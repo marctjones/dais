@@ -1,0 +1,23 @@
+name = "webfinger"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# Custom domain routes for WebFinger
+routes = [
+  { pattern = "dais.social/.well-known/webfinger", custom_domain = true }
+]
+
+[env.production]
+name = "webfinger-production"
+routes = [
+  { pattern = "dais.social/.well-known/webfinger", custom_domain = true }
+]
+
+# D1 database for actor lookups
+[[d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"

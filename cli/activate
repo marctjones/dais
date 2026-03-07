@@ -1,0 +1,15 @@
+#!/bin/bash
+# Convenience script to activate the Python virtual environment
+# Usage: source cli/activate
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
+    source "$PROJECT_ROOT/venv/bin/activate"
+    echo "✅ Python virtual environment activated"
+    echo "💡 CLI: dais --help"
+else
+    echo "❌ Virtual environment not found. Run: python3 -m venv venv"
+    exit 1
+fi

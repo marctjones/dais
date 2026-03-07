@@ -1,0 +1,15 @@
+name = "outbox"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[env.production]
+name = "outbox-production"
+
+# D1 database for retrieving posts
+[[d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"

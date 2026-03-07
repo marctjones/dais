@@ -1,0 +1,23 @@
+name = "inbox"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# Custom domain routes for Inbox endpoint
+routes = [
+  { pattern = "social.dais.social/users/*/inbox", custom_domain = true }
+]
+
+[env.production]
+name = "inbox-production"
+routes = [
+  { pattern = "social.dais.social/users/*/inbox", custom_domain = true }
+]
+
+# D1 database for storing activities and followers
+[[d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"

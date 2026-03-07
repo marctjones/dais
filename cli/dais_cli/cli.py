@@ -1,0 +1,36 @@
+"""Main CLI entry point."""
+
+import click
+from rich.console import Console
+
+from dais_cli import __version__
+from dais_cli.commands import setup, post, followers, test, stats, db, actor, config_cmd
+
+console = Console()
+
+
+@click.group()
+@click.version_option(version=__version__, prog_name="dais")
+@click.pass_context
+def main(ctx):
+    """dais - Manage your dais.social ActivityPub server.
+
+    A command-line tool for creating posts, managing followers,
+    and administering your personal ActivityPub instance.
+    """
+    ctx.ensure_object(dict)
+
+
+# Register command groups
+main.add_command(setup.setup)
+main.add_command(config_cmd.config)
+main.add_command(actor.actor)
+main.add_command(post.post)
+main.add_command(followers.followers)
+main.add_command(test.test)
+main.add_command(stats.stats)
+main.add_command(db.db)
+
+
+if __name__ == "__main__":
+    main()
