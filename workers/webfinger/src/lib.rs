@@ -33,9 +33,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .await
 }
 
-async fn handle_webfinger(req: Request, _ctx: RouteContext<()>) -> Result<Response> {
+async fn handle_webfinger(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Add CORS headers for federation
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     headers.set("Content-Type", "application/jrd+json")?;
     headers.set("Access-Control-Allow-Origin", "*")?;
     headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
@@ -71,33 +71,47 @@ async fn handle_webfinger(req: Request, _ctx: RouteContext<()>) -> Result<Respon
     let username = parts[0];
     let domain = parts[1];
 
+    // Get configured domain from environment variable
+    let configured_domain = ctx.env.var("DOMAIN")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "dais.social".to_string());
+
     // Validate domain matches our domain
-    if domain != "dais.social" {
+    if domain != configured_domain {
         return Response::error("Domain not found", 404);
     }
 
-    // TODO: Query D1 database to verify user exists
-    // For now, we'll hardcode support for "marc"
-    if username != "marc" {
+    // Query D1 database to verify user exists
+    let db = ctx.env.d1("DB")?;
+    let query = "SELECT username FROM actors WHERE username = ?";
+    let statement = db.prepare(query).bind(&[username.into()])?;
+    let result = statement.first::<serde_json::Value>(None).await?;
+
+    if result.is_none() {
         return Response::error("User not found", 404);
     }
+
+    // Get ActivityPub domain from environment
+    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| format!("social.{}", configured_domain));
 
     // Build WebFinger response
     let response = WebFingerResponse {
         subject: resource.clone(),
         aliases: vec![
-            format!("https://social.dais.social/users/{}", username),
+            format!("https://{}/users/{}", activitypub_domain, username),
         ],
         links: vec![
             WebFingerLink {
                 rel: "self".to_string(),
                 link_type: "application/activity+json".to_string(),
-                href: format!("https://social.dais.social/users/{}", username),
+                href: format!("https://{}/users/{}", activitypub_domain, username),
             },
             WebFingerLink {
                 rel: "http://webfinger.net/rel/profile-page".to_string(),
                 link_type: "text/html".to_string(),
-                href: format!("https://dais.social/@{}", username),
+                href: format!("https://{}/@{}", configured_domain, username),
             },
         ],
     };
