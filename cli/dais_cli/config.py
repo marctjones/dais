@@ -28,7 +28,8 @@ class Config:
             Configuration dictionary
         """
         if not self.config_file.exists():
-            return self._default_config()
+            self._config = self._default_config()
+            return self._config
 
         self._config = toml.load(self.config_file)
         return self._config
