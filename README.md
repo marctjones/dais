@@ -189,13 +189,42 @@ dais stats                             # Show follower count, post count, etc.
 
 ## Implementation Roadmap
 
-### Phase 1 - Basic Federation ✅
-- [x] WebFinger endpoint (Rust Worker)
-- [x] Python CLI skeleton
+### Phase 1 - Basic Federation ✅ COMPLETE
+
+**What you can do now:**
+- Be discovered on the Fediverse via WebFinger (`@username@yourdomain.com`)
+- Have a valid ActivityPub profile accessible to any federated server
+- Receive follow requests from Mastodon, Pleroma, Pixelfed, etc.
+- Approve or reject followers via CLI
+- Send cryptographically signed Accept/Reject activities
+
+**Implementation:**
+- [x] WebFinger endpoint (Rust Worker) - with D1 actor lookup
+- [x] Python CLI skeleton - full command structure
 - [x] RSA key generation (`dais setup init`)
-- [ ] Actor endpoint with static profile
-- [ ] Inbox for receiving Follow requests
-- [ ] Follower approval CLI (`dais followers approve`)
+- [x] Actor endpoint with static profile - queries D1 for actor data
+- [x] Inbox for receiving Follow requests - with HTTP signature verification
+- [x] Follower approval CLI (`dais followers approve`) - sends signed Accept/Reject
+- [x] HTTP signature verification - PKCS1v15 (rsa-sha256) per ActivityPub spec
+- [x] Comprehensive test coverage - pytest for CLI, cargo test for workers
+
+**Testing:**
+```bash
+# Run CLI tests
+cd cli && pytest -v
+
+# Run Rust tests
+cd workers/shared && cargo test
+
+# Test WebFinger discovery
+dais test webfinger
+
+# Test Actor endpoint
+dais test actor
+
+# View statistics
+dais stats
+```
 
 ### Phase 2 - Content Publishing
 - [ ] Create and publish posts (`dais post create`)
