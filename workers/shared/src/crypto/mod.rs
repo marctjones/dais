@@ -6,7 +6,7 @@
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
 use rsa::signature::{Signer, Verifier, SignatureEncoding};
-use rsa::pss::{SigningKey, VerifyingKey, Signature};
+use rsa::pkcs1v15::{SigningKey, VerifyingKey, Signature};
 use sha2::Sha256;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
@@ -63,8 +63,8 @@ mod tests {
 
     #[test]
     fn test_sign_and_verify() {
-        let private_key_pem = include_str!("../../../../../cli/test_keys/private.pem");
-        let public_key_pem = include_str!("../../../../../cli/test_keys/public.pem");
+        let private_key_pem = include_str!("../../../../cli/test_keys/private.pem");
+        let public_key_pem = include_str!("../../../../cli/test_keys/public.pem");
 
         let message = "test message";
         let signature = sign_message(private_key_pem, message).unwrap();
