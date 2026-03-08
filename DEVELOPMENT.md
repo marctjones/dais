@@ -2,7 +2,138 @@
 
 This guide covers setting up and using the local development environment for dais.
 
-## Prerequisites
+## Two Approaches
+
+### 🐳 Containerized (Recommended for Testing)
+- **Clean, isolated, reproducible**
+- Perfect for running tests
+- No local dependencies except Docker/Podman
+- Easy reset: `make clean && make up`
+
+### ⚡ Tmux-based (Recommended for Development)
+- **Fast iteration, hot reload**
+- Better for active development
+- Requires Rust, wrangler, Python installed
+- Ideal for debugging
+
+---
+
+## Containerized Development (Docker/Podman)
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) or [Podman](https://podman.io/getting-started/installation)
+- [docker-compose](https://docs.docker.com/compose/install/) or [podman-compose](https://github.com/containers/podman-compose)
+- [make](https://www.gnu.org/software/make/) (optional, for convenience)
+
+### Quick Start with Containers
+
+```bash
+# Build and start all services
+make up
+
+# Seed database with test data
+make seed
+
+# Run all tests
+make test
+
+# Open a shell in the CLI container
+make shell
+
+# Stop everything
+make down
+```
+
+### Detailed Container Commands
+
+```bash
+# Build container images
+make build
+# or: docker-compose build
+
+# Start services (detached)
+make up
+# or: docker-compose up -d
+
+# Seed database
+make seed
+# or: ./scripts/seed-container-db.sh
+
+# Run tests (Phase 1 + Phase 2 + unit tests)
+make test
+# or: ./scripts/test-containers.sh
+
+# Clean start (removes volumes)
+make clean
+make up
+# or: docker-compose down -v && docker-compose up -d
+
+# View logs
+make logs
+# or: docker-compose logs -f
+
+# View logs for specific worker
+make logs-worker WORKER=webfinger
+# or: docker-compose logs -f webfinger
+
+# Open shell in CLI container
+make shell
+# or: docker-compose exec cli /bin/bash
+
+# Run dais commands in container
+docker-compose exec cli dais stats
+docker-compose exec cli dais post create "Hello from container!"
+docker-compose exec cli dais post list
+
+# Stop all services
+make down
+# or: docker-compose down
+
+# Clean rebuild
+make rebuild
+# or: docker-compose down -v && docker-compose build && docker-compose up -d
+```
+
+### Container Testing Workflow
+
+```bash
+# Fresh test run (recommended)
+make test-clean
+
+# This will:
+# 1. Stop and remove all containers + volumes
+# 2. Build fresh images
+# 3. Start all services
+# 4. Seed database
+# 5. Run Phase 1 tests (10 tests)
+# 6. Run Phase 2 tests (10 tests)
+# 7. Run Python unit tests (15 tests)
+```
+
+### Container Services
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| webfinger | 8787 | WebFinger discovery endpoint |
+| actor | 8788 | ActivityPub Actor profile |
+| inbox | 8789 | Receive ActivityPub activities |
+| outbox | 8790 | Serve posts (OrderedCollection) |
+| cli | - | Run dais commands and tests |
+| db-init | - | Initialize and migrate D1 database |
+
+### Shared D1 Database
+
+All workers share the same D1 database via a Docker volume:
+- Volume: `d1-data`
+- Mounted to: `/app/workers/actor/.wrangler` in each container
+- Ensures consistent state across all workers
+
+---
+
+## Tmux-based Development (Native)
+
+### Prerequisites
 
 - [Rust](https://rustup.rs/) 1.70+
 - [wrangler](https://developers.cloudflare.com/workers/wrangler/) 3.0+
@@ -374,6 +505,45 @@ tmux attach -t dais-dev
 - **Kill stuck session**: `tmux kill-session -t dais-dev`
 - **List all sessions**: `tmux ls`
 - **Attach to session**: `tmux attach -t dais-dev`
+
+### Container issues
+
+- **Services not starting**: `docker-compose logs` to see errors
+- **Port conflicts**: `docker-compose down` then check `lsof -i :8787-8790`
+- **Database not seeding**: `docker-compose restart db-init && make seed`
+- **Stale state**: `make clean && make up` for fresh start
+
+---
+
+## Choosing Your Workflow
+
+### Use Containers When:
+- ✅ Running tests (completely clean environment)
+- ✅ Verifying functionality (reproducible results)
+- ✅ CI/CD pipelines (identical to production)
+- ✅ Onboarding new contributors (no dependency setup)
+- ✅ Testing database migrations (easy reset)
+- ✅ Sharing environment state (volume snapshots)
+
+### Use Tmux When:
+- ✅ Active development (hot reload on file changes)
+- ✅ Debugging workers (direct console access)
+- ✅ Quick iteration (no container rebuild)
+- ✅ Testing performance (less overhead)
+- ✅ Developing new features (faster feedback loop)
+
+### Hybrid Workflow (Recommended):
+```bash
+# Daily development
+./scripts/dev-start.sh
+# ... make changes, hot reload works ...
+./scripts/dev-stop.sh
+
+# Before committing
+make test-clean  # Fresh containerized test
+```
+
+---
 
 ## Next Steps
 

@@ -1,0 +1,153 @@
+version: '3.8'
+
+services:
+  # Shared D1 database initialization
+  db-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.cli
+    volumes:
+      - d1-data:/app/workers/actor/.wrangler
+      - ./cli/migrations:/app/cli/migrations
+      - ./workers:/app/workers
+    working_dir: /app/workers/actor
+    command: >
+      sh -c "
+        wrangler d1 execute DB --local --file=/app/cli/migrations/001_initial_schema.sql &&
+        echo 'Database initialized'
+      "
+    networks:
+      - dais-network
+
+  # WebFinger worker (port 8787)
+  webfinger:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8787:8787"
+    volumes:
+      - d1-data:/app/workers/webfinger/.wrangler
+      - ./workers/webfinger:/app/workers/webfinger
+      - ./workers/shared:/app/workers/shared
+    working_dir: /app/workers/webfinger
+    command: wrangler dev --local --port 8787 --ip 0.0.0.0
+    environment:
+      - DOMAIN=localhost
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - dais-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Actor worker (port 8788)
+  actor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8788:8788"
+    volumes:
+      - d1-data:/app/workers/actor/.wrangler
+      - ./workers/actor:/app/workers/actor
+      - ./workers/shared:/app/workers/shared
+    working_dir: /app/workers/actor
+    command: wrangler dev --local --port 8788 --ip 0.0.0.0
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - dais-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-H", "Accept: application/activity+json", "http://localhost:8788/users/marc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Inbox worker (port 8789)
+  inbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8789:8789"
+    volumes:
+      - d1-data:/app/workers/inbox/.wrangler
+      - ./workers/inbox:/app/workers/inbox
+      - ./workers/shared:/app/workers/shared
+    working_dir: /app/workers/inbox
+    command: wrangler dev --local --port 8789 --ip 0.0.0.0
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - dais-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-X", "OPTIONS", "http://localhost:8789/users/marc/inbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Outbox worker (port 8790)
+  outbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8790:8790"
+    volumes:
+      - d1-data:/app/workers/outbox/.wrangler
+      - ./workers/outbox:/app/workers/outbox
+      - ./workers/shared:/app/workers/shared
+    working_dir: /app/workers/outbox
+    command: wrangler dev --local --port 8790 --ip 0.0.0.0
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - dais-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-H", "Accept: application/activity+json", "http://localhost:8790/users/marc/outbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # CLI for running commands and tests
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile.cli
+    volumes:
+      - d1-data:/app/workers/actor/.wrangler
+      - ./cli:/app/cli
+      - ./workers:/app/workers
+      - ./scripts:/app/scripts
+      - ./cli/test_keys:/root/.dais/keys
+    working_dir: /app
+    depends_on:
+      webfinger:
+        condition: service_healthy
+      actor:
+        condition: service_healthy
+      inbox:
+        condition: service_healthy
+      outbox:
+        condition: service_healthy
+    networks:
+      - dais-network
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+
+volumes:
+  d1-data:
+    driver: local
+
+networks:
+  dais-network:
+    driver: bridge

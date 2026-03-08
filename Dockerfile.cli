@@ -1,0 +1,27 @@
+# Python CLI for dais management
+FROM python:3.12-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js and wrangler (for D1 access)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g wrangler@latest
+
+# Set working directory
+WORKDIR /app
+
+# Copy CLI and install
+COPY cli /app/cli
+COPY workers /app/workers
+
+RUN cd cli && pip install -e .
+
+# Default command
+CMD ["/bin/bash"]
