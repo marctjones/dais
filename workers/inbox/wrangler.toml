@@ -6,9 +6,10 @@ compatibility_date = "2025-01-04"
 command = "cargo install -q worker-build && worker-build --release"
 
 # Custom domain routes for Inbox endpoint
-routes = [
-  { pattern = "social.dais.social/users/*/inbox", custom_domain = true }
-]
+# Commented out for local development (not supported in local mode)
+# routes = [
+#   { pattern = "social.dais.social/users/*/inbox", custom_domain = true }
+# ]
 
 [env.production]
 name = "inbox-production"

@@ -17,8 +17,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Install wrangler globally
 RUN npm install -g wrangler@latest
 
-# Install worker-build for Rust Workers
-RUN cargo install worker-build
+# Note: worker-build is not needed globally - wrangler handles Rust compilation
+# Add wasm32 target for Rust
+RUN rustup target add wasm32-unknown-unknown
 
 # Set working directory
 WORKDIR /app
@@ -26,8 +27,8 @@ WORKDIR /app
 # Copy shared library first (for caching)
 COPY workers/shared /app/workers/shared
 
-# Build shared library
-RUN cd workers/shared && cargo build --release
+# Note: Don't pre-build - wrangler will compile when starting dev server
+# This avoids edition2024 issues and keeps container build fast
 
 # Production image
 FROM base as worker

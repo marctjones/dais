@@ -32,6 +32,22 @@ fi
 
 cd "$WORKER_DIR"
 
+# Create symlinks so all workers share the same database
+echo -e "${GREEN}Step 0: Setting up shared database...${NC}"
+for worker in webfinger inbox outbox; do
+    if [ -L "$PROJECT_ROOT/workers/$worker/.wrangler" ]; then
+        echo "  Symlink already exists for $worker"
+    elif [ -d "$PROJECT_ROOT/workers/$worker/.wrangler" ]; then
+        echo "  Removing existing .wrangler for $worker"
+        rm -rf "$PROJECT_ROOT/workers/$worker/.wrangler"
+        ln -s "$PROJECT_ROOT/workers/actor/.wrangler" "$PROJECT_ROOT/workers/$worker/.wrangler"
+        echo "  Created symlink for $worker"
+    else
+        ln -s "$PROJECT_ROOT/workers/actor/.wrangler" "$PROJECT_ROOT/workers/$worker/.wrangler"
+        echo "  Created symlink for $worker"
+    fi
+done
+
 echo -e "${GREEN}Step 1: Running database migration...${NC}"
 wrangler d1 execute DB --local --file="$MIGRATION_FILE"
 

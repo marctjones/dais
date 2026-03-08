@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+# set -e temporarily disabled for debugging
 
 # Colors for output
 GREEN='\033[0;32m'

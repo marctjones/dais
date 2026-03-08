@@ -1,0 +1,47 @@
+# Current Documentation Structure
+
+## Active Documentation (In Repository)
+
+### User-Facing
+- **README.md** - Project overview, quick start, features, roadmap
+- **ROADMAP.md** - Milestones, timeline, priorities
+- **CONTAINER_QUICKSTART.md** - Quick containerized testing guide
+
+### Developer-Facing  
+- **DEVELOPMENT.md** - Local development setup (tmux + containers)
+- **CONTRIBUTING.md** - Contribution guidelines
+- **CLAUDE.md** - AI assistant usage notes
+- **AGENTS.md** - Agent configuration
+
+### Technical Reference
+- **DNS_SETUP.md** - DNS configuration details
+- **VISION.md** - Project vision and goals
+
+### To Be Created
+- **DEPLOYMENT.md** - Production deployment guide (Issue #44)
+- **TESTING.md** - Test documentation (Issue #43)
+
+## Archived Documentation
+
+See `.archive/README.md` for historical documentation.
+
+## Documentation Strategy
+
+**During Alpha/Beta:** All docs in repository
+- Easier to maintain during rapid changes
+- Stays in sync with code versions
+- Part of PR review process
+
+**After v1.0:** Consider enabling wiki for:
+- User guides and tutorials
+- Community troubleshooting
+- Instance showcase
+- FAQ
+
+## Style Guide
+
+- Use GitHub-flavored Markdown
+- Include code examples with syntax highlighting
+- Add table of contents for long docs
+- Keep line length reasonable (80-100 chars)
+- Use emojis sparingly for section markers

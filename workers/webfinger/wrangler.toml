@@ -3,16 +3,17 @@ main = "build/worker/shim.mjs"
 compatibility_date = "2025-01-04"
 
 [vars]
-DOMAIN = "dais.social"
-ACTIVITYPUB_DOMAIN = "social.dais.social"
+DOMAIN = "localhost"
+ACTIVITYPUB_DOMAIN = "localhost"
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"
 
 # Custom domain routes for WebFinger
-routes = [
-  { pattern = "dais.social/.well-known/webfinger", custom_domain = true }
-]
+# Commented out for local development (not supported in local mode)
+# routes = [
+#   { pattern = "dais.social/.well-known/webfinger", custom_domain = true }
+# ]
 
 [env.production]
 name = "webfinger-production"

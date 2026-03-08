@@ -31,22 +31,22 @@ tmux new-session -d -s "$SESSION_NAME" -c "$PROJECT_ROOT"
 tmux rename-window -t "$SESSION_NAME:0" "webfinger"
 tmux send-keys -t "$SESSION_NAME:0" "cd $PROJECT_ROOT/workers/webfinger" C-m
 tmux send-keys -t "$SESSION_NAME:0" "echo -e '${GREEN}Starting WebFinger worker on port 8787...${NC}'" C-m
-tmux send-keys -t "$SESSION_NAME:0" "wrangler dev --local --port 8787" C-m
+tmux send-keys -t "$SESSION_NAME:0" "wrangler dev --local --port 8787 --var DOMAIN=localhost --var ACTIVITYPUB_DOMAIN=localhost" C-m
 
 # Window 1: Actor worker (port 8788)
 tmux new-window -t "$SESSION_NAME:1" -n "actor" -c "$PROJECT_ROOT/workers/actor"
 tmux send-keys -t "$SESSION_NAME:1" "echo -e '${GREEN}Starting Actor worker on port 8788...${NC}'" C-m
-tmux send-keys -t "$SESSION_NAME:1" "wrangler dev --local --port 8788" C-m
+tmux send-keys -t "$SESSION_NAME:1" "wrangler dev --local --port 8788 --var DOMAIN=localhost --var ACTIVITYPUB_DOMAIN=localhost" C-m
 
 # Window 2: Inbox worker (port 8789)
 tmux new-window -t "$SESSION_NAME:2" -n "inbox" -c "$PROJECT_ROOT/workers/inbox"
 tmux send-keys -t "$SESSION_NAME:2" "echo -e '${GREEN}Starting Inbox worker on port 8789...${NC}'" C-m
-tmux send-keys -t "$SESSION_NAME:2" "wrangler dev --local --port 8789" C-m
+tmux send-keys -t "$SESSION_NAME:2" "wrangler dev --local --port 8789 --var DOMAIN=localhost --var ACTIVITYPUB_DOMAIN=localhost" C-m
 
 # Window 3: Outbox worker (port 8790)
 tmux new-window -t "$SESSION_NAME:3" -n "outbox" -c "$PROJECT_ROOT/workers/outbox"
 tmux send-keys -t "$SESSION_NAME:3" "echo -e '${GREEN}Starting Outbox worker on port 8790...${NC}'" C-m
-tmux send-keys -t "$SESSION_NAME:3" "wrangler dev --local --port 8790" C-m
+tmux send-keys -t "$SESSION_NAME:3" "wrangler dev --local --port 8790 --var DOMAIN=localhost --var ACTIVITYPUB_DOMAIN=localhost" C-m
 
 # Window 4: Shell for running commands
 tmux new-window -t "$SESSION_NAME:4" -n "shell" -c "$PROJECT_ROOT"
