@@ -226,11 +226,53 @@ dais test actor
 dais stats
 ```
 
-### Phase 2 - Content Publishing
-- [ ] Create and publish posts (`dais post create`)
-- [ ] Outbox with post listing
-- [ ] Media attachment handling (R2 upload)
-- [ ] Post visibility controls
+### Phase 2 - Content Publishing ✅ COMPLETE
+
+**What you can do now:**
+- Create and publish posts to your followers (`dais post create`)
+- List all your posts (`dais post list`)
+- Delete posts with federated Delete activities (`dais post delete`)
+- Control post visibility (public, unlisted, followers, direct)
+- Automatic delivery to all approved followers' inboxes
+- Serve posts via ActivityPub-compliant outbox endpoint
+
+**Implementation:**
+- [x] Outbox worker with OrderedCollection endpoint
+- [x] Individual post endpoint (GET /users/:username/posts/:id)
+- [x] Post create command with HTTP signature delivery
+- [x] Post list command with rich table display
+- [x] Post delete command with Delete activity delivery
+- [x] Activity delivery module with reusable HTTP signature logic
+- [x] Post visibility controls (public, unlisted, followers, direct)
+- [x] Local development environment with tmux scripts
+- [x] Database seeding scripts for testing
+- [x] Integration tests for both Phase 1 and Phase 2
+- [x] Unit tests (19 tests covering delivery, posts, outbox)
+
+**Testing:**
+```bash
+# Local development
+./scripts/dev-start.sh
+./scripts/seed-local-db.sh
+
+# Test Phase 1 (WebFinger, Actor, Inbox)
+./scripts/test-phase1-local.sh
+
+# Test Phase 2 (Posts, Outbox, Delivery)
+./scripts/test-phase2-local.sh
+
+# Create and manage posts
+dais post create "Hello, Fediverse!"
+dais post list
+dais post delete <post-id>
+
+# Run unit tests
+cd cli && pytest -v
+cd workers/outbox && cargo test
+```
+
+**Not yet implemented:**
+- [ ] Media attachment handling (R2 upload) - deferred to Phase 2.5
 
 ### Phase 3 - Interactions
 - [ ] Receive and display replies
