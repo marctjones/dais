@@ -47,12 +47,30 @@ dais/
 
 ## Quick Start
 
-### Prerequisites
+### Two Ways to Get Started
+
+**🐳 Containerized (Recommended for Testing):**
+- No local dependencies except Docker/Podman
+- Clean, isolated, reproducible environment
+- See [CONTAINER_QUICKSTART.md](CONTAINER_QUICKSTART.md)
+
+```bash
+make up && make seed && make test
+```
+
+**⚡ Native (For Development):**
+- Fast iteration with hot reload
+- Better for active development
+- See full setup below
+
+### Prerequisites (Native Setup)
 
 - [Rust](https://rustup.rs/) (for Workers)
 - [wrangler](https://developers.cloudflare.com/workers/wrangler/) (Cloudflare CLI)
 - [Python 3.10+](https://www.python.org/) (for CLI)
 - Cloudflare account (free tier)
+
+### Native Setup
 
 ### 1. Install Python CLI
 
