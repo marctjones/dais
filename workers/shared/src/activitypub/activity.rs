@@ -76,4 +76,17 @@ impl Activity {
             published: Some(chrono::Utc::now().to_rfc3339()),
         }
     }
+
+    /// Create a Delete activity
+    pub fn delete(id: String, actor: String, object: String) -> Self {
+        Self {
+            context: super::activitypub_context(),
+            activity_type: "Delete".to_string(),
+            id,
+            actor,
+            object: serde_json::json!(object),
+            target: None,
+            published: Some(chrono::Utc::now().to_rfc3339()),
+        }
+    }
 }

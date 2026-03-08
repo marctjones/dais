@@ -65,3 +65,57 @@ pub struct Attachment {
 
     pub name: Option<String>,
 }
+
+/// ActivityPub OrderedCollection (for outbox, followers, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderedCollection {
+    #[serde(rename = "@context")]
+    pub context: serde_json::Value,
+
+    #[serde(rename = "type")]
+    pub collection_type: String,
+
+    pub id: String,
+
+    #[serde(rename = "totalItems")]
+    pub total_items: usize,
+
+    #[serde(rename = "orderedItems")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ordered_items: Option<Vec<serde_json::Value>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last: Option<String>,
+}
+
+impl OrderedCollection {
+    /// Create a new ordered collection with items
+    pub fn new(id: String, items: Vec<serde_json::Value>) -> Self {
+        let total = items.len();
+        Self {
+            context: super::activitypub_context(),
+            collection_type: "OrderedCollection".to_string(),
+            id,
+            total_items: total,
+            ordered_items: Some(items),
+            first: None,
+            last: None,
+        }
+    }
+
+    /// Create an empty ordered collection
+    pub fn empty(id: String) -> Self {
+        Self {
+            context: super::activitypub_context(),
+            collection_type: "OrderedCollection".to_string(),
+            id,
+            total_items: 0,
+            ordered_items: Some(vec![]),
+            first: None,
+            last: None,
+        }
+    }
+}
