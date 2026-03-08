@@ -166,6 +166,8 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_post_id_format() {
         let username = "marc";
@@ -173,5 +175,42 @@ mod tests {
         let expected = "https://social.dais.social/users/marc/posts/001";
         let actual = format!("https://social.dais.social/users/{}/posts/{}", username, post_id_param);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_outbox_id_format() {
+        let username = "alice";
+        let expected = "https://social.dais.social/users/alice/outbox";
+        let actual = format!("https://social.dais.social/users/{}/outbox", username);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_ordered_collection_new() {
+        let outbox_id = "https://social.dais.social/users/marc/outbox".to_string();
+        let notes = vec![
+            serde_json::json!({"type": "Note", "content": "Test 1"}),
+            serde_json::json!({"type": "Note", "content": "Test 2"}),
+        ];
+
+        let collection = OrderedCollection::new(outbox_id.clone(), notes);
+
+        assert_eq!(collection.collection_type, "OrderedCollection");
+        assert_eq!(collection.id, outbox_id);
+        assert_eq!(collection.total_items, 2);
+        assert!(collection.ordered_items.is_some());
+        assert_eq!(collection.ordered_items.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_ordered_collection_empty() {
+        let outbox_id = "https://social.dais.social/users/marc/outbox".to_string();
+        let collection = OrderedCollection::empty(outbox_id.clone());
+
+        assert_eq!(collection.collection_type, "OrderedCollection");
+        assert_eq!(collection.id, outbox_id);
+        assert_eq!(collection.total_items, 0);
+        assert!(collection.ordered_items.is_some());
+        assert_eq!(collection.ordered_items.unwrap().len(), 0);
     }
 }
