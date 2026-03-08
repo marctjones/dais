@@ -2,6 +2,20 @@
 
 import click
 from rich.console import Console
+from rich.table import Table
+import subprocess
+import sys
+import json
+from pathlib import Path
+from datetime import datetime
+import uuid
+
+from dais_cli.config import Config
+from dais_cli.delivery import (
+    build_create_activity,
+    build_delete_activity,
+    deliver_to_followers
+)
 
 console = Console()
 
@@ -16,44 +30,307 @@ def post():
 @click.argument('content')
 @click.option('--visibility', type=click.Choice(['public', 'unlisted', 'followers', 'direct']),
               default='public', help='Post visibility')
-def create(content, visibility):
+@click.option('--remote', is_flag=True, help='Use remote database and deliver to production followers')
+def create(content, visibility, remote):
     """Create and publish a post.
 
     CONTENT: The text content of your post
     """
-    console.print(f"[dim]Creating post with visibility: {visibility}[/dim]")
-    console.print(f"\n{content}\n")
+    console.print(f"[bold blue]Creating {visibility} post[/bold blue]\n")
+    console.print(f"{content}\n")
 
-    # TODO: Implement post creation
-    # - Store in D1 database
-    # - Generate ActivityPub Create activity
-    # - Deliver to followers' inboxes
-    console.print("[yellow]Post creation not yet implemented.[/yellow]")
-    console.print("[dim]Will be implemented in Phase 2[/dim]")
+    # Generate unique post ID
+    post_uuid = str(uuid.uuid4())[:8]
+    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+    post_id_path = f"{timestamp}-{post_uuid}"
+
+    # Our actor info (TODO: make configurable)
+    actor_username = "marc"
+    actor_id = "https://social.dais.social/users/marc"
+    post_id = f"https://social.dais.social/users/{actor_username}/posts/{post_id_path}"
+
+    # Get project root
+    project_root = Path(__file__).parent.parent.parent.parent
+    worker_dir = project_root / "workers" / "actor"
+
+    # Determine audience
+    if visibility == 'public':
+        to_audience = ["https://www.w3.org/ns/activitystreams#Public"]
+        cc_audience = []
+    elif visibility == 'unlisted':
+        to_audience = []
+        cc_audience = ["https://www.w3.org/ns/activitystreams#Public"]
+    elif visibility == 'followers':
+        to_audience = [f"{actor_id}/followers"]
+        cc_audience = []
+    else:  # direct
+        to_audience = []
+        cc_audience = []
+
+    published_at = datetime.utcnow().isoformat() + "Z"
+
+    # Insert post to D1 database
+    console.print("[dim]Saving post to database...[/dim]")
+
+    # Escape single quotes for SQL
+    content_escaped = content.replace("'", "''")
+    to_json = json.dumps(to_audience).replace("'", "''")
+    cc_json = json.dumps(cc_audience).replace("'", "''") if cc_audience else "[]"
+
+    insert_query = f"""
+    INSERT INTO posts (id, actor_id, content, visibility, published_at)
+    VALUES ('{post_id}', '{actor_id}', '{content_escaped}', '{visibility}', '{published_at}')
+    """
+
+    cmd = ["wrangler", "d1", "execute", "DB", "--command", insert_query]
+    if remote:
+        cmd.append("--remote")
+
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=str(worker_dir))
+        console.print(f"[green]✓[/green] Post saved to database")
+        console.print(f"[dim]Post ID: {post_id}[/dim]\n")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]✗ Failed to save post[/red]")
+        console.print(f"[red]{e.stderr}[/red]")
+        sys.exit(1)
+
+    # Build ActivityPub Note object
+    note = {
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "type": "Note",
+        "id": post_id,
+        "attributedTo": actor_id,
+        "content": content,
+        "published": published_at,
+        "to": to_audience,
+        "cc": cc_audience
+    }
+
+    # Wrap in Create activity
+    create_activity = build_create_activity(actor_id, note)
+
+    # Query approved followers for delivery
+    if visibility in ['public', 'unlisted', 'followers']:
+        console.print("[dim]Querying approved followers for delivery...[/dim]")
+
+        followers_query = "SELECT follower_actor_id, follower_inbox FROM followers WHERE status = 'approved'"
+        cmd_followers = ["wrangler", "d1", "execute", "DB", "--command", followers_query]
+        if remote:
+            cmd_followers.append("--remote")
+
+        try:
+            result = subprocess.run(cmd_followers, capture_output=True, text=True, check=True, cwd=str(worker_dir))
+            output = result.stdout
+            start = output.find('[')
+            end = output.rfind(']') + 1
+            data = json.loads(output[start:end])
+            followers = data[0].get("results", [])
+
+            if followers:
+                console.print(f"[dim]Delivering to {len(followers)} approved follower(s)...[/dim]\n")
+
+                # Deliver to all followers
+                successful, failed = deliver_to_followers(
+                    activity=create_activity,
+                    followers=followers,
+                    actor_url=actor_id,
+                    verbose=True
+                )
+
+                console.print(f"\n[green]✓[/green] Post created and delivered")
+                console.print(f"[dim]Successful deliveries: {successful}/{successful + failed}[/dim]")
+
+                if failed > 0:
+                    console.print(f"[yellow]⚠[/yellow] Some deliveries failed ({failed})")
+            else:
+                console.print(f"[dim]No approved followers to deliver to[/dim]")
+                console.print(f"[green]✓[/green] Post created successfully")
+
+        except subprocess.CalledProcessError as e:
+            console.print(f"[yellow]⚠[/yellow] Failed to query followers for delivery")
+            console.print(f"[dim]Post is saved but not delivered[/dim]")
+    else:
+        console.print(f"[green]✓[/green] Post created (visibility: {visibility}, no delivery needed)")
 
 
 @post.command()
 @click.option('--limit', type=int, default=20, help='Number of posts to show')
-def list(limit):
+@click.option('--remote', is_flag=True, help='Query remote database')
+def list(limit, remote):
     """List your posts."""
-    console.print(f"[dim]Listing {limit} most recent posts...[/dim]\n")
+    console.print(f"[bold blue]Listing {limit} most recent posts[/bold blue]\n")
 
-    # TODO: Query D1 database for posts
-    console.print("[yellow]Post listing not yet implemented.[/yellow]")
-    console.print("[dim]Will be implemented in Phase 2[/dim]")
+    # Get project root
+    project_root = Path(__file__).parent.parent.parent.parent
+    worker_dir = project_root / "workers" / "actor"
+
+    # Query posts from database
+    query = f"""
+    SELECT id, content, visibility, published_at
+    FROM posts
+    ORDER BY published_at DESC
+    LIMIT {limit}
+    """
+
+    cmd = ["wrangler", "d1", "execute", "DB", "--command", query]
+    if remote:
+        cmd.append("--remote")
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=str(worker_dir))
+        output = result.stdout
+        start = output.find('[')
+        end = output.rfind(']') + 1
+        data = json.loads(output[start:end])
+        posts = data[0].get("results", [])
+
+        if not posts:
+            console.print("[dim]No posts found.[/dim]")
+            return
+
+        # Display as table
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("ID", style="dim", no_wrap=True)
+        table.add_column("Content", style="white")
+        table.add_column("Visibility", style="yellow")
+        table.add_column("Published", style="dim")
+
+        for post_data in posts:
+            post_id = post_data.get("id", "")
+            content = post_data.get("content", "")
+            visibility = post_data.get("visibility", "")
+            published = post_data.get("published_at", "")
+
+            # Extract just the post ID suffix for display
+            id_display = post_id.split("/")[-1] if "/" in post_id else post_id
+
+            # Truncate content for display
+            content_preview = content[:60] + "..." if len(content) > 60 else content
+
+            # Color code visibility
+            if visibility == "public":
+                visibility_display = f"[green]{visibility}[/green]"
+            elif visibility == "unlisted":
+                visibility_display = f"[yellow]{visibility}[/yellow]"
+            elif visibility == "followers":
+                visibility_display = f"[blue]{visibility}[/blue]"
+            else:
+                visibility_display = f"[dim]{visibility}[/dim]"
+
+            table.add_row(id_display, content_preview, visibility_display, published)
+
+        console.print(table)
+        console.print(f"\n[dim]Total: {len(posts)} post(s)[/dim]")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]✗ Error querying database[/red]")
+        console.print(f"[red]{e.stderr}[/red]")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]✗ Error parsing response[/red]")
+        sys.exit(1)
 
 
 @post.command()
 @click.argument('post_id')
-def delete(post_id):
+@click.option('--remote', is_flag=True, help='Delete from remote database and notify production followers')
+def delete(post_id, remote):
     """Delete a post.
 
-    POST_ID: The ID of the post to delete
+    POST_ID: The short ID of the post to delete (e.g., "20260107120000-abc123")
     """
-    console.print(f"[dim]Deleting post {post_id}...[/dim]")
+    console.print(f"[bold blue]Deleting post {post_id}[/bold blue]\n")
 
-    # TODO: Implement post deletion
-    # - Mark as deleted in D1
-    # - Send Delete activity to followers
-    console.print("[yellow]Post deletion not yet implemented.[/yellow]")
-    console.print("[dim]Will be implemented in Phase 2[/dim]")
+    # Our actor info (TODO: make configurable)
+    actor_username = "marc"
+    actor_id = "https://social.dais.social/users/marc"
+
+    # Construct full post URL
+    full_post_id = f"https://social.dais.social/users/{actor_username}/posts/{post_id}"
+
+    # Get project root
+    project_root = Path(__file__).parent.parent.parent.parent
+    worker_dir = project_root / "workers" / "actor"
+
+    # First, verify post exists
+    query_post = f"SELECT id FROM posts WHERE id = '{full_post_id}'"
+    cmd_query = ["wrangler", "d1", "execute", "DB", "--command", query_post]
+    if remote:
+        cmd_query.append("--remote")
+
+    try:
+        result = subprocess.run(cmd_query, capture_output=True, text=True, check=True, cwd=str(worker_dir))
+        output = result.stdout
+        start = output.find('[')
+        end = output.rfind(']') + 1
+        data = json.loads(output[start:end])
+        posts = data[0].get("results", [])
+
+        if not posts:
+            console.print(f"[red]✗ Post not found: {post_id}[/red]")
+            sys.exit(1)
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]✗ Error querying post[/red]")
+        console.print(f"[red]{e.stderr}[/red]")
+        sys.exit(1)
+
+    # Delete from database
+    console.print("[dim]Deleting post from database...[/dim]")
+
+    delete_query = f"DELETE FROM posts WHERE id = '{full_post_id}'"
+    cmd = ["wrangler", "d1", "execute", "DB", "--command", delete_query]
+    if remote:
+        cmd.append("--remote")
+
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=str(worker_dir))
+        console.print(f"[green]✓[/green] Post deleted from database\n")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]✗ Failed to delete post[/red]")
+        console.print(f"[red]{e.stderr}[/red]")
+        sys.exit(1)
+
+    # Send Delete activity to followers
+    console.print("[dim]Querying approved followers for Delete activity delivery...[/dim]")
+
+    followers_query = "SELECT follower_actor_id, follower_inbox FROM followers WHERE status = 'approved'"
+    cmd_followers = ["wrangler", "d1", "execute", "DB", "--command", followers_query]
+    if remote:
+        cmd_followers.append("--remote")
+
+    try:
+        result = subprocess.run(cmd_followers, capture_output=True, text=True, check=True, cwd=str(worker_dir))
+        output = result.stdout
+        start = output.find('[')
+        end = output.rfind(']') + 1
+        data = json.loads(output[start:end])
+        followers = data[0].get("results", [])
+
+        if followers:
+            console.print(f"[dim]Delivering Delete activity to {len(followers)} approved follower(s)...[/dim]\n")
+
+            # Build Delete activity
+            delete_activity = build_delete_activity(actor_id, full_post_id)
+
+            # Deliver to all followers
+            successful, failed = deliver_to_followers(
+                activity=delete_activity,
+                followers=followers,
+                actor_url=actor_id,
+                verbose=True
+            )
+
+            console.print(f"\n[green]✓[/green] Post deleted and Delete activity delivered")
+            console.print(f"[dim]Successful deliveries: {successful}/{successful + failed}[/dim]")
+
+            if failed > 0:
+                console.print(f"[yellow]⚠[/yellow] Some deliveries failed ({failed})")
+        else:
+            console.print(f"[dim]No approved followers to notify[/dim]")
+            console.print(f"[green]✓[/green] Post deleted successfully")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[yellow]⚠[/yellow] Failed to query followers for delivery")
+        console.print(f"[dim]Post is deleted but Delete activity not sent[/dim]")
