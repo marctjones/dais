@@ -44,10 +44,19 @@ def create(content, visibility, remote):
     timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
     post_id_path = f"{timestamp}-{post_uuid}"
 
-    # Our actor info (TODO: make configurable)
-    actor_username = "marc"
-    actor_id = "https://social.dais.social/users/marc"
-    post_id = f"https://social.dais.social/users/{actor_username}/posts/{post_id_path}"
+    # Load configuration
+    config = Config()
+
+    # Use localhost for local development, configured domain for remote
+    if remote:
+        activitypub_domain = config.get("server.activitypub_domain", "social.dais.social")
+        actor_username = config.get("server.username", "marc")
+    else:
+        activitypub_domain = "localhost"
+        actor_username = config.get("server.username", "marc")
+
+    actor_id = f"https://{activitypub_domain}/users/{actor_username}"
+    post_id = f"https://{activitypub_domain}/users/{actor_username}/posts/{post_id_path}"
 
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
@@ -242,12 +251,21 @@ def delete(post_id, remote):
     """
     console.print(f"[bold blue]Deleting post {post_id}[/bold blue]\n")
 
-    # Our actor info (TODO: make configurable)
-    actor_username = "marc"
-    actor_id = "https://social.dais.social/users/marc"
+    # Load configuration
+    config = Config()
+
+    # Use localhost for local development, configured domain for remote
+    if remote:
+        activitypub_domain = config.get("server.activitypub_domain", "social.dais.social")
+        actor_username = config.get("server.username", "marc")
+    else:
+        activitypub_domain = "localhost"
+        actor_username = config.get("server.username", "marc")
+
+    actor_id = f"https://{activitypub_domain}/users/{actor_username}"
 
     # Construct full post URL
-    full_post_id = f"https://social.dais.social/users/{actor_username}/posts/{post_id}"
+    full_post_id = f"https://{activitypub_domain}/users/{actor_username}/posts/{post_id}"
 
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
