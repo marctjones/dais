@@ -1,5 +1,5 @@
 # Base image for Cloudflare Workers with Rust + wrangler
-FROM rust:1.75-slim as base
+FROM rust:1.83-slim as base
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
