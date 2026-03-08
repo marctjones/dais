@@ -6,95 +6,12 @@ from rich.table import Table
 import subprocess
 import sys
 import json
-import httpx
 from pathlib import Path
-from datetime import datetime
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.backends import default_backend
-import base64
 
 from dais_cli.config import Config
+from dais_cli.delivery import sign_and_send_activity, build_accept_activity, build_reject_activity
 
 console = Console()
-
-
-def sign_and_send_activity(activity_type: str, follower_inbox: str, follower_actor: str, follow_id: str):
-    """Sign and send an Accept or Reject activity to a follower's inbox."""
-
-    # Build activity
-    activity_id = f"https://social.dais.social/activities/{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-    our_actor = "https://social.dais.social/users/marc"
-
-    activity = {
-        "@context": "https://www.w3.org/ns/activitystreams",
-        "type": activity_type,
-        "id": activity_id,
-        "actor": our_actor,
-        "object": {
-            "type": "Follow",
-            "id": follow_id,
-            "actor": follower_actor,
-            "object": our_actor
-        }
-    }
-
-    body = json.dumps(activity)
-
-    # Load private key
-    private_key_path = Path.home() / ".dais" / "keys" / "private.pem"
-    with open(private_key_path, 'rb') as f:
-        private_key = serialization.load_pem_private_key(
-            f.read(),
-            password=None,
-            backend=default_backend()
-        )
-
-    # Parse URL
-    from urllib.parse import urlparse
-    parsed = urlparse(follower_inbox)
-    host = parsed.netloc
-    path = parsed.path
-
-    # Build signature
-    date = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
-
-    import hashlib
-    body_hash = hashlib.sha256(body.encode('utf-8')).digest()
-    digest = 'SHA-256=' + base64.b64encode(body_hash).decode('utf-8')
-
-    signing_string = f"(request-target): post {path}\nhost: {host}\ndate: {date}\ndigest: {digest}"
-
-    signature_bytes = private_key.sign(
-        signing_string.encode('utf-8'),
-        padding.PKCS1v15(),
-        hashes.SHA256()
-    )
-    signature_b64 = base64.b64encode(signature_bytes).decode('utf-8')
-
-    key_id = f"{our_actor}#main-key"
-    signature_header = (
-        f'keyId="{key_id}",'
-        f'algorithm="rsa-sha256",'
-        f'headers="(request-target) host date digest",'
-        f'signature="{signature_b64}"'
-    )
-
-    headers = {
-        'Date': date,
-        'Digest': digest,
-        'Signature': signature_header,
-        'Content-Type': 'application/activity+json',
-        'Accept': 'application/activity+json'
-    }
-
-    # Send activity
-    try:
-        response = httpx.post(follower_inbox, headers=headers, content=body, timeout=30.0)
-        return response.status_code in [200, 202], response.status_code
-    except Exception as e:
-        console.print(f"[red]✗ Error sending activity: {e}[/red]")
-        return False, None
 
 
 @click.group()
@@ -231,7 +148,21 @@ def approve(actor, remote):
 
         # Send Accept activity
         console.print(f"\n[dim]Sending Accept activity to {follower_inbox}...[/dim]")
-        success, status_code = sign_and_send_activity("Accept", follower_inbox, actor, follow_id)
+
+        # Build Follow activity object
+        our_actor = "https://social.dais.social/users/marc"
+        follow_activity = {
+            "type": "Follow",
+            "id": follow_id,
+            "actor": actor,
+            "object": our_actor
+        }
+
+        # Build Accept activity
+        accept_activity = build_accept_activity(our_actor, follow_activity)
+
+        # Send to follower's inbox
+        success, status_code = sign_and_send_activity(accept_activity, follower_inbox, our_actor)
 
         if success:
             console.print(f"[green]✓[/green] Accept activity sent successfully (status: {status_code})")
@@ -300,7 +231,21 @@ def reject(actor, remote):
 
         # Send Reject activity
         console.print(f"\n[dim]Sending Reject activity to {follower_inbox}...[/dim]")
-        success, status_code = sign_and_send_activity("Reject", follower_inbox, actor, follow_id)
+
+        # Build Follow activity object
+        our_actor = "https://social.dais.social/users/marc"
+        follow_activity = {
+            "type": "Follow",
+            "id": follow_id,
+            "actor": actor,
+            "object": our_actor
+        }
+
+        # Build Reject activity
+        reject_activity = build_reject_activity(our_actor, follow_activity)
+
+        # Send to follower's inbox
+        success, status_code = sign_and_send_activity(reject_activity, follower_inbox, our_actor)
 
         if success:
             console.print(f"[green]✓[/green] Reject activity sent successfully (status: {status_code})")
