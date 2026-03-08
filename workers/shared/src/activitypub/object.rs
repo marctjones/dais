@@ -13,6 +13,7 @@ pub struct Note {
 
     pub id: String,
 
+    #[serde(rename = "attributedTo")]
     pub attributed_to: String,
 
     pub content: String,

@@ -88,8 +88,13 @@ async fn handle_outbox(req: Request, ctx: RouteContext<()>) -> Result<Response> 
         notes.push(serde_json::to_value(note)?);
     }
 
+    // Get ActivityPub domain from environment
+    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "social.dais.social".to_string());
+
     // Build OrderedCollection
-    let outbox_id = format!("https://social.dais.social/users/{}/outbox", username);
+    let outbox_id = format!("https://{}/users/{}/outbox", activitypub_domain, username);
     let collection = OrderedCollection::new(outbox_id, notes);
 
     Ok(Response::from_json(&collection)?.with_headers(headers))
@@ -124,8 +129,13 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Get D1 database
     let db = ctx.env.d1("DB").expect("D1 database binding not found");
 
+    // Get ActivityPub domain from environment
+    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "social.dais.social".to_string());
+
     // Construct full post ID (URL)
-    let post_id = format!("https://social.dais.social/users/{}/posts/{}", username, post_id_param);
+    let post_id = format!("https://{}/users/{}/posts/{}", activitypub_domain, username, post_id_param);
 
     // Query for post
     let post_query = r#"
