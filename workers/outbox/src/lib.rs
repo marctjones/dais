@@ -17,17 +17,24 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 /// Handle GET /users/:username/outbox
 /// Returns OrderedCollection of all posts by this user
 async fn handle_outbox(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    // Add CORS headers for federation
-    let headers = Headers::new();
-    headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
+    // Handle OPTIONS request
+    if req.method() == Method::Options {
+        let headers = Headers::new();
+        headers.set("Access-Control-Allow-Origin", "*")?;
+        headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
+        headers.set("Access-Control-Allow-Headers", "Content-Type, Accept")?;
+        return Ok(Response::empty()?.with_headers(headers));
+    }
+
+    // Check Accept header for content negotiation
+    let accept_header = req.headers().get("Accept")?.unwrap_or_default();
+    let wants_html = accept_header.contains("text/html") && !accept_header.contains("application/activity+json");
+
+    // CORS headers
+    let mut headers = Headers::new();
     headers.set("Access-Control-Allow-Origin", "*")?;
     headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
     headers.set("Access-Control-Allow-Headers", "Content-Type, Accept")?;
-
-    // Handle OPTIONS request
-    if req.method() == Method::Options {
-        return Ok(Response::empty()?.with_headers(headers));
-    }
 
     // Get username from URL
     let username = match ctx.param("username") {
@@ -95,25 +102,40 @@ async fn handle_outbox(req: Request, ctx: RouteContext<()>) -> Result<Response> 
 
     // Build OrderedCollection
     let outbox_id = format!("https://{}/users/{}/outbox", activitypub_domain, username);
-    let collection = OrderedCollection::new(outbox_id, notes);
+    let collection = OrderedCollection::new(outbox_id.clone(), notes.clone());
 
-    Ok(Response::from_json(&collection)?.with_headers(headers))
+    // Return HTML or JSON based on Accept header
+    if wants_html {
+        headers.set("Content-Type", "text/html; charset=utf-8")?;
+        let html = render_outbox_html(username, &notes);
+        Ok(Response::from_html(html)?.with_headers(headers))
+    } else {
+        headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
+        Ok(Response::from_json(&collection)?.with_headers(headers))
+    }
 }
 
 /// Handle GET /users/:username/posts/:id
 /// Returns individual Note object
 async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    // Add CORS headers for federation
-    let headers = Headers::new();
-    headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
+    // Handle OPTIONS request
+    if req.method() == Method::Options {
+        let headers = Headers::new();
+        headers.set("Access-Control-Allow-Origin", "*")?;
+        headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
+        headers.set("Access-Control-Allow-Headers", "Content-Type, Accept")?;
+        return Ok(Response::empty()?.with_headers(headers));
+    }
+
+    // Check Accept header for content negotiation
+    let accept_header = req.headers().get("Accept")?.unwrap_or_default();
+    let wants_html = accept_header.contains("text/html") && !accept_header.contains("application/activity+json");
+
+    // CORS headers
+    let mut headers = Headers::new();
     headers.set("Access-Control-Allow-Origin", "*")?;
     headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
     headers.set("Access-Control-Allow-Headers", "Content-Type, Accept")?;
-
-    // Handle OPTIONS request
-    if req.method() == Method::Options {
-        return Ok(Response::empty()?.with_headers(headers));
-    }
 
     // Get username and post ID from URL
     let username = match ctx.param("username") {
@@ -171,7 +193,262 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         attachment: None,
     };
 
-    Ok(Response::from_json(&note)?.with_headers(headers))
+    // Return HTML or JSON based on Accept header
+    if wants_html {
+        headers.set("Content-Type", "text/html; charset=utf-8")?;
+        let html = render_post_html(username, &note);
+        Ok(Response::from_html(html)?.with_headers(headers))
+    } else {
+        headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
+        Ok(Response::from_json(&note)?.with_headers(headers))
+    }
+}
+
+fn render_post_html(username: &str, note: &Note) -> String {
+    format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Post by @{username}@dais.social</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            line-height: 1.6;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 600px;
+            margin: 40px auto;
+        }}
+        .post {{
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }}
+        .header {{
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #3a3a3a;
+        }}
+        .avatar {{
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            font-size: 20px;
+            color: white;
+            flex-shrink: 0;
+        }}
+        .author {{
+            flex: 1;
+        }}
+        .name {{
+            font-weight: 600;
+            color: #ffffff;
+        }}
+        .handle {{
+            color: #8899a6;
+            font-size: 14px;
+        }}
+        .content {{
+            font-size: 16px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }}
+        .meta {{
+            color: #8899a6;
+            font-size: 14px;
+            padding-top: 15px;
+            border-top: 1px solid #3a3a3a;
+        }}
+        .footer {{
+            text-align: center;
+            margin-top: 30px;
+            color: #8899a6;
+            font-size: 14px;
+        }}
+        .footer a {{
+            color: #667eea;
+            text-decoration: none;
+        }}
+        .footer a:hover {{
+            text-decoration: underline;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="post">
+            <div class="header">
+                <div class="avatar">{}</div>
+                <div class="author">
+                    <div class="name">@{}</div>
+                    <div class="handle">@{}@dais.social</div>
+                </div>
+            </div>
+            <div class="content">{}</div>
+            <div class="meta">
+                Posted: {}
+            </div>
+        </div>
+        <div class="footer">
+            <p><a href="/users/{}/outbox">← Back to posts</a></p>
+            <p style="margin-top: 10px;">Powered by <a href="https://dais.social">dais</a></p>
+        </div>
+    </div>
+</body>
+</html>"#,
+        username.chars().next().unwrap_or('?').to_uppercase(),
+        username,
+        username,
+        note.content,
+        note.published,
+        username
+    )
+}
+
+fn render_outbox_html(username: &str, notes: &[serde_json::Value]) -> String {
+    let posts_html = if notes.is_empty() {
+        r#"<div class="empty">No posts yet.</div>"#.to_string()
+    } else {
+        notes.iter().map(|note| {
+            let content = note["content"].as_str().unwrap_or("");
+            let published = note["published"].as_str().unwrap_or("");
+            let id = note["id"].as_str().unwrap_or("");
+            let post_id = id.split('/').last().unwrap_or("");
+
+            // Truncate long posts
+            let preview = if content.len() > 280 {
+                format!("{}...", &content[..280])
+            } else {
+                content.to_string()
+            };
+
+            format!(r#"
+            <div class="post">
+                <div class="content">{}</div>
+                <div class="meta">
+                    {} · <a href="/users/{}/posts/{}">View post</a>
+                </div>
+            </div>
+            "#, preview, published, username, post_id)
+        }).collect::<Vec<_>>().join("\n")
+    };
+
+    format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>@{username}@dais.social - Posts</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            line-height: 1.6;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 600px;
+            margin: 40px auto;
+        }}
+        .header {{
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }}
+        h1 {{
+            font-size: 28px;
+            margin-bottom: 8px;
+        }}
+        .subtitle {{
+            color: #8899a6;
+            font-size: 16px;
+        }}
+        .post {{
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }}
+        .content {{
+            font-size: 16px;
+            line-height: 1.6;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }}
+        .meta {{
+            color: #8899a6;
+            font-size: 14px;
+            padding-top: 12px;
+            border-top: 1px solid #3a3a3a;
+        }}
+        .meta a {{
+            color: #667eea;
+            text-decoration: none;
+        }}
+        .meta a:hover {{
+            text-decoration: underline;
+        }}
+        .empty {{
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            color: #8899a6;
+        }}
+        .footer {{
+            text-align: center;
+            margin-top: 30px;
+            color: #8899a6;
+            font-size: 14px;
+        }}
+        .footer a {{
+            color: #667eea;
+            text-decoration: none;
+        }}
+        .footer a:hover {{
+            text-decoration: underline;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>@{username}</h1>
+            <div class="subtitle">@{username}@dais.social</div>
+        </div>
+        {posts_html}
+        <div class="footer">
+            <p><a href="/users/{username}">View profile</a></p>
+            <p style="margin-top: 10px;">Powered by <a href="https://dais.social">dais</a></p>
+        </div>
+    </div>
+</body>
+</html>"#,
+        username = username,
+        posts_html = posts_html
+    )
 }
 
 #[cfg(test)]
