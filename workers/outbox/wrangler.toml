@@ -3,14 +3,26 @@ main = "build/worker/shim.mjs"
 compatibility_date = "2025-01-04"
 
 [vars]
-DOMAIN = "localhost"
-ACTIVITYPUB_DOMAIN = "localhost"
+DOMAIN = "dais.social"
+ACTIVITYPUB_DOMAIN = "social.dais.social"
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"
 
 [env.production]
 name = "outbox-production"
+routes = [
+  { pattern = "social.dais.social/*", custom_domain = true }
+]
+
+[env.production.vars]
+DOMAIN = "dais.social"
+ACTIVITYPUB_DOMAIN = "social.dais.social"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
 # D1 database for retrieving posts
 [[d1_databases]]
