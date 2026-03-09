@@ -16,6 +16,11 @@ from dais_cli.delivery import (
     build_delete_activity,
     deliver_to_followers
 )
+from dais_cli.media import (
+    upload_to_r2,
+    build_attachment_json,
+    build_attachment_dict
+)
 
 console = Console()
 
@@ -28,10 +33,12 @@ def post():
 
 @post.command()
 @click.argument('content')
+@click.option('--attach', type=click.Path(exists=True), multiple=True,
+              help='Attach media file (can be used multiple times)')
 @click.option('--visibility', type=click.Choice(['public', 'unlisted', 'followers', 'direct']),
               default='public', help='Post visibility')
 @click.option('--remote', is_flag=True, help='Use remote database and deliver to production followers')
-def create(content, visibility, remote):
+def create(content, attach, visibility, remote):
     """Create and publish a post.
 
     CONTENT: The text content of your post
@@ -78,6 +85,28 @@ def create(content, visibility, remote):
 
     published_at = datetime.utcnow().isoformat() + "Z"
 
+    # Handle media attachments
+    attachment_filenames = []
+    media_domain = config.get("cloudflare.r2_public_domain", "media.dais.social")
+
+    if attach:
+        console.print(f"[dim]Uploading {len(attach)} media file(s)...[/dim]")
+        for file_path in attach:
+            filename = upload_to_r2(file_path, remote=remote)
+            if filename:
+                attachment_filenames.append(filename)
+            else:
+                console.print(f"[yellow]⚠[/yellow] Skipping {file_path}")
+
+        if not attachment_filenames:
+            console.print("[red]✗ All media uploads failed[/red]")
+            sys.exit(1)
+
+        console.print(f"[green]✓[/green] Uploaded {len(attachment_filenames)} file(s)\n")
+
+    # Build attachment JSON for database
+    attachments_json = build_attachment_json(attachment_filenames, media_domain) if attachment_filenames else "[]"
+
     # Insert post to D1 database
     console.print("[dim]Saving post to database...[/dim]")
 
@@ -85,10 +114,11 @@ def create(content, visibility, remote):
     content_escaped = content.replace("'", "''")
     to_json = json.dumps(to_audience).replace("'", "''")
     cc_json = json.dumps(cc_audience).replace("'", "''") if cc_audience else "[]"
+    attachments_escaped = attachments_json.replace("'", "''")
 
     insert_query = f"""
-    INSERT INTO posts (id, actor_id, content, visibility, published_at)
-    VALUES ('{post_id}', '{actor_id}', '{content_escaped}', '{visibility}', '{published_at}')
+    INSERT INTO posts (id, actor_id, content, visibility, published_at, media_attachments)
+    VALUES ('{post_id}', '{actor_id}', '{content_escaped}', '{visibility}', '{published_at}', '{attachments_escaped}')
     """
 
     cmd = ["wrangler", "d1", "execute", "DB", "--command", insert_query]
@@ -115,6 +145,10 @@ def create(content, visibility, remote):
         "to": to_audience,
         "cc": cc_audience
     }
+
+    # Add attachments if present
+    if attachment_filenames:
+        note["attachment"] = build_attachment_dict(attachment_filenames, media_domain)
 
     # Wrap in Create activity
     create_activity = build_create_activity(actor_id, note)

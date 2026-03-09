@@ -13,9 +13,7 @@ command = "cargo install -q worker-build && worker-build --release"
 
 [env.production]
 name = "inbox-production"
-routes = [
-  { pattern = "social.dais.social/*", custom_domain = true }
-]
+# No custom domain routes - inbox is accessed via router worker
 
 [env.production.vars]
 DOMAIN = "dais.social"

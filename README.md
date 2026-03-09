@@ -289,8 +289,43 @@ cd cli && pytest -v
 cd workers/outbox && cargo test
 ```
 
-**Not yet implemented:**
-- [ ] Media attachment handling (R2 upload) - deferred to Phase 2.5
+### Phase 2.5 - Media Attachments ✅ COMPLETE
+
+**What you can do now:**
+- Upload images with posts (`dais post create "Text" --attach image.jpg`)
+- View images inline in HTML posts
+- Images federate to Mastodon/Pleroma timelines
+- Automatic MIME type detection
+- File validation (size limits: 10MB images, 40MB videos)
+- Unique filename generation for R2 storage
+
+**Implementation:**
+- [x] CLI media upload module with validation
+- [x] Post create with `--attach` option (multiple files supported)
+- [x] R2 upload via wrangler CLI
+- [x] Database storage of attachment metadata
+- [x] Outbox worker renders images in HTML
+- [x] ActivityPub Note attachment field for federation
+
+**Setup Required:**
+```bash
+# One-time: Enable R2 in Cloudflare Dashboard
+# Go to: Dashboard → R2 → Enable R2 (free tier)
+
+# Create bucket
+wrangler r2 bucket create dais-media
+
+# Uncomment R2 bindings in workers/outbox/wrangler.toml
+# Deploy worker
+cd workers/outbox && wrangler deploy
+
+# Upload images
+dais post create "Check out this photo! 📷" --attach photo.jpg --remote
+```
+
+**Supported formats:**
+- Images: JPEG, PNG, GIF, WebP (max 10MB)
+- Videos: MP4, WebM (max 40MB) - future support
 
 ### Phase 3 - Interactions
 - [ ] Receive and display replies
@@ -302,6 +337,23 @@ cd workers/outbox && cargo test
 - [ ] Complete CLI tooling
 - [ ] Analytics and reporting
 - [ ] Federation testing suite
+
+## Documentation
+
+### Getting Started
+- [DEPLOYMENT.md](DEPLOYMENT.md) - Complete production deployment guide
+- [DEVELOPMENT.md](DEVELOPMENT.md) - Local development environment setup
+- [TESTING.md](TESTING.md) - Running tests and CI/CD integration
+- [CONTAINER_QUICKSTART.md](CONTAINER_QUICKSTART.md) - Quick start with containers
+
+### Configuration
+- [DNS_SETUP.md](DNS_SETUP.md) - Custom domain and DNS configuration
+- [ROADMAP.md](ROADMAP.md) - Project roadmap and milestones
+
+### Contributing
+- [CONTRIBUTING.md](CONTRIBUTING.md) - How to contribute to dais
+- [AGENTS.md](AGENTS.md) - AI agent usage guidelines
+- [CLAUDE.md](CLAUDE.md) - Claude AI integration notes
 
 ## ActivityPub Resources
 

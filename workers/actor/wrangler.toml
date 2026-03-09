@@ -2,6 +2,9 @@ name = "actor"
 main = "build/worker/shim.mjs"
 compatibility_date = "2025-01-04"
 
+[vars]
+THEME = "cat-light"
+
 [build]
 command = "cargo install -q worker-build && worker-build --release"
 
@@ -13,13 +16,12 @@ command = "cargo install -q worker-build && worker-build --release"
 
 [env.production]
 name = "actor-production"
-routes = [
-  { pattern = "social.dais.social", custom_domain = true }
-]
+# No custom domain routes - actor is accessed via router worker
 
 [env.production.vars]
 DOMAIN = "dais.social"
 ACTIVITYPUB_DOMAIN = "social.dais.social"
+THEME = "cat-light"
 
 [[env.production.d1_databases]]
 binding = "DB"

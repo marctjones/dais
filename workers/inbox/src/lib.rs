@@ -64,6 +64,14 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let router = Router::new();
 
     router
+        .options("/users/:username/inbox", |_req, _ctx| {
+            let mut headers = Headers::new();
+            headers.set("Access-Control-Allow-Origin", "*")?;
+            headers.set("Access-Control-Allow-Methods", "POST, OPTIONS")?;
+            headers.set("Access-Control-Allow-Headers", "Content-Type, Signature, Date, Digest")?;
+            headers.set("Access-Control-Max-Age", "86400")?;
+            Ok(Response::empty()?.with_headers(headers))
+        })
         .post_async("/users/:username/inbox", handle_inbox)
         .run(req, env)
         .await
