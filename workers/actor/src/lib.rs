@@ -89,6 +89,25 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         }
     }
 
+    // Get actor ID as string for queries
+    let actor_id_str = actor_data["id"].as_str().ok_or("Missing actor id")?;
+
+    // Query for post count
+    let post_count_query = "SELECT COUNT(*) as count FROM posts WHERE actor_id = ?";
+    let post_count_stmt = db.prepare(post_count_query).bind(&[actor_id_str.into()])?;
+    let post_count_result = post_count_stmt.first::<serde_json::Value>(None).await?;
+    let post_count = post_count_result
+        .and_then(|v| v["count"].as_u64())
+        .unwrap_or(0) as usize;
+
+    // Query for follower count (approved only)
+    let follower_count_query = "SELECT COUNT(*) as count FROM followers WHERE actor_id = ? AND status = 'approved'";
+    let follower_count_stmt = db.prepare(follower_count_query).bind(&[actor_id_str.into()])?;
+    let follower_count_result = follower_count_stmt.first::<serde_json::Value>(None).await?;
+    let follower_count = follower_count_result
+        .and_then(|v| v["count"].as_u64())
+        .unwrap_or(0) as usize;
+
     // Get theme from environment (default to "dais")
     let theme_name = ctx.env.var("THEME")
         .map(|v| v.to_string())
@@ -98,7 +117,7 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Return HTML or JSON based on Accept header
     if wants_html {
         headers.set("Content-Type", "text/html; charset=utf-8")?;
-        let html = render_profile_html(&person, actor_username, &theme);
+        let html = render_profile_html(&person, actor_username, post_count, follower_count, &theme);
         Ok(Response::from_html(html)?.with_headers(headers))
     } else {
         headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
@@ -106,7 +125,7 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     }
 }
 
-fn render_profile_html(person: &Person, username: &str, theme: &Theme) -> String {
+fn render_profile_html(person: &Person, username: &str, post_count: usize, follower_count: usize, theme: &Theme) -> String {
     let display_name = person.name.as_ref().unwrap_or(&person.preferred_username);
     let summary = person.summary.as_deref().unwrap_or("");
 
@@ -305,7 +324,7 @@ fn render_profile_html(person: &Person, username: &str, theme: &Theme) -> String
 
             <div class="stats">
                 <div class="stat">
-                    <div class="stat-value">0</div>
+                    <div class="stat-value">{post_count}</div>
                     <div class="stat-label">Posts</div>
                 </div>
                 <div class="stat">
@@ -313,7 +332,7 @@ fn render_profile_html(person: &Person, username: &str, theme: &Theme) -> String
                     <div class="stat-label">Following</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value">0</div>
+                    <div class="stat-value">{follower_count}</div>
                     <div class="stat-label">Followers</div>
                 </div>
             </div>
@@ -355,6 +374,8 @@ fn render_profile_html(person: &Person, username: &str, theme: &Theme) -> String
         } else {
             String::new()
         },
+        post_count = post_count,
+        follower_count = follower_count,
         outbox_username = username,
         person_id = person.id
     )

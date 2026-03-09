@@ -256,20 +256,112 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     }
 }
 
+/// Convert external video URLs to embeds
+fn embed_external_videos(content: &str) -> String {
+    let mut result = content.to_string();
+
+    // YouTube patterns
+    let youtube_patterns = [
+        (r"https?://(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]+)", "https://www.youtube.com/embed/$1"),
+        (r"https?://youtu\.be/([a-zA-Z0-9_-]+)", "https://www.youtube.com/embed/$1"),
+    ];
+
+    // Vimeo pattern
+    let vimeo_pattern = (r"https?://(?:www\.)?vimeo\.com/(\d+)", "https://player.vimeo.com/video/$1");
+
+    // Replace YouTube URLs
+    for (_pattern, _embed_template) in &youtube_patterns {
+        // Simple regex-like replacement (Rust doesn't have regex in wasm by default)
+        // This is a simplified version - would need proper regex crate for production
+        if result.contains("youtube.com/watch?v=") || result.contains("youtu.be/") {
+            // Extract video ID manually
+            if let Some(start) = result.find("youtube.com/watch?v=") {
+                let id_start = start + 20; // Length of "youtube.com/watch?v="
+                if let Some(id_end) = result[id_start..].find(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
+                    let video_id = &result[id_start..id_start + id_end];
+                    let embed_html = format!(
+                        r#"<div class="video-embed"><iframe src="https://www.youtube.com/embed/{}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>"#,
+                        video_id
+                    );
+                    result = result.replace(&format!("https://www.youtube.com/watch?v={}", video_id), &embed_html);
+                } else {
+                    // ID goes to end of string
+                    let video_id = &result[id_start..];
+                    let embed_html = format!(
+                        r#"<div class="video-embed"><iframe src="https://www.youtube.com/embed/{}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>"#,
+                        video_id
+                    );
+                    result = result.replace(&format!("https://www.youtube.com/watch?v={}", video_id), &embed_html);
+                }
+            } else if let Some(start) = result.find("youtu.be/") {
+                let id_start = start + 9; // Length of "youtu.be/"
+                if let Some(id_end) = result[id_start..].find(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
+                    let video_id = &result[id_start..id_start + id_end];
+                    let embed_html = format!(
+                        r#"<div class="video-embed"><iframe src="https://www.youtube.com/embed/{}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>"#,
+                        video_id
+                    );
+                    result = result.replace(&format!("https://youtu.be/{}", video_id), &embed_html);
+                } else {
+                    let video_id = &result[id_start..];
+                    let embed_html = format!(
+                        r#"<div class="video-embed"><iframe src="https://www.youtube.com/embed/{}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>"#,
+                        video_id
+                    );
+                    result = result.replace(&format!("https://youtu.be/{}", video_id), &embed_html);
+                }
+            }
+        }
+    }
+
+    // Replace Vimeo URLs
+    if result.contains("vimeo.com/") {
+        if let Some(start) = result.find("vimeo.com/") {
+            let id_start = start + 10; // Length of "vimeo.com/"
+            if let Some(id_end) = result[id_start..].find(|c: char| !c.is_numeric()) {
+                let video_id = result[id_start..id_start + id_end].to_string();
+                let embed_html = format!(
+                    r#"<div class="video-embed"><iframe src="https://player.vimeo.com/video/{}" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>"#,
+                    video_id
+                );
+                result = result.replace(&format!("https://vimeo.com/{}", video_id), &embed_html);
+                result = result.replace(&format!("https://www.vimeo.com/{}", video_id), &embed_html);
+            }
+        }
+    }
+
+    result
+}
+
 fn render_post_html(username: &str, note: &Note, attachments: &Option<Vec<Attachment>>, theme: &Theme) -> String {
     let light = &theme.light;
     let dark = &theme.dark;
 
+    // Process content for external video embeds
+    let processed_content = embed_external_videos(&note.content);
+
     // Build attachments HTML
     let attachments_html = if let Some(atts) = attachments {
         if !atts.is_empty() {
-            let images: Vec<String> = atts.iter().filter(|a| a.attachment_type == "Image").map(|att| {
-                let alt_text = att.name.as_ref().map(|s| s.as_str()).unwrap_or("");
-                format!(r#"<img src="{}" alt="{}" loading="lazy">"#, att.url, alt_text)
-            }).collect();
+            let mut media_items: Vec<String> = Vec::new();
 
-            if !images.is_empty() {
-                format!(r#"<div class="attachments">{}</div>"#, images.join("\n"))
+            // Render images
+            for att in atts.iter().filter(|a| a.attachment_type == "Image") {
+                let alt_text = att.name.as_ref().map(|s| s.as_str()).unwrap_or("");
+                media_items.push(format!(r#"<img src="{}" alt="{}" loading="lazy">"#, att.url, alt_text));
+            }
+
+            // Render videos
+            for att in atts.iter().filter(|a| a.attachment_type == "Video") {
+                let alt_text = att.name.as_ref().map(|s| s.as_str()).unwrap_or("");
+                media_items.push(format!(
+                    r#"<video controls preload="metadata" aria-label="{}"><source src="{}" type="{}">Your browser does not support video playback.</video>"#,
+                    alt_text, att.url, att.media_type
+                ));
+            }
+
+            if !media_items.is_empty() {
+                format!(r#"<div class="attachments">{}</div>"#, media_items.join("\n"))
             } else {
                 String::new()
             }
@@ -359,8 +451,34 @@ fn render_post_html(username: &str, note: &Note, attachments: &Option<Vec<Attach
             margin-bottom: 8px;
             border-radius: 12px;
         }}
-        .attachments img:last-child {{
+        .attachments video {{
+            width: 100%;
+            height: auto;
+            display: block;
+            margin-bottom: 8px;
+            border-radius: 12px;
+            background: #000;
+        }}
+        .attachments img:last-child,
+        .attachments video:last-child {{
             margin-bottom: 0;
+        }}
+        .video-embed {{
+            margin: 24px 0;
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 aspect ratio */
+            height: 0;
+            overflow: hidden;
+            border-radius: 12px;
+        }}
+        .video-embed iframe {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            border-radius: 12px;
         }}
         .meta {{
             color: {text_secondary};
@@ -454,7 +572,7 @@ fn render_post_html(username: &str, note: &Note, attachments: &Option<Vec<Attach
         avatar_initial = username.chars().next().unwrap_or('?').to_uppercase(),
         name_username = username,
         handle_username = username,
-        content = note.content,
+        content = processed_content,
         published = note.published,
         outbox_username = username,
         attachments = attachments_html
@@ -474,19 +592,35 @@ fn render_outbox_html(username: &str, notes: &[serde_json::Value], total_items: 
             let id = note["id"].as_str().unwrap_or("");
             let post_id = id.split('/').last().unwrap_or("");
 
-            // Truncate long posts
-            let preview = if content.len() > 280 {
-                format!("{}...", &content[..280])
+            // Process content for external video embeds
+            let processed_content = embed_external_videos(content);
+
+            // Truncate long posts (after embed processing)
+            let preview = if processed_content.len() > 280 {
+                format!("{}...", &processed_content[..280])
             } else {
-                content.to_string()
+                processed_content.to_string()
             };
 
-            // Build attachment preview (show first image thumbnail)
+            // Build attachment preview (show first media item)
             let attachment_preview = if let Some(attachments) = note["attachment"].as_array() {
+                // Try to find first image
                 if let Some(first_image) = attachments.iter().find(|a| a["type"].as_str() == Some("Image")) {
                     if let Some(url) = first_image["url"].as_str() {
                         let alt = first_image["name"].as_str().unwrap_or("");
                         format!(r#"<div class="attachment-preview"><img src="{}" alt="{}" loading="lazy"></div>"#, url, alt)
+                    } else {
+                        String::new()
+                    }
+                // Try to find first video
+                } else if let Some(first_video) = attachments.iter().find(|a| a["type"].as_str() == Some("Video")) {
+                    if let Some(url) = first_video["url"].as_str() {
+                        let media_type = first_video["mediaType"].as_str().unwrap_or("video/mp4");
+                        let alt = first_video["name"].as_str().unwrap_or("");
+                        format!(
+                            r#"<div class="attachment-preview"><video controls preload="metadata" aria-label="{}"><source src="{}" type="{}"></video></div>"#,
+                            alt, url, media_type
+                        )
                     } else {
                         String::new()
                     }
@@ -619,6 +753,30 @@ fn render_outbox_html(username: &str, notes: &[serde_json::Value], total_items: 
             width: 100%;
             height: auto;
             display: block;
+            border-radius: 12px;
+        }}
+        .attachment-preview video {{
+            width: 100%;
+            height: auto;
+            display: block;
+            border-radius: 12px;
+            background: #000;
+        }}
+        .video-embed {{
+            margin: 16px 0;
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 aspect ratio */
+            height: 0;
+            overflow: hidden;
+            border-radius: 12px;
+        }}
+        .video-embed iframe {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
             border-radius: 12px;
         }}
         .actions {{
