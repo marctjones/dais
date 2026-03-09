@@ -31,11 +31,10 @@ database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
 # R2 bucket for media attachments
-# Note: Requires R2 to be enabled in Cloudflare Dashboard first
-# [[r2_buckets]]
-# binding = "MEDIA_BUCKET"
-# bucket_name = "dais-media"
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media"
 
-# [[env.production.r2_buckets]]
-# binding = "MEDIA_BUCKET"
-# bucket_name = "dais-media"
+[[env.production.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media"

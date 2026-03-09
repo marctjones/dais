@@ -107,18 +107,18 @@ def generate_filename(original_path: str) -> str:
     return f"{timestamp}-{short_uuid}{ext}"
 
 
-def generate_media_url(filename: str, domain: str = "media.dais.social") -> str:
+def generate_media_url(filename: str, domain: str = "social.dais.social") -> str:
     """
     Generate public URL for media file.
 
     Args:
         filename: Name of file in R2
-        domain: Custom domain for R2 bucket
+        domain: Base domain (default: social.dais.social)
 
     Returns:
-        Public URL
+        Public URL (e.g., https://social.dais.social/media/filename.jpg)
     """
-    return f"https://{domain}/{filename}"
+    return f"https://{domain}/media/{filename}"
 
 
 def upload_to_r2(file_path: str, bucket: str = "dais-media", remote: bool = False) -> Optional[str]:
@@ -160,7 +160,7 @@ def upload_to_r2(file_path: str, bucket: str = "dais-media", remote: bool = Fals
 
 def build_attachment_json(
     filenames: List[str],
-    domain: str = "media.dais.social",
+    domain: str = "social.dais.social",
     alt_texts: Optional[List[str]] = None
 ) -> str:
     """
@@ -208,7 +208,7 @@ def build_attachment_json(
 
 def build_attachment_dict(
     filenames: List[str],
-    domain: str = "media.dais.social",
+    domain: str = "social.dais.social",
     alt_texts: Optional[List[str]] = None
 ) -> List[Dict]:
     """

@@ -2,11 +2,20 @@ name = "router"
 main = "src/index.js"
 compatibility_date = "2025-01-04"
 
+# R2 bucket for serving media files
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media"
+
 [env.production]
 name = "router-production"
 routes = [
   { pattern = "social.dais.social", custom_domain = true }
 ]
+
+[[env.production.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media"
 
 [env.production.vars]
 WEBFINGER_URL = "https://webfinger-production.marc-t-jones.workers.dev"

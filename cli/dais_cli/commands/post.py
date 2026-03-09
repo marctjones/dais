@@ -87,7 +87,7 @@ def create(content, attach, visibility, remote):
 
     # Handle media attachments
     attachment_filenames = []
-    media_domain = config.get("cloudflare.r2_public_domain", "media.dais.social")
+    media_domain = config.get("cloudflare.r2_public_domain", "social.dais.social")
 
     if attach:
         console.print(f"[dim]Uploading {len(attach)} media file(s)...[/dim]")
