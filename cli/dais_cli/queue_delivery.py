@@ -72,7 +72,7 @@ def deliver_dual_protocol_post(
 
 
 def deliver_to_bluesky(text: str, post_id: str, remote: bool = False) -> Optional[str]:
-    """Post to Bluesky via AT Protocol.
+    """Post to self-hosted PDS via AT Protocol.
 
     Args:
         text: Post text content
@@ -82,51 +82,92 @@ def deliver_to_bluesky(text: str, post_id: str, remote: bool = False) -> Optiona
     Returns:
         AT Protocol URI of the created post, or None on failure
     """
+    # Use self-hosted PDS
+    pds_url = "https://pds.dais.social" if remote else "http://localhost:8787"
+
+    # Load PDS credentials
+    password_path = get_dais_dir() / "pds-password.txt"
+    if not password_path.exists():
+        console.print("[yellow]⚠[/yellow] PDS password not found. Check .dais/pds-password.txt")
+        return None
+
+    with open(password_path) as f:
+        password = f.read().strip()
+
+    # Create session with self-hosted PDS
+    import httpx
+
     try:
-        from atproto import Client
-    except ImportError:
-        console.print("[yellow]⚠[/yellow] atproto library not installed. Install with: pip install atproto")
-        return None
+        # Authenticate
+        auth_response = httpx.post(
+            f"{pds_url}/xrpc/com.atproto.server.createSession",
+            json={
+                "identifier": "social.dais.social",
+                "password": password
+            },
+            timeout=30.0
+        )
 
-    # Load Bluesky credentials
-    config_path = get_dais_dir() / "bluesky.json"
-    if not config_path.exists():
-        console.print("[yellow]⚠[/yellow] Bluesky not configured. Run: dais setup bluesky")
-        return None
+        if auth_response.status_code != 200:
+            console.print(f"[yellow]⚠[/yellow] PDS authentication failed: {auth_response.status_code}")
+            return None
 
-    with open(config_path) as f:
-        config = json.load(f)
+        session = auth_response.json()
+        access_token = session.get("access_jwt")
+        did = session.get("did", "did:web:social.dais.social")
 
-    # Create client and login
-    client = Client()
-    client.login(config['handle'], config['password'])
+        # Create post record
+        from datetime import datetime
+        created_at = datetime.utcnow().isoformat() + "Z"
 
-    # Send post
-    response = client.send_post(text=text)
+        post_response = httpx.post(
+            f"{pds_url}/xrpc/com.atproto.repo.createRecord",
+            json={
+                "repo": did,
+                "collection": "app.bsky.feed.post",
+                "record": {
+                    "$type": "app.bsky.feed.post",
+                    "text": text,
+                    "createdAt": created_at
+                }
+            },
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=30.0
+        )
 
-    # Update database with AT Protocol URI
-    if response and response.uri:
-        project_root = Path(__file__).parent.parent.parent
-        worker_dir = project_root / "workers" / "actor"
+        if post_response.status_code == 200:
+            result = post_response.json()
+            uri = result.get("uri")
+            cid = result.get("cid")
 
-        atproto_uri_escaped = response.uri.replace("'", "''")
-        atproto_cid_escaped = response.cid.replace("'", "''") if hasattr(response, 'cid') else ''
+            # Update database with AT Protocol URI
+            if uri:
+                project_root = Path(__file__).parent.parent.parent
+                worker_dir = project_root / "workers" / "actor"
 
-        update_query = f"""
-        UPDATE posts
-        SET atproto_uri = '{atproto_uri_escaped}', atproto_cid = '{atproto_cid_escaped}'
-        WHERE id = '{post_id.replace("'", "''")}'
-        """
+                atproto_uri_escaped = uri.replace("'", "''")
+                atproto_cid_escaped = cid.replace("'", "''") if cid else ''
 
-        cmd = ["wrangler", "d1", "execute", "DB", "--command", update_query]
-        if remote:
-            cmd.append("--remote")
+                update_query = f"""
+                UPDATE posts
+                SET atproto_uri = '{atproto_uri_escaped}', atproto_cid = '{atproto_cid_escaped}'
+                WHERE id = '{post_id.replace("'", "''")}'
+                """
 
-        try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=str(worker_dir))
-        except subprocess.CalledProcessError:
-            console.print("[dim]Warning: Could not save AT Protocol URI to database[/dim]")
+                cmd = ["wrangler", "d1", "execute", "DB", "--command", update_query]
+                if remote:
+                    cmd.append("--remote")
 
-        return response.uri
+                try:
+                    subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=str(worker_dir))
+                except subprocess.CalledProcessError:
+                    console.print("[dim]Warning: Could not save AT Protocol URI to database[/dim]")
+
+                return uri
+        else:
+            console.print(f"[yellow]⚠[/yellow] Failed to create post: {post_response.status_code}")
+
+    except Exception as e:
+        console.print(f"[yellow]⚠[/yellow] PDS error: {e}")
 
     return None
