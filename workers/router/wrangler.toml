@@ -10,7 +10,8 @@ bucket_name = "dais-media"
 [env.production]
 name = "router-production"
 routes = [
-  { pattern = "social.dais.social", custom_domain = true }
+  { pattern = "social.dais.social", custom_domain = true },
+  { pattern = "pds.dais.social", custom_domain = true }
 ]
 
 [[env.production.r2_buckets]]
@@ -22,3 +23,4 @@ WEBFINGER_URL = "https://webfinger-production.marc-t-jones.workers.dev"
 ACTOR_URL = "https://actor-production.marc-t-jones.workers.dev"
 INBOX_URL = "https://inbox-production.marc-t-jones.workers.dev"
 OUTBOX_URL = "https://outbox-production.marc-t-jones.workers.dev"
+PDS_URL = "https://pds-production.marc-t-jones.workers.dev"

@@ -2,6 +2,18 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
+    const hostname = url.hostname;
+
+    // Route pds.dais.social to PDS worker
+    if (hostname === 'pds.dais.social') {
+      const targetUrl = env.PDS_URL + path + url.search;
+      const targetRequest = new Request(targetUrl, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+      });
+      return fetch(targetRequest);
+    }
 
     // Serve media files from R2
     if (path.startsWith('/media/')) {
