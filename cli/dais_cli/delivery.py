@@ -4,6 +4,7 @@ import httpx
 import json
 import base64
 import hashlib
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple, List
@@ -12,8 +13,105 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
 from rich.console import Console
+from dais_cli.config import get_dais_dir
 
 console = Console()
+
+
+def execute_remote_d1(query: str, remote: bool = False) -> Optional[List[Dict]]:
+    """Execute a D1 query against the database.
+
+    Args:
+        query: SQL query to execute
+        remote: Whether to execute on remote (production) database
+
+    Returns:
+        List of result dictionaries, or None on error
+    """
+    # Get project root
+    project_root = Path(__file__).parent.parent.parent
+    worker_dir = project_root / "workers" / "actor"
+
+    cmd = ["wrangler", "d1", "execute", "DB", "--command", query]
+    if remote:
+        cmd.append("--remote")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=str(worker_dir)
+        )
+        output = result.stdout
+
+        # Parse JSON output from wrangler
+        start = output.find('[')
+        end = output.rfind(']') + 1
+        if start >= 0 and end > start:
+            data = json.loads(output[start:end])
+            if data and len(data) > 0:
+                return data[0].get("results", [])
+
+        return []
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]✗ Database query failed[/red]")
+        console.print(f"[dim]{e.stderr}[/dim]")
+        return None
+    except json.JSONDecodeError:
+        console.print(f"[red]✗ Failed to parse database response[/red]")
+        return None
+
+
+def get_actor_info(remote: bool = False) -> Dict[str, str]:
+    """Get actor information from config.
+
+    Args:
+        remote: Whether to use remote/production settings
+
+    Returns:
+        Dict with 'username', 'domain', and 'actor_id'
+    """
+    from dais_cli.config import Config
+
+    config = Config()
+    username = config.get("server.username", "social")
+    domain = config.get("server.domain", "dais.social")
+
+    if remote:
+        activitypub_domain = config.get("server.activitypub_domain", f"social.{domain}")
+    else:
+        activitypub_domain = "localhost"
+
+    actor_id = f"https://{activitypub_domain}/users/{username}"
+
+    return {
+        "username": username,
+        "domain": domain,
+        "activitypub_domain": activitypub_domain,
+        "actor_id": actor_id
+    }
+
+
+def send_activity(inbox_url: str, activity: Dict, remote: bool = False) -> bool:
+    """Send an activity to a remote inbox.
+
+    Args:
+        inbox_url: Target inbox URL
+        activity: ActivityPub activity object
+        remote: Whether this is for remote/production
+
+    Returns:
+        True if successful, False otherwise
+    """
+    actor_info = get_actor_info(remote)
+    success, status = sign_and_send_activity(
+        activity=activity,
+        inbox_url=inbox_url,
+        actor_url=actor_info["actor_id"]
+    )
+    return success
 
 
 def sign_and_send_activity(
@@ -34,7 +132,7 @@ def sign_and_send_activity(
         Tuple of (success: bool, status_code: Optional[int])
     """
     if private_key_path is None:
-        private_key_path = Path.home() / ".dais" / "keys" / "private.pem"
+        private_key_path = get_dais_dir() / "keys" / "private.pem"
 
     # Serialize activity to JSON
     body = json.dumps(activity)

@@ -6,6 +6,19 @@ from typing import Optional
 import toml
 
 
+def get_dais_dir() -> Path:
+    """Get the project-local .dais directory.
+
+    Returns:
+        Path to .dais directory in the project root
+    """
+    # Get project root (4 levels up from this file: cli/dais_cli/config.py -> project root)
+    project_root = Path(__file__).parent.parent.parent
+    dais_dir = project_root / ".dais"
+    dais_dir.mkdir(parents=True, exist_ok=True)
+    return dais_dir
+
+
 class Config:
     """Configuration manager for dais CLI."""
 
@@ -13,9 +26,9 @@ class Config:
         """Initialize configuration.
 
         Args:
-            config_dir: Override default config directory (~/.dais)
+            config_dir: Override default config directory (project/.dais)
         """
-        self.config_dir = config_dir or Path.home() / ".dais"
+        self.config_dir = config_dir or get_dais_dir()
         self.config_file = self.config_dir / "config.toml"
         self.keys_dir = self.config_dir / "keys"
 

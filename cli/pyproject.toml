@@ -25,6 +25,7 @@ dependencies = [
     "boto3>=1.34.0",
     "python-dotenv>=1.0.0",
     "toml>=0.10.0",
+    "atproto>=0.0.54",
 ]
 
 [project.optional-dependencies]

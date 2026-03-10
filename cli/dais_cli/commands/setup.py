@@ -1,6 +1,7 @@
 """Setup and initialization commands."""
 
 import click
+import json
 from rich.console import Console
 from rich.panel import Panel
 from pathlib import Path
@@ -8,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
-from dais_cli.config import Config
+from dais_cli.config import Config, get_dais_dir
 
 console = Console()
 
@@ -153,3 +154,71 @@ def show():
         title="dais.social Configuration",
         border_style="blue"
     ))
+
+
+@setup.command()
+@click.option('--force', is_flag=True, help='Overwrite existing Bluesky configuration')
+def bluesky(force):
+    """Configure Bluesky (AT Protocol) credentials.
+
+    This allows dais to post to Bluesky alongside ActivityPub.
+    You'll need your Bluesky handle and password (or app password).
+
+    Example:
+        dais setup bluesky
+    """
+    bluesky_config_path = get_dais_dir() / "bluesky.json"
+
+    if bluesky_config_path.exists() and not force:
+        console.print("[yellow]Bluesky already configured. Use --force to overwrite.[/yellow]")
+        return
+
+    console.print("[bold blue]Bluesky (AT Protocol) Setup[/bold blue]\n")
+
+    console.print("Enter your Bluesky credentials:")
+    console.print("[dim]Get an app password at: https://bsky.app/settings/app-passwords[/dim]\n")
+
+    handle = click.prompt(
+        "Bluesky handle (e.g., username.bsky.social)",
+        type=str
+    )
+
+    password = click.prompt(
+        "Bluesky password or app password",
+        hide_input=True,
+        type=str
+    )
+
+    # Test the credentials
+    console.print("\n[dim]Testing credentials...[/dim]")
+    try:
+        from atproto import Client
+        client = Client()
+        session = client.login(handle, password)
+
+        console.print(f"[green]✓[/green] Successfully authenticated as {session.handle}")
+
+        # Save credentials
+        bluesky_config = {
+            "handle": handle,
+            "password": password,
+            "did": session.did
+        }
+
+        bluesky_config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(bluesky_config_path, 'w') as f:
+            json.dump(bluesky_config, f, indent=2)
+
+        bluesky_config_path.chmod(0o600)
+        console.print(f"[green]✓[/green] Credentials saved to {bluesky_config_path}")
+
+        console.print("\n[bold green]Bluesky setup complete![/bold green]")
+        console.print("\n[dim]You can now post to both ActivityPub and Bluesky with:[/dim]")
+        console.print("[dim]  dais post create \"Hello!\" --protocol both --remote[/dim]\n")
+
+    except ImportError:
+        console.print("[red]✗[/red] atproto library not installed")
+        console.print("[dim]Install with: pip install atproto[/dim]")
+    except Exception as e:
+        console.print(f"[red]✗[/red] Authentication failed: {e}")
+        console.print("[dim]Check your handle and password[/dim]")

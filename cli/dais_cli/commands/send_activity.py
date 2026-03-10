@@ -11,7 +11,7 @@ from cryptography.hazmat.backends import default_backend
 import base64
 from rich.console import Console
 
-from dais_cli.config import Config
+from dais_cli.config import Config, get_dais_dir
 
 console = Console()
 
@@ -133,7 +133,7 @@ def send_response(activity_type, follow_activity_id, remote):
     body = json.dumps(activity)
     
     # Sign the request
-    private_key_path = Path.home() / ".dais" / "keys" / "private.pem"
+    private_key_path = get_dais_dir() / "keys" / "private.pem"
     key_id = f"{our_actor}#main-key"
     
     headers = sign_request(follower_inbox, body, private_key_path, key_id)

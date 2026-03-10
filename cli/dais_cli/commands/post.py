@@ -13,9 +13,9 @@ import uuid
 from dais_cli.config import Config
 from dais_cli.delivery import (
     build_create_activity,
-    build_delete_activity,
-    deliver_to_followers
+    build_delete_activity
 )
+from dais_cli.queue_delivery import deliver_dual_protocol_post
 from dais_cli.media import (
     upload_to_r2,
     build_attachment_json,
@@ -39,8 +39,10 @@ def post():
               help='Alt text for media (provide in same order as --attach)')
 @click.option('--visibility', type=click.Choice(['public', 'unlisted', 'followers', 'direct']),
               default='public', help='Post visibility')
+@click.option('--protocol', type=click.Choice(['both', 'activitypub', 'atproto']),
+              default='both', help='Which protocol(s) to post to')
 @click.option('--remote', is_flag=True, help='Use remote database and deliver to production followers')
-def create(content, attach, alt, visibility, remote):
+def create(content, attach, alt, visibility, protocol, remote):
     """Create and publish a post.
 
     CONTENT: The text content of your post
@@ -50,7 +52,7 @@ def create(content, attach, alt, visibility, remote):
         dais post create "Check this out!" --attach photo.jpg --alt "Sunset over mountains" --remote
         dais post create "My gallery" --attach img1.jpg --alt "First pic" --attach img2.jpg --alt "Second pic" --remote
     """
-    console.print(f"[bold blue]Creating {visibility} post[/bold blue]\n")
+    console.print(f"[bold blue]Creating {visibility} post ({protocol})[/bold blue]\n")
     console.print(f"{content}\n")
 
     # Generate unique post ID
@@ -125,8 +127,8 @@ def create(content, attach, alt, visibility, remote):
     attachments_escaped = attachments_json.replace("'", "''")
 
     insert_query = f"""
-    INSERT INTO posts (id, actor_id, content, visibility, published_at, media_attachments)
-    VALUES ('{post_id}', '{actor_id}', '{content_escaped}', '{visibility}', '{published_at}', '{attachments_escaped}')
+    INSERT INTO posts (id, actor_id, content, visibility, published_at, media_attachments, protocol)
+    VALUES ('{post_id}', '{actor_id}', '{content_escaped}', '{visibility}', '{published_at}', '{attachments_escaped}', '{protocol}')
     """
 
     cmd = ["wrangler", "d1", "execute", "DB", "--command", insert_query]
@@ -161,46 +163,45 @@ def create(content, attach, alt, visibility, remote):
     # Wrap in Create activity
     create_activity = build_create_activity(actor_id, note)
 
-    # Query approved followers for delivery
+    # Queue deliveries for both protocols
     if visibility in ['public', 'unlisted', 'followers']:
-        console.print("[dim]Querying approved followers for delivery...[/dim]")
+        console.print("[dim]Queueing deliveries...[/dim]")
 
-        followers_query = "SELECT follower_actor_id, follower_inbox FROM followers WHERE status = 'approved'"
-        cmd_followers = ["wrangler", "d1", "execute", "DB", "--command", followers_query]
-        if remote:
-            cmd_followers.append("--remote")
+        # Get ActivityPub followers if needed
+        followers = []
+        if protocol in ['activitypub', 'both']:
+            followers_query = "SELECT follower_actor_id, follower_inbox FROM followers WHERE status = 'approved'"
+            cmd_followers = ["wrangler", "d1", "execute", "DB", "--command", followers_query]
+            if remote:
+                cmd_followers.append("--remote")
 
-        try:
-            result = subprocess.run(cmd_followers, capture_output=True, text=True, check=True, cwd=str(worker_dir))
-            output = result.stdout
-            start = output.find('[')
-            end = output.rfind(']') + 1
-            data = json.loads(output[start:end])
-            followers = data[0].get("results", [])
+            try:
+                result = subprocess.run(cmd_followers, capture_output=True, text=True, check=True, cwd=str(worker_dir))
+                output = result.stdout
+                start = output.find('[')
+                end = output.rfind(']') + 1
+                data = json.loads(output[start:end])
+                followers = data[0].get("results", [])
+            except subprocess.CalledProcessError as e:
+                console.print(f"[yellow]⚠[/yellow] Failed to query followers")
+                console.print(f"[dim]{e.stderr}[/dim]")
 
-            if followers:
-                console.print(f"[dim]Delivering to {len(followers)} approved follower(s)...[/dim]\n")
+        # Deliver to selected protocol(s)
+        results = deliver_dual_protocol_post(
+            text=content,
+            post_id=post_id,
+            actor_url=actor_id,
+            activity=create_activity,
+            followers=followers,
+            protocol=protocol,
+            remote=remote
+        )
 
-                # Deliver to all followers
-                successful, failed = deliver_to_followers(
-                    activity=create_activity,
-                    followers=followers,
-                    actor_url=actor_id,
-                    verbose=True
-                )
-
-                console.print(f"\n[green]✓[/green] Post created and delivered")
-                console.print(f"[dim]Successful deliveries: {successful}/{successful + failed}[/dim]")
-
-                if failed > 0:
-                    console.print(f"[yellow]⚠[/yellow] Some deliveries failed ({failed})")
-            else:
-                console.print(f"[dim]No approved followers to deliver to[/dim]")
-                console.print(f"[green]✓[/green] Post created successfully")
-
-        except subprocess.CalledProcessError as e:
-            console.print(f"[yellow]⚠[/yellow] Failed to query followers for delivery")
-            console.print(f"[dim]Post is saved but not delivered[/dim]")
+        console.print(f"\n[green]✓[/green] Post created and delivered")
+        if results['activitypub']['successful'] > 0:
+            console.print(f"[dim]ActivityPub: {results['activitypub']['successful']} successful, {results['activitypub']['failed']} failed[/dim]")
+        if results['atproto']['success']:
+            console.print(f"[dim]AT Protocol: Posted successfully[/dim]")
     else:
         console.print(f"[green]✓[/green] Post created (visibility: {visibility}, no delivery needed)")
 

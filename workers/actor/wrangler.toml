@@ -28,8 +28,17 @@ binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
+[[env.production.queues.producers]]
+binding = "DELIVERY_QUEUE"
+queue = "delivery-queue"
+
 # D1 database for actor data
 [[d1_databases]]
 binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+# Queue producer for delivery jobs
+[[queues.producers]]
+binding = "DELIVERY_QUEUE"
+queue = "delivery-queue"
