@@ -1,0 +1,19 @@
+[package]
+name = "pds"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+worker = { version = "0.7.2", features = ["d1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = "s"
+lto = true

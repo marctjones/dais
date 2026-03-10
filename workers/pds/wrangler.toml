@@ -1,0 +1,28 @@
+name = "pds"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[vars]
+DOMAIN = "social.dais.social"
+PDS_HOSTNAME = "pds.dais.social"
+
+# D1 database for AT Protocol records
+[[d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+[env.production]
+name = "pds-production"
+
+[env.production.vars]
+DOMAIN = "social.dais.social"
+PDS_HOSTNAME = "pds.dais.social"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
