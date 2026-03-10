@@ -30,13 +30,24 @@ impl DurableObject for RelaySubscription {
         let path_str = path.to_string();
 
         // Check if this is a WebSocket upgrade request
-        if req.headers().get("Upgrade")?.as_deref() == Some("websocket") {
-            return self.handle_subscribe(req).await;
-        }
+        let is_websocket = req.headers()
+            .get("Upgrade")
+            .ok()
+            .flatten()
+            .map(|v| v.to_lowercase() == "websocket")
+            .unwrap_or(false);
 
         match path_str.as_str() {
             "/broadcast" => self.handle_broadcast(req).await,
-            _ => self.handle_subscribe(req).await,
+            _ if is_websocket => self.handle_subscribe(req).await,
+            _ => {
+                // Return info about the firehose endpoint
+                let info = json!({
+                    "message": "WebSocket endpoint for com.atproto.sync.subscribeRepos",
+                    "usage": "Connect with WebSocket client to receive repo events"
+                });
+                Response::from_json(&info)
+            }
         }
     }
 }
