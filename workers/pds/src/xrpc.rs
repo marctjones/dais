@@ -119,19 +119,38 @@ pub async fn create_record(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "social.dais.social".to_string());
 
-    let actor_id = format!("did:web:{}", domain);
+    // Use ActivityPub actor ID for database consistency (one identity, two protocols)
+    let actor_id = format!("https://social.{}/users/social", domain.split('.').skip(1).collect::<Vec<_>>().join("."));
     let post_id = format!("at://{}/{}/{}", domain, body.collection, rkey);
 
     let text_escaped = text.replace("'", "''");
-    let record_json = serde_json::to_string(&body.record)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("'", "''");
 
-    let query = format!(
-        "INSERT INTO posts (id, actor_id, content, visibility, published_at, protocol, atproto_uri, atproto_cid) \
-         VALUES ('{}', '{}', '{}', 'public', '{}', 'atproto', '{}', '{}')",
-        post_id, actor_id, text_escaped, created_at, uri, cid
+    // Check if a post with this content already exists (created by CLI)
+    let check_query = format!(
+        "SELECT id FROM posts WHERE actor_id = '{}' AND content = '{}' ORDER BY published_at DESC LIMIT 1",
+        actor_id, text_escaped
     );
+
+    let check_statement = db.prepare(&check_query);
+    let result = check_statement.first::<serde_json::Value>(None).await?;
+
+    // If post exists, update it with AT Protocol metadata; otherwise insert new post
+    let query = if let Some(existing) = result {
+        let existing_id = existing.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        format!(
+            "UPDATE posts SET atproto_uri = '{}', atproto_cid = '{}', protocol = CASE WHEN protocol = 'activitypub' THEN 'both' ELSE protocol END WHERE id = '{}'",
+            uri, cid, existing_id
+        )
+    } else {
+        format!(
+            "INSERT INTO posts (id, actor_id, content, visibility, published_at, protocol, atproto_uri, atproto_cid) \
+             VALUES ('{}', '{}', '{}', 'public', '{}', 'atproto', '{}', '{}')",
+            post_id, actor_id, text_escaped, created_at, uri, cid
+        )
+    };
 
     let statement = db.prepare(&query);
     statement.run().await?;

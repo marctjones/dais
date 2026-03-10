@@ -33,6 +33,10 @@ pub struct Note {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment: Option<Vec<Attachment>>,
+
+    // AT Protocol cross-reference
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub atproto_uri: Option<String>,
 }
 
 impl Note {
@@ -49,6 +53,7 @@ impl Note {
             cc: None,
             in_reply_to: None,
             attachment: None,
+            atproto_uri: None,
         }
     }
 }

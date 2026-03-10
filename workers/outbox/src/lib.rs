@@ -78,7 +78,7 @@ async fn handle_outbox(req: Request, ctx: RouteContext<()>) -> Result<Response> 
     // Query for posts by this actor (public visibility only for outbox)
     // Order by published_at DESC for reverse chronological
     let posts_query = r#"
-        SELECT id, content, content_html, visibility, published_at, in_reply_to, media_attachments
+        SELECT id, content, content_html, visibility, published_at, in_reply_to, media_attachments, atproto_uri
         FROM posts
         WHERE actor_id = ? AND visibility IN ('public', 'unlisted')
         ORDER BY published_at DESC
@@ -118,6 +118,7 @@ async fn handle_outbox(req: Request, ctx: RouteContext<()>) -> Result<Response> 
             cc: None,
             in_reply_to: post["in_reply_to"].as_str().map(|s| s.to_string()),
             attachment: attachments,
+            atproto_uri: post["atproto_uri"].as_str().map(|s| s.to_string()),
         };
 
         notes.push(serde_json::to_value(note)?);
@@ -197,7 +198,7 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Query for post
     let post_query = r#"
         SELECT p.id, p.actor_id, p.content, p.content_html, p.visibility,
-               p.published_at, p.in_reply_to, p.media_attachments
+               p.published_at, p.in_reply_to, p.media_attachments, p.atproto_uri
         FROM posts p
         JOIN actors a ON p.actor_id = a.id
         WHERE p.id = ? AND a.username = ?
@@ -237,6 +238,7 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         cc: None,
         in_reply_to: post["in_reply_to"].as_str().map(|s| s.to_string()),
         attachment: attachments.clone(),
+        atproto_uri: post["atproto_uri"].as_str().map(|s| s.to_string()),
     };
 
     // Fetch interactions for HTML rendering
