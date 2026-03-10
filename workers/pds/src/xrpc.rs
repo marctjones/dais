@@ -155,6 +155,37 @@ pub async fn create_record(mut req: Request, ctx: RouteContext<()>) -> Result<Re
     let statement = db.prepare(&query);
     statement.run().await?;
 
+    // Broadcast event to relay subscribers
+    let domain = ctx.env.var("DOMAIN")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "social.dais.social".to_string());
+    let repo_did = format!("did:web:{}", domain);
+
+    let event = crate::relay_subscription::RepoEvent {
+        repo: repo_did,
+        operation: "create".to_string(),
+        path: format!("{}/{}", body.collection, rkey),
+        cid: cid.clone(),
+        record: body.record.clone(),
+    };
+
+    // Get Durable Object and broadcast
+    if let Ok(namespace) = ctx.durable_object("RELAY_SUBSCRIPTION") {
+        if let Ok(id) = namespace.id_from_name("global") {
+            if let Ok(stub) = id.get_stub() {
+                let event_json = serde_json::to_string(&event).unwrap_or_default();
+                let broadcast_req = Request::new_with_init(
+                    "https://internal/broadcast",
+                    RequestInit::new()
+                        .with_method(Method::Post)
+                        .with_body(Some(event_json.into()))
+                )?;
+                // Fire and forget - don't wait for broadcast to complete
+                let _ = stub.fetch_with_request(broadcast_req).await;
+            }
+        }
+    }
+
     let response = json!({
         "uri": uri,
         "cid": cid,
@@ -247,6 +278,89 @@ fn generate_cid(record: &serde_json::Value) -> String {
     let result = hasher.finalize();
 
     format!("bafyrei{}", hex::encode(&result[..16]))
+}
+
+/// Handle com.atproto.sync.listRepos
+pub async fn list_repos(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let domain = ctx.env.var("DOMAIN")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "social.dais.social".to_string());
+
+    let did = format!("did:web:{}", domain);
+
+    // Get latest post to determine revision
+    let query = "SELECT COUNT(*) as count FROM posts WHERE protocol IN ('atproto', 'both')";
+    let statement = db.prepare(query);
+    let result = statement.first::<serde_json::Value>(None).await?;
+
+    let rev = result
+        .and_then(|r| r.get("count").and_then(|c| c.as_i64()))
+        .unwrap_or(0);
+
+    let repos = vec![json!({
+        "did": did,
+        "head": format!("bafyreib2rxk3rybk6z5z5z5z5z5z5z5z5z5z5z5z5z5z5z5"),
+        "rev": format!("{}", rev),
+        "active": true
+    })];
+
+    let response = json!({
+        "repos": repos,
+        "cursor": null
+    });
+
+    Response::from_json(&response)
+}
+
+/// Handle com.atproto.sync.getRepoStatus
+pub async fn get_repo_status(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let did = url.query_pairs()
+        .find(|(k, _)| k == "did")
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_default();
+
+    let domain = ctx.env.var("DOMAIN")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "social.dais.social".to_string());
+
+    let expected_did = format!("did:web:{}", domain);
+
+    if did != expected_did {
+        let error = json!({"error": "RepoNotFound", "message": "Repository not found"});
+        return Response::from_json(&error).map(|r| r.with_status(404));
+    }
+
+    let db = ctx.env.d1("DB")?;
+
+    // Get latest post count as revision
+    let query = "SELECT COUNT(*) as count FROM posts WHERE protocol IN ('atproto', 'both')";
+    let statement = db.prepare(query);
+    let result = statement.first::<serde_json::Value>(None).await?;
+
+    let rev = result
+        .and_then(|r| r.get("count").and_then(|c| c.as_i64()))
+        .unwrap_or(0);
+
+    let response = json!({
+        "did": did,
+        "active": true,
+        "status": "active",
+        "rev": format!("{}", rev)
+    });
+
+    Response::from_json(&response)
+}
+
+/// Handle com.atproto.sync.subscribeRepos (WebSocket endpoint)
+pub async fn subscribe_repos(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    // Get the Durable Object stub
+    let namespace = ctx.durable_object("RELAY_SUBSCRIPTION")?;
+    let stub = namespace.id_from_name("global")?.get_stub()?;
+
+    // Forward the request to the Durable Object
+    stub.fetch_with_request(req).await
 }
 
 mod hex {

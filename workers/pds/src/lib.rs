@@ -5,6 +5,7 @@ use serde_json::json;
 mod did;
 mod xrpc;
 mod auth;
+mod relay_subscription;
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -31,6 +32,15 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .get_async("/xrpc/com.atproto.sync.getRepo", |req, ctx| async move {
             xrpc::get_repo(req, ctx).await
+        })
+        .get_async("/xrpc/com.atproto.sync.listRepos", |req, ctx| async move {
+            xrpc::list_repos(req, ctx).await
+        })
+        .get_async("/xrpc/com.atproto.sync.getRepoStatus", |req, ctx| async move {
+            xrpc::get_repo_status(req, ctx).await
+        })
+        .get_async("/xrpc/com.atproto.sync.subscribeRepos", |req, ctx| async move {
+            xrpc::subscribe_repos(req, ctx).await
         })
         .get_async("/xrpc/com.atproto.server.describeServer", |req, ctx| async move {
             xrpc::describe_server(req, ctx).await
