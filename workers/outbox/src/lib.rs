@@ -239,6 +239,46 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         attachment: attachments.clone(),
     };
 
+    // Fetch interactions for HTML rendering
+    let mut replies: Vec<serde_json::Value> = Vec::new();
+    let mut likes: Vec<serde_json::Value> = Vec::new();
+    let mut boosts: Vec<serde_json::Value> = Vec::new();
+
+    if wants_html {
+        // Fetch replies to this post
+        let replies_query = r#"
+            SELECT actor_username, actor_display_name, actor_avatar_url, content, published_at
+            FROM replies
+            WHERE post_id = ?
+            ORDER BY published_at ASC
+        "#;
+        let replies_stmt = db.prepare(replies_query).bind(&[post_id.clone().into()])?;
+        let replies_result = replies_stmt.all().await?;
+        replies = replies_result.results::<serde_json::Value>()?;
+
+        // Fetch likes for this post
+        let likes_query = r#"
+            SELECT actor_username, actor_display_name, actor_avatar_url
+            FROM interactions
+            WHERE post_id = ? AND type = 'like'
+            ORDER BY created_at DESC
+        "#;
+        let likes_stmt = db.prepare(likes_query).bind(&[post_id.clone().into()])?;
+        let likes_result = likes_stmt.all().await?;
+        likes = likes_result.results::<serde_json::Value>()?;
+
+        // Fetch boosts for this post
+        let boosts_query = r#"
+            SELECT actor_username, actor_display_name, actor_avatar_url, created_at
+            FROM interactions
+            WHERE post_id = ? AND type = 'boost'
+            ORDER BY created_at DESC
+        "#;
+        let boosts_stmt = db.prepare(boosts_query).bind(&[post_id.clone().into()])?;
+        let boosts_result = boosts_stmt.all().await?;
+        boosts = boosts_result.results::<serde_json::Value>()?;
+    }
+
     // Get theme from environment (default to "dais")
     let theme_name = ctx.env.var("THEME")
         .map(|v| v.to_string())
@@ -248,7 +288,7 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Return HTML or JSON based on Accept header
     if wants_html {
         headers.set("Content-Type", "text/html; charset=utf-8")?;
-        let html = render_post_html(username, &note, &attachments, &theme);
+        let html = render_post_html(username, &note, &attachments, &replies, &likes, &boosts, &theme);
         Ok(Response::from_html(html)?.with_headers(headers))
     } else {
         headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
@@ -333,12 +373,71 @@ fn embed_external_videos(content: &str) -> String {
     result
 }
 
-fn render_post_html(username: &str, note: &Note, attachments: &Option<Vec<Attachment>>, theme: &Theme) -> String {
+fn render_post_html(username: &str, note: &Note, attachments: &Option<Vec<Attachment>>, replies: &[serde_json::Value], likes: &[serde_json::Value], boosts: &[serde_json::Value], theme: &Theme) -> String {
     let light = &theme.light;
     let dark = &theme.dark;
 
     // Process content for external video embeds
     let processed_content = embed_external_videos(&note.content);
+
+    // Build interaction counts HTML
+    let like_count = likes.len();
+    let boost_count = boosts.len();
+    let reply_count = replies.len();
+
+    let interaction_counts_html = if like_count > 0 || boost_count > 0 || reply_count > 0 {
+        format!(r#"
+        <div class="interaction-counts">
+            {}{}{}
+        </div>
+        "#,
+            if reply_count > 0 {
+                format!(r#"<span class="count">💬 {} {}</span>"#, reply_count, if reply_count == 1 { "reply" } else { "replies" })
+            } else { String::new() },
+            if boost_count > 0 {
+                format!(r#"<span class="count">🔁 {} {}</span>"#, boost_count, if boost_count == 1 { "boost" } else { "boosts" })
+            } else { String::new() },
+            if like_count > 0 {
+                format!(r#"<span class="count">❤️ {} {}</span>"#, like_count, if like_count == 1 { "like" } else { "likes" })
+            } else { String::new() }
+        )
+    } else {
+        String::new()
+    };
+
+    // Build replies HTML
+    let replies_html = if !replies.is_empty() {
+        let replies_items: Vec<String> = replies.iter().map(|reply| {
+            let actor_username = reply["actor_username"].as_str().unwrap_or("unknown");
+            let actor_display_name = reply["actor_display_name"].as_str().unwrap_or(actor_username);
+            let content = reply["content"].as_str().unwrap_or("");
+            let published_at = reply["published_at"].as_str().unwrap_or("");
+            let avatar_initial = actor_username.chars().next().unwrap_or('?').to_uppercase();
+
+            format!(r#"
+            <div class="reply">
+                <div class="reply-header">
+                    <div class="reply-avatar">{}</div>
+                    <div class="reply-author">
+                        <div class="reply-name">{}</div>
+                        <div class="reply-handle">{}</div>
+                    </div>
+                    <div class="reply-timestamp">{}</div>
+                </div>
+                <div class="reply-content">{}</div>
+            </div>
+            "#, avatar_initial, actor_display_name, actor_username, published_at, content)
+        }).collect();
+
+        format!(r#"
+        <div class="replies-section">
+            <h3 class="replies-title">Replies</h3>
+            {}
+        </div>
+        "#, replies_items.join("\n"))
+    } else {
+        String::new()
+    };
 
     // Build attachments HTML
     let attachments_html = if let Some(atts) = attachments {
@@ -486,6 +585,82 @@ fn render_post_html(username: &str, note: &Note, attachments: &Option<Vec<Attach
             padding-top: 16px;
             border-top: 1px solid {border};
         }}
+        .interaction-counts {{
+            display: flex;
+            gap: 20px;
+            padding: 16px 0;
+            margin-top: 16px;
+            border-top: 1px solid {border};
+            font-size: 15px;
+            color: {text_secondary};
+        }}
+        .interaction-counts .count {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .replies-section {{
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 2px solid {border};
+        }}
+        .replies-title {{
+            font-size: 20px;
+            font-weight: 600;
+            color: {text_primary};
+            margin-bottom: 20px;
+        }}
+        .reply {{
+            background: {bg_primary};
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }}
+        .reply:last-child {{
+            margin-bottom: 0;
+        }}
+        .reply-header {{
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+            gap: 12px;
+        }}
+        .reply-avatar {{
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, {accent_primary} 0%, {accent_hover} 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: white;
+            font-weight: 600;
+            flex-shrink: 0;
+        }}
+        .reply-author {{
+            flex: 1;
+        }}
+        .reply-name {{
+            font-weight: 600;
+            font-size: 15px;
+            color: {text_primary};
+        }}
+        .reply-handle {{
+            color: {text_secondary};
+            font-size: 14px;
+        }}
+        .reply-timestamp {{
+            color: {text_secondary};
+            font-size: 14px;
+        }}
+        .reply-content {{
+            font-size: 15px;
+            line-height: 1.6;
+            color: {text_primary};
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }}
         .footer {{
             text-align: center;
             margin-top: 32px;
@@ -516,8 +691,20 @@ fn render_post_html(username: &str, note: &Note, attachments: &Option<Vec<Attach
             .handle, .meta {{
                 color: {dark_text_secondary};
             }}
-            .header, .meta {{
+            .header, .meta, .interaction-counts, .replies-section {{
                 border-color: {dark_border};
+            }}
+            .interaction-counts {{
+                color: {dark_text_secondary};
+            }}
+            .replies-title, .reply-name, .reply-content {{
+                color: {dark_text_primary};
+            }}
+            .reply-handle, .reply-timestamp {{
+                color: {dark_text_secondary};
+            }}
+            .reply {{
+                background: {dark_bg_primary};
             }}
             .footer {{
                 border-top-color: {dark_border};
@@ -544,6 +731,8 @@ fn render_post_html(username: &str, note: &Note, attachments: &Option<Vec<Attach
             <div class="meta">
                 Posted: {published}
             </div>
+            {interaction_counts}
+            {replies}
         </div>
         <div class="footer">
             <p><a href="/users/{outbox_username}/outbox">← Back to posts</a></p>
@@ -575,7 +764,9 @@ fn render_post_html(username: &str, note: &Note, attachments: &Option<Vec<Attach
         content = processed_content,
         published = note.published,
         outbox_username = username,
-        attachments = attachments_html
+        attachments = attachments_html,
+        interaction_counts = interaction_counts_html,
+        replies = replies_html
     )
 }
 

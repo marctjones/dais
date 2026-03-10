@@ -34,13 +34,6 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 }
 
 async fn handle_webfinger(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    // Add CORS headers for federation
-    let headers = Headers::new();
-    headers.set("Content-Type", "application/jrd+json")?;
-    headers.set("Access-Control-Allow-Origin", "*")?;
-    headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
-    headers.set("Access-Control-Allow-Headers", "Content-Type")?;
-
     // Parse query parameters
     let url = req.url()?;
     let resource = url
@@ -76,8 +69,13 @@ async fn handle_webfinger(req: Request, ctx: RouteContext<()>) -> Result<Respons
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "dais.social".to_string());
 
-    // Validate domain matches our domain
-    if domain != configured_domain {
+    // Get ActivityPub domain from environment
+    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| format!("social.{}", configured_domain));
+
+    // Validate domain matches either our base domain or ActivityPub subdomain
+    if domain != configured_domain && domain != activitypub_domain {
         return Response::error("Domain not found", 404);
     }
 
@@ -90,11 +88,6 @@ async fn handle_webfinger(req: Request, ctx: RouteContext<()>) -> Result<Respons
     if result.is_none() {
         return Response::error("User not found", 404);
     }
-
-    // Get ActivityPub domain from environment
-    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
-        .map(|v| v.to_string())
-        .unwrap_or_else(|_| format!("social.{}", configured_domain));
 
     // Build WebFinger response
     let response = WebFingerResponse {
@@ -116,5 +109,10 @@ async fn handle_webfinger(req: Request, ctx: RouteContext<()>) -> Result<Respons
         ],
     };
 
-    Response::from_json(&response)
+    let mut resp = Response::from_json(&response)?;
+    resp.headers_mut().set("Content-Type", "application/jrd+json")?;
+    resp.headers_mut().set("Access-Control-Allow-Origin", "*")?;
+    resp.headers_mut().set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
+    resp.headers_mut().set("Access-Control-Allow-Headers", "Content-Type")?;
+    Ok(resp)
 }

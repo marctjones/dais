@@ -24,8 +24,15 @@ binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
+[env.production.ai]
+binding = "AI"
+
 # D1 database for storing activities and followers
 [[d1_databases]]
 binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+# AI binding for content moderation
+[ai]
+binding = "AI"

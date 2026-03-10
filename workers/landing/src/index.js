@@ -1,6 +1,19 @@
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const path = url.pathname;
+
+    // Route WebFinger requests to webfinger worker
+    if (path.startsWith('/.well-known/webfinger')) {
+      const webfingerUrl = env.WEBFINGER_URL + path + url.search;
+      const response = await fetch(new Request(webfingerUrl, {
+        method: request.method,
+        headers: request.headers,
+      }));
+
+      // Preserve all headers from the webfinger worker response
+      return response;
+    }
 
     // Serve the landing page HTML
     const html = `<!DOCTYPE html>

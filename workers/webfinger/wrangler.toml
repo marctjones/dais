@@ -17,9 +17,7 @@ command = "cargo install -q worker-build && worker-build --release"
 
 [env.production]
 name = "webfinger-production"
-routes = [
-  { pattern = "dais.social", custom_domain = true }
-]
+# No routes needed - accessed via router worker
 
 [env.production.vars]
 DOMAIN = "dais.social"

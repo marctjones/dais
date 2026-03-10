@@ -35,13 +35,20 @@ def post():
 @click.argument('content')
 @click.option('--attach', type=click.Path(exists=True), multiple=True,
               help='Attach media file (can be used multiple times)')
+@click.option('--alt', type=str, multiple=True,
+              help='Alt text for media (provide in same order as --attach)')
 @click.option('--visibility', type=click.Choice(['public', 'unlisted', 'followers', 'direct']),
               default='public', help='Post visibility')
 @click.option('--remote', is_flag=True, help='Use remote database and deliver to production followers')
-def create(content, attach, visibility, remote):
+def create(content, attach, alt, visibility, remote):
     """Create and publish a post.
 
     CONTENT: The text content of your post
+
+    Examples:
+        dais post create "Hello!" --remote
+        dais post create "Check this out!" --attach photo.jpg --alt "Sunset over mountains" --remote
+        dais post create "My gallery" --attach img1.jpg --alt "First pic" --attach img2.jpg --alt "Second pic" --remote
     """
     console.print(f"[bold blue]Creating {visibility} post[/bold blue]\n")
     console.print(f"{content}\n")
@@ -104,8 +111,9 @@ def create(content, attach, visibility, remote):
 
         console.print(f"[green]✓[/green] Uploaded {len(attachment_filenames)} file(s)\n")
 
-    # Build attachment JSON for database
-    attachments_json = build_attachment_json(attachment_filenames, media_domain) if attachment_filenames else "[]"
+    # Build attachment JSON for database (with alt texts if provided)
+    alt_texts = list(alt) if alt else None
+    attachments_json = build_attachment_json(attachment_filenames, media_domain, alt_texts) if attachment_filenames else "[]"
 
     # Insert post to D1 database
     console.print("[dim]Saving post to database...[/dim]")
@@ -148,7 +156,7 @@ def create(content, attach, visibility, remote):
 
     # Add attachments if present
     if attachment_filenames:
-        note["attachment"] = build_attachment_dict(attachment_filenames, media_domain)
+        note["attachment"] = build_attachment_dict(attachment_filenames, media_domain, alt_texts)
 
     # Wrap in Create activity
     create_activity = build_create_activity(actor_id, note)

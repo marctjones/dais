@@ -43,8 +43,8 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Get D1 database
     let db = ctx.env.d1("DB").expect("D1 database binding not found");
 
-    // Query for actor
-    let query = "SELECT id, username, display_name, summary, public_key FROM actors WHERE username = ?";
+    // Query for actor (including icon and image for avatar/header)
+    let query = "SELECT id, username, display_name, summary, public_key, icon, image FROM actors WHERE username = ?";
     let statement = db.prepare(query).bind(&[username.into()])?;
 
     let result = statement.first::<serde_json::Value>(None).await?;
@@ -89,6 +89,20 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         }
     }
 
+    // Add avatar (icon)
+    if let Some(icon_url) = actor_data["icon"].as_str() {
+        if !icon_url.is_empty() {
+            person = person.with_icon(icon_url.to_string());
+        }
+    }
+
+    // Add header/banner (image)
+    if let Some(image_url) = actor_data["image"].as_str() {
+        if !image_url.is_empty() {
+            person = person.with_header(image_url.to_string());
+        }
+    }
+
     // Get actor ID as string for queries
     let actor_id_str = actor_data["id"].as_str().ok_or("Missing actor id")?;
 
@@ -114,10 +128,14 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         .unwrap_or_else(|_| "dais".to_string());
     let theme = Theme::from_name(&theme_name);
 
+    // Extract icon/image URLs for HTML rendering
+    let icon_url = person.icon.as_ref().map(|i| i.url.clone());
+    let image_url = person.image.as_ref().map(|i| i.url.clone());
+
     // Return HTML or JSON based on Accept header
     if wants_html {
         headers.set("Content-Type", "text/html; charset=utf-8")?;
-        let html = render_profile_html(&person, actor_username, post_count, follower_count, &theme);
+        let html = render_profile_html(&person, actor_username, post_count, follower_count, &theme, icon_url, image_url);
         Ok(Response::from_html(html)?.with_headers(headers))
     } else {
         headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
@@ -125,7 +143,15 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     }
 }
 
-fn render_profile_html(person: &Person, username: &str, post_count: usize, follower_count: usize, theme: &Theme) -> String {
+fn render_profile_html(
+    person: &Person,
+    username: &str,
+    post_count: usize,
+    follower_count: usize,
+    theme: &Theme,
+    icon_url: Option<String>,
+    image_url: Option<String>
+) -> String {
     let display_name = person.name.as_ref().unwrap_or(&person.preferred_username);
     let summary = person.summary.as_deref().unwrap_or("");
 
@@ -161,15 +187,46 @@ fn render_profile_html(person: &Person, username: &str, post_count: usize, follo
             text-align: center;
             margin-bottom: 32px;
         }}
+        .profile-header {{
+            position: relative;
+            margin: -48px -48px 32px;
+            border-radius: 16px 16px 0 0;
+            overflow: hidden;
+        }}
+        .header-image {{
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+            display: block;
+        }}
+        .header-placeholder {{
+            width: 100%;
+            height: 200px;
+            background: linear-gradient(135deg, {accent_primary} 0%, {accent_hover} 100%);
+        }}
         .avatar {{
             width: 120px;
             height: 120px;
+            border-radius: 50%;
+            margin: 0 auto 20px;
+            position: relative;
+            border: 4px solid {bg_secondary};
+        }}
+        .avatar-image {{
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            object-fit: cover;
+            display: block;
+        }}
+        .avatar-letter {{
+            width: 100%;
+            height: 100%;
             background: linear-gradient(135deg, {accent_primary} 0%, {accent_hover} 100%);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin: 0 auto 20px;
             font-size: 48px;
             color: white;
             font-weight: 700;
@@ -267,6 +324,15 @@ fn render_profile_html(person: &Person, username: &str, post_count: usize, follo
             .profile-card {{
                 background: {dark_bg_secondary};
             }}
+            .avatar {{
+                border-color: {dark_bg_secondary};
+            }}
+            .header-placeholder {{
+                background: linear-gradient(135deg, {dark_accent_primary} 0%, {dark_accent_hover} 100%);
+            }}
+            .avatar-letter {{
+                background: linear-gradient(135deg, {dark_accent_primary} 0%, {dark_accent_hover} 100%);
+            }}
             h1 {{
                 color: {dark_text_primary};
             }}
@@ -314,8 +380,9 @@ fn render_profile_html(person: &Person, username: &str, post_count: usize, follo
 <body>
     <div class="container">
         <div class="profile-card">
+            {header_html}
             <div class="header">
-                <div class="avatar">{avatar_initial}</div>
+                {avatar_html}
                 <h1>{display_name}</h1>
                 <div class="handle">@{handle_username}@dais.social</div>
             </div>
@@ -366,7 +433,17 @@ fn render_profile_html(person: &Person, username: &str, post_count: usize, follo
         dark_accent_hover = dark.accent_hover,
         dark_border = dark.border,
         // Content
-        avatar_initial = display_name.chars().next().unwrap_or('?').to_uppercase(),
+        header_html = if let Some(ref header_url) = image_url {
+            format!(r#"<div class="profile-header"><img src="{}" alt="Profile header" class="header-image"></div>"#, header_url)
+        } else {
+            String::new()
+        },
+        avatar_html = if let Some(ref avatar_url) = icon_url {
+            format!(r#"<div class="avatar"><img src="{}" alt="Profile picture" class="avatar-image"></div>"#, avatar_url)
+        } else {
+            format!(r#"<div class="avatar"><div class="avatar-letter">{}</div></div>"#,
+                display_name.chars().next().unwrap_or('?').to_uppercase())
+        },
         display_name = display_name,
         handle_username = username,
         bio_html = if !summary.is_empty() {

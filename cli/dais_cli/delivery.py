@@ -234,3 +234,29 @@ def build_delete_activity(actor_url: str, object_url: str) -> Dict[str, Any]:
         "object": object_url,
         "to": ["https://www.w3.org/ns/activitystreams#Public"]
     }
+
+
+def deliver_activity_to_inbox(
+    activity: Dict[str, Any],
+    inbox_url: str,
+    actor_url: str,
+    private_key_path: Optional[Path] = None
+) -> bool:
+    """Convenience function to deliver an activity to a remote inbox.
+
+    Args:
+        activity: The ActivityPub activity to send
+        inbox_url: The inbox URL to send to
+        actor_url: Our actor URL (for keyId)
+        private_key_path: Path to private key (defaults to ~/.dais/keys/private.pem)
+
+    Returns:
+        True if delivery was successful, False otherwise
+    """
+    success, status_code = sign_and_send_activity(
+        activity=activity,
+        inbox_url=inbox_url,
+        actor_url=actor_url,
+        private_key_path=private_key_path
+    )
+    return success
