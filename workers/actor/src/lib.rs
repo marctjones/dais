@@ -10,6 +10,8 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
     router
         .get_async("/users/:username", handle_actor)
+        .get_async("/users/:username/followers", handle_followers)
+        .get_async("/users/:username/following", handle_following)
         .run(req, env)
         .await
 }
@@ -141,6 +143,178 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
         Ok(Response::from_json(&person)?.with_headers(headers))
     }
+}
+
+async fn handle_followers(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    // Handle OPTIONS request
+    if req.method() == Method::Options {
+        let mut headers = Headers::new();
+        headers.set("Access-Control-Allow-Origin", "*")?;
+        headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
+        headers.set("Access-Control-Allow-Headers", "Content-Type, Accept")?;
+        return Ok(Response::empty()?.with_headers(headers));
+    }
+
+    // CORS headers
+    let mut headers = Headers::new();
+    headers.set("Access-Control-Allow-Origin", "*")?;
+    headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
+    headers.set("Access-Control-Allow-Headers", "Content-Type, Accept")?;
+    headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
+
+    // Get username from URL
+    let username = match ctx.param("username") {
+        Some(u) => u,
+        None => return Response::error("Username required", 400),
+    };
+
+    // Get D1 database
+    let db = ctx.env.d1("DB").expect("D1 database binding not found");
+
+    // Build the actor URL
+    let actor_url = format!("https://social.dais.social/users/{}", username);
+
+    // Check if page parameter is present
+    let url = req.url()?;
+    let page: Option<u32> = url
+        .query_pairs()
+        .find(|(k, _)| k == "page")
+        .and_then(|(_, v)| v.parse().ok());
+
+    if let Some(page_num) = page {
+        // Return paginated collection page
+        let items_per_page = 50;
+        let offset = (page_num.saturating_sub(1)) * items_per_page;
+
+        let query = format!(
+            "SELECT follower_actor_id FROM followers WHERE actor_id = ? AND status = 'approved' ORDER BY created_at DESC LIMIT {} OFFSET {}",
+            items_per_page, offset
+        );
+        let statement = db.prepare(&query).bind(&[actor_url.as_str().into()])?;
+
+        let results = statement.all().await?;
+        let items: Vec<String> = results
+            .results::<serde_json::Value>()?
+            .iter()
+            .filter_map(|row| row["follower_actor_id"].as_str().map(|s| s.to_string()))
+            .collect();
+
+        let page_response = serde_json::json!({
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "type": "OrderedCollectionPage",
+            "id": format!("https://social.dais.social/users/{}/followers?page={}", username, page_num),
+            "partOf": format!("https://social.dais.social/users/{}/followers", username),
+            "orderedItems": items
+        });
+
+        return Ok(Response::from_json(&page_response)?.with_headers(headers));
+    }
+
+    // Return collection summary
+    let count_query = "SELECT COUNT(*) as count FROM followers WHERE actor_id = ? AND status = 'approved'";
+    let count_stmt = db.prepare(count_query).bind(&[actor_url.as_str().into()])?;
+    let count_result = count_stmt.first::<serde_json::Value>(None).await?;
+    let total_items = count_result
+        .and_then(|v| v["count"].as_u64())
+        .unwrap_or(0);
+
+    let collection = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "type": "OrderedCollection",
+        "id": format!("https://social.dais.social/users/{}/followers", username),
+        "totalItems": total_items,
+        "first": format!("https://social.dais.social/users/{}/followers?page=1", username)
+    });
+
+    Ok(Response::from_json(&collection)?.with_headers(headers))
+}
+
+async fn handle_following(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    // Handle OPTIONS request
+    if req.method() == Method::Options {
+        let headers = Headers::new();
+        headers.set("Access-Control-Allow-Origin", "*")?;
+        headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
+        headers.set("Access-Control-Allow-Headers", "Content-Type, Accept")?;
+        return Ok(Response::empty()?.with_headers(headers));
+    }
+
+    // CORS headers
+    let headers = Headers::new();
+    headers.set("Access-Control-Allow-Origin", "*")?;
+    headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
+    headers.set("Access-Control-Allow-Headers", "Content-Type, Accept")?;
+    headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
+
+    // Get username from URL
+    let username = match ctx.param("username") {
+        Some(u) => u,
+        None => return Response::error("Username required", 400),
+    };
+
+    // Get D1 database
+    let db = ctx.env.d1("DB").expect("D1 database binding not found");
+
+    // Build the actor URL
+    let actor_url = format!("https://social.dais.social/users/{}", username);
+
+    // Check if page parameter is present
+    let url = req.url()?;
+    let page: Option<u32> = url
+        .query_pairs()
+        .find(|(k, _)| k == "page")
+        .and_then(|(_, v)| v.parse().ok());
+
+    if let Some(page_num) = page {
+        // Return paginated collection page
+        console_log!("Following pagination requested: page {}", page_num);
+        let items_per_page = 50;
+        let offset = (page_num.saturating_sub(1)) * items_per_page;
+
+        let query = format!(
+            "SELECT target_actor_id FROM following WHERE actor_id = ? AND status = 'approved' ORDER BY created_at DESC LIMIT {} OFFSET {}",
+            items_per_page, offset
+        );
+        console_log!("Following query: {}", query);
+        let statement = db.prepare(&query).bind(&[actor_url.as_str().into()])?;
+
+        console_log!("Executing following query...");
+        let results = statement.all().await?;
+        console_log!("Following query complete");
+        let items: Vec<String> = results
+            .results::<serde_json::Value>()?
+            .iter()
+            .filter_map(|row| row["target_actor_id"].as_str().map(|s| s.to_string()))
+            .collect();
+
+        let page_response = serde_json::json!({
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "type": "OrderedCollectionPage",
+            "id": format!("https://social.dais.social/users/{}/following?page={}", username, page_num),
+            "partOf": format!("https://social.dais.social/users/{}/following", username),
+            "orderedItems": items
+        });
+
+        return Ok(Response::from_json(&page_response)?.with_headers(headers));
+    }
+
+    // Return collection summary
+    let count_query = "SELECT COUNT(*) as count FROM following WHERE actor_id = ? AND status = 'approved'";
+    let count_stmt = db.prepare(count_query).bind(&[actor_url.as_str().into()])?;
+    let count_result = count_stmt.first::<serde_json::Value>(None).await?;
+    let total_items = count_result
+        .and_then(|v| v["count"].as_u64())
+        .unwrap_or(0);
+
+    let collection = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "type": "OrderedCollection",
+        "id": format!("https://social.dais.social/users/{}/following", username),
+        "totalItems": total_items,
+        "first": format!("https://social.dais.social/users/{}/following?page=1", username)
+    });
+
+    Ok(Response::from_json(&collection)?.with_headers(headers))
 }
 
 fn render_profile_html(

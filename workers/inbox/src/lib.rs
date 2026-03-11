@@ -531,11 +531,11 @@ async fn handle_accept(db: &D1Database, activity: &Activity) -> Result<()> {
     if let Some(object_id) = activity.object.get("id").and_then(|v| v.as_str()) {
         console_log!("Accept for follow activity: {}", object_id);
 
-        // Update following status to accepted
+        // Update following status to approved
         let accepted_at = chrono::Utc::now().to_rfc3339();
 
         let query = format!(
-            "UPDATE following SET status = 'accepted', accepted_at = '{}' WHERE id = '{}'",
+            "UPDATE following SET status = 'approved', accepted_at = '{}' WHERE id = '{}'",
             accepted_at, object_id
         );
 

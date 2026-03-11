@@ -30,6 +30,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/xrpc/com.atproto.repo.listRecords", |req, ctx| async move {
             xrpc::list_records(req, ctx).await
         })
+        .get_async("/xrpc/com.atproto.repo.getRecord", |req, ctx| async move {
+            xrpc::get_record(req, ctx).await
+        })
         .get_async("/xrpc/com.atproto.sync.getRepo", |req, ctx| async move {
             xrpc::get_repo(req, ctx).await
         })

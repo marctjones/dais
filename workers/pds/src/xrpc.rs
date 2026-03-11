@@ -233,6 +233,67 @@ pub async fn list_records(req: Request, ctx: RouteContext<()>) -> Result<Respons
     Response::from_json(&response)
 }
 
+/// Handle com.atproto.repo.getRecord
+pub async fn get_record(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+
+    // Parse query parameters
+    let repo = url.query_pairs()
+        .find(|(k, _)| k == "repo")
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_default();
+
+    let collection = url.query_pairs()
+        .find(|(k, _)| k == "collection")
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_default();
+
+    let rkey = url.query_pairs()
+        .find(|(k, _)| k == "rkey")
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_default();
+
+    // Validate parameters
+    if repo.is_empty() || collection.is_empty() || rkey.is_empty() {
+        let error = json!({"error": "InvalidRequest", "message": "Missing required parameters: repo, collection, rkey"});
+        return Response::from_json(&error).map(|r| r.with_status(400));
+    }
+
+    // Only support app.bsky.feed.post for now
+    if collection != "app.bsky.feed.post" {
+        let error = json!({"error": "InvalidRequest", "message": "Only app.bsky.feed.post collection is supported"});
+        return Response::from_json(&error).map(|r| r.with_status(400));
+    }
+
+    // Build the URI to look up
+    let uri = format!("at://{}/{}/{}", repo, collection, rkey);
+
+    let db = ctx.env.d1("DB")?;
+    let query = "SELECT id, content, published_at, atproto_uri, atproto_cid FROM posts WHERE atproto_uri = ? AND (protocol = 'atproto' OR protocol = 'both') LIMIT 1";
+
+    let statement = db.prepare(query).bind(&[uri.as_str().into()])?;
+    let result = statement.first::<serde_json::Value>(None).await?;
+
+    match result {
+        Some(row) => {
+            let response = json!({
+                "uri": row.get("atproto_uri").and_then(|v| v.as_str()).unwrap_or(""),
+                "cid": row.get("atproto_cid").and_then(|v| v.as_str()).unwrap_or(""),
+                "value": {
+                    "text": row.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+                    "createdAt": row.get("published_at").and_then(|v| v.as_str()).unwrap_or(""),
+                    "$type": "app.bsky.feed.post"
+                }
+            });
+            Response::from_json(&response)
+        }
+        None => {
+            let error = json!({"error": "RecordNotFound", "message": "Record not found"});
+            Response::from_json(&error).map(|r| r.with_status(404))
+        }
+    }
+}
+
 /// Handle com.atproto.sync.getRepo
 pub async fn get_repo(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Return minimal repo data for relay sync
