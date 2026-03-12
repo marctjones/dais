@@ -288,12 +288,36 @@ async fn handle_undo(db: &D1Database, activity: &Activity) -> Result<()> {
     Ok(())
 }
 
-async fn handle_create(db: &D1Database, activity: &Activity, _username: &str, ctx: &RouteContext<()>) -> Result<()> {
+async fn handle_create(db: &D1Database, activity: &Activity, username: &str, ctx: &RouteContext<()>) -> Result<()> {
     console_log!("Processing Create from: {}", activity.actor);
+
+    // Build our actor URL
+    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "social.dais.social".to_string());
+    let our_actor_url = format!("https://{}/users/{}", activitypub_domain, username);
 
     // Check if the object is a Note (post/reply)
     if let Some(object_type) = activity.object.get("type").and_then(|v| v.as_str()) {
         if object_type == "Note" {
+            // Check if this is a DM (to contains our actor, no Public)
+            let is_dm = activity.object.get("to")
+                .and_then(|to| to.as_array())
+                .map(|to_array| {
+                    let has_our_actor = to_array.iter().any(|recipient| {
+                        recipient.as_str() == Some(&our_actor_url)
+                    });
+                    let has_public = to_array.iter().any(|recipient| {
+                        recipient.as_str() == Some("https://www.w3.org/ns/activitystreams#Public")
+                    });
+                    has_our_actor && !has_public
+                })
+                .unwrap_or(false);
+
+            if is_dm {
+                console_log!("This is a direct message");
+                return handle_direct_message(db, activity, &our_actor_url).await;
+            }
             // Check if this is a reply to one of our posts
             if let Some(in_reply_to) = activity.object.get("inReplyTo").and_then(|v| v.as_str()) {
                 console_log!("This is a reply to: {}", in_reply_to);
@@ -382,6 +406,119 @@ async fn handle_create(db: &D1Database, activity: &Activity, _username: &str, ct
             }
         }
     }
+
+    Ok(())
+}
+
+async fn handle_direct_message(db: &D1Database, activity: &Activity, our_actor_url: &str) -> Result<()> {
+    console_log!("Processing direct message from: {}", activity.actor);
+
+    // Extract message details
+    let msg_id = activity.object.get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&activity.id);
+
+    let content = activity.object.get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let published_at = activity.object.get("published")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // Get all participants from `to` field
+    let mut participants = Vec::new();
+    participants.push(activity.actor.clone()); // Sender
+
+    if let Some(to_array) = activity.object.get("to").and_then(|v| v.as_array()) {
+        for recipient in to_array {
+            if let Some(recipient_str) = recipient.as_str() {
+                if !participants.contains(&recipient_str.to_string()) {
+                    participants.push(recipient_str.to_string());
+                }
+            }
+        }
+    }
+
+    // Sort participants for deterministic conversation ID
+    participants.sort();
+    let participants_str = participants.join("|");
+
+    // Generate conversation ID (hash of sorted participants)
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(participants_str.as_bytes());
+    let hash_result = hasher.finalize();
+    let conversation_id = format!("{:x}", hash_result)[..16].to_string();
+
+    console_log!("Conversation ID: {}", conversation_id);
+
+    // Insert or update conversation
+    let participants_json = serde_json::to_string(&participants).unwrap_or_default();
+
+    let conv_query = r#"
+        INSERT INTO conversations (id, participants, last_message_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET last_message_at = ?
+    "#;
+
+    let conv_stmt = db.prepare(conv_query).bind(&[
+        conversation_id.as_str().into(),
+        participants_json.as_str().into(),
+        published_at.into(),
+        published_at.into(),
+    ])?;
+
+    conv_stmt.run().await?;
+
+    // Insert message
+    let msg_query = r#"
+        INSERT OR IGNORE INTO direct_messages (id, conversation_id, sender_id, content, published_at)
+        VALUES (?, ?, ?, ?, ?)
+    "#;
+
+    let msg_stmt = db.prepare(msg_query).bind(&[
+        msg_id.into(),
+        conversation_id.as_str().into(),
+        activity.actor.as_str().into(),
+        content.into(),
+        published_at.into(),
+    ])?;
+
+    msg_stmt.run().await?;
+
+    // Insert conversation participants if not exists
+    for participant in &participants {
+        let participant_query = r#"
+            INSERT OR IGNORE INTO conversation_participants (conversation_id, actor_id)
+            VALUES (?, ?)
+        "#;
+
+        let participant_stmt = db.prepare(participant_query).bind(&[
+            conversation_id.as_str().into(),
+            participant.as_str().into(),
+        ])?;
+
+        participant_stmt.run().await?;
+    }
+
+    // Create notification for DM
+    let (actor_username, actor_display_name, actor_avatar_url) =
+        extract_actor_info(&activity.actor).await;
+
+    create_notification(
+        db,
+        "mention", // Use "mention" type for DMs (could add "dm" type later)
+        &activity.actor,
+        &actor_username,
+        &actor_display_name,
+        &actor_avatar_url,
+        None,
+        Some(msg_id),
+        Some(content),
+    ).await?;
+
+    console_log!("Stored direct message from: {}", activity.actor);
 
     Ok(())
 }
