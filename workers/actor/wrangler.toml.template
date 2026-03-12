@@ -1,0 +1,44 @@
+name = "actor"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[vars]
+THEME = "cat-light"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# Custom domain routes for Actor endpoint
+# Commented out for local development (not supported in local mode)
+# routes = [
+#   { pattern = "${ACTIVITYPUB_DOMAIN}/users/*", custom_domain = true }
+# ]
+
+[env.production]
+name = "actor-production"
+# No custom domain routes - actor is accessed via router worker
+
+[env.production.vars]
+DOMAIN = "${DOMAIN}"
+ACTIVITYPUB_DOMAIN = "${ACTIVITYPUB_DOMAIN}"
+THEME = "cat-light"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+[[env.production.queues.producers]]
+binding = "DELIVERY_QUEUE"
+queue = "delivery-queue"
+
+# D1 database for actor data
+[[d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+# Queue producer for delivery jobs
+[[queues.producers]]
+binding = "DELIVERY_QUEUE"
+queue = "delivery-queue"

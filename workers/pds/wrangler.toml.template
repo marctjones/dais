@@ -1,0 +1,43 @@
+name = "pds"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[vars]
+DOMAIN = "${ACTIVITYPUB_DOMAIN}"
+PDS_HOSTNAME = "${PDS_DOMAIN}"
+
+# D1 database for AT Protocol records
+[[d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+# Durable Object for relay subscriptions
+[[durable_objects.bindings]]
+name = "RELAY_SUBSCRIPTION"
+class_name = "RelaySubscription"
+script_name = "pds"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelaySubscription"]
+
+[env.production]
+name = "pds-production"
+
+[env.production.vars]
+DOMAIN = "${ACTIVITYPUB_DOMAIN}"
+PDS_HOSTNAME = "${PDS_DOMAIN}"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+[[env.production.durable_objects.bindings]]
+name = "RELAY_SUBSCRIPTION"
+class_name = "RelaySubscription"
+script_name = "pds-production"

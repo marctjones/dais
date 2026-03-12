@@ -1,0 +1,40 @@
+name = "outbox"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[vars]
+DOMAIN = "${DOMAIN}"
+ACTIVITYPUB_DOMAIN = "${ACTIVITYPUB_DOMAIN}"
+THEME = "cat-light"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[env.production]
+name = "outbox-production"
+# No custom domain routes - outbox is accessed via router worker
+
+[env.production.vars]
+DOMAIN = "${DOMAIN}"
+ACTIVITYPUB_DOMAIN = "${ACTIVITYPUB_DOMAIN}"
+THEME = "cat-light"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+# D1 database for retrieving posts
+[[d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+# R2 bucket for media attachments
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "${R2_BUCKET}"
+
+[[env.production.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "${R2_BUCKET}"

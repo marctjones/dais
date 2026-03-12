@@ -16,18 +16,25 @@ def test():
 
 
 @test.command()
-def webfinger():
+@click.option('--local', is_flag=True, help='Test local development server')
+def webfinger(local):
     """Test WebFinger endpoint."""
     config = Config()
     config.load()
 
-    domain = config.get("server.domain", "dais.social")
-    username = config.get("server.username", "marc")
+    if local:
+        domain = "localhost:8787"
+        protocol = "http"
+        username = config.get("server.username", "marc")
+    else:
+        domain = config.get("server.domain", "dais.social")
+        protocol = "https"
+        username = config.get("server.username", "marc")
 
     console.print(f"[bold blue]Testing WebFinger endpoint...[/bold blue]\n")
 
-    url = f"https://{domain}/.well-known/webfinger"
-    params = {"resource": f"acct:{username}@{domain}"}
+    url = f"{protocol}://{domain}/.well-known/webfinger"
+    params = {"resource": f"acct:{username}@{domain}" if not local else f"acct:{username}@dais.social"}
 
     console.print(f"[dim]GET {url}?resource={params['resource']}[/dim]\n")
 
@@ -59,17 +66,24 @@ def webfinger():
 
 
 @test.command()
-def actor():
+@click.option('--local', is_flag=True, help='Test local development server')
+def actor(local):
     """Test ActivityPub Actor endpoint."""
     config = Config()
     config.load()
 
-    activitypub_domain = config.get("server.activitypub_domain", "social.dais.social")
+    if local:
+        activitypub_domain = "localhost:8788"
+        protocol = "http"
+    else:
+        activitypub_domain = config.get("server.activitypub_domain", "social.dais.social")
+        protocol = "https"
+
     username = config.get("server.username", "marc")
 
     console.print(f"[bold blue]Testing Actor endpoint...[/bold blue]\n")
 
-    url = f"https://{activitypub_domain}/users/{username}"
+    url = f"{protocol}://{activitypub_domain}/users/{username}"
     headers = {"Accept": "application/activity+json"}
 
     console.print(f"[dim]GET {url}[/dim]")
@@ -100,7 +114,8 @@ def actor():
 
 @test.command()
 @click.argument('actor')
-def federation(actor):
+@click.option('--local', is_flag=True, help='Test against local development servers')
+def federation(actor, local):
     """Test federation with another instance.
 
     ACTOR: The ActivityPub actor to test (e.g., @user@mastodon.social)
@@ -119,8 +134,16 @@ def federation(actor):
 
     # Test WebFinger lookup
     console.print("[bold]1. WebFinger lookup[/bold]")
-    url = f"https://{domain}/.well-known/webfinger"
-    params = {"resource": f"acct:{username}@{domain}"}
+
+    # Use local development server if --local flag is set
+    if local:
+        webfinger_url = f"http://localhost:8787/.well-known/webfinger"
+        params = {"resource": f"acct:{username}@{domain}"}
+    else:
+        webfinger_url = f"https://{domain}/.well-known/webfinger"
+        params = {"resource": f"acct:{username}@{domain}"}
+
+    url = webfinger_url
 
     try:
         response = httpx.get(url, params=params, timeout=10.0)

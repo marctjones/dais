@@ -1,0 +1,26 @@
+name = "router"
+main = "src/index.js"
+compatibility_date = "2025-01-04"
+
+# R2 bucket for serving media files
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "${R2_BUCKET}"
+
+[env.production]
+name = "router-production"
+routes = [
+  { pattern = "${ACTIVITYPUB_DOMAIN}", custom_domain = true },
+  { pattern = "${PDS_DOMAIN}", custom_domain = true }
+]
+
+[[env.production.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "${R2_BUCKET}"
+
+[env.production.vars]
+WEBFINGER_URL = "https://webfinger-production.${ACCOUNT_NAME}.workers.dev"
+ACTOR_URL = "https://actor-production.${ACCOUNT_NAME}.workers.dev"
+INBOX_URL = "https://inbox-production.${ACCOUNT_NAME}.workers.dev"
+OUTBOX_URL = "https://outbox-production.${ACCOUNT_NAME}.workers.dev"
+PDS_URL = "https://pds-production.${ACCOUNT_NAME}.workers.dev"

@@ -1,0 +1,38 @@
+name = "inbox"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# Custom domain routes for Inbox endpoint
+# Commented out for local development (not supported in local mode)
+# routes = [
+#   { pattern = "${ACTIVITYPUB_DOMAIN}/users/*/inbox", custom_domain = true }
+# ]
+
+[env.production]
+name = "inbox-production"
+# No custom domain routes - inbox is accessed via router worker
+
+[env.production.vars]
+DOMAIN = "${DOMAIN}"
+ACTIVITYPUB_DOMAIN = "${ACTIVITYPUB_DOMAIN}"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+[env.production.ai]
+binding = "AI"
+
+# D1 database for storing activities and followers
+[[d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+# AI binding for content moderation
+[ai]
+binding = "AI"

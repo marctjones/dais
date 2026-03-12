@@ -68,8 +68,9 @@ def create(content, attach, alt, visibility, protocol, remote):
         activitypub_domain = config.get("server.activitypub_domain", "social.dais.social")
         actor_username = config.get("server.username", "marc")
     else:
+        # Local mode: use hardcoded values matching seed-local-db.sh
         activitypub_domain = "localhost"
-        actor_username = config.get("server.username", "marc")
+        actor_username = "marc"  # Fixed to match local seed data
 
     actor_id = f"https://{activitypub_domain}/users/{actor_username}"
     post_id = f"https://{activitypub_domain}/users/{actor_username}/posts/{post_id_path}"
@@ -302,8 +303,9 @@ def delete(post_id, remote):
         activitypub_domain = config.get("server.activitypub_domain", "social.dais.social")
         actor_username = config.get("server.username", "marc")
     else:
+        # Local mode: use hardcoded values matching seed-local-db.sh
         activitypub_domain = "localhost"
-        actor_username = config.get("server.username", "marc")
+        actor_username = "marc"  # Fixed to match local seed data
 
     actor_id = f"https://{activitypub_domain}/users/{actor_username}"
 

@@ -1,0 +1,16 @@
+name = "landing"
+main = "src/index.js"
+compatibility_date = "2025-01-04"
+
+# No build step needed for simple JS worker
+# No D1 database needed for static content
+
+[env.production]
+name = "landing-production"
+routes = [
+  { pattern = "${DOMAIN}", custom_domain = true },
+  { pattern = "www.${DOMAIN}", custom_domain = true }
+]
+
+[env.production.vars]
+WEBFINGER_URL = "https://webfinger-production.${ACCOUNT_NAME}.workers.dev"

@@ -4,7 +4,7 @@ import click
 from rich.console import Console
 
 from dais_cli import __version__
-from dais_cli.commands import setup, post, followers, test, stats, db, actor, config_cmd, media, interact, notifications, moderation, block, follow, timeline, dm
+from dais_cli.commands import setup, post, followers, test, stats, db, actor, config_cmd, media, interact, notifications, moderation, block, follow, timeline, dm, deploy, doctor
 
 console = Console()
 
@@ -38,6 +38,8 @@ main.add_command(block.block)
 main.add_command(test.test)
 main.add_command(stats.stats)
 main.add_command(db.db)
+main.add_command(deploy.deploy)
+main.add_command(doctor.doctor)
 
 
 if __name__ == "__main__":

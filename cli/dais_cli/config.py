@@ -64,12 +64,15 @@ class Config:
             "server": {
                 "domain": "example.com",
                 "activitypub_domain": "social.example.com",
+                "pds_domain": "pds.example.com",
                 "username": "social",
             },
             "cloudflare": {
                 "account_id": "",
+                "account_name": "",
                 "api_token": "",
                 "d1_database_id": "",
+                "d1_database_name": "dais-db",
                 "r2_bucket": "dais-media",
             },
             "keys": {

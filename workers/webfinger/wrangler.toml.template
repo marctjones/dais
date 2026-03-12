@@ -1,0 +1,35 @@
+name = "webfinger"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[vars]
+DOMAIN = "${DOMAIN}"
+ACTIVITYPUB_DOMAIN = "${ACTIVITYPUB_DOMAIN}"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# Custom domain routes for WebFinger
+# Commented out for local development (not supported in local mode)
+# routes = [
+#   { pattern = "${DOMAIN}/.well-known/webfinger", custom_domain = true }
+# ]
+
+[env.production]
+name = "webfinger-production"
+# No routes needed - accessed via router worker
+
+[env.production.vars]
+DOMAIN = "${DOMAIN}"
+ACTIVITYPUB_DOMAIN = "${ACTIVITYPUB_DOMAIN}"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+# D1 database for actor lookups
+[[d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"

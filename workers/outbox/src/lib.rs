@@ -187,33 +187,32 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Get D1 database
     let db = ctx.env.d1("DB").expect("D1 database binding not found");
 
-    // Get ActivityPub domain from environment
-    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
-        .map(|v| v.to_string())
-        .unwrap_or_else(|_| "social.dais.social".to_string());
+    // Query for post using LIKE pattern to match the path component, not the full URL
+    // This handles domain mismatches between what's stored (e.g., https://localhost)
+    // and what's configured (e.g., localhost:8790)
+    let post_path_pattern = format!("%/users/{}/posts/{}", username, post_id_param);
 
-    // Construct full post ID (URL)
-    let post_id = format!("https://{}/users/{}/posts/{}", activitypub_domain, username, post_id_param);
-
-    // Query for post
     let post_query = r#"
         SELECT p.id, p.actor_id, p.content, p.content_html, p.visibility,
                p.published_at, p.in_reply_to, p.media_attachments, p.atproto_uri
         FROM posts p
         JOIN actors a ON p.actor_id = a.id
-        WHERE p.id = ? AND a.username = ?
+        WHERE p.id LIKE ? AND a.username = ?
     "#;
 
-    let stmt = db.prepare(post_query).bind(&[post_id.clone().into(), username.into()])?;
+    let stmt = db.prepare(post_query).bind(&[post_path_pattern.clone().into(), username.into()])?;
     let result = stmt.first::<serde_json::Value>(None).await?;
 
     let post = match result {
         Some(data) => data,
         None => {
-            console_log!("Post not found: {}", post_id);
+            console_log!("Post not found for path pattern: {}", post_path_pattern);
             return Response::error("Post not found", 404);
         }
     };
+
+    // Extract the actual post ID from the database result (full URL)
+    let post_id = post["id"].as_str().unwrap_or("").to_string();
 
     // Parse media attachments if present
     let attachments: Option<Vec<Attachment>> = post["media_attachments"]

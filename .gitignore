@@ -36,6 +36,8 @@ Cargo.lock
 # Cloudflare Workers
 .wrangler/
 worker-build/
+workers/*/wrangler.toml
+!workers/*/wrangler.toml.template
 
 # IDEs
 .vscode/

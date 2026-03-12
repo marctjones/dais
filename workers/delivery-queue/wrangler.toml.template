@@ -1,0 +1,48 @@
+name = "delivery-queue"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# Queue consumer configuration
+[[queues.consumers]]
+queue = "delivery-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 3
+dead_letter_queue = "delivery-dlq"
+
+# D1 database for tracking deliveries
+[[d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+# R2 for media (if needed for attachments)
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "${R2_BUCKET}"
+
+[env.production]
+name = "delivery-queue-production"
+
+[[env.production.queues.consumers]]
+queue = "delivery-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 3
+dead_letter_queue = "delivery-dlq"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "${DATABASE_NAME}"
+database_id = "${DATABASE_ID}"
+
+[[env.production.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "${R2_BUCKET}"
+
+[env.production.vars]
+DOMAIN = "${DOMAIN}"
+ACTIVITYPUB_DOMAIN = "${ACTIVITYPUB_DOMAIN}"
