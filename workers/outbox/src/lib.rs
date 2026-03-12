@@ -247,11 +247,11 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let mut boosts: Vec<serde_json::Value> = Vec::new();
 
     if wants_html {
-        // Fetch replies to this post
+        // Fetch replies to this post (exclude hidden ones)
         let replies_query = r#"
             SELECT actor_username, actor_display_name, actor_avatar_url, content, published_at
             FROM replies
-            WHERE post_id = ?
+            WHERE post_id = ? AND (hidden IS NULL OR hidden = 0)
             ORDER BY published_at ASC
         "#;
         let replies_stmt = db.prepare(replies_query).bind(&[post_id.clone().into()])?;
