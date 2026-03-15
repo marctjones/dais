@@ -78,6 +78,9 @@ class Config:
             "keys": {
                 "private_key_path": str(self.keys_dir / "private.pem"),
                 "public_key_path": str(self.keys_dir / "public.pem"),
+            },
+            "environment": {
+                "default": "production",  # "production" or "development"
             }
         }
 

@@ -41,8 +41,9 @@ def post():
               default='public', help='Post visibility')
 @click.option('--protocol', type=click.Choice(['both', 'activitypub', 'atproto']),
               default='both', help='Which protocol(s) to post to')
-@click.option('--remote', is_flag=True, help='Use remote database and deliver to production followers')
-def create(content, attach, alt, visibility, protocol, remote):
+@click.option('--remote', is_flag=True, help='Use production environment (deprecated: use --env production)')
+@click.option('--env', type=click.Choice(['production', 'development']), help='Environment to use (overrides config default)')
+def create(content, attach, alt, visibility, protocol, remote, env):
     """Create and publish a post.
 
     CONTENT: The text content of your post
@@ -62,15 +63,29 @@ def create(content, attach, alt, visibility, protocol, remote):
 
     # Load configuration
     config = Config()
+    config.load()
 
-    # Use localhost for local development, configured domain for remote
-    if remote:
-        activitypub_domain = config.get("server.activitypub_domain", "social.dais.social")
-        actor_username = config.get("server.username", "marc")
+    # Determine environment: --env flag > --remote flag > config default > production
+    if env:
+        use_production = (env == 'production')
+    elif remote:
+        use_production = True
     else:
-        # Local mode: use hardcoded values matching seed-local-db.sh
+        default_env = config.get("environment.default", "production")
+        use_production = (default_env == "production")
+
+    # Use production or development settings
+    if use_production:
+        activitypub_domain = config.get("server.activitypub_domain", "social.dais.social")
+        actor_username = config.get("server.username", "social")
+        env_label = "[production]"
+    else:
+        # Development mode: use localhost matching seed-local-db.sh
         activitypub_domain = "localhost"
         actor_username = "marc"  # Fixed to match local seed data
+        env_label = "[development]"
+
+    console.print(f"[dim]Environment: {env_label}[/dim]")
 
     actor_id = f"https://{activitypub_domain}/users/{actor_username}"
     post_id = f"https://{activitypub_domain}/users/{actor_username}/posts/{post_id_path}"
