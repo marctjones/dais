@@ -283,51 +283,75 @@ export default {
     <div class="container">
         <header>
             <div class="logo">d</div>
-            <span class="status-badge">Alpha • In Development</span>
+            <span class="status-badge">v1.0.0 • Stable Release</span>
             <h1>dais</h1>
-            <div class="tagline">Self-hosted ActivityPub on Cloudflare Workers</div>
+            <div class="tagline">ActivityPub + Bluesky on Cloudflare</div>
             <p class="description">
-                A modern, single-user ActivityPub server that runs entirely on Cloudflare's edge network.
-                Own your social media presence without managing servers.
+                A complete single-user social media server supporting both ActivityPub (Mastodon)
+                and AT Protocol (Bluesky). Run your own instance at @you@yourdomain.com with
+                zero hosting costs on Cloudflare's free tier.
             </p>
             <div class="buttons">
-                <a href="https://github.com/marctjones/dais" class="button button-primary">View on GitHub</a>
+                <a href="https://github.com/marctjones/dais/releases/tag/v1.0.0" class="button button-primary">Download v1.0.0</a>
+                <a href="https://github.com/marctjones/dais" class="button button-secondary">View on GitHub</a>
                 <a href="https://social.dais.social/users/social" class="button button-secondary">Live Demo</a>
             </div>
         </header>
 
         <div class="features">
             <div class="feature">
-                <h3>Serverless Edge</h3>
-                <p>Runs on Cloudflare Workers - no servers to manage, automatic scaling, deployed globally.</p>
+                <h3>🌐 Dual Protocol Support</h3>
+                <p>Full ActivityPub and AT Protocol. Post to Mastodon, Pleroma, Pixelfed, and Bluesky from one account.</p>
             </div>
             <div class="feature">
-                <h3>Open Federation</h3>
-                <p>Full ActivityPub protocol support. Connect with Mastodon, Pixelfed, and the entire fediverse.</p>
+                <h3>🖥️ Terminal UI</h3>
+                <p>Interactive dashboard with 6 views for managing followers, posts, notifications, DMs, and analytics in real-time.</p>
             </div>
             <div class="feature">
-                <h3>Built with Rust</h3>
-                <p>Compiled to WebAssembly for performance and security. Type-safe, fast, reliable.</p>
+                <h3>🔒 Enterprise Auth</h3>
+                <p>Cloudflare Access with SSO support. Google, GitHub, Microsoft identity providers. Service tokens for API access.</p>
+            </div>
+            <div class="feature">
+                <h3>🚀 One-Command Deploy</h3>
+                <p>Run "dais deploy all" to set up everything: D1 database, R2 storage, 9 Workers, migrations, and secrets.</p>
+            </div>
+            <div class="feature">
+                <h3>⚡ Rust + WASM</h3>
+                <p>9 Workers compiled to WebAssembly for maximum performance. Global edge deployment in 300+ locations.</p>
+            </div>
+            <div class="feature">
+                <h3>💰 Zero Cost Hosting</h3>
+                <p>Runs entirely on Cloudflare free tier. $0/month for typical use. Unlimited bandwidth, no egress fees.</p>
             </div>
         </div>
 
         <div class="highlight-list">
-            <h2>Why dais?</h2>
-            <div class="highlight-item">Single-user focus - your corner of the fediverse</div>
-            <div class="highlight-item">Cloudflare D1 for data persistence</div>
-            <div class="highlight-item">HTTP signatures for secure federation</div>
-            <div class="highlight-item">CLI for easy post management</div>
-            <div class="highlight-item">Clean, modern HTML interface</div>
-            <div class="highlight-item">Deploy in minutes with wrangler</div>
+            <h2>What's in v1.0.0?</h2>
+            <div class="highlight-item">200+ features including posts, replies, likes, boosts, and direct messages</div>
+            <div class="highlight-item">Terminal UI with 6 interactive views for complete management</div>
+            <div class="highlight-item">Full CLI with 14 command groups (post, followers, search, notifications, etc.)</div>
+            <div class="highlight-item">Cloudflare Access authentication with multiple identity providers</div>
+            <div class="highlight-item">Media attachments (images, videos) via R2 object storage</div>
+            <div class="highlight-item">Search users and posts across the Fediverse</div>
+            <div class="highlight-item">Moderation tools: block accounts and instances</div>
+            <div class="highlight-item">Backup and restore for complete data safety</div>
+            <div class="highlight-item">Real-time notifications and statistics dashboard</div>
+            <div class="highlight-item">12 comprehensive documentation guides</div>
         </div>
 
         <footer>
-            <p>Join the fediverse on your own terms.</p>
+            <p>🎉 v1.0.0 Stable Release - Own your social media presence on your own terms.</p>
             <p style="margin-top: 16px;">
-                Follow the project: <a href="https://social.dais.social/users/social">@social@dais.social</a>
+                Follow the project: <a href="https://social.dais.social/users/social">@social@dais.social</a> •
+                <a href="https://bsky.app/profile/social.dais.social">@social.dais.social on Bluesky</a>
+            </p>
+            <p style="margin-top: 16px;">
+                <a href="https://github.com/marctjones/dais/releases/tag/v1.0.0">Release Notes</a> •
+                <a href="https://github.com/marctjones/dais/blob/main/INSTALL.md">Installation Guide</a> •
+                <a href="https://github.com/marctjones/dais/blob/main/FEATURES.md">Feature List</a>
             </p>
             <p style="margin-top: 24px; font-size: 14px; opacity: 0.8;">
-                Built with ❤️ by the dais community • <a href="https://github.com/marctjones/dais">Open Source</a>
+                Built with ❤️ by the dais community • <a href="https://github.com/marctjones/dais">Open Source (MIT License)</a>
             </p>
         </footer>
     </div>
