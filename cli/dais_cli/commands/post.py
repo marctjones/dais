@@ -148,7 +148,7 @@ def create(content, attach, alt, visibility, protocol, remote, env):
     """
 
     cmd = ["wrangler", "d1", "execute", "DB", "--command", insert_query]
-    if remote:
+    if use_production:
         cmd.append("--remote")
 
     try:
@@ -225,10 +225,26 @@ def create(content, attach, alt, visibility, protocol, remote, env):
 
 @post.command()
 @click.option('--limit', type=int, default=20, help='Number of posts to show')
-@click.option('--remote', is_flag=True, help='Query remote database')
-def list(limit, remote):
+@click.option('--remote', is_flag=True, help='Query production database (deprecated: use --env production)')
+@click.option('--env', type=click.Choice(['production', 'development']), help='Environment to use (overrides config default)')
+def list(limit, remote, env):
     """List your posts."""
     console.print(f"[bold blue]Listing {limit} most recent posts[/bold blue]\n")
+
+    # Load configuration and determine environment
+    config = Config()
+    config.load()
+
+    if env:
+        use_production = (env == 'production')
+    elif remote:
+        use_production = True
+    else:
+        default_env = config.get("environment.default", "production")
+        use_production = (default_env == "production")
+
+    env_label = "[production]" if use_production else "[development]"
+    console.print(f"[dim]Environment: {env_label}[/dim]")
 
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
@@ -243,7 +259,7 @@ def list(limit, remote):
     """
 
     cmd = ["wrangler", "d1", "execute", "DB", "--command", query]
-    if remote:
+    if use_production:
         cmd.append("--remote")
 
     try:
@@ -303,19 +319,32 @@ def list(limit, remote):
 
 @post.command()
 @click.argument('post_id')
-@click.option('--remote', is_flag=True, help='Delete from remote database and notify production followers')
-def delete(post_id, remote):
+@click.option('--remote', is_flag=True, help='Delete from production (deprecated: use --env production)')
+@click.option('--env', type=click.Choice(['production', 'development']), help='Environment to use (overrides config default)')
+def delete(post_id, remote, env):
     """Delete a post.
 
     POST_ID: The short ID of the post to delete (e.g., "20260107120000-abc123")
     """
     console.print(f"[bold blue]Deleting post {post_id}[/bold blue]\n")
 
-    # Load configuration
+    # Load configuration and determine environment
     config = Config()
+    config.load()
 
-    # Use localhost for local development, configured domain for remote
-    if remote:
+    if env:
+        use_production = (env == 'production')
+    elif remote:
+        use_production = True
+    else:
+        default_env = config.get("environment.default", "production")
+        use_production = (default_env == "production")
+
+    env_label = "[production]" if use_production else "[development]"
+    console.print(f"[dim]Environment: {env_label}[/dim]")
+
+    # Use localhost for local development, configured domain for production
+    if use_production:
         activitypub_domain = config.get("server.activitypub_domain", "social.dais.social")
         actor_username = config.get("server.username", "marc")
     else:
@@ -360,7 +389,7 @@ def delete(post_id, remote):
 
     delete_query = f"DELETE FROM posts WHERE id = '{full_post_id}'"
     cmd = ["wrangler", "d1", "execute", "DB", "--command", delete_query]
-    if remote:
+    if use_production:
         cmd.append("--remote")
 
     try:
