@@ -1,0 +1,23 @@
+name = "auth"
+main = "src/index.ts"
+compatibility_date = "2025-01-04"
+
+[env.production]
+name = "auth-production"
+route = { pattern = "${DOMAIN}/api/auth/*", zone_name = "${DOMAIN}" }
+
+[env.production.vars]
+APP_DOMAIN = "${DOMAIN}"
+
+# Note: The following secrets must be set via CLI:
+#
+# wrangler secret put CLOUDFLARE_ACCESS_TEAM_DOMAIN --env production
+# wrangler secret put CLOUDFLARE_ACCESS_AUD --env production
+# wrangler secret put ALLOWED_EMAIL --env production (optional)
+# wrangler secret put SERVICE_TOKENS --env production (optional)
+#
+# Get these values from Cloudflare Zero Trust dashboard:
+# 1. CLOUDFLARE_ACCESS_TEAM_DOMAIN: Your team domain (e.g., "myteam.cloudflareaccess.com")
+# 2. CLOUDFLARE_ACCESS_AUD: Application Audience (AUD) tag from Access application settings
+# 3. ALLOWED_EMAIL: Your email address to restrict access (optional)
+# 4. SERVICE_TOKENS: JSON array of service tokens for API access (optional)

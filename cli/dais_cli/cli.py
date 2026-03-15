@@ -4,7 +4,8 @@ import click
 from rich.console import Console
 
 from dais_cli import __version__
-from dais_cli.commands import setup, post, followers, test, stats, db, actor, config_cmd, media, interact, notifications, moderation, block, follow, timeline, dm, deploy, doctor
+from dais_cli.commands import setup, post, followers, test, stats, db, actor, config_cmd, media, interact, notifications, moderation, block, follow, timeline, dm, deploy, doctor, search, auth
+from dais_cli.tui.app import run_tui
 
 console = Console()
 
@@ -21,10 +22,17 @@ def main(ctx):
     ctx.ensure_object(dict)
 
 
+@click.command()
+def tui():
+    """Launch interactive Terminal UI for managing dais."""
+    run_tui()
+
+
 # Register command groups
 main.add_command(setup.setup)
 main.add_command(config_cmd.config)
 main.add_command(actor.actor)
+main.add_command(auth.auth)
 main.add_command(post.post)
 main.add_command(media.media)
 main.add_command(followers.followers)
@@ -40,6 +48,8 @@ main.add_command(stats.stats)
 main.add_command(db.db)
 main.add_command(deploy.deploy)
 main.add_command(doctor.doctor)
+main.add_command(search.search)
+main.add_command(tui)
 
 
 if __name__ == "__main__":

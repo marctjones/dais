@@ -195,7 +195,8 @@ def create(content, attach, alt, visibility, protocol, remote):
             activity=create_activity,
             followers=followers,
             protocol=protocol,
-            remote=remote
+            remote=remote,
+            visibility=visibility
         )
 
         console.print(f"\n[green]✓[/green] Post created and delivered")

@@ -25,7 +25,8 @@ def deliver_dual_protocol_post(
     activity: Dict,
     followers: List[Dict],
     protocol: str = "both",
-    remote: bool = False
+    remote: bool = False,
+    visibility: str = "public"
 ) -> Dict[str, any]:
     """Deliver post to selected protocol(s).
 
@@ -37,6 +38,7 @@ def deliver_dual_protocol_post(
         followers: List of ActivityPub followers
         protocol: Which protocol(s) to use ('activitypub', 'atproto', 'both')
         remote: Whether to use remote database
+        visibility: Post visibility ('public', 'unlisted', 'followers', 'direct')
 
     Returns:
         Dict with delivery results
@@ -45,6 +47,31 @@ def deliver_dual_protocol_post(
         'activitypub': {'successful': 0, 'failed': 0},
         'atproto': {'success': False, 'uri': None}
     }
+
+    # PRIVACY SAFETY CHECK: Prevent leaking private posts to Bluesky
+    # Bluesky doesn't support followers-only or DM visibility - all posts are public
+    original_protocol = protocol
+    if protocol in ('atproto', 'both') and visibility in ('followers', 'direct'):
+        console.print(f"[yellow]⚠[/yellow]  Privacy Notice: Bluesky doesn't support '{visibility}' visibility")
+        console.print(f"[yellow]   All Bluesky posts are public. Posting to ActivityPub only to protect your privacy.[/yellow]")
+        protocol = 'activitypub'  # Override to ActivityPub only
+        results['atproto'] = {'success': False, 'uri': None, 'skipped': 'privacy_protection'}
+
+        # Update database to reflect actual protocol used
+        if original_protocol == 'both':
+            project_root = Path(__file__).parent.parent.parent
+            worker_dir = project_root / "workers" / "actor"
+            post_id_escaped = post_id.replace("'", "''")
+            update_query = f"UPDATE posts SET protocol = 'activitypub' WHERE id = '{post_id_escaped}'"
+            cmd = ["wrangler", "d1", "execute", "DB", "--command", update_query]
+            if remote:
+                cmd.append("--remote")
+            else:
+                cmd.append("--local")
+            try:
+                subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=str(worker_dir))
+            except subprocess.CalledProcessError:
+                pass  # Non-critical: database update failed but delivery will still work
 
     # Deliver to ActivityPub
     if protocol in ('activitypub', 'both') and followers:

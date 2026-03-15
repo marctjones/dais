@@ -253,6 +253,7 @@ def workers():
         'inbox',
         'outbox',
         'pds',
+        'auth',
         'delivery-queue',
         'router',
         'landing'
