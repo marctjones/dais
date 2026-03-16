@@ -1,0 +1,40 @@
+[package]
+name = "dais-cloudflare"
+version = "1.1.0"
+edition = "2021"
+authors = ["Marc T Jones <marc@dais.social>"]
+description = "Cloudflare platform bindings for dais"
+license = "MIT"
+repository = "https://github.com/marctjones/dais"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Core dais library
+dais-core = { path = "../../../core" }
+
+# Cloudflare Workers runtime
+worker = { version = "0.7.2", features = ["d1", "queue", "http"] }
+
+# WASM bindings
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
+
+# Async runtime
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+
+[features]
+default = []

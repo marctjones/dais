@@ -9,10 +9,10 @@ pub mod storage;
 pub mod queue;
 pub mod http;
 
-pub use database::DatabaseProvider;
-pub use storage::StorageProvider;
-pub use queue::QueueProvider;
-pub use http::HttpProvider;
+pub use database::{DatabaseProvider, DatabaseDialect};
+pub use storage::{StorageProvider, StorageMetadata, ObjectInfo, ListOptions, ListResult};
+pub use queue::{QueueProvider, QueueHandler, QueueMessage, DeliveryMessage, SyncMessage, MediaProcessingMessage, MediaTask};
+pub use http::{HttpProvider, Request, Response, Method};
 
 use serde_json::Value;
 use std::collections::HashMap;
