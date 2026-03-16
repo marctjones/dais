@@ -1,422 +1,586 @@
-# Deploying dais to Cloudflare Workers
+# dais v1.1 Deployment Guide
 
-This guide walks you through deploying your dais instance to Cloudflare Workers, giving you a production-ready single-user ActivityPub server.
+**Date**: March 15, 2026
+**Version**: v1.1.0
+
+This guide walks you through deploying dais v1.1 from scratch on Cloudflare Workers.
+
+## Overview
+
+**Deployment time**: 30-45 minutes
+**Cost**: Cloudflare Workers Free tier ($0/month for most single-user instances)
+
+**What you'll deploy**:
+- 9 Cloudflare Workers (WebFinger, Actor, Inbox, Outbox, etc.)
+- 1 D1 Database (SQLite)
+- 1 R2 Bucket (media storage)
+- 1 Queue (delivery retries)
 
 ## Prerequisites
 
-Before you begin, ensure you have:
+### Required
 
-1. **A Cloudflare account** (free tier works fine)
-   - Sign up at https://cloudflare.com if you don't have one
-   - Note your account ID (found in Workers & Pages dashboard)
+- [x] **Domain name** - You own a domain (e.g., `example.com`)
+- [x] **Cloudflare account** - Free tier is sufficient
+- [x] **Domain on Cloudflare** - Add your domain to Cloudflare DNS
+- [x] **Git** - For cloning the repository
+- [x] **Rust** (1.75+) - Install from https://rustup.rs
+- [x] **Node.js** (18+) - For wrangler CLI
+- [x] **wrangler CLI** (3.0+) - Cloudflare's deployment tool
 
-2. **A domain name**
-   - You'll need a domain to host your instance
-   - Can be registered through Cloudflare or any registrar
-   - Example: `example.com`
+### Optional
 
-3. **Wrangler CLI installed**
-   ```bash
-   npm install -g wrangler
-   ```
+- [ ] **Bluesky account** - For AT Protocol / PDS integration
+- [ ] **Admin interface** - For web-based post creation
+- [ ] **Custom theme** - For personalized appearance
 
-4. **Python 3.8+** (for the dais CLI)
-   ```bash
-   python3 --version
-   ```
+## Step 1: Install Prerequisites
 
-5. **dais CLI installed**
-   ```bash
-   pip install -e cli/
-   ```
-
-## Quick Start (5 Commands)
-
-If you're already familiar with Cloudflare Workers, here's the quick version:
+### Install Rust
 
 ```bash
-# 1. Initialize configuration
-dais setup init
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+rustup target add wasm32-unknown-unknown
+```
 
-# 2. Authenticate with Cloudflare
+Verify:
+```bash
+rustc --version  # Should be 1.75+
+```
+
+### Install Node.js
+
+**Ubuntu/Debian**:
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+**macOS**:
+```bash
+brew install node
+```
+
+**Windows**:
+Download from https://nodejs.org
+
+Verify:
+```bash
+node --version  # Should be 18+
+```
+
+### Install wrangler CLI
+
+```bash
+npm install -g wrangler
+wrangler --version  # Should be 3.0+
+```
+
+### Install worker-build
+
+```bash
+cargo install worker-build
+```
+
+## Step 2: Setup Cloudflare
+
+### Create Cloudflare Account
+
+1. Go to https://dash.cloudflare.com/sign-up
+2. Create free account
+3. Verify email
+
+### Add Domain to Cloudflare
+
+1. In Cloudflare Dashboard, click "Add a site"
+2. Enter your domain (e.g., `example.com`)
+3. Select "Free" plan
+4. Follow instructions to change nameservers at your domain registrar
+5. Wait for DNS to propagate (~10 minutes to 24 hours)
+
+### Authenticate wrangler
+
+```bash
 wrangler login
-
-# 3. Deploy everything (infrastructure, secrets, database, workers)
-dais deploy all
-
-# 4. Verify deployment
-dais deploy verify
-
-# 5. Check system health
-dais doctor
 ```
 
-## Step-by-Step Setup
+This opens a browser to authorize wrangler with your Cloudflare account.
 
-### 1. Initialize Configuration
+Verify:
+```bash
+wrangler whoami
+```
 
-Run the setup wizard to configure your instance:
+## Step 3: Clone and Configure
+
+### Clone Repository
 
 ```bash
-dais setup init
+git clone https://github.com/daisocial/dais.git
+cd dais
+git checkout release/v1.1
 ```
 
-You'll be prompted for:
-- **Username**: Your ActivityPub username (e.g., `alice`)
-- **Domain**: Your main domain (e.g., `example.com`)
-- **ActivityPub Domain**: Subdomain for ActivityPub (e.g., `social.example.com`)
-- **PDS Domain**: Subdomain for AT Protocol (e.g., `pds.example.com`)
-- **Cloudflare Account ID**: From your Cloudflare dashboard
-- **Cloudflare Account Name**: Your Cloudflare account name (e.g., `alice-smith`)
+### Choose Your Domains
 
-This will:
-- Generate cryptographic keys for signing ActivityPub activities
-- Create a configuration file at `.dais/config.toml`
-- Set up directory structure
+You need 3 subdomains:
 
-### 2. Authenticate with Cloudflare
+1. **Main domain** - Landing page (e.g., `dais.example.com`)
+2. **ActivityPub domain** - Federation endpoint (e.g., `social.dais.example.com`)
+3. **PDS domain** - Bluesky/AT Protocol (e.g., `pds.dais.example.com`)
 
-Authenticate wrangler with your Cloudflare account:
+**Example**:
+- Main: `dais.social`
+- ActivityPub: `social.dais.social`
+- PDS: `pds.dais.social`
+
+### Generate Cryptographic Keys
 
 ```bash
-wrangler login
+# Create keys directory
+mkdir -p ~/.dais/keys
+
+# Generate RSA key pair for ActivityPub HTTP signatures
+openssl genrsa -out ~/.dais/keys/private.pem 2048
+openssl rsa -in ~/.dais/keys/private.pem -pubout -out ~/.dais/keys/public.pem
 ```
 
-This opens a browser window for authentication. After logging in, wrangler can deploy to your account.
+## Step 4: Create Cloudflare Resources
 
-### 3. Create Infrastructure
-
-Create the required Cloudflare resources (D1 database and R2 bucket):
+### Create D1 Database
 
 ```bash
-dais deploy infrastructure
+wrangler d1 create dais-db
 ```
 
-This command:
-- Creates a D1 database named `dais-db` (or your configured name)
-- Creates an R2 bucket named `dais-media` (or your configured name)
-- Saves the resource IDs to your configuration
+Save the database ID from the output:
+```
+✅ Successfully created DB 'dais-db'
+   database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+```
 
-**Note**: If resources already exist, the command will detect them and continue.
-
-### 4. Upload Secrets
-
-Upload your private key to Cloudflare Workers:
+### Create R2 Bucket
 
 ```bash
-dais deploy secrets
+wrangler r2 bucket create dais-media
 ```
 
-This uploads the private key (generated during `dais setup init`) as a secret to all workers that need it:
-- actor
-- inbox
-- outbox
-- delivery-queue
-
-The private key is used to sign ActivityPub activities (HTTP signatures).
-
-### 5. Apply Database Migrations
-
-Create the database schema by applying migrations:
+### Create Queue
 
 ```bash
-dais deploy database
+wrangler queues create delivery
 ```
 
-This runs all SQL migrations in `cli/migrations/` against your D1 database, creating tables for:
-- Posts and activities
-- Followers and following
-- Media attachments
-- Direct messages
-- AT Protocol records
+## Step 5: Configure Workers
 
-### 6. Deploy Workers
+### Update wrangler.toml Files
 
-Deploy all 8 Cloudflare Workers:
+For each worker in `platforms/cloudflare/workers/*/wrangler.toml`, update:
+
+**Example** (`platforms/cloudflare/workers/actor/wrangler.toml`):
+
+```toml
+name = "actor"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[vars]
+THEME = "cat-light"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[env.production]
+name = "actor-production"
+
+[env.production.vars]
+DOMAIN = "dais.example.com"                      # ← YOUR MAIN DOMAIN
+ACTIVITYPUB_DOMAIN = "social.dais.example.com"   # ← YOUR ACTIVITYPUB DOMAIN
+PDS_DOMAIN = "pds.dais.example.com"              # ← YOUR PDS DOMAIN (optional)
+THEME = "cat-light"
+USERNAME = "yourusername"                         # ← YOUR USERNAME
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "dais-db"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"  # ← YOUR DATABASE ID
+
+[[env.production.r2_buckets]]
+binding = "MEDIA"
+bucket_name = "dais-media"
+
+[[env.production.queues.producers]]
+queue = "delivery"
+binding = "DELIVERY_QUEUE"
+```
+
+**Repeat for all 9 workers**:
+- `actor`
+- `inbox`
+- `outbox`
+- `webfinger`
+- `delivery-queue`
+- `auth`
+- `pds`
+- `router`
+- `landing`
+
+### Helper Script for Configuration
+
+Create `update-config.sh`:
 
 ```bash
-dais deploy workers
+#!/bin/bash
+# update-config.sh
+
+# Your configuration
+DOMAIN="dais.example.com"
+ACTIVITYPUB_DOMAIN="social.dais.example.com"
+PDS_DOMAIN="pds.dais.example.com"
+DATABASE_ID="f90f9da8-136c-40c6-b96a-eba38d7efa65"  # From step 4
+USERNAME="yourusername"
+
+# Update all workers
+for worker in actor inbox outbox webfinger delivery-queue auth pds router landing; do
+    CONFIG="platforms/cloudflare/workers/$worker/wrangler.toml"
+    echo "Updating $worker..."
+
+    sed -i "s/DOMAIN = \".*\"/DOMAIN = \"$DOMAIN\"/" "$CONFIG"
+    sed -i "s/ACTIVITYPUB_DOMAIN = \".*\"/ACTIVITYPUB_DOMAIN = \"$ACTIVITYPUB_DOMAIN\"/" "$CONFIG"
+    sed -i "s/PDS_DOMAIN = \".*\"/PDS_DOMAIN = \"$PDS_DOMAIN\"/" "$CONFIG"
+    sed -i "s/database_id = \".*\"/database_id = \"$DATABASE_ID\"/" "$CONFIG"
+    sed -i "s/USERNAME = \".*\"/USERNAME = \"$USERNAME\"/" "$CONFIG"
+done
+
+echo "Configuration updated!"
 ```
 
-This command:
-1. Generates `wrangler.toml` files from templates using your configuration
-2. Deploys workers in the correct order:
-   - webfinger (handles `.well-known/webfinger` lookups)
-   - actor (serves ActivityPub actor profile)
-   - inbox (receives incoming activities)
-   - outbox (serves your posts feed)
-   - pds (AT Protocol Personal Data Server)
-   - delivery-queue (processes outgoing deliveries)
-   - router (routes traffic to appropriate workers)
-   - landing (serves your homepage)
+Make executable and run:
+```bash
+chmod +x update-config.sh
+./update-config.sh
+```
 
-### 7. Configure DNS
+## Step 6: Setup Database Schema
 
-**Important**: You must configure DNS for your domains to point to Cloudflare Workers.
-
-In your Cloudflare dashboard (DNS settings):
-
-#### For your main domain (`example.com`):
-- **Type**: CNAME
-- **Name**: `@` (or `example.com`)
-- **Target**: `<your-account>.workers.dev`
-- **Proxy**: Orange cloud (proxied)
-
-#### For ActivityPub domain (`social.example.com`):
-- **Type**: CNAME
-- **Name**: `social`
-- **Target**: `<your-account>.workers.dev`
-- **Proxy**: Orange cloud (proxied)
-
-#### For PDS domain (`pds.example.com`):
-- **Type**: CNAME
-- **Name**: `pds`
-- **Target**: `<your-account>.workers.dev`
-- **Proxy**: Orange cloud (proxied)
-
-#### Alternative: Use Cloudflare Dashboard
-
-In Workers & Pages → router-production → Settings → Triggers → Custom Domains:
-- Add: `social.example.com`
-- Add: `pds.example.com`
-
-In Workers & Pages → landing-production → Settings → Triggers → Custom Domains:
-- Add: `example.com`
-- Add: `www.example.com`
-
-### 8. Verify Deployment
-
-Check that everything is working:
+### Apply Migrations
 
 ```bash
-dais deploy verify
+# Create tables
+wrangler d1 execute dais-db --file=cli/migrations/001_initial_schema.sql --remote
+
+# Create indexes
+wrangler d1 execute dais-db --file=cli/migrations/002_indexes.sql --remote
+
+# Add AT Protocol tables (if using PDS)
+wrangler d1 execute dais-db --file=cli/migrations/003_at_protocol.sql --remote
 ```
 
-This tests:
-- WebFinger endpoint (`https://example.com/.well-known/webfinger`)
-- Actor endpoint (`https://social.example.com/users/alice`)
-- Worker deployment status
+### Verify Schema
+
+```bash
+wrangler d1 execute dais-db --command "SELECT name FROM sqlite_master WHERE type='table'" --remote
+```
+
+Expected tables:
+- `users`
+- `posts`
+- `followers`
+- `following`
+- `activities`
+- `notifications`
+- `at_repos` (if PDS enabled)
+- `at_records` (if PDS enabled)
+
+### Seed Initial User
+
+```bash
+# Create your user account
+wrangler d1 execute dais-db --command "
+INSERT INTO users (username, email, display_name, summary, created_at)
+VALUES ('yourusername', 'you@example.com', 'Your Name', 'Your bio', datetime('now'))
+" --remote
+```
+
+## Step 7: Upload Secrets
+
+### Upload Private Key
+
+For workers that need HTTP signature signing (inbox, outbox, delivery-queue):
+
+```bash
+# Actor worker
+cd platforms/cloudflare/workers/actor
+wrangler secret put PRIVATE_KEY --env production < ~/.dais/keys/private.pem
+
+# Inbox worker
+cd ../inbox
+wrangler secret put PRIVATE_KEY --env production < ~/.dais/keys/private.pem
+
+# Outbox worker
+cd ../outbox
+wrangler secret put PRIVATE_KEY --env production < ~/.dais/keys/private.pem
+
+# Delivery queue worker
+cd ../delivery-queue
+wrangler secret put PRIVATE_KEY --env production < ~/.dais/keys/private.pem
+
+cd ../../../../
+```
+
+### Upload Admin Password (Optional)
+
+If using the auth worker for admin interface:
+
+```bash
+cd platforms/cloudflare/workers/auth
+
+# Generate secure password
+ADMIN_PASSWORD=$(openssl rand -base64 32)
+echo "Admin password: $ADMIN_PASSWORD"  # Save this!
+
+# Upload as secret
+echo -n "$ADMIN_PASSWORD" | wrangler secret put ADMIN_PASSWORD --env production
+
+cd ../../../../
+```
+
+## Step 8: Build and Deploy Workers
+
+### Test Compilation First
+
+```bash
+./scripts/test-workers.sh
+```
 
 Expected output:
 ```
-1. Testing WebFinger endpoint
-✓ WebFinger endpoint working
+Testing dais-core library... ✓ PASS
+Testing dais-cloudflare bindings... ✓ PASS
+Testing actor worker... ✓ PASS
+Testing inbox worker... ✓ PASS
+Testing outbox worker... ✓ PASS
+Testing webfinger worker... ✓ PASS
+Testing delivery-queue worker... ✓ PASS
+Testing auth worker... ✓ PASS
+Testing pds worker... ✓ PASS
+Testing router worker... ✓ PASS
+Testing landing worker... ✓ PASS
 
-2. Testing Actor endpoint
-✓ Actor endpoint working
-
-3. Checking worker status
-✓ Workers are deployed
-
-Summary
-✓ All checks passed (3/3)
-
-Your dais instance is deployed and working!
-
-Your actor URL: https://social.example.com/users/alice
-You can now follow @alice@example.com from other instances
+Total: 11/11 components compiled successfully
 ```
 
-### 9. Test Federation
-
-Test that other ActivityPub servers can discover you:
+### Deploy Workers
 
 ```bash
-# Test your WebFinger
-dais test webfinger
-
-# Test your Actor profile
-dais test actor
-
-# Test federation with another instance (e.g., Mastodon)
-dais test federation @user@mastodon.social
+# Deploy all workers
+for worker in landing webfinger actor auth pds outbox inbox delivery-queue router; do
+    echo "Deploying $worker..."
+    cd platforms/cloudflare/workers/$worker
+    wrangler deploy --env production
+    cd ../../../../
+done
 ```
+
+This takes ~5-10 minutes. Each worker is deployed to Cloudflare's global network.
+
+## Step 9: Configure DNS
+
+### Add Worker Routes
+
+In Cloudflare Dashboard:
+
+1. Go to **Workers & Pages**
+2. Click on each worker
+3. Go to **Settings** → **Triggers** → **Custom Domains**
+4. Add custom domain
+
+**Domains to add**:
+
+| Worker | Custom Domain | Purpose |
+|--------|---------------|---------|
+| `landing` | `dais.example.com` | Main landing page |
+| `router` | `social.dais.example.com` | ActivityPub router |
+| `pds` | `pds.dais.example.com` | AT Protocol / Bluesky |
+
+The router automatically routes:
+- `/.well-known/webfinger` → WebFinger worker
+- `/users/*` → Actor worker
+- `/users/*/inbox` → Inbox worker
+- `/users/*/outbox` → Outbox worker
+
+## Step 10: Verify Deployment
+
+### Automated Verification
+
+```bash
+export DOMAIN="dais.example.com"
+export ACTIVITYPUB_DOMAIN="social.dais.example.com"
+export USERNAME="yourusername"
+
+./scripts/verify-deployment.sh
+```
+
+Expected output:
+```
+Testing WebFinger endpoint...
+Testing WebFinger... ✓ 200
+
+Testing Actor endpoint...
+Testing Actor Profile... ✓ 200
+
+Testing Landing page...
+Testing Landing Page... ✓ 200
+Testing Health Check... ✓ 200
+
+Verification Summary
+Passed: 4
+Failed: 0
+
+All endpoints verified successfully!
+```
+
+### Manual Testing
+
+**1. Test WebFinger**:
+```bash
+curl "https://social.dais.example.com/.well-known/webfinger?resource=acct:yourusername@social.dais.example.com"
+```
+
+Expected response:
+```json
+{
+  "subject": "acct:yourusername@social.dais.example.com",
+  "links": [
+    {
+      "rel": "self",
+      "type": "application/activity+json",
+      "href": "https://social.dais.example.com/users/yourusername"
+    }
+  ]
+}
+```
+
+**2. Test Actor Profile**:
+```bash
+curl -H "Accept: application/activity+json" https://social.dais.example.com/users/yourusername
+```
+
+**3. Test Landing Page**:
+
+Visit `https://dais.example.com` in browser.
 
 ## Troubleshooting
 
-### Run Diagnostics
+### Workers not responding
 
-If something isn't working, run the doctor command:
-
+**Check deployment status**:
 ```bash
-dais doctor
+wrangler deployments list --name actor-production
 ```
 
-This checks:
-- ✓ Config file exists
-- ✓ Keys generated
-- ✓ Wrangler installed
-- ✓ Cloudflare authenticated
-- ✓ D1 database exists
-- ✓ R2 bucket exists
-- ✓ Workers deployed
-- ✓ WebFinger responding
-- ✓ Actor responding
-
-And provides specific suggestions for fixing any issues.
-
-### Common Issues
-
-#### "Config not found"
-Run `dais setup init` to create configuration.
-
-#### "Keys missing"
-Run `dais setup init` to generate cryptographic keys.
-
-#### "Not logged in to Cloudflare"
-Run `wrangler login` to authenticate.
-
-#### "D1 database not found"
-Run `dais deploy infrastructure` to create the database.
-
-#### "WebFinger/Actor endpoint unreachable"
-- Check that DNS is configured correctly
-- Ensure workers are deployed (`dais deploy workers`)
-- Wait a few minutes for DNS propagation
-- Verify custom domains are added to workers in Cloudflare dashboard
-
-#### "Worker deployment failed"
-- Check that all required resources exist (D1, R2)
-- Ensure secrets are uploaded (`dais deploy secrets`)
-- Check `wrangler deploy` output for specific errors
-- Verify your Cloudflare account has Workers enabled
-
-## Updating to New Versions
-
-When you pull new code from the repository:
-
+**Check logs**:
 ```bash
-# 1. Pull latest code
-git pull
-
-# 2. Apply any new database migrations
-dais deploy database
-
-# 3. Redeploy workers with new code
-dais deploy workers
-
-# 4. Verify everything still works
-dais deploy verify
+wrangler tail actor-production
 ```
 
-## Security Considerations
+**Redeploy**:
+```bash
+cd platforms/cloudflare/workers/actor
+wrangler deploy --env production
+```
 
-### Private Key Security
+### Database errors
 
-- Your private key (`.dais/keys/private.pem`) is **critical** for security
-- Never commit it to git (it's in `.gitignore`)
-- Back it up securely (encrypted backup recommended)
-- If compromised, you'll need to generate a new keypair and redeploy
+**Verify database**:
+```bash
+wrangler d1 list
+wrangler d1 execute dais-db --command "SELECT 1" --remote
+```
 
-### Secrets Management
+### WebFinger not found
 
-- Secrets are uploaded to Cloudflare Workers using `dais deploy secrets`
-- They're stored securely in Cloudflare's infrastructure
-- Never log or expose the PRIVATE_KEY environment variable
-- Rotate keys periodically for best security
+**Check DNS**:
+```bash
+dig social.dais.example.com
+```
 
-### Access Control
+**Check custom domains in Cloudflare Dashboard**:
+- Workers & Pages → router-production → Settings → Triggers → Custom Domains
 
-- Your Cloudflare API token should have minimal permissions:
-  - Workers Scripts: Edit
-  - D1: Edit
-  - R2: Edit
-- Never share your API token
-- Revoke and regenerate if compromised
+### Federation not working
 
-## Cost Estimates
+**Verify private key uploaded**:
+```bash
+cd platforms/cloudflare/workers/inbox
+wrangler secret list --env production
+```
 
-Cloudflare Workers **Free Tier** includes:
-- 100,000 requests/day across all workers
-- 10ms CPU time per request
-- Unlimited D1 database reads (5 million writes/month)
-- 10 GB R2 storage (1 million reads/month, 1 million writes/month)
+**Check inbox logs**:
+```bash
+wrangler tail inbox-production
+```
 
-For a typical single-user instance:
-- **Cost**: $0/month (free tier is sufficient)
-- If you exceed free tier: ~$5/month for Workers ($0.50 per million requests)
+## Cost Breakdown
 
-R2 storage costs:
-- $0.015/GB/month for storage beyond 10 GB
-- No egress fees (unlike S3)
+### Cloudflare Workers Free Tier
+
+| Resource | Free Tier | Typical Usage | Cost |
+|----------|-----------|---------------|------|
+| Worker requests | 100,000/day | ~1,000/day | $0 |
+| D1 reads | 5M/day | ~5,000/day | $0 |
+| D1 writes | 100,000/day | ~100/day | $0 |
+| R2 storage | 10 GB | ~1 GB | $0 |
+| Queues | 1M operations/month | ~5,000/month | $0 |
+
+**Total monthly cost for typical single-user instance**: **$0**
 
 ## Next Steps
 
-Once deployed:
+### Test Federation
 
-1. **Create your first post**:
-   ```bash
-   dais post create "Hello, fediverse! 👋"
-   ```
+1. Follow your account from Mastodon
+2. Create posts via admin interface or API
+3. Check delivery logs: `wrangler tail delivery-queue-production`
 
-2. **Follow someone**:
-   ```bash
-   dais follow add @user@mastodon.social
-   ```
+### Optional Enhancements
 
-3. **Check your timeline**:
-   ```bash
-   dais timeline home
-   ```
+1. **Custom Theme**: Edit `platforms/cloudflare/workers/landing/themes/`
+2. **Profile Picture**: Upload to R2 and update user record
+3. **Admin Interface**: Deploy custom admin panel
+4. **Analytics**: Add Cloudflare Web Analytics
 
-4. **Share your profile**:
-   - Your profile: `https://social.example.com/users/alice`
-   - Tell people to follow: `@alice@example.com`
+### Maintenance
 
-## Advanced Configuration
-
-### Custom Themes
-
-Edit `workers/actor/wrangler.toml` and `workers/outbox/wrangler.toml`:
-
-```toml
-[env.production.vars]
-THEME = "cat-dark"  # or "cat-light"
-```
-
-Then redeploy:
+**Backup database**:
 ```bash
-dais deploy workers
+wrangler d1 export dais-db --output=backup-$(date +%Y%m%d).sql
 ```
 
-### Multiple Environments
-
-You can create separate dev/staging/production environments by:
-1. Creating new wrangler environments in `wrangler.toml`
-2. Using different D1 databases and R2 buckets
-3. Deploying with `wrangler deploy --env staging`
-
-### Monitoring
-
-View worker logs:
+**Monitor logs**:
 ```bash
 wrangler tail router-production
 wrangler tail inbox-production
 ```
 
-View D1 database stats:
+**Update dais**:
 ```bash
-wrangler d1 execute <database-id> --command "SELECT COUNT(*) FROM posts"
+git pull origin release/v1.1
+./scripts/test-workers.sh
+# Redeploy workers
 ```
 
-View R2 bucket usage:
-```bash
-wrangler r2 bucket list
-```
+## Resources
 
-## Getting Help
+- **Architecture Guide**: `ARCHITECTURE_v1.1.md`
+- **Testing Guide**: `TESTING_v1.1.md`
+- **Migration Guide**: `MIGRATION_GUIDE_v1.0_to_v1.1.md`
+- **GitHub**: https://github.com/daisocial/dais
 
-- **GitHub Issues**: https://github.com/marctjones/dais/issues
-- **Cloudflare Docs**: https://developers.cloudflare.com/workers/
-- **ActivityPub Spec**: https://www.w3.org/TR/activitypub/
+## Support
 
-## Contributing
+- **Issues**: https://github.com/daisocial/dais/issues
+- **Discussions**: https://github.com/daisocial/dais/discussions
 
-Found a bug in deployment? Want to improve this guide?
-
-- Open an issue: https://github.com/marctjones/dais/issues
-- Submit a PR: https://github.com/marctjones/dais/pulls
-
-## License
-
-See LICENSE file for details.
+Congratulations! Your dais instance is now live and federating with the Fediverse! 🎉

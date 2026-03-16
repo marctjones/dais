@@ -1,0 +1,16 @@
+[package]
+name = "landing-refactored"
+version = "1.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+worker = "0.7.2"
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

@@ -10,6 +10,8 @@ pub mod traits;
 pub mod activitypub;
 pub mod atproto;
 pub mod webfinger;
+pub mod sql;
+pub mod migrations;
 mod error;
 mod utils;
 
@@ -91,9 +93,23 @@ impl DaisCore {
     // ActivityPub methods (to be implemented)
 
     /// Handle incoming ActivityPub activity to inbox
-    pub async fn handle_inbox(&self, actor: String, activity_json: String) -> CoreResult<()> {
-        // TODO: Implement in activitypub module
-        Err(CoreError::Internal("Not implemented".to_string()))
+    pub async fn handle_inbox(
+        &self,
+        activity_json: String,
+        our_actor_url: String,
+        moderator: Option<&dyn activitypub::ContentModerator>,
+    ) -> CoreResult<()> {
+        // Parse the activity
+        let activity: activitypub::Activity = serde_json::from_str(&activity_json)?;
+
+        // Process the activity
+        activitypub::process_inbox_activity(
+            &*self.db,
+            &*self.http,
+            activity,
+            &our_actor_url,
+            moderator,
+        ).await
     }
 
     /// Create a new post
@@ -103,9 +119,64 @@ impl DaisCore {
     }
 
     /// Get actor profile
-    pub async fn get_actor(&self, username: String) -> CoreResult<String> {
-        // TODO: Implement in activitypub module
-        Err(CoreError::Internal("Not implemented".to_string()))
+    pub async fn get_actor(&self, username: String) -> CoreResult<activitypub::Person> {
+        activitypub::get_actor(&*self.db, &username, &self.config.activitypub_domain).await
+    }
+
+    /// Get actor counts (posts, followers, following)
+    pub async fn get_actor_counts(&self, actor_id: String) -> CoreResult<activitypub::ActorCounts> {
+        activitypub::get_actor_counts(&*self.db, &actor_id).await
+    }
+
+    /// Get followers collection for an actor
+    pub async fn get_followers(&self, username: String, page: Option<u32>) -> CoreResult<serde_json::Value> {
+        activitypub::get_followers(&*self.db, &username, &self.config.activitypub_domain, page).await
+    }
+
+    /// Get following collection for an actor
+    pub async fn get_following(&self, username: String, page: Option<u32>) -> CoreResult<serde_json::Value> {
+        activitypub::get_following(&*self.db, &username, &self.config.activitypub_domain, page).await
+    }
+
+    /// Get outbox posts for an actor
+    pub async fn get_outbox_posts(&self, username: String) -> CoreResult<Vec<activitypub::Post>> {
+        activitypub::get_outbox_posts(&*self.db, &username).await
+    }
+
+    /// Get a single post
+    pub async fn get_post(&self, username: String, post_id: String) -> CoreResult<activitypub::Post> {
+        activitypub::get_post(&*self.db, &username, &post_id).await
+    }
+
+    /// Get post interactions (replies, likes, boosts)
+    pub async fn get_post_interactions(&self, post_id: String) -> CoreResult<activitypub::PostInteractions> {
+        activitypub::get_post_interactions(&*self.db, &post_id).await
+    }
+
+    /// Deliver activity to a remote inbox
+    pub async fn deliver_to_inbox(
+        &self,
+        inbox_url: String,
+        actor_url: String,
+        activity_json: String,
+    ) -> CoreResult<()> {
+        activitypub::deliver_to_inbox(
+            &*self.http,
+            &inbox_url,
+            &actor_url,
+            &activity_json,
+            &self.config.private_key,
+        ).await
+    }
+
+    /// Create delivery jobs for all followers
+    pub async fn create_follower_deliveries(
+        &self,
+        post_id: String,
+        actor_id: String,
+        activity_json: String,
+    ) -> CoreResult<Vec<String>> {
+        activitypub::create_follower_deliveries(&*self.db, &post_id, &actor_id, &activity_json).await
     }
 
     /// WebFinger lookup

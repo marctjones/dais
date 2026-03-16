@@ -35,7 +35,7 @@ thiserror = "1.0"
 anyhow = "1.0"
 
 # Crypto (for ActivityPub signatures)
-rsa = "0.9"
+rsa = { version = "0.9", features = ["getrandom", "pem", "sha2"] }
 sha2 = "0.10"
 base64 = "0.21"
 
