@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "name": "dais-vercel",
+  "builds": [
+    {
+      "src": "functions/webfinger/Cargo.toml",
+      "use": "@vercel/rust",
+      "config": {
+        "runtime": "rust@1.75.0"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/.well-known/webfinger",
+      "dest": "/functions/webfinger"
+    }
+  ],
+  "env": {
+    "DATABASE_URL": "@database-url",
+    "BLOB_READ_WRITE_TOKEN": "@blob-token",
+    "UPSTASH_REDIS_URL": "@redis-url",
+    "UPSTASH_REDIS_TOKEN": "@redis-token"
+  }
+}
