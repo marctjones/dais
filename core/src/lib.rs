@@ -9,6 +9,7 @@
 pub mod traits;
 pub mod activitypub;
 pub mod atproto;
+pub mod webfinger;
 mod error;
 mod utils;
 
@@ -108,9 +109,14 @@ impl DaisCore {
     }
 
     /// WebFinger lookup
-    pub async fn webfinger(&self, resource: String) -> CoreResult<String> {
-        // TODO: Implement in activitypub module
-        Err(CoreError::Internal("Not implemented".to_string()))
+    pub async fn webfinger(&self, resource: String) -> CoreResult<webfinger::WebFingerResponse> {
+        webfinger::handle_webfinger(
+            &*self.db,
+            &resource,
+            &self.config.activitypub_domain,
+            &self.config.activitypub_domain,
+        )
+        .await
     }
 
     // AT Protocol methods (to be implemented)
