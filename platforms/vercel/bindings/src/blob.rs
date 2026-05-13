@@ -4,8 +4,7 @@
 // Vercel Blob is S3-compatible and provides global CDN delivery.
 
 use async_trait::async_trait;
-use dais_core::traits::StorageProvider;
-use dais_core::types::{CoreResult, CoreError};
+use dais_core::traits::{StorageProvider, StorageMetadata, ObjectInfo, ListOptions, ListResult, PlatformResult, PlatformError};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +18,7 @@ pub struct VercelBlobProvider {
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 struct PutRequest {
     pathname: String,
     #[serde(rename = "contentType")]
@@ -29,6 +29,7 @@ struct PutRequest {
 struct PutResponse {
     url: String,
     #[serde(rename = "downloadUrl")]
+    #[allow(dead_code)]
     download_url: String,
 }
 
@@ -57,26 +58,23 @@ impl VercelBlobProvider {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl StorageProvider for VercelBlobProvider {
-    async fn put(&self, key: &str, data: &[u8]) -> CoreResult<String> {
-        // Determine content type from file extension
-        let content_type = Self::guess_content_type(key);
-
+    async fn put(&self, key: &str, data: Vec<u8>, content_type: &str) -> PlatformResult<String> {
         // Upload to Vercel Blob
         let response = self
             .client
             .put(format!("{}/{}", self.base_url, key))
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Content-Type", content_type)
-            .body(data.to_vec())
+            .body(data)
             .send()
             .await
-            .map_err(|e| CoreError::StorageError(format!("Failed to upload to Vercel Blob: {}", e)))?;
+            .map_err(|e| PlatformError::Storage(format!("Failed to upload to Vercel Blob: {}", e)))?;
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(CoreError::StorageError(format!(
+            return Err(PlatformError::Storage(format!(
                 "Vercel Blob upload failed: {}",
                 error_text
             )));
@@ -85,23 +83,58 @@ impl StorageProvider for VercelBlobProvider {
         let blob_response: PutResponse = response
             .json()
             .await
-            .map_err(|e| CoreError::StorageError(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| PlatformError::Storage(format!("Failed to parse response: {}", e)))?;
 
         Ok(blob_response.url)
     }
 
-    async fn get(&self, key: &str) -> CoreResult<Vec<u8>> {
-        // Download from Vercel Blob
+    async fn put_with_metadata(
+        &self,
+        key: &str,
+        data: Vec<u8>,
+        content_type: &str,
+        metadata: StorageMetadata,
+    ) -> PlatformResult<String> {
+        let mut request = self
+            .client
+            .put(format!("{}/{}", self.base_url, key))
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Content-Type", content_type);
+
+        if let Some(cache_control) = &metadata.cache_control {
+            request = request.header("Cache-Control", cache_control);
+        }
+        if let Some(content_disposition) = &metadata.content_disposition {
+            request = request.header("Content-Disposition", content_disposition);
+        }
+
+        let response = request
+            .body(data)
+            .send()
+            .await
+            .map_err(|e| PlatformError::Storage(format!("Failed to upload: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(PlatformError::Storage(format!("Upload failed: status {}", response.status())));
+        }
+
+        let blob_response: PutResponse = response.json().await
+            .map_err(|e| PlatformError::Storage(format!("Failed to parse response: {}", e)))?;
+
+        Ok(blob_response.url)
+    }
+
+    async fn get(&self, key: &str) -> PlatformResult<Vec<u8>> {
         let response = self
             .client
             .get(format!("{}/{}", self.base_url, key))
             .header("Authorization", format!("Bearer {}", self.token))
             .send()
             .await
-            .map_err(|e| CoreError::StorageError(format!("Failed to download from Vercel Blob: {}", e)))?;
+            .map_err(|e| PlatformError::Storage(format!("Failed to download from Vercel Blob: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(CoreError::StorageError(format!(
+            return Err(PlatformError::Storage(format!(
                 "Vercel Blob download failed: status {}",
                 response.status()
             )));
@@ -110,30 +143,112 @@ impl StorageProvider for VercelBlobProvider {
         let data = response
             .bytes()
             .await
-            .map_err(|e| CoreError::StorageError(format!("Failed to read response: {}", e)))?
+            .map_err(|e| PlatformError::Storage(format!("Failed to read response: {}", e)))?
             .to_vec();
 
         Ok(data)
     }
 
-    async fn delete(&self, key: &str) -> CoreResult<()> {
-        // Delete from Vercel Blob
+    async fn head(&self, key: &str) -> PlatformResult<ObjectInfo> {
+        let response = self
+            .client
+            .head(format!("{}/{}", self.base_url, key))
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await
+            .map_err(|e| PlatformError::Storage(format!("Failed to get metadata: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(PlatformError::Storage(format!("HEAD request failed: status {}", response.status())));
+        }
+
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        let size = response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let last_modified = response
+            .headers()
+            .get("last-modified")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        Ok(ObjectInfo {
+            key: key.to_string(),
+            content_type,
+            size,
+            last_modified,
+            etag,
+            metadata: StorageMetadata::new(),
+        })
+    }
+
+    async fn delete(&self, key: &str) -> PlatformResult<()> {
         let response = self
             .client
             .delete(format!("{}/{}", self.base_url, key))
             .header("Authorization", format!("Bearer {}", self.token))
             .send()
             .await
-            .map_err(|e| CoreError::StorageError(format!("Failed to delete from Vercel Blob: {}", e)))?;
+            .map_err(|e| PlatformError::Storage(format!("Failed to delete from Vercel Blob: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(CoreError::StorageError(format!(
+            return Err(PlatformError::Storage(format!(
                 "Vercel Blob delete failed: status {}",
                 response.status()
             )));
         }
 
         Ok(())
+    }
+
+    async fn list(&self, _prefix: &str) -> PlatformResult<Vec<String>> {
+        // Vercel Blob doesn't have a direct list API yet, return empty list
+        // In production, you'd use the Vercel Blob list API when available
+        Ok(Vec::new())
+    }
+
+    async fn list_detailed(&self, _options: ListOptions) -> PlatformResult<ListResult> {
+        // Vercel Blob doesn't have a direct list API yet
+        Ok(ListResult {
+            objects: Vec::new(),
+            cursor: None,
+            has_more: false,
+        })
+    }
+
+    async fn copy(&self, from: &str, to: &str) -> PlatformResult<()> {
+        // Vercel Blob doesn't have server-side copy, so download and re-upload
+        let data = self.get(from).await?;
+        let content_type = Self::guess_content_type(to);
+        self.put(to, data, content_type).await?;
+        Ok(())
+    }
+
+    fn public_url(&self, key: &str) -> String {
+        format!("{}/{}", self.base_url, key)
+    }
+
+    async fn signed_url(&self, key: &str, _expires_in: u32) -> PlatformResult<String> {
+        // Vercel Blob URLs are public by default with token authentication
+        // For now, return the public URL
+        Ok(self.public_url(key))
     }
 }
 

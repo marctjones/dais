@@ -3,8 +3,7 @@
 // This provider uses reqwest for HTTP requests from Vercel Edge Functions.
 
 use async_trait::async_trait;
-use dais_core::traits::HttpProvider;
-use dais_core::types::{CoreResult, CoreError, HttpRequest, HttpResponse};
+use dais_core::traits::{HttpProvider, PlatformResult, PlatformError, Request, Response, Method};
 use reqwest::Client;
 use std::collections::HashMap;
 
@@ -34,19 +33,19 @@ impl Default for VercelHttpProvider {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl HttpProvider for VercelHttpProvider {
-    async fn fetch(&self, request: HttpRequest) -> CoreResult<HttpResponse> {
+    async fn fetch(&self, request: Request) -> PlatformResult<Response> {
         // Build request
-        let mut req = match request.method.as_str() {
-            "GET" => self.client.get(&request.url),
-            "POST" => self.client.post(&request.url),
-            "PUT" => self.client.put(&request.url),
-            "DELETE" => self.client.delete(&request.url),
-            "PATCH" => self.client.patch(&request.url),
-            "HEAD" => self.client.head(&request.url),
-            method => {
-                return Err(CoreError::HttpError(format!("Unsupported HTTP method: {}", method)))
+        let mut req = match request.method {
+            Method::Get => self.client.get(&request.url),
+            Method::Post => self.client.post(&request.url),
+            Method::Put => self.client.put(&request.url),
+            Method::Delete => self.client.delete(&request.url),
+            Method::Patch => self.client.patch(&request.url),
+            Method::Head => self.client.head(&request.url),
+            Method::Options => {
+                return Err(PlatformError::Http("OPTIONS method not supported".to_string()))
             }
         };
 
@@ -60,11 +59,19 @@ impl HttpProvider for VercelHttpProvider {
             req = req.body(body.clone());
         }
 
+        // Set timeout if specified
+        if let Some(timeout_secs) = request.timeout {
+            req = req.timeout(std::time::Duration::from_secs(timeout_secs as u64));
+        }
+
         // Send request
         let response = req
             .send()
             .await
-            .map_err(|e| CoreError::HttpError(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| PlatformError::Http(format!("HTTP request failed: {}", e)))?;
+
+        // Get final URL (after redirects)
+        let final_url = response.url().to_string();
 
         // Extract status
         let status = response.status().as_u16();
@@ -81,13 +88,14 @@ impl HttpProvider for VercelHttpProvider {
         let body = response
             .bytes()
             .await
-            .map_err(|e| CoreError::HttpError(format!("Failed to read response body: {}", e)))?
+            .map_err(|e| PlatformError::Http(format!("Failed to read response body: {}", e)))?
             .to_vec();
 
-        Ok(HttpResponse {
+        Ok(Response {
             status,
             headers,
             body,
+            url: final_url,
         })
     }
 }

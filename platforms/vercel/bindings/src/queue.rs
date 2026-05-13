@@ -4,8 +4,7 @@
 // uses Upstash Redis or HTTP webhooks for background job processing.
 
 use async_trait::async_trait;
-use dais_core::traits::QueueProvider;
-use dais_core::types::{CoreResult, CoreError, QueueMessage};
+use dais_core::traits::{QueueProvider, PlatformResult, PlatformError};
 use reqwest::Client;
 use serde_json;
 
@@ -87,29 +86,26 @@ impl VercelQueueProvider {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl QueueProvider for VercelQueueProvider {
-    async fn send(&self, queue: &str, message: &QueueMessage) -> CoreResult<()> {
+    async fn send(&self, message: &str) -> PlatformResult<()> {
         match &self.strategy {
             QueueStrategy::UpstashRedis {
                 redis_url,
                 redis_token,
             } => {
                 // Use Upstash Redis REST API to push to queue
-                let message_json = serde_json::to_string(message)
-                    .map_err(|e| CoreError::QueueError(format!("Failed to serialize message: {}", e)))?;
-
                 let response = self
                     .client
-                    .post(format!("{}/lpush/{}", redis_url, queue))
+                    .post(format!("{}/lpush/dais-queue", redis_url))
                     .header("Authorization", format!("Bearer {}", redis_token))
-                    .json(&vec![message_json])
+                    .json(&vec![message])
                     .send()
                     .await
-                    .map_err(|e| CoreError::QueueError(format!("Failed to push to Redis: {}", e)))?;
+                    .map_err(|e| PlatformError::Queue(format!("Failed to push to Redis: {}", e)))?;
 
                 if !response.status().is_success() {
-                    return Err(CoreError::QueueError(format!(
+                    return Err(PlatformError::Queue(format!(
                         "Redis push failed: status {}",
                         response.status()
                     )));
@@ -123,13 +119,14 @@ impl QueueProvider for VercelQueueProvider {
                 let response = self
                     .client
                     .post(webhook_url)
-                    .json(&message)
+                    .header("Content-Type", "application/json")
+                    .body(message.to_string())
                     .send()
                     .await
-                    .map_err(|e| CoreError::QueueError(format!("Webhook call failed: {}", e)))?;
+                    .map_err(|e| PlatformError::Queue(format!("Webhook call failed: {}", e)))?;
 
                 if !response.status().is_success() {
-                    return Err(CoreError::QueueError(format!(
+                    return Err(PlatformError::Queue(format!(
                         "Webhook failed: status {}",
                         response.status()
                     )));
@@ -140,12 +137,121 @@ impl QueueProvider for VercelQueueProvider {
 
             QueueStrategy::InMemory => {
                 // In-memory queue doesn't actually queue anything
-                // This is only for development/testing
-                eprintln!(
-                    "Warning: In-memory queue ignoring message to queue '{}': {:?}",
-                    queue, message
-                );
+                eprintln!("Warning: In-memory queue ignoring message: {}", message);
                 Ok(())
+            }
+        }
+    }
+
+    async fn send_batch(&self, messages: Vec<String>) -> PlatformResult<()> {
+        match &self.strategy {
+            QueueStrategy::UpstashRedis {
+                redis_url,
+                redis_token,
+            } => {
+                let response = self
+                    .client
+                    .post(format!("{}/lpush/dais-queue", redis_url))
+                    .header("Authorization", format!("Bearer {}", redis_token))
+                    .json(&messages)
+                    .send()
+                    .await
+                    .map_err(|e| PlatformError::Queue(format!("Failed to push batch: {}", e)))?;
+
+                if !response.status().is_success() {
+                    return Err(PlatformError::Queue(format!(
+                        "Redis batch push failed: status {}",
+                        response.status()
+                    )));
+                }
+
+                Ok(())
+            }
+
+            QueueStrategy::HttpWebhook { .. } | QueueStrategy::InMemory => {
+                // Fall back to individual sends
+                for message in messages {
+                    self.send(&message).await?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    async fn send_delayed(&self, message: &str, delay_seconds: u32) -> PlatformResult<()> {
+        match &self.strategy {
+            QueueStrategy::UpstashRedis {
+                redis_url,
+                redis_token,
+            } => {
+                // Use Redis ZADD with score = current_time + delay
+                let delay_timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() + delay_seconds as u64;
+
+                let response = self
+                    .client
+                    .post(format!("{}/zadd/dais-delayed-queue", redis_url))
+                    .header("Authorization", format!("Bearer {}", redis_token))
+                    .json(&serde_json::json!([delay_timestamp, message]))
+                    .send()
+                    .await
+                    .map_err(|e| PlatformError::Queue(format!("Failed to schedule message: {}", e)))?;
+
+                if !response.status().is_success() {
+                    return Err(PlatformError::Queue(format!(
+                        "Redis delayed push failed: status {}",
+                        response.status()
+                    )));
+                }
+
+                Ok(())
+            }
+
+            QueueStrategy::HttpWebhook { .. } | QueueStrategy::InMemory => {
+                // Delayed sending not supported, send immediately
+                eprintln!("Warning: Delayed sending not supported, sending immediately");
+                self.send(message).await
+            }
+        }
+    }
+
+    async fn depth(&self) -> PlatformResult<u64> {
+        match &self.strategy {
+            QueueStrategy::UpstashRedis {
+                redis_url,
+                redis_token,
+            } => {
+                let response = self
+                    .client
+                    .get(format!("{}/llen/dais-queue", redis_url))
+                    .header("Authorization", format!("Bearer {}", redis_token))
+                    .send()
+                    .await
+                    .map_err(|e| PlatformError::Queue(format!("Failed to get queue depth: {}", e)))?;
+
+                if !response.status().is_success() {
+                    return Err(PlatformError::Queue(format!(
+                        "Redis llen failed: status {}",
+                        response.status()
+                    )));
+                }
+
+                let result: serde_json::Value = response
+                    .json()
+                    .await
+                    .map_err(|e| PlatformError::Queue(format!("Failed to parse response: {}", e)))?;
+
+                let depth = result.get("result")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                Ok(depth)
+            }
+
+            QueueStrategy::HttpWebhook { .. } | QueueStrategy::InMemory => {
+                Ok(0)
             }
         }
     }

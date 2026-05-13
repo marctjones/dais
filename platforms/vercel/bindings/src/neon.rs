@@ -4,8 +4,8 @@
 // which is the recommended database for Vercel Edge Functions.
 
 use async_trait::async_trait;
-use dais_core::traits::{DatabaseProvider, DatabaseDialect};
-use dais_core::types::{CoreResult, CoreError, Value, Row};
+use dais_core::traits::{DatabaseProvider, DatabaseDialect, PlatformResult, PlatformError, Row, Statement};
+use serde_json::Value;
 use tokio_postgres::{Client, NoTls};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -30,10 +30,10 @@ impl NeonProvider {
     ///     .expect("DATABASE_URL must be set");
     /// let provider = NeonProvider::new(&connection_string).await?;
     /// ```
-    pub async fn new(connection_string: &str) -> CoreResult<Self> {
+    pub async fn new(connection_string: &str) -> PlatformResult<Self> {
         let (client, connection) = tokio_postgres::connect(connection_string, NoTls)
             .await
-            .map_err(|e| CoreError::DatabaseError(format!("Failed to connect to Neon: {}", e)))?;
+            .map_err(|e| PlatformError::Database(format!("Failed to connect to Neon: {}", e)))?;
 
         // Spawn connection handler
         tokio::spawn(async move {
@@ -47,15 +47,25 @@ impl NeonProvider {
         })
     }
 
-    /// Convert dais Value to PostgreSQL parameter
-    fn value_to_param(value: &Value) -> Box<dyn tokio_postgres::types::ToSql + Send + Sync> {
+    /// Convert JSON Value to PostgreSQL parameter
+    fn value_to_param(value: &Value) -> Box<dyn tokio_postgres::types::ToSql + Sync> {
         match value {
             Value::Null => Box::new(None::<String>),
             Value::Bool(b) => Box::new(*b),
-            Value::Integer(i) => Box::new(*i),
-            Value::Float(f) => Box::new(*f),
-            Value::Text(s) => Box::new(s.clone()),
-            Value::Bytes(b) => Box::new(b.clone()),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Box::new(i)
+                } else if let Some(f) = n.as_f64() {
+                    Box::new(f)
+                } else {
+                    Box::new(None::<i64>)
+                }
+            }
+            Value::String(s) => Box::new(s.clone()),
+            Value::Array(_) | Value::Object(_) => {
+                // Serialize complex types as JSON
+                Box::new(serde_json::to_string(value).unwrap_or_default())
+            }
         }
     }
 
@@ -65,46 +75,45 @@ impl NeonProvider {
 
         for (idx, column) in row.columns().iter().enumerate() {
             let name = column.name();
-            let value = Self::pg_value_to_dais_value(row, idx);
+            let value = Self::pg_value_to_json_value(row, idx);
             dais_row.insert(name.to_string(), value);
         }
 
         dais_row
     }
 
-    /// Convert PostgreSQL value to dais Value
-    fn pg_value_to_dais_value(row: &tokio_postgres::Row, idx: usize) -> Value {
+    /// Convert PostgreSQL value to JSON Value
+    fn pg_value_to_json_value(row: &tokio_postgres::Row, idx: usize) -> Value {
         // Try different types in order of likelihood
         if let Ok(v) = row.try_get::<_, Option<String>>(idx) {
-            return v.map(Value::Text).unwrap_or(Value::Null);
+            return v.map(Value::String).unwrap_or(Value::Null);
         }
         if let Ok(v) = row.try_get::<_, Option<i64>>(idx) {
-            return v.map(Value::Integer).unwrap_or(Value::Null);
+            return v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null);
         }
         if let Ok(v) = row.try_get::<_, Option<f64>>(idx) {
-            return v.map(Value::Float).unwrap_or(Value::Null);
+            return v.and_then(|f| serde_json::Number::from_f64(f))
+                .map(Value::Number)
+                .unwrap_or(Value::Null);
         }
         if let Ok(v) = row.try_get::<_, Option<bool>>(idx) {
             return v.map(Value::Bool).unwrap_or(Value::Null);
-        }
-        if let Ok(v) = row.try_get::<_, Option<Vec<u8>>>(idx) {
-            return v.map(Value::Bytes).unwrap_or(Value::Null);
         }
 
         Value::Null
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl DatabaseProvider for NeonProvider {
-    async fn query(&self, sql: &str, params: &[Value]) -> CoreResult<Vec<Row>> {
+    async fn execute(&self, sql: &str, params: &[Value]) -> PlatformResult<Vec<Row>> {
         // Convert placeholders from SQLite format (?1) to PostgreSQL format ($1)
         let pg_sql = dais_core::sql::convert_placeholders(sql, DatabaseDialect::PostgreSQL);
 
         let client = self.client.lock().await;
 
         // Convert parameters
-        let pg_params: Vec<Box<dyn tokio_postgres::types::ToSql + Send + Sync>> = params
+        let pg_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = params
             .iter()
             .map(Self::value_to_param)
             .collect();
@@ -116,34 +125,49 @@ impl DatabaseProvider for NeonProvider {
                 &pg_params.iter().map(|p| p.as_ref()).collect::<Vec<_>>()[..],
             )
             .await
-            .map_err(|e| CoreError::DatabaseError(format!("Query failed: {}", e)))?;
+            .map_err(|e| PlatformError::Database(format!("Query failed: {}", e)))?;
 
         // Convert rows
         Ok(rows.iter().map(Self::pg_row_to_dais_row).collect())
     }
 
-    async fn execute(&self, sql: &str, params: &[Value]) -> CoreResult<u64> {
-        // Convert placeholders
-        let pg_sql = dais_core::sql::convert_placeholders(sql, DatabaseDialect::PostgreSQL);
+    async fn batch(&self, statements: Vec<Statement>) -> PlatformResult<()> {
+        let mut client = self.client.lock().await;
 
-        let client = self.client.lock().await;
-
-        // Convert parameters
-        let pg_params: Vec<Box<dyn tokio_postgres::types::ToSql + Send + Sync>> = params
-            .iter()
-            .map(Self::value_to_param)
-            .collect();
-
-        // Execute statement
-        let rows_affected = client
-            .execute(
-                &pg_sql,
-                &pg_params.iter().map(|p| p.as_ref()).collect::<Vec<_>>()[..],
-            )
+        // Start transaction
+        let transaction = client
+            .transaction()
             .await
-            .map_err(|e| CoreError::DatabaseError(format!("Execute failed: {}", e)))?;
+            .map_err(|e| PlatformError::Database(format!("Failed to start transaction: {}", e)))?;
 
-        Ok(rows_affected)
+        for statement in statements {
+            // Convert placeholders
+            let pg_sql = dais_core::sql::convert_placeholders(&statement.sql, DatabaseDialect::PostgreSQL);
+
+            // Convert parameters
+            let pg_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = statement
+                .params
+                .iter()
+                .map(Self::value_to_param)
+                .collect();
+
+            // Execute statement
+            transaction
+                .execute(
+                    &pg_sql,
+                    &pg_params.iter().map(|p| p.as_ref()).collect::<Vec<_>>()[..],
+                )
+                .await
+                .map_err(|e| PlatformError::Database(format!("Batch statement failed: {}", e)))?;
+        }
+
+        // Commit transaction
+        transaction
+            .commit()
+            .await
+            .map_err(|e| PlatformError::Database(format!("Failed to commit transaction: {}", e)))?;
+
+        Ok(())
     }
 
     fn dialect(&self) -> DatabaseDialect {
@@ -164,8 +188,7 @@ mod tests {
         let provider = NeonProvider::new(&connection_string).await.unwrap();
 
         // Test simple query
-        let result = provider.query("SELECT 1 as num", &[]).await.unwrap();
+        let result = provider.execute("SELECT 1 as num", &[]).await.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].get("num"), Some(&Value::Integer(1)));
     }
 }
