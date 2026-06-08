@@ -119,7 +119,7 @@ pub async fn create_notification(
     let query = r#"
         INSERT INTO notifications (
             id, type, actor_id, actor_username, actor_display_name,
-            actor_avatar_url, post_id, reply_id, content, created_at, read
+            actor_avatar_url, post_id, activity_id, content, created_at, read
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)
     "#;
 
@@ -408,7 +408,7 @@ pub async fn handle_like(
     let query = r#"
         INSERT OR IGNORE INTO interactions (
             id, type, actor_id, actor_username, actor_display_name,
-            actor_avatar_url, object_id, published_at
+            actor_avatar_url, object_url, created_at
         ) VALUES (?1, 'like', ?2, ?3, ?4, ?5, ?6, ?7)
     "#;
 
@@ -461,7 +461,7 @@ pub async fn handle_announce(
     let query = r#"
         INSERT OR IGNORE INTO interactions (
             id, type, actor_id, actor_username, actor_display_name,
-            actor_avatar_url, object_id, published_at
+            actor_avatar_url, object_url, created_at
         ) VALUES (?1, 'boost', ?2, ?3, ?4, ?5, ?6, ?7)
     "#;
 
