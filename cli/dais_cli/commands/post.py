@@ -39,7 +39,7 @@ def post():
 @click.option('--alt', type=str, multiple=True,
               help='Alt text for media (provide in same order as --attach)')
 @click.option('--visibility', type=click.Choice(['public', 'unlisted', 'followers', 'direct']),
-              default='public', help='Post visibility')
+              default=None, help='Post visibility (default: private/followers-only, configurable via server.default_visibility)')
 @click.option('--protocol', type=click.Choice(['both', 'activitypub', 'atproto']),
               default='both', help='Which protocol(s) to post to')
 @click.option('--remote', is_flag=True, help='Use production environment (deprecated: use --env production)')
@@ -55,6 +55,14 @@ def create(content, attach, alt, visibility, protocol, remote, env, encrypt):
         dais post create "Check this out!" --attach photo.jpg --alt "Sunset over mountains" --remote
         dais post create "My gallery" --attach img1.jpg --alt "First pic" --attach img2.jpg --alt "Second pic" --remote
     """
+    # Private by default: when --visibility isn't given, fall back to the instance
+    # default (followers-only). This is the access-protection default; public is an
+    # explicit opt-in (--visibility public).
+    if visibility is None:
+        _vis_cfg = Config()
+        _vis_cfg.load()
+        visibility = _vis_cfg.get("server.default_visibility", "followers")
+
     console.print(f"[bold blue]Creating {visibility} post ({protocol})[/bold blue]\n")
     console.print(f"{content}\n")
 
