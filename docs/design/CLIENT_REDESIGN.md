@@ -50,52 +50,55 @@ overlay); over-configurable keybindings as a substitute for good defaults (tut's
 
 ---
 
-## 2. Tech stack recommendation
+## 2. Tech stack — **Rust + Ratatui (chosen)**
 
-**Primary recommendation: Go + Cobra (CLI) + Bubble Tea / Lipgloss / Bubbles / Glamour / Huh (TUI).**
+**CLI:** `clap` (derive API). **TUI:** `ratatui` + `crossterm` (terminal backend).
+Plus: `rusqlite` (local store), `reqwest` (D1/AP HTTP), `tokio` (async, P6), `rsa`/
+`sha2`/`aes-gcm` (signing + E2EE — same crates as core), `serde`/`serde_json`,
+`termimad` or `comrak`→ANSI (render post markdown).
 
-Why:
-- **Every tool we admire in this space is this stack** — gh, lazygit, k9s, gum, glow,
-  atuin, gh-dash. It's the proven gold standard for *exactly* a loved CLI+TUI.
-- **Single static binary** — `dais` is one download, no Python venv. Huge install-UX
-  win for a self-host tool.
-- **Bubble Tea = the Elm Architecture** (Model/Update/View, framework-owned loop) →
-  clean, testable, and the "shared core, two front-ends" split falls out naturally:
-  Cobra commands and Bubble Tea both call one `internal/dais` service package.
-- The **Charm ecosystem** gives a cohesive, beautiful look cheaply: Lipgloss (layout/
-  style), Bubbles (list/viewport/textarea/spinner), **Glamour** (render post markdown),
-  **Huh** (compose forms), Gum (prompts for the CLI).
+Why this wins for dais specifically:
+- **One language with `dais-core`** — and, crucially, **real code-sharing**: extract a
+  `dais-shared` crate (HTTP Signatures, ActivityPub Note/Actor types, E2EE
+  encrypt/decrypt + fallback) used by *both* the WASM workers (via core) and this
+  client. Signing and crypto then live in exactly one audited place — a meaningful
+  security and consistency win the Go option couldn't give.
+- **Single static binary**, fastest runtime — ideal install UX for a self-host tool.
+- One toolchain (`cargo`) for the whole repo.
 
-**Alternative — Rust + Ratatui + clap:** aligns with the dais *core* language, fastest,
-single binary; but immediate-mode means you own the event loop (more code) and the
-component ecosystem is thinner. Choose this only if "one language with the core" is a
-hard requirement.
+The cost we accept (per the decision): Ratatui is **immediate-mode** — we own the event
+loop and redraw each frame from app state (`loop { terminal.draw(ui)?; handle(event) }`),
+and the component ecosystem is thinner than Charm's, so we build a few widgets
+ourselves (feed list, composer textarea, palette). We mitigate this with a small
+in-house widget set in `dais-tui` and lean on `tui-textarea`, `tui-input`, and
+`ratatui`'s built-in `List`/`Paragraph`/`Scrollbar`.
 
-**Not recommended — staying on Python/Textual:** Textual is genuinely excellent (P6/P7/
-P8 come from it), but Python distribution (venv/pipx) is a worse install story for a
-download-and-run operator tool, and we're explicitly going greenfield.
-
-> Decision needed from you (§8): **Go+Charm (recommended)** vs **Rust+Ratatui**.
+Architecture note (immediate-mode): keep a single `App` state struct as the source of
+truth; the render fn is a pure `&App -> frame`; async work (fetch/sign/decrypt) runs on
+`tokio` tasks that send messages into an `mpsc` channel the event loop drains — so the
+UI never blocks (P6) and redraws are incremental via Ratatui's diffing (P7).
 
 ---
 
 ## 3. Architecture — one SDK, two front-ends
 
 ```
-            ┌──────────────┐        ┌──────────────┐
-            │  cmd/dais    │        │  TUI (Bubble │
-            │  (Cobra CLI) │        │  Tea program)│
-            └──────┬───────┘        └──────┬───────┘
-                   │   both call only ↓    │
-            ┌──────────────────────────────────────┐
-            │  internal/dais  — the client SDK      │
-            │  • config (precedence P4)             │
-            │  • signer (HTTP Signatures, your key) │
-            │  • store  (local SQLite: timeline,    │
-            │            unread, drafts, cache)     │
-            │  • api    (Cloudflare D1 + R2 + AP)   │
-            │  • e2ee   (encrypt/decrypt + fallback)│
-            └──────────────────────────────────────┘
+        ┌─ bin: dais (clap) ─┐   ┌─ bin/mod: dais-tui (ratatui) ─┐
+        │  noun-verb commands│   │  App state · render · events  │
+        └─────────┬──────────┘   └───────────────┬───────────────┘
+                  │   both depend only on ↓       │
+        ┌──────────────────────────────────────────────────┐
+        │  dais-client (crate) — the client SDK             │
+        │  • config (precedence P4)   • store (rusqlite:    │
+        │  • api    (reqwest → D1/R2/AP) timeline/unread/    │
+        │  • signer/e2ee  ── re-exported from ↓  drafts)     │
+        └───────────────────────┬──────────────────────────┘
+                                 │ shares
+        ┌──────────────────────────────────────────────────┐
+        │  dais-shared (crate) — signatures, ActivityPub    │
+        │  types, E2EE encrypt/decrypt + fallback.          │
+        │  ALSO used by dais-core / the workers.            │
+        └──────────────────────────────────────────────────┘
 ```
 
 Key architectural upgrades over today's client:
@@ -303,9 +306,10 @@ opt-in."
 
 ---
 
-## 8. Decisions needed
-1. **Stack:** Go + Charm (recommended) vs Rust + Ratatui.
-2. **Build vs incrementally migrate** the existing Python client (greenfield rewrite is
-   cleaner given the SDK + store changes; the old client keeps working until cutover).
+## 8. Decisions
+1. **Stack: ✅ Rust + Ratatui + clap** (decided) — shares a `dais-shared` crate with
+   the core for signing/AP-types/E2EE; single binary; one toolchain.
+2. **Build vs migrate:** greenfield rewrite (recommended — cleaner given the SDK +
+   local-store changes; the Python client keeps working until cutover). *Open.*
 3. **D1 access:** direct Cloudflare D1 HTTP API now (token in config) vs a future
-   authenticated management endpoint on the dais worker.
+   authenticated management endpoint on the dais worker. *Open — start with the D1 API.*
