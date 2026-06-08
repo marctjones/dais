@@ -5,7 +5,24 @@
 use dais_core::traits::{DatabaseProvider, DatabaseDialect, PlatformError, PlatformResult, Row, Statement};
 use async_trait::async_trait;
 use serde_json::Value;
+use wasm_bindgen::JsValue;
 use worker::D1Database;
+
+/// Convert a JSON value into a JsValue suitable for D1 parameter binding.
+/// The core always binds scalars (string / number / bool / null); arrays and
+/// objects are JSON-stringified (they correspond to TEXT/JSON columns).
+fn json_to_js(value: &Value) -> JsValue {
+    match value {
+        Value::Null => JsValue::NULL,
+        Value::Bool(b) => JsValue::from_bool(*b),
+        Value::Number(n) => n
+            .as_f64()
+            .map(JsValue::from_f64)
+            .unwrap_or(JsValue::NULL),
+        Value::String(s) => JsValue::from_str(s),
+        other => JsValue::from_str(&other.to_string()),
+    }
+}
 
 pub struct D1Provider {
     db: D1Database,
@@ -21,10 +38,18 @@ impl D1Provider {
 #[async_trait(?Send)]
 impl DatabaseProvider for D1Provider {
     async fn execute(&self, sql: &str, params: &[Value]) -> PlatformResult<Vec<Row>> {
-        // For now, simplified implementation without parameter binding
-        // TODO: Implement proper parameter binding when worker-rs API is clearer
-
         let statement = self.db.prepare(sql);
+
+        // Bind positional parameters (?1, ?2, …). Without this, any query with
+        // placeholders fails with "Wrong number of parameter bindings".
+        let statement = if params.is_empty() {
+            statement
+        } else {
+            let bound: Vec<JsValue> = params.iter().map(json_to_js).collect();
+            statement
+                .bind(&bound)
+                .map_err(|e| PlatformError::Database(format!("D1 bind failed: {:?}", e)))?
+        };
 
         // Execute and get results
         let result = statement
@@ -52,15 +77,21 @@ impl DatabaseProvider for D1Provider {
     }
 
     async fn batch(&self, statements: Vec<Statement>) -> PlatformResult<()> {
-        // D1 batch API (simplified without parameter binding)
-        // TODO: Add parameter binding support
-        let batch_statements: Vec<_> = statements
-            .iter()
-            .map(|stmt| self.db.prepare(&stmt.sql))
-            .collect();
+        let mut prepared = Vec::with_capacity(statements.len());
+        for stmt in &statements {
+            let p = self.db.prepare(&stmt.sql);
+            let p = if stmt.params.is_empty() {
+                p
+            } else {
+                let bound: Vec<JsValue> = stmt.params.iter().map(json_to_js).collect();
+                p.bind(&bound)
+                    .map_err(|e| PlatformError::Database(format!("D1 bind failed: {:?}", e)))?
+            };
+            prepared.push(p);
+        }
 
         self.db
-            .batch(batch_statements)
+            .batch(prepared)
             .await
             .map_err(|e| PlatformError::Database(format!("D1 batch failed: {:?}", e)))?;
 
