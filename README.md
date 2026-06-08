@@ -1,24 +1,29 @@
 # dais - Single-User ActivityPub & AT Protocol Server
 
-A complete single-user social media server supporting both **ActivityPub** (Mastodon, Pleroma, etc.) and **AT Protocol** (Bluesky). Built on Cloudflare's infrastructure with zero hosting costs.
+A single-user social media server supporting **ActivityPub** (Mastodon, Pleroma, etc.) and **AT Protocol** (Bluesky), built on Cloudflare with zero hosting costs.
 
 **Live Example**: `@social@dais.social` on Mastodon and `@social.dais.social` on Bluesky
+
+> **Direction & honest status:** dais is moving toward a *private-by-default*
+> personal social network — see [`docs/POSITIONING.md`](docs/POSITIONING.md) for
+> the purpose/roadmap and §5 there for a maturity snapshot. Items marked 🧪/⚠️
+> below are experimental or in progress.
 
 ## ✨ Features
 
 ### Social Protocols
 - ✅ **ActivityPub Federation** - Compatible with Mastodon, Pleroma, Pixelfed, and the entire Fediverse
-- ✅ **AT Protocol (Bluesky)** - Full Bluesky integration with lexicon support
+- 🧪 **AT Protocol (Bluesky)** - Bluesky integration with lexicon support *(experimental, ~partial)*
 - ✅ **WebFinger Discovery** - Be discoverable as `@username@yourdomain.com`
-- ✅ **HTTP Signatures** - Cryptographically signed federation requests
+- ✅ **HTTP Signatures** - Outbound requests are cryptographically signed *(inbound enforcement in progress — #60)*
 
 ### Content & Interactions
 - ✅ **Posts** - Create, publish, and delete posts with full federation
 - ✅ **Media Attachments** - Images, videos, and files via Cloudflare R2
 - ✅ **Replies** - Thread conversations across the Fediverse
-- ✅ **Direct Messages** - Private encrypted messaging
+- ⚠️ **Direct Messages** - Private DMs, transport-encrypted (HTTPS); **not** end-to-end encrypted yet — E2EE is planned (#71)
 - ✅ **Likes & Boosts** - Favorite and share posts
-- ✅ **Visibility Controls** - Public, unlisted, followers-only, and direct
+- ⚠️ **Visibility Controls** - Public, unlisted, followers-only, and direct *(authorized-fetch enforcement on read in progress — #61)*
 - ✅ **Content Warnings** - Sensitive content support
 
 ### Management
