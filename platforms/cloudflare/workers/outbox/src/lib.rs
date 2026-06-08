@@ -8,9 +8,9 @@
 /// All outbox query logic is now in dais-core, making it reusable across platforms.
 
 use worker::{self, event, Request, Response, Env, Context, Router, RouteContext, Result, Headers};
-use dais_cloudflare::D1Provider;
+use dais_cloudflare::{D1Provider, WorkerHttpProvider};
 use dais_core::{DaisCore, CoreConfig, CoreError};
-use dais_core::activitypub::Post;
+use dais_core::activitypub::{Post, HttpSignature};
 use async_trait::async_trait;
 
 #[event(fetch)]
@@ -150,7 +150,7 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Box::new(db),
         Box::new(PlaceholderStorage),
         Box::new(PlaceholderQueue),
-        Box::new(PlaceholderHttp),
+        Box::new(WorkerHttpProvider::new()),
         config,
     );
 
@@ -166,6 +166,16 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         }
     };
 
+    // Authorized-fetch (#61): non-public posts are only served to an approved
+    // follower who signs the GET. Anonymous / non-follower requests get 404 — so
+    // the post's existence isn't even revealed on the pull side.
+    if post.visibility != "public" && post.visibility != "unlisted" {
+        if !is_authorized_follower(&req, &core, &activitypub_domain).await {
+            worker::console_log!("Authorized-fetch denied for {}-only post", post.visibility);
+            return Response::error("Not Found", 404);
+        }
+    }
+
     if wants_html {
         // Return HTML view (platform-specific)
         // TODO: Implement HTML rendering with theme support and interactions
@@ -179,6 +189,61 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         resp.headers_mut().set("Access-Control-Allow-Origin", "*")?;
         Ok(resp)
     }
+}
+
+/// Authorized-fetch check: is this GET signed by an approved follower?
+/// Reuses the same HTTP-signature machinery as the inbox, on the read path.
+async fn is_authorized_follower(req: &Request, core: &DaisCore, ap_domain: &str) -> bool {
+    use std::collections::HashMap;
+
+    let sig_header = match req.headers().get("Signature") {
+        Ok(Some(s)) => s,
+        _ => return false, // unsigned request → not an authorized follower
+    };
+    let http_sig = match HttpSignature::parse(&sig_header) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    // Signer actor = keyId without the #fragment.
+    let actor_id = http_sig.key_id.split('#').next().unwrap_or("").to_string();
+    if actor_id.is_empty() {
+        return false;
+    }
+
+    // Reconstruct exactly the headers the signer signed. Verify against the public
+    // host (ap_domain), not the proxied *.workers.dev origin (same fix as inbox).
+    let path = match req.url() {
+        Ok(u) => u.path().to_string(),
+        Err(_) => return false,
+    };
+    let mut headers_map: HashMap<String, String> = HashMap::new();
+    for h in &http_sig.headers {
+        let hl = h.to_lowercase();
+        if hl == "(request-target)" {
+            continue;
+        } else if hl == "host" {
+            headers_map.insert("host".to_string(), ap_domain.to_string());
+        } else if let Ok(Some(v)) = req.headers().get(&hl) {
+            headers_map.insert(hl, v);
+        }
+    }
+
+    // Fetch the signer's public key and verify the GET signature.
+    let public_key = match dais_core::activitypub::fetch_actor_public_key(&*core.http(), &actor_id).await {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+    let verified = dais_core::activitypub::verify_request(&public_key, &http_sig, "GET", &path, &headers_map)
+        .unwrap_or(false);
+    if !verified {
+        return false;
+    }
+
+    // Verified signature — is this actor an approved follower?
+    dais_core::activitypub::is_approved_follower(&*core.db(), &actor_id)
+        .await
+        .unwrap_or(false)
 }
 
 /// Build ActivityPub OrderedCollection for outbox

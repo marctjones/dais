@@ -10,6 +10,19 @@ use crate::error::{CoreResult, CoreError};
 use crate::activitypub::types::Person;
 use serde_json::Value;
 
+/// Check whether an actor is an approved follower — used for authorized-fetch
+/// (pull-side) read gating of followers-only content.
+pub async fn is_approved_follower(db: &dyn DatabaseProvider, actor_url: &str) -> CoreResult<bool> {
+    let query = "SELECT COUNT(*) as count FROM followers WHERE follower_actor_id = ?1 AND status = 'approved'";
+    let rows = db.execute(query, &[Value::String(actor_url.to_string())]).await?;
+    if let Some(row) = rows.first() {
+        if let Some(count) = row.get("count").and_then(|v| v.as_u64()) {
+            return Ok(count > 0);
+        }
+    }
+    Ok(false)
+}
+
 /// Actor data from database
 #[derive(Debug, Clone)]
 pub struct ActorData {
