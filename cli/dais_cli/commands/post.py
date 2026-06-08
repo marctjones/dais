@@ -117,7 +117,7 @@ def create(content, attach, alt, visibility, protocol, remote, env):
     if attach:
         console.print(f"[dim]Uploading {len(attach)} media file(s)...[/dim]")
         for file_path in attach:
-            filename = upload_to_r2(file_path, remote=remote)
+            filename = upload_to_r2(file_path, remote=use_production)
             if filename:
                 attachment_filenames.append(filename)
             else:
@@ -187,8 +187,8 @@ def create(content, attach, alt, visibility, protocol, remote, env):
         followers = []
         if protocol in ['activitypub', 'both']:
             followers_query = "SELECT follower_actor_id, follower_inbox FROM followers WHERE status = 'approved'"
-            cmd_followers = ["wrangler", "d1", "execute", "DB", "--command", followers_query]
-            if remote:
+            cmd_followers = ["wrangler", "d1", "execute", "dais-social", "--command", followers_query]
+            if use_production:
                 cmd_followers.append("--remote")
 
             try:
@@ -210,7 +210,7 @@ def create(content, attach, alt, visibility, protocol, remote, env):
             activity=create_activity,
             followers=followers,
             protocol=protocol,
-            remote=remote,
+            remote=use_production,
             visibility=visibility
         )
 
