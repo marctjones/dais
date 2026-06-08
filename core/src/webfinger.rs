@@ -72,11 +72,17 @@ pub async fn handle_webfinger(
         return Err(CoreError::NotFound("User not found".to_string()));
     }
 
-    // Build WebFinger response
+    // Build WebFinger response.
+    // Always advertise the canonical apex handle as the subject (acct:user@base),
+    // regardless of whether the apex or the AP-subdomain form was queried. This is
+    // what makes @user@domain.com the canonical handle: when a remote server fetches
+    // the actor (on the subdomain) and re-checks the canonical acct, it must get back
+    // the apex handle, or it treats the apex as a mismatch and rejects it.
     let response = WebFingerResponse {
-        subject: resource.to_string(),
+        subject: format!("acct:{}@{}", username, configured_domain),
         aliases: vec![
             format!("https://{}/users/{}", activitypub_domain, username),
+            format!("acct:{}@{}", username, activitypub_domain),
         ],
         links: vec![
             WebFingerLink {
