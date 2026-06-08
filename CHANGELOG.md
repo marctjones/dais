@@ -5,6 +5,49 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-08
+
+**Milestone: the server actually federates.** End-to-end federation with Mastodon
+now works on a clean, Cloudflare-only, core-based architecture — after fixing a
+chain of bugs that had kept inbound follows broken since launch (0 followers).
+
+### Changed — Cloudflare-only, core-based architecture
+- Completed the v1.1 core-based worker migration: all 9 workers delegate to
+  `dais-core` and are now the sole production deployment. The legacy `workers/`
+  tree is retired (recoverable at tag `pre-cutover-core-tree`).
+- **Dropped Vercel/Netlify** — Cloudflare is the only supported target. The
+  provider-trait abstraction is retained for testability, not multi-platform.
+
+### Added — working federation + email-style handles
+- **Email-style apex handle**: `@you@yourdomain.com` now resolves end-to-end
+  (WebFinger at the apex proxied to the webfinger worker; canonical-subject
+  delegation), with the actor on the AP subdomain — like Mastodon.
+- Reusable multi-worker deploy tool: `scripts/deploy.sh`.
+- Design docs: `docs/POSITIONING.md`, `docs/design/PRIVATE_MODE.md`,
+  `docs/design/PROTOCOL_ADAPTERS.md` (private-by-default direction).
+
+### Fixed — federation now works
+- **D1 parameter binding** implemented in `D1Provider` (every parameterized
+  query was failing at runtime).
+- **Inbound HTTP-signature verification**: verify against the public host, not
+  the proxied `*.workers.dev` origin (every inbound signature had failed →
+  inbound follows never worked).
+- Schema/code mismatches: `is_blocked` (`blocks`), `notifications`
+  (`activity_id`), `interactions` (`object_url`/`created_at`).
+- CLI: actor URL derived from config (was hardcoded to the wrong user); worker
+  paths repointed to the new tree.
+- `worker-build` pinned to `^0.7` for `worker` 0.7.x compatibility.
+
+### Validated (live, against `@social@dais.social`)
+- Discover → follow → approve with a real Mastodon account: WebFinger resolves,
+  inbound `Follow` is signature-verified and stored, and the outbound `Accept`
+  is accepted (HTTP 202).
+
+### Known limitations / next
+- Outbound post delivery to followers (delivery-queue + `deliveries` schema) in
+  progress. AT Protocol/PDS experimental. Private-mode (private-by-default) in
+  design.
+
 ## [1.2.0] - 2026-03-15
 
 ### Added - Vercel Edge Functions Support

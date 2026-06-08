@@ -2,12 +2,18 @@
 
 A single-user social media server supporting **ActivityPub** (Mastodon, Pleroma, etc.) and **AT Protocol** (Bluesky), built on Cloudflare with zero hosting costs.
 
-**Live Example**: `@social@dais.social` on Mastodon and `@social.dais.social` on Bluesky
+**Live Example**: `@social@dais.social` — follow it from any Mastodon/fediverse server.
 
+> **v1.3.0 — the server actually federates.** End-to-end ActivityPub federation
+> works against real Mastodon (discover → follow → approve, with HTTP-signature
+> verification), on a clean Cloudflare-only core-based architecture. Your handle is
+> your **email-style address** (`@you@yourdomain.com`), with the actor on a
+> subdomain — like Mastodon's delegated WebFinger.
+>
 > **Direction & honest status:** dais is moving toward a *private-by-default*
 > personal social network — see [`docs/POSITIONING.md`](docs/POSITIONING.md) for
-> the purpose/roadmap and §5 there for a maturity snapshot. Items marked 🧪/⚠️
-> below are experimental or in progress.
+> the purpose/roadmap and §5 for a maturity snapshot. Items marked 🧪/⚠️ below are
+> experimental or in progress (outbound post delivery, AT Protocol, private mode).
 
 ## ✨ Features
 
