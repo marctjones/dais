@@ -9,6 +9,7 @@ command = "cargo install -q worker-build --version '^0.7' && worker-build --rele
 DOMAIN = "dais.social"
 ACTIVITYPUB_DOMAIN = "social.dais.social"
 USERNAME = "social"
+WEBFINGER_URL = "https://webfinger.marc-t-jones.workers.dev"
 
 [env.production]
 name = "landing-production"
@@ -21,3 +22,4 @@ routes = [
 DOMAIN = "dais.social"
 ACTIVITYPUB_DOMAIN = "social.dais.social"
 USERNAME = "social"
+WEBFINGER_URL = "https://webfinger-production.marc-t-jones.workers.dev"

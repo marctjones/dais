@@ -12,13 +12,32 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let url = req.url()?;
     let path = url.path();
 
-    if path == "/" {
-        handle_landing(env).await
-    } else if path == "/health" {
-        Response::ok("OK")
-    } else {
-        Response::error("Not Found", 404)
+    match path {
+        "/" => handle_landing(env).await,
+        "/health" => Response::ok("OK"),
+        // Email-style discovery: @user@apex-domain. The apex (dais.social) is served
+        // by this worker, so proxy WebFinger to the webfinger worker so handles that
+        // match the base domain resolve. (Actor still lives on the AP subdomain.)
+        "/.well-known/webfinger" => proxy_to_webfinger(&url, &env).await,
+        _ => Response::error("Not Found", 404),
     }
+}
+
+async fn proxy_to_webfinger(url: &Url, env: &Env) -> Result<Response> {
+    let base = env
+        .var("WEBFINGER_URL")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "https://webfinger-production.marc-t-jones.workers.dev".to_string());
+
+    let mut target = format!("{}/.well-known/webfinger", base.trim_end_matches('/'));
+    if let Some(query) = url.query() {
+        target.push('?');
+        target.push_str(query);
+    }
+
+    let target_url = Url::parse(&target)
+        .map_err(|e| Error::from(format!("invalid WEBFINGER_URL: {e}")))?;
+    Fetch::Url(target_url).send().await
 }
 
 async fn handle_landing(env: Env) -> Result<Response> {

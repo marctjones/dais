@@ -181,13 +181,16 @@ impl DaisCore {
 
     /// WebFinger lookup
     pub async fn webfinger(&self, resource: String) -> CoreResult<webfinger::WebFingerResponse> {
-        webfinger::handle_webfinger(
-            &*self.db,
-            &resource,
-            &self.config.activitypub_domain,
-            &self.config.activitypub_domain,
-        )
-        .await
+        // Accept the email-style apex handle (@user@domain.com) in addition to the
+        // ActivityPub subdomain (@user@social.domain.com). Derive the base domain by
+        // stripping one subdomain label (social.dais.social -> dais.social); if the
+        // AP domain is already an apex (no extra label), fall back to it unchanged.
+        let ap = self.config.activitypub_domain.as_str();
+        let base_domain = match ap.split_once('.') {
+            Some((_, rest)) if rest.contains('.') => rest,
+            _ => ap,
+        };
+        webfinger::handle_webfinger(&*self.db, &resource, base_domain, ap).await
     }
 
     // AT Protocol methods (to be implemented)
