@@ -27,7 +27,7 @@ serde_json = "1.0"
 console_error_panic_hook = "0.1"
 
 # Shared code for theme support (HTML rendering)
-shared = { path = "../../../../workers/shared" }
+shared = { path = "../../shared" }
 
 [profile.release]
 opt-level = "z"
