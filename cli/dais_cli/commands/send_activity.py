@@ -87,7 +87,7 @@ def send_response(activity_type, follow_activity_id, remote):
     
     # Find project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
     
     # Get the Follow activity from database
     query = f"SELECT id, follower_actor_id, follower_inbox FROM followers WHERE id = '{follow_activity_id}'"
@@ -115,7 +115,9 @@ def send_response(activity_type, follow_activity_id, remote):
     
     # Build Accept/Reject activity
     activity_id = f"https://social.dais.social/activities/{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-    our_actor = "https://social.dais.social/users/marc"
+    from dais_cli.config import Config
+    _cfg = Config()
+    our_actor = f'https://{_cfg.get("server.activitypub_domain", "social.dais.social")}/users/{_cfg.get("server.username", "social")}'
     
     activity = {
         "@context": "https://www.w3.org/ns/activitystreams",

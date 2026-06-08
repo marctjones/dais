@@ -178,7 +178,7 @@ def send(recipients, message, remote):
     console.print("[dim]Saving message to database...[/dim]")
 
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     # Escape content for SQL
     content_escaped = message.replace("'", "''")
@@ -249,7 +249,7 @@ def send(recipients, message, remote):
 def list_conversations(remote):
     """List all direct message conversations."""
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     # Query conversations with latest message
     query = """
@@ -360,7 +360,7 @@ def read(recipient, remote):
 
     # Query messages
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     query = f"""
     SELECT id, sender_id, content, published_at

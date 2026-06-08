@@ -149,7 +149,7 @@ class ThreadScreen(Screen):
             return
 
         project_root = Path(__file__).parent.parent.parent.parent.parent
-        worker_dir = project_root / "workers" / "actor"
+        worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
         try:
             # Load post data

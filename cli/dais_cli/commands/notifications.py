@@ -31,7 +31,7 @@ def list(limit, unread_only, remote):
 
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     # Build query
     where_clause = "WHERE read = FALSE" if unread_only else ""
@@ -129,7 +129,7 @@ def clear(remote):
 
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     query = "UPDATE notifications SET read = TRUE WHERE read = FALSE"
 
@@ -155,7 +155,7 @@ def stats(remote):
 
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     # Query counts by type
     query = """

@@ -123,7 +123,7 @@ def reply(post_url, content, remote):
 
     # Get project root for wrangler
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     cmd = ["wrangler", "d1", "execute", "DB", "--command", insert_query]
     if remote:
@@ -325,7 +325,7 @@ def boost(post_url, remote):
 
     # Get project root for wrangler
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     followers_query = "SELECT follower_actor_id, follower_inbox FROM followers WHERE status = 'approved'"
     cmd_followers = ["wrangler", "d1", "execute", "DB", "--command", followers_query]

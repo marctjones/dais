@@ -30,7 +30,7 @@ def execute_remote_d1(query: str, remote: bool = False) -> Optional[List[Dict]]:
     """
     # Get project root
     project_root = Path(__file__).parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     cmd = ["wrangler", "d1", "execute", "DB", "--command", query]
     if remote:

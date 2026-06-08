@@ -40,7 +40,7 @@ class StatsWidget(Static):
         """Fetch latest statistics from database."""
         # Get project root
         project_root = Path(__file__).parent.parent.parent.parent.parent
-        worker_dir = project_root / "workers" / "actor"
+        worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
         try:
             # Get follower counts

@@ -32,7 +32,7 @@ class PostListWidget(Static):
     def refresh_data(self) -> None:
         """Fetch recent posts from database."""
         project_root = Path(__file__).parent.parent.parent.parent.parent
-        worker_dir = project_root / "workers" / "actor"
+        worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
         try:
             result = subprocess.run(

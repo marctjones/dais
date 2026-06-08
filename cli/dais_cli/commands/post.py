@@ -92,7 +92,7 @@ def create(content, attach, alt, visibility, protocol, remote, env):
 
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     # Determine audience
     if visibility == 'public':
@@ -248,7 +248,7 @@ def list(limit, remote, env):
 
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     # Query posts from database
     query = f"""
@@ -359,7 +359,7 @@ def delete(post_id, remote, env):
 
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     # First, verify post exists
     query_post = f"SELECT id FROM posts WHERE id = '{full_post_id}'"

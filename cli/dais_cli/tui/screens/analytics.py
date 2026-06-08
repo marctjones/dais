@@ -138,7 +138,7 @@ class AnalyticsScreen(Screen):
     def _load_stats(self) -> None:
         """Load statistics from database."""
         project_root = Path(__file__).parent.parent.parent.parent.parent
-        worker_dir = project_root / "workers" / "actor"
+        worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
         # Get comprehensive stats
         query = """
@@ -178,7 +178,7 @@ class AnalyticsScreen(Screen):
     def _load_growth_data(self) -> None:
         """Load growth data over time."""
         project_root = Path(__file__).parent.parent.parent.parent.parent
-        worker_dir = project_root / "workers" / "actor"
+        worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
         # Get daily growth for last 7 days
         self.growth_data = []

@@ -16,7 +16,7 @@ def query_d1(query: str, remote: bool = False) -> list:
     """Execute a D1 query and return results."""
     # Find project root (where workers/ directory is)
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     cmd = ["wrangler", "d1", "execute", "dais-social", "--command", query]
     if remote:

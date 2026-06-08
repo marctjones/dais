@@ -33,7 +33,7 @@ def posts(query: str, remote: bool, limit: int):
     config.load()
 
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     # SQL query with LIKE search
     query_escaped = query.replace("'", "''")
@@ -117,7 +117,7 @@ def users(username: str, remote: bool):
         dais search users "alice"
     """
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     username_escaped = username.replace("'", "''")
 
@@ -191,7 +191,7 @@ def replies(query: str, remote: bool, limit: int):
         dais search replies "great post"
     """
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     query_escaped = query.replace("'", "''")
     sql = f"""
@@ -262,7 +262,7 @@ def stats(remote: bool):
     Shows total counts of searchable content.
     """
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     sql = """
     SELECT

@@ -138,7 +138,7 @@ class ModerationScreen(Screen):
     def action_refresh(self) -> None:
         """Refresh moderation queue from database."""
         project_root = Path(__file__).parent.parent.parent.parent.parent
-        worker_dir = project_root / "workers" / "actor"
+        worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
         try:
             # Query replies with moderation data

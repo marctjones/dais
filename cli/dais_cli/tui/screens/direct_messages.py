@@ -172,7 +172,7 @@ class DirectMessagesScreen(Screen):
     def action_refresh(self) -> None:
         """Refresh conversations list from database."""
         project_root = Path(__file__).parent.parent.parent.parent.parent
-        worker_dir = project_root / "workers" / "actor"
+        worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
         try:
             # Query conversations with most recent message time
@@ -263,7 +263,7 @@ class DirectMessagesScreen(Screen):
 
         # Load messages
         project_root = Path(__file__).parent.parent.parent.parent.parent
-        worker_dir = project_root / "workers" / "actor"
+        worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
         try:
             result = subprocess.run(

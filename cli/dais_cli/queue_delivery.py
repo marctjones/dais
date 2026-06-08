@@ -60,7 +60,7 @@ def deliver_dual_protocol_post(
         # Update database to reflect actual protocol used
         if original_protocol == 'both':
             project_root = Path(__file__).parent.parent.parent
-            worker_dir = project_root / "workers" / "actor"
+            worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
             post_id_escaped = post_id.replace("'", "''")
             update_query = f"UPDATE posts SET protocol = 'activitypub' WHERE id = '{post_id_escaped}'"
             cmd = ["wrangler", "d1", "execute", "DB", "--command", update_query]
@@ -170,7 +170,7 @@ def deliver_to_bluesky(text: str, post_id: str, remote: bool = False) -> Optiona
             # Update database with AT Protocol URI
             if uri:
                 project_root = Path(__file__).parent.parent.parent
-                worker_dir = project_root / "workers" / "actor"
+                worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
                 atproto_uri_escaped = uri.replace("'", "''")
                 atproto_cid_escaped = cid.replace("'", "''") if cid else ''

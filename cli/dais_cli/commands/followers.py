@@ -36,7 +36,7 @@ def list(status, remote):
 
     # Find project root (where workers/ directory is)
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     cmd = ["wrangler", "d1", "execute", "dais-social", "--command", query]
     if remote:
@@ -115,7 +115,7 @@ def approve(actor, remote):
 
     # Find project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     cmd = ["wrangler", "d1", "execute", "dais-social", "--command", query]
     if remote:
@@ -150,7 +150,8 @@ def approve(actor, remote):
         console.print(f"\n[dim]Sending Accept activity to {follower_inbox}...[/dim]")
 
         # Build Follow activity object
-        our_actor = "https://social.dais.social/users/marc"
+        config = Config()
+        our_actor = f'https://{config.get("server.activitypub_domain", "social.dais.social")}/users/{config.get("server.username", "social")}'
         follow_activity = {
             "type": "Follow",
             "id": follow_id,
@@ -198,7 +199,7 @@ def reject(actor, remote):
 
     # Find project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     cmd = ["wrangler", "d1", "execute", "dais-social", "--command", query]
     if remote:
@@ -233,7 +234,8 @@ def reject(actor, remote):
         console.print(f"\n[dim]Sending Reject activity to {follower_inbox}...[/dim]")
 
         # Build Follow activity object
-        our_actor = "https://social.dais.social/users/marc"
+        config = Config()
+        our_actor = f'https://{config.get("server.activitypub_domain", "social.dais.social")}/users/{config.get("server.username", "social")}'
         follow_activity = {
             "type": "Follow",
             "id": follow_id,
@@ -277,7 +279,7 @@ def remove(actor, remote):
 
     # Find project root
     project_root = Path(__file__).parent.parent.parent.parent
-    worker_dir = project_root / "workers" / "actor"
+    worker_dir = project_root / "platforms" / "cloudflare" / "workers" / "actor"
 
     cmd = ["wrangler", "d1", "execute", "dais-social", "--command", query]
     if remote:
