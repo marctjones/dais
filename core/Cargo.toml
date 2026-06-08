@@ -46,7 +46,7 @@ tokio-test = "0.4"
 [features]
 default = []
 
-# Platform-specific features (for conditional compilation)
+# Platform-specific features (for conditional compilation).
+# Cloudflare is the only supported deployment target; the provider-trait
+# abstraction is retained for testability, not multi-platform shipping.
 cloudflare = []
-vercel = []
-netlify = []
