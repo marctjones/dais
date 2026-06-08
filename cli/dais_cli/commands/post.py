@@ -16,6 +16,7 @@ from dais_cli.delivery import (
     build_delete_activity
 )
 from dais_cli.queue_delivery import deliver_dual_protocol_post
+from dais_cli.e2ee import encrypt_message, fallback_content
 from dais_cli.media import (
     upload_to_r2,
     build_attachment_json,
@@ -43,7 +44,8 @@ def post():
               default='both', help='Which protocol(s) to post to')
 @click.option('--remote', is_flag=True, help='Use production environment (deprecated: use --env production)')
 @click.option('--env', type=click.Choice(['production', 'development']), help='Environment to use (overrides config default)')
-def create(content, attach, alt, visibility, protocol, remote, env):
+@click.option('--encrypt', is_flag=True, help='End-to-end encrypt (opt-in): only dais clients can read it; other clients see a notice + link')
+def create(content, attach, alt, visibility, protocol, remote, env, encrypt):
     """Create and publish a post.
 
     CONTENT: The text content of your post
@@ -133,11 +135,28 @@ def create(content, attach, alt, visibility, protocol, remote, env):
     alt_texts = list(alt) if alt else None
     attachments_json = build_attachment_json(attachment_filenames, media_domain, alt_texts) if attachment_filenames else "[]"
 
+    # E2EE (opt-in): encrypt content client-side. The server stores ONLY the
+    # fallback notice (never the plaintext); the delivered Note carries the
+    # ciphertext in an `encryptedMessage` extension that dais clients read and
+    # other clients (Mastodon) ignore — showing the fallback notice instead.
+    encrypted_message = None
+    stored_content = content
+    if encrypt:
+        from dais_cli.config import get_dais_dir
+        pub_pem = (get_dais_dir() / "keys" / "public.pem").read_text()
+        # v1: recipients = the sender's own dais key (round-trippable) plus any
+        # approved followers that publish a dais encryption key. Followers without
+        # one simply get the fallback notice.
+        recipients = {f"{actor_id}#main-key": pub_pem}
+        encrypted_message = encrypt_message(content, recipients)
+        stored_content = fallback_content(post_id)
+        console.print("[dim]🔒 End-to-end encrypted — clients without dais see a notice + link[/dim]")
+
     # Insert post to D1 database
     console.print("[dim]Saving post to database...[/dim]")
 
     # Escape single quotes for SQL
-    content_escaped = content.replace("'", "''")
+    content_escaped = stored_content.replace("'", "''")
     to_json = json.dumps(to_audience).replace("'", "''")
     cc_json = json.dumps(cc_audience).replace("'", "''") if cc_audience else "[]"
     attachments_escaped = attachments_json.replace("'", "''")
@@ -166,11 +185,13 @@ def create(content, attach, alt, visibility, protocol, remote, env):
         "type": "Note",
         "id": post_id,
         "attributedTo": actor_id,
-        "content": content,
+        "content": stored_content,
         "published": published_at,
         "to": to_audience,
         "cc": cc_audience
     }
+    if encrypted_message:
+        note["encryptedMessage"] = encrypted_message
 
     # Add attachments if present
     if attachment_filenames:
