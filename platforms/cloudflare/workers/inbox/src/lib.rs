@@ -110,6 +110,12 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
         .map(|v| v.to_string())
         .unwrap_or_else(|_| format!("social.{}", configured_domain));
 
+    // HTTP-signature `host` fix: remote servers sign over the public inbox host
+    // (the ActivityPub domain, e.g. social.dais.social). Behind the router proxy
+    // the real Host header is the *.workers.dev origin, so verifying against it
+    // fails every signature. Verify against the configured public host instead.
+    headers_map.insert("host".to_string(), activitypub_domain.clone());
+
     let username_var = ctx.env.var("USERNAME")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "social".to_string());

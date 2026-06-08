@@ -28,7 +28,9 @@ pub async fn is_blocked(
     db: &dyn DatabaseProvider,
     actor_url: &str,
 ) -> CoreResult<bool> {
-    let query = "SELECT COUNT(*) as count FROM blocked_actors WHERE actor_url = ?1";
+    // Schema: the moderation table is `blocks` keyed by `actor_id` (the blocked
+    // actor's URL), not `blocked_actors`/`actor_url`.
+    let query = "SELECT COUNT(*) as count FROM blocks WHERE actor_id = ?1";
     let rows = db.execute(query, &[Value::String(actor_url.to_string())]).await?;
 
     if !rows.is_empty() {
