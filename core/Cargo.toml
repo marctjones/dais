@@ -22,7 +22,7 @@ serde_json = "1.0"
 # (Will add specific dependencies as we migrate logic)
 chrono = { version = "0.4", features = ["serde"] }
 url = "2.5"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "serde", "js"] }
 
 # WASM bindings
 wasm-bindgen = "0.2"
@@ -50,3 +50,10 @@ default = []
 # Cloudflare is the only supported deployment target; the provider-trait
 # abstraction is retained for testability, not multi-platform shipping.
 cloudflare = []
+
+# wasm32 (Cloudflare Workers) needs a JS randomness backend for getrandom 0.2,
+# pulled transitively by rsa. uuid's getrandom (0.4) is handled by uuid's "js"
+# feature above. Without these, wasm builds fail with "the wasm*-unknown-unknown
+# targets are not supported by default".
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

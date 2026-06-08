@@ -1,0 +1,35 @@
+name = "webfinger"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[vars]
+DOMAIN = "dais.social"
+ACTIVITYPUB_DOMAIN = "social.dais.social"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# Custom domain routes for WebFinger
+# Commented out for local development (not supported in local mode)
+# routes = [
+#   { pattern = "dais.social/.well-known/webfinger", custom_domain = true }
+# ]
+
+[env.production]
+name = "webfinger-production"
+# No routes needed - accessed via router worker
+
+[env.production.vars]
+DOMAIN = "dais.social"
+ACTIVITYPUB_DOMAIN = "social.dais.social"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+# D1 database for actor lookups
+[[d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"

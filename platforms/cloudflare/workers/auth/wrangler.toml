@@ -1,0 +1,32 @@
+name = "auth"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[vars]
+DOMAIN = "dais.social"
+ACTIVITYPUB_DOMAIN = "social.dais.social"
+
+# D1 database for service tokens / sessions
+[[d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+# NOTE: auth had no wrangler.toml in the v1.0 tree and is not yet routed by the
+# router worker (the router 404s unknown paths). This config lets auth deploy
+# standalone; wire `/auth/*` routing in router/src/index.js when auth goes live.
+
+[env.production]
+name = "auth-production"
+
+[env.production.vars]
+DOMAIN = "dais.social"
+ACTIVITYPUB_DOMAIN = "social.dais.social"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"

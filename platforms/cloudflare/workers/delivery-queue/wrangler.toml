@@ -1,0 +1,48 @@
+name = "delivery-queue"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# Queue consumer configuration
+[[queues.consumers]]
+queue = "delivery-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 3
+dead_letter_queue = "delivery-dlq"
+
+# D1 database for tracking deliveries
+[[d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+# R2 for media (if needed for attachments)
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media"
+
+[env.production]
+name = "delivery-queue-production"
+
+[[env.production.queues.consumers]]
+queue = "delivery-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 3
+dead_letter_queue = "delivery-dlq"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+[[env.production.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media"
+
+[env.production.vars]
+DOMAIN = "dais.social"
+ACTIVITYPUB_DOMAIN = "social.dais.social"
