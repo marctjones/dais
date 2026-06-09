@@ -1,100 +1,28 @@
-# dais CLI
+# `cli/` — D1 schema migrations
 
-Command-line tools for managing your dais.social ActivityPub server.
+The Python operator CLI that used to live here was **removed** once the native Rust
+client (`/client`) reached ActivityPub parity. Recover it from git history or tag
+`v1.4.0` if ever needed.
 
-## Installation
-
-```bash
-# Install in development mode
-pip install -e .
-
-# Or install from wheel
-pip install dais-cli
-```
-
-## Usage
-
-```bash
-# Show version and help
-dais --version
-dais --help
-
-# Initialize configuration and generate keys
-dais setup init
-
-# Create a post
-dais post create "Hello, Fediverse!"
-dais post create "Hello world" --visibility unlisted
-
-# List posts
-dais post list
-dais post list --limit 10
-
-# Manage followers
-dais followers list
-dais followers approve @alice@mastodon.social
-dais followers reject @bob@pleroma.example
-
-# Test federation
-dais test webfinger
-dais test federation @someone@instance.social
-
-# Show statistics
-dais stats
-```
-
-## Commands
-
-### Setup
-
-- `dais setup init` - Initialize configuration, generate RSA keys
-- `dais setup show` - Show current configuration
-
-### Posts
-
-- `dais post create <content>` - Create and publish a post
-- `dais post list` - List your posts
-- `dais post delete <id>` - Delete a post
-
-### Followers
-
-- `dais followers list` - List all followers
-- `dais followers approve <actor>` - Approve a follow request
-- `dais followers reject <actor>` - Reject a follow request
-- `dais followers remove <actor>` - Remove a follower
-
-### Testing
-
-- `dais test webfinger` - Test WebFinger endpoint
-- `dais test actor` - Test Actor endpoint
-- `dais test federation <actor>` - Test federation with another instance
-
-### Statistics
-
-- `dais stats` - Show follower count, post count, etc.
-
-## Configuration
-
-The CLI uses a `.dais` directory in your home folder for configuration:
+What remains here is the **authoritative Cloudflare D1 schema** — the numbered SQL
+migrations applied to the `dais-social` database, which the Rust client's queries
+target:
 
 ```
-~/.dais/
-  config.toml       # Configuration file
-  keys/
-    private.pem     # RSA private key
-    public.pem      # RSA public key
+migrations/
+├── 001_initial_schema.sql   actors, followers, following, posts, activities
+├── 002_interactions.sql     replies, interactions, notifications
+├── 003_moderation.sql
+├── 004_blocking.sql         blocks
+├── 005_following.sql        following (target_actor_id / target_inbox)
+├── 006_protocol_support.sql posts.protocol, atproto_uri/cid
+├── 006_auth_tokens.sql      sessions
+├── 007_direct_messages.sql  conversations, direct_messages
+└── 008_bluesky_chat.sql
 ```
 
-## Development
+Apply with, e.g.:
 
-```bash
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Format code
-black .
-ruff check .
+```
+wrangler d1 execute DB --remote --file=cli/migrations/001_initial_schema.sql
 ```

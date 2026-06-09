@@ -11,7 +11,9 @@ and **AT Protocol (Bluesky)**.
 - **Design:** `docs/design/PRIVATE_MODE.md`, `docs/design/PROTOCOL_ADAPTERS.md`.
 - **Architecture:** `ARCHITECTURE_v1.1.md` (three layers: `core/` →
   `platforms/cloudflare/bindings` → worker shims). Rust core in `core/`,
-  Cloudflare workers under `platforms/cloudflare/`, Python CLI in `cli/`.
+  Cloudflare workers under `platforms/cloudflare/`. The operator client is the
+  native Rust CLI+TUI in `client/` (the old Python CLI was removed; recover from git
+  history / tag `v1.4.0` if needed). `cli/` now holds only the D1 schema migrations.
 
 ## Working agreements
 
