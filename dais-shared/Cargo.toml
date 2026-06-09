@@ -1,0 +1,34 @@
+[package]
+name = "dais-shared"
+version = "1.3.0"
+edition = "2021"
+authors = ["Marc T Jones <marc@dais.social>"]
+description = "Shared dais primitives — HTTP Signatures, ActivityPub types, and E2EE. Used by dais-core (Cloudflare Workers, wasm32) and the dais client (native). One audited home for signing and crypto."
+license = "MIT"
+repository = "https://github.com/marctjones/dais"
+
+# Pure library: no cdylib. Must build for BOTH wasm32-unknown-unknown (workers,
+# via dais-core) and native targets (the client). Keep it free of tokio/reqwest/
+# rusqlite so it stays portable to wasm.
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Signing + key-wrap (shared with dais-core's signature path)
+rsa = { version = "0.9", features = ["getrandom", "pem", "sha2"] }
+sha2 = "0.10"
+base64 = "0.22"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# E2EE content encryption (hybrid AES-256-GCM; ported from cli/dais_cli/e2ee.py,
+# wire-compatible so a Python-encrypted message decrypts here and vice-versa).
+aes-gcm = "0.10"
+
+# wasm32 (Cloudflare Workers) needs a JS randomness backend for getrandom 0.2,
+# pulled transitively by rsa/rand_core. Mirrors dais-core's own wasm config.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+serde_json = "1.0"
