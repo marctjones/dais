@@ -1,0 +1,27 @@
+[package]
+name = "dais"
+description = "dais — the operator client for your single-user fediverse instance. CLI + TUI."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "dais"
+path = "src/main.rs"
+
+[dependencies]
+dais-client.workspace = true
+dais-tui.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+# End-to-end GUI testing: spawn the real `dais tui` binary under a pseudo-terminal,
+# send keystrokes, and parse the emitted escape sequences into a virtual screen.
+portable-pty = "0.8"
+vt100 = "0.15"

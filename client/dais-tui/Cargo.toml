@@ -1,0 +1,15 @@
+[package]
+name = "dais-tui"
+description = "dais TUI — a mail client for the fediverse. Ratatui front-end over the dais-client SDK."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dais-client.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
