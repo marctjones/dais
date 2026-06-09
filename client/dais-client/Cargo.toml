@@ -9,6 +9,12 @@ repository.workspace = true
 
 [dependencies]
 dais-shared.workspace = true
+# Native binding over the platform-agnostic server core: the client reuses core's
+# audited delivery / signing / actor-fetch by implementing its HttpProvider +
+# DatabaseProvider traits natively (reqwest + the D1 HTTP API). Same code path the
+# Workers use — one audited federation implementation.
+dais-core = { path = "../../core" }
+async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
@@ -17,3 +23,8 @@ reqwest.workspace = true
 rusqlite.workspace = true
 toml.workspace = true
 dirs.workspace = true
+uuid = { version = "1", features = ["v4", "v5"] }
+
+[dev-dependencies]
+tokio = { workspace = true }
+rand_core = { version = "0.6", features = ["getrandom"] }
