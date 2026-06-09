@@ -3,7 +3,7 @@ services:
   db-init:
     build:
       context: .
-      dockerfile: Dockerfile.cli
+      dockerfile: Dockerfile
     volumes:
       - d1-data:/app/workers/actor/.wrangler
       - ./cli/migrations:/app/cli/migrations
@@ -114,33 +114,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # CLI for running commands and tests
-  cli:
-    build:
-      context: .
-      dockerfile: Dockerfile.cli
-    volumes:
-      - d1-data:/app/workers/actor/.wrangler
-      - ./cli:/app/cli
-      - ./workers:/app/workers
-      - ./scripts:/app/scripts
-      - ./cli/test_keys:/root/.dais/keys
-    working_dir: /app
-    depends_on:
-      webfinger:
-        condition: service_healthy
-      actor:
-        condition: service_healthy
-      inbox:
-        condition: service_healthy
-      outbox:
-        condition: service_healthy
-    networks:
-      - dais-network
-    stdin_open: true
-    tty: true
-    command: /bin/bash
 
 volumes:
   d1-data:

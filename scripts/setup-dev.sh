@@ -1,17 +1,11 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Setting up dais.social development environment..."
+echo "🚀 Setting up dais development environment..."
 echo ""
 
 # Check prerequisites
 echo "Checking prerequisites..."
-
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 not found. Please install Python 3.10+"
-    exit 1
-fi
-echo "✅ Python 3 found: $(python3 --version)"
 
 if ! command -v cargo &> /dev/null; then
     echo "❌ Rust not found. Please install from https://rustup.rs/"
@@ -26,17 +20,9 @@ fi
 echo "✅ wrangler found: $(wrangler --version)"
 
 echo ""
-echo "Setting up Python virtual environment..."
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip -q
-pip install -e "cli/[dev]" -q
-echo "✅ Python CLI installed"
-
-echo ""
 echo "Setting up Rust toolchain..."
 rustup target add wasm32-unknown-unknown 2>/dev/null || true
-echo "✅ wasm32-unknown-unknown target ready"
+echo "✅ wasm32-unknown-unknown target ready (for the Workers)"
 
 if ! cargo install --list | grep -q worker-build; then
     echo "Installing worker-build..."
@@ -45,11 +31,15 @@ fi
 echo "✅ worker-build ready"
 
 echo ""
+echo "Building the native client..."
+( cd client && cargo build )
+echo "✅ client built"
+
+echo ""
 echo "✅ Development environment setup complete!"
 echo ""
 echo "Next steps:"
-echo "  1. source venv/bin/activate"
-echo "  2. dais setup init"
-echo "  3. cd workers/webfinger && wrangler dev"
+echo "  • Client:  cd client && cargo run -p dais -- tui   (or: dais --help)"
+echo "  • Workers: cd platforms/cloudflare/workers/<name> && wrangler dev"
 echo ""
-echo "See CONTRIBUTING.md for development workflow."
+echo "See CONTRIBUTING.md for the development workflow."

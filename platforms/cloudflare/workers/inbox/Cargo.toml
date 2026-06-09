@@ -12,6 +12,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 console_error_panic_hook = "0.1"
 async-trait = "0.1"
+# Replay-window check on the signed Date header (#sec S2). Default features (clock +
+# wasmbind) give a working Utc::now() on wasm, same as dais-core relies on.
+chrono = { version = "0.4", features = ["serde"] }
 
 # Platform-agnostic core
 dais-core = { path = "../../../../core" }

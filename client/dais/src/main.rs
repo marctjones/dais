@@ -215,11 +215,16 @@ async fn run() -> Result<()> {
         Command::Init(args) => cmd_init(args),
         Command::Status => cmd_status().await,
         Command::Timeline(cmd) => cmd_timeline(cmd),
-        Command::Post(args) => cmd_post(args),
+        Command::Post(args) => cmd_post(args).await,
         Command::Thread(args) => cmd_thread(args),
-        Command::Requests(cmd) => cmd_requests(cmd),
+        Command::Requests(cmd) => cmd_requests(cmd).await,
         Command::Friends(cmd) => cmd_friends(cmd),
         Command::Account(cmd) => cmd_account(cmd),
+        Command::Follow(cmd) => cmd_follow(cmd).await,
+        Command::Followers(cmd) => cmd_followers(cmd).await,
+        Command::Dm(cmd) => cmd_dm(cmd).await,
+        Command::Notify(cmd) => cmd_notify(cmd).await,
+        Command::Block(cmd) => cmd_block(cmd).await,
         Command::Tui => {
             if !std::io::stdout().is_terminal() {
                 return Err(anyhow!("the TUI needs an interactive terminal (stdout is not a TTY)"));
@@ -227,13 +232,6 @@ async fn run() -> Result<()> {
             let client = Client::open()?;
             dais_tui::run(client)
         }
-        // Verbs that need a server/worker endpoint that doesn't exist yet — present
-        // in the map for discoverability, honest about not being wired.
-        Command::Follow(_) => not_wired("follow"),
-        Command::Followers(_) => not_wired("followers"),
-        Command::Dm(_) => not_wired("dm"),
-        Command::Notify(_) => not_wired("notify"),
-        Command::Block(_) => not_wired("block"),
     }
 }
 
@@ -359,7 +357,7 @@ fn cmd_timeline(cmd: TimelineCmd) -> Result<()> {
     Ok(())
 }
 
-fn cmd_post(args: PostArgs) -> Result<()> {
+async fn cmd_post(args: PostArgs) -> Result<()> {
     let s = Style::new();
     let client = Client::open()?;
 
@@ -383,42 +381,73 @@ fn cmd_post(args: PostArgs) -> Result<()> {
         None => client.config.default_visibility(),
     };
 
-    if visibility == Visibility::Public && !args.yes {
-        if !confirm(&s.yellow("This posts PUBLICLY to the whole fediverse. Continue?"), args.yes)? {
-            println!("{}", s.dim("cancelled"));
-            return Ok(());
-        }
+    if visibility == Visibility::Public
+        && !args.yes
+        && !confirm(&s.yellow("This posts PUBLICLY to the whole fediverse. Continue?"), args.yes)?
+    {
+        println!("{}", s.dim("cancelled"));
+        return Ok(());
     }
 
-    let res = client.compose(&text, visibility, args.encrypt, args.reply.as_deref())?;
+    // Offline / unconfigured: stage locally (no wire delivery).
+    if !client.can_federate() {
+        let res = client.compose(&text, visibility, args.encrypt, args.reply.as_deref())?;
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "staged_draft_id": res.draft_id,
+                    "visibility": res.visibility.label(),
+                    "encrypted": res.encrypt,
+                    "delivered": false,
+                }))?
+            );
+        } else {
+            println!(
+                "{} draft #{} · {} {}{}",
+                s.yellow("staged (offline)"),
+                res.draft_id,
+                visibility.glyph(),
+                visibility.label(),
+                if res.encrypt { s.magenta(" · 🔒") } else { String::new() }
+            );
+            println!("{}", s.dim("not delivered — configure D1 + key (`dais init`) to federate"));
+        }
+        return Ok(());
+    }
+
+    let out = client
+        .publish(&text, visibility, args.encrypt, args.reply.as_deref())
+        .await?;
 
     if args.json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "draft_id": res.draft_id,
-                "visibility": res.visibility.label(),
-                "encrypted": res.encrypt,
+                "post_id": out.post_id,
+                "visibility": visibility.label(),
+                "encrypted": args.encrypt,
+                "followers_targeted": out.followers_targeted,
+                "delivered": out.delivered,
+                "failed": out.failed,
             }))?
         );
         return Ok(());
     }
 
     println!(
-        "{} draft #{} · {} {}{}",
-        s.green("staged"),
-        res.draft_id,
+        "{} · {} {}{}",
+        s.green("posted"),
         visibility.glyph(),
         visibility.label(),
-        if res.encrypt { s.magenta(" · 🔒 encrypted") } else { String::new() }
+        if args.encrypt { s.magenta(" · 🔒 encrypted") } else { String::new() }
     );
-    if let Some(preview) = res.encrypted_preview {
-        println!("{}", s.dim("non-dais recipients will see:"));
-        println!("  {}", s.dim(&strip_html(&preview)));
-    }
+    println!("  {}", s.dim(&out.post_id));
     println!(
-        "{}",
-        s.dim("(staged locally; wire delivery via the worker lands in a later phase)")
+        "  delivered to {}/{} follower inbox(es){}",
+        out.delivered,
+        out.followers_targeted,
+        if out.failed > 0 { format!(", {} failed", out.failed) } else { String::new() }
     );
     Ok(())
 }
@@ -447,9 +476,55 @@ fn cmd_thread(args: ThreadArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_requests(cmd: RequestsCmd) -> Result<()> {
+async fn cmd_requests(cmd: RequestsCmd) -> Result<()> {
     let s = Style::new();
     let client = Client::open()?;
+
+    // When configured for prod, operate on real D1 + deliver Accept/Reject.
+    if client.can_federate() {
+        match cmd {
+            RequestsCmd::List { json } => {
+                let reqs = client.requests_remote().await?;
+                if json {
+                    let arr: Vec<_> = reqs
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "follower": r.follower_actor_id,
+                                "inbox": r.follower_inbox,
+                                "created_at": r.created_at,
+                            })
+                        })
+                        .collect();
+                    println!("{}", serde_json::to_string_pretty(&arr)?);
+                } else if reqs.is_empty() {
+                    println!("{}", s.dim("no pending follow requests"));
+                } else {
+                    for r in &reqs {
+                        println!("{} {}  {}", s.cyan("●"), s.bold(&r.follower_actor_id), s.dim(&r.created_at));
+                    }
+                }
+            }
+            RequestsCmd::Approve { handle, yes } => {
+                if !confirm(
+                    &format!("Approve {handle}? They'll be able to read your followers-only posts."),
+                    yes,
+                )? {
+                    println!("{}", s.dim("cancelled"));
+                    return Ok(());
+                }
+                client.request_approve(&handle).await?;
+                println!("{} {handle} {}", s.green("approved"), s.dim("(Accept delivered)"));
+            }
+            RequestsCmd::Reject { handle } => {
+                client.request_reject(&handle).await?;
+                println!("{} {handle} {}", s.yellow("rejected"), s.dim("(Reject delivered)"));
+            }
+        }
+        return Ok(());
+    }
+
+    // Offline / demo: operate on the local store.
     match cmd {
         RequestsCmd::List { json } => {
             let reqs = client.requests()?;
@@ -573,6 +648,158 @@ fn cmd_account(cmd: AccountCmd) -> Result<()> {
     }
 }
 
+fn require_federation(client: &Client) -> Result<()> {
+    if !client.can_federate() {
+        return Err(anyhow!(
+            "this needs D1 + a signing key — run `dais init` and set d1.* and keys.* in config.toml"
+        ));
+    }
+    Ok(())
+}
+
+async fn cmd_follow(cmd: FollowCmd) -> Result<()> {
+    let s = Style::new();
+    let client = Client::open()?;
+    require_federation(&client)?;
+    match cmd {
+        FollowCmd::Add { handle } => {
+            let target = client.follow_add(&handle).await?;
+            println!("{} {handle} {}", s.green("follow sent"), s.dim(&format!("→ {target}")));
+        }
+        FollowCmd::List => {
+            let rows = client.following_list().await?;
+            if rows.is_empty() {
+                println!("{}", s.dim("not following anyone yet"));
+            } else {
+                for (actor, status) in rows {
+                    let st = if status == "accepted" { s.green(&status) } else { s.dim(&status) };
+                    println!("{}  {}", s.bold(&actor), st);
+                }
+            }
+        }
+        FollowCmd::Remove { handle } => {
+            client.follow_remove(&handle).await?;
+            println!("{} {handle} {}", s.yellow("unfollowed"), s.dim("(Undo delivered)"));
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_followers(cmd: FollowersCmd) -> Result<()> {
+    let s = Style::new();
+    let client = Client::open()?;
+    require_federation(&client)?;
+    match cmd {
+        FollowersCmd::List => {
+            let rows = client.followers_list().await?;
+            if rows.is_empty() {
+                println!("{}", s.dim("no approved followers yet"));
+            } else {
+                for actor in rows {
+                    println!("{}", actor);
+                }
+            }
+        }
+        FollowersCmd::Remove { handle } => {
+            client.follower_remove(&handle).await?;
+            println!("{} {handle}", s.yellow("removed follower"));
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_dm(cmd: DmCmd) -> Result<()> {
+    let s = Style::new();
+    let client = Client::open()?;
+    require_federation(&client)?;
+    match cmd {
+        DmCmd::Send { handle, text, encrypt } => {
+            let id = client.dm_send(&handle, &text, encrypt).await?;
+            println!(
+                "{} → {handle}{}",
+                s.green("DM sent"),
+                if encrypt { s.magenta(" · 🔒 encrypted") } else { String::new() }
+            );
+            println!("  {}", s.dim(&id));
+        }
+        DmCmd::List => {
+            let convos = client.dm_list().await?;
+            if convos.is_empty() {
+                println!("{}", s.dim("no conversations"));
+            } else {
+                for (id, last) in convos {
+                    println!("{}  {}", s.bold(&id), s.dim(&last));
+                }
+            }
+        }
+        DmCmd::Read { handle } => {
+            let msgs = client.dm_thread(&handle).await?;
+            if msgs.is_empty() {
+                println!("{}", s.dim("no messages"));
+            } else {
+                for (sender, content, when) in msgs {
+                    println!("{} {}", s.cyan(&sender), s.dim(&when));
+                    println!("  {content}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_notify(cmd: NotifyCmd) -> Result<()> {
+    let s = Style::new();
+    let client = Client::open()?;
+    require_federation(&client)?;
+    match cmd {
+        NotifyCmd::List => {
+            let rows = client.notify_list(50).await?;
+            if rows.is_empty() {
+                println!("{}", s.dim("no notifications"));
+            } else {
+                for (typ, who, when) in rows {
+                    println!("{} {}  {}", s.cyan(&format!("[{typ}]")), s.bold(&who), s.dim(&when));
+                }
+            }
+        }
+        NotifyCmd::Read { id, all } => {
+            if !all && id.is_none() {
+                return Err(anyhow!("specify a notification id or --all"));
+            }
+            client.notify_mark_read(if all { None } else { id.as_deref() }).await?;
+            println!("{}", s.green(if all { "marked all read" } else { "marked read" }));
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_block(cmd: BlockCmd) -> Result<()> {
+    let s = Style::new();
+    let client = Client::open()?;
+    require_federation(&client)?;
+    match cmd {
+        BlockCmd::Add { target } => {
+            client.block_add(&target).await?;
+            println!("{} {target}", s.yellow("blocked"));
+        }
+        BlockCmd::List => {
+            let rows = client.block_list().await?;
+            if rows.is_empty() {
+                println!("{}", s.dim("no blocks"));
+            } else {
+                for t in rows {
+                    println!("{t}");
+                }
+            }
+        }
+        BlockCmd::Remove { target } => {
+            client.block_remove(&target).await?;
+            println!("{} {target}", s.green("unblocked"));
+        }
+    }
+    Ok(())
+}
+
 fn not_wired(what: &str) -> Result<()> {
     let s = Style::new();
     println!(
@@ -598,17 +825,3 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
     Ok(matches!(line.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
-fn strip_html(s: &str) -> String {
-    // Crude tag strip for the terminal preview of the fallback notice.
-    let mut out = String::new();
-    let mut in_tag = false;
-    for c in s.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(c),
-            _ => {}
-        }
-    }
-    out.replace("  ", " ").trim().to_string()
-}

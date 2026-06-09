@@ -5,12 +5,15 @@
 //! The SDK is the only layer that knows secrets — the front-ends never re-implement
 //! signing or crypto.
 
+pub mod actions;
 pub mod api;
 pub mod config;
 pub mod d1;
 pub mod e2ee;
 pub mod error;
+pub mod federation;
 pub mod model;
+pub mod platform;
 pub mod signer;
 pub mod store;
 

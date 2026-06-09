@@ -124,6 +124,9 @@ impl Config {
         let text = toml::to_string_pretty(self)
             .map_err(|e| Error::Config(format!("serializing config: {e}")))?;
         std::fs::write(&path, text)?;
+        // config.toml holds the Cloudflare D1 API token — make it owner-only so other
+        // users on a shared machine can't read it.
+        restrict_permissions(&path)?;
         Ok(())
     }
 
@@ -184,4 +187,34 @@ impl Config {
         std::fs::read_to_string(path)
             .map_err(|e| Error::Config(format!("reading private key {}: {e}", path.display())))
     }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn restrict_permissions_makes_file_owner_only() {
+        let p = std::env::temp_dir().join(format!("dais-perm-{}.tmp", std::process::id()));
+        std::fs::write(&p, "api_token = \"secret\"").unwrap();
+        // Start world-readable, then restrict.
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        restrict_permissions(&p).unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "config must be owner-only (holds the D1 token)");
+        let _ = std::fs::remove_file(&p);
+    }
+}
+
+/// Restrict a file to owner read/write (0600) on Unix. No-op elsewhere.
+fn restrict_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(path, perms)?;
+    }
+    Ok(())
 }

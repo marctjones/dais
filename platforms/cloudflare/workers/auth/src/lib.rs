@@ -33,6 +33,20 @@ struct ValidateResponse {
     username: Option<String>,
 }
 
+/// Constant-time byte-slice equality — no early exit on first mismatch, so compare
+/// timing doesn't reveal how many leading bytes matched. (Length difference is not
+/// hidden, but password length is not the secret.)
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
@@ -76,8 +90,13 @@ async fn handle_login(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
             String::new()
         });
 
-    // Verify password (in production, use password hashing!)
-    if body.password != expected_password {
+    // Verify password with a constant-time comparison so equality timing can't leak
+    // the secret (#sec S3). NOTE: still a single shared secret with no hashing or
+    // rate limiting — those need infra (stored hash, KV counter) and are tracked as
+    // follow-ups; this closes the timing side-channel now.
+    if expected_password.is_empty()
+        || !constant_time_eq(body.password.as_bytes(), expected_password.as_bytes())
+    {
         return Response::from_json(&LoginResponse {
             success: false,
             token: None,
