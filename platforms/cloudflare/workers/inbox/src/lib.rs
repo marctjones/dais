@@ -151,13 +151,21 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
     let actor_id = activity["actor"].as_str().unwrap_or("");
     worker::console_log!("Verifying signature from actor: {}", actor_id);
 
-    // Verify digest if present
+    // Verify digest if present. NOTE: verify_digest returns Ok(false) on a MISMATCH
+    // (it only errs on internal failure), so we must reject both the false and error
+    // cases — an `if let Err` alone would let a tampered body through. (#sec S1)
     if let Some(digest_header) = headers_map.get("digest") {
-        if let Err(e) = dais_core::activitypub::verify_digest(&body, digest_header) {
-            worker::console_log!("Digest verification failed: {}", e);
-            return Response::error("Invalid digest", 400);
+        match dais_core::activitypub::verify_digest(&body, digest_header) {
+            Ok(true) => worker::console_log!("✓ Digest verified"),
+            Ok(false) => {
+                worker::console_log!("✗ Digest mismatch — body does not match Digest header");
+                return Response::error("Invalid digest", 400);
+            }
+            Err(e) => {
+                worker::console_log!("Digest verification error: {}", e);
+                return Response::error("Invalid digest", 400);
+            }
         }
-        worker::console_log!("✓ Digest verified");
     }
 
     // Fetch actor's public key and verify signature
@@ -189,6 +197,26 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
     }
 
     worker::console_log!("✓ Signature verified successfully");
+
+    // Replay protection (#sec S2): the Date header is part of the signed set, so a
+    // valid signature authenticates it. Reject an authenticated-but-stale request so
+    // a captured signed request can't be replayed indefinitely. A 12h tolerance
+    // (common fediverse practice) absorbs clock skew; an unparseable date fails open
+    // so we never reject legitimate-but-oddly-formatted traffic.
+    if let Some(date_str) = headers_map.get("date") {
+        match chrono::DateTime::parse_from_rfc2822(date_str) {
+            Ok(sent) => {
+                let skew = chrono::Utc::now()
+                    .signed_duration_since(sent.with_timezone(&chrono::Utc))
+                    .num_seconds();
+                if skew.abs() > 12 * 3600 {
+                    worker::console_log!("✗ Date {}s out of window — possible replay", skew);
+                    return Response::error("Request date outside acceptable window", 401);
+                }
+            }
+            Err(_) => worker::console_log!("⚠ Unparseable Date header; skipping replay check"),
+        }
+    }
 
     // Build our actor URL
     let our_actor_url = format!("https://{}/users/{}", activitypub_domain, username);
