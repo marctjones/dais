@@ -11,6 +11,10 @@ repository = "https://github.com/marctjones/dais"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Shared dais primitives — HTTP Signatures + ActivityPub types live here now, so
+# the server and the client sign/serialize identically. (docs/design/CLIENT_REDESIGN.md §2)
+dais-shared = { path = "../dais-shared" }
+
 # Async runtime
 async-trait = "0.1"
 

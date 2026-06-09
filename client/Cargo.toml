@@ -1,0 +1,36 @@
+# The dais client workspace — native CLI + TUI. Runs locally; never compiled to
+# wasm (that's core's job). Kept as its own workspace so it does NOT pull the
+# repo's 8 standalone worker crates into a shared lockfile.
+[workspace]
+resolver = "2"
+members = ["dais-client", "dais", "dais-tui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Marc T Jones <marc@dais.social>"]
+license = "MIT"
+repository = "https://github.com/marctjones/dais"
+
+[workspace.dependencies]
+dais-shared = { path = "../dais-shared" }
+dais-client = { path = "dais-client" }
+dais-tui = { path = "dais-tui" }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+# SDK
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+toml = "0.8"
+dirs = "5"
+
+# CLI + TUI
+clap = { version = "4", features = ["derive", "env"] }
+ratatui = "0.29"
+crossterm = "0.28"

@@ -1,0 +1,19 @@
+[package]
+name = "dais-client"
+description = "dais client SDK — config, local SQLite store, Cloudflare D1 HTTP API, signing + E2EE. The one brain behind the CLI and the TUI."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dais-shared.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+toml.workspace = true
+dirs.workspace = true
