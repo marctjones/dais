@@ -455,7 +455,7 @@ dais doctor
 **Runtime**: Cloudflare Workers (Rust → WebAssembly)
 **Database**: D1 (SQLite at the edge)
 **Storage**: R2 (S3-compatible object storage)
-**CLI**: Python 3.10+ with Click and Rich
+**CLI/TUI**: Rust client with `clap` and `ratatui`
 **Frontend**: Static HTML (Cloudflare Pages)
 
 ### Project Structure
@@ -473,12 +473,10 @@ dais/
 │   ├── router/          # Request routing
 │   └── landing/         # Static landing page
 │
-├── cli/                 # Python CLI
-│   ├── dais_cli/        # CLI implementation
-│   │   ├── commands/    # CLI commands
-│   │   ├── tui/         # Terminal UI
-│   │   └── config.py    # Configuration management
-│   └── migrations/      # Database migrations
+├── client/              # Rust CLI + TUI client
+│   └── src/             # CLI, TUI, D1 helpers, E2EE
+├── cli/                 # Database migrations
+│   └── migrations/      # Schema history
 │
 └── scripts/             # Development scripts
     ├── dev-start.sh     # Start local dev environment
