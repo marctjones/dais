@@ -85,13 +85,24 @@ pub fn print_posts(posts: &[D1Post]) {
 
     for post in posts {
         println!(
-            "{} [{} / {}]",
+            "{} [{} / {}{}]",
             post.published_at.as_deref().unwrap_or("unknown time"),
             post.visibility.as_deref().unwrap_or("unknown"),
-            post.protocol.as_deref().unwrap_or("activitypub")
+            post.protocol.as_deref().unwrap_or("activitypub"),
+            post.encrypted_message
+                .as_ref()
+                .map(|_| " / encrypted")
+                .unwrap_or("")
         );
         println!("{}", post.content);
         println!("id={}", post.id);
+        if let Some(reply_to) = post
+            .in_reply_to
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("reply_to={reply_to}");
+        }
         if let Some(uri) = &post.atproto_uri {
             if !uri.is_empty() {
                 println!("atproto={uri}");
@@ -132,10 +143,14 @@ pub fn print_timeline(posts: &[D1TimelinePost]) {
             .or(post.actor_username.as_deref())
             .unwrap_or(&post.actor_id);
         println!(
-            "{} [{} / {}]",
+            "{} [{} / {}{}]",
             post.published_at.as_deref().unwrap_or("unknown time"),
             post.visibility.as_deref().unwrap_or("unknown"),
-            post.protocol.as_deref().unwrap_or("activitypub")
+            post.protocol.as_deref().unwrap_or("activitypub"),
+            post.encrypted_message
+                .as_ref()
+                .map(|_| " / encrypted")
+                .unwrap_or("")
         );
         println!("{display_name} - {}", post.actor_id);
         println!("{}", post.content);
@@ -155,7 +170,11 @@ pub fn print_friends(friends: &[D1Friend]) {
 
     for friend in friends {
         println!("{}", friend.friend_actor_id);
-        if let Some(inbox) = friend.friend_inbox.as_deref().filter(|value| !value.is_empty()) {
+        if let Some(inbox) = friend
+            .friend_inbox
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
             println!("inbox={inbox}");
         }
         if let Some(shared) = friend

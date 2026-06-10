@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct D1Post {
     pub id: String,
@@ -13,9 +14,12 @@ pub struct D1Post {
     pub visibility: Option<String>,
     pub protocol: Option<String>,
     pub published_at: Option<String>,
+    pub in_reply_to: Option<String>,
     pub atproto_uri: Option<String>,
+    pub encrypted_message: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct D1User {
     pub actor_id: String,
@@ -24,6 +28,7 @@ pub struct D1User {
     pub created_at: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct D1TimelinePost {
     pub object_id: String,
@@ -35,8 +40,72 @@ pub struct D1TimelinePost {
     pub published_at: Option<String>,
     pub updated_at: Option<String>,
     pub protocol: Option<String>,
+    pub encrypted_message: Option<String>,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1FollowerRow {
+    pub id: String,
+    pub actor_id: String,
+    pub follower_actor_id: String,
+    pub follower_inbox: String,
+    pub follower_shared_inbox: Option<String>,
+    pub status: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1FollowingRow {
+    pub id: String,
+    pub actor_id: String,
+    pub target_actor_id: String,
+    pub target_inbox: String,
+    pub status: String,
+    pub created_at: Option<String>,
+    pub accepted_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1Notification {
+    pub id: String,
+    pub kind: String,
+    pub actor_id: String,
+    pub actor_username: Option<String>,
+    pub actor_display_name: Option<String>,
+    pub actor_avatar_url: Option<String>,
+    pub post_id: Option<String>,
+    pub activity_id: Option<String>,
+    pub content: Option<String>,
+    pub read: Option<bool>,
+    pub created_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1DirectMessage {
+    pub id: String,
+    pub conversation_id: String,
+    pub sender_id: String,
+    pub content: String,
+    pub published_at: String,
+    pub created_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1Block {
+    pub id: String,
+    pub actor_id: String,
+    pub blocked_domain: Option<String>,
+    pub reason: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct D1Friend {
     pub friend_actor_id: String,
@@ -61,7 +130,7 @@ pub struct ServerStats {
     pub dual_protocol_posts: u64,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct D1Client {
     remote: bool,
     worker_dir: PathBuf,
@@ -85,13 +154,47 @@ impl D1Client {
         let sql = format!(
             r#"
             SELECT id, content, visibility, COALESCE(protocol, 'activitypub') AS protocol,
-                   published_at, atproto_uri
+                   published_at, atproto_uri, encrypted_message, in_reply_to
             FROM posts
             ORDER BY published_at DESC
             LIMIT {limit}
             "#
         );
         self.query(&sql)
+    }
+
+    pub async fn create_post(
+        &self,
+        id: &str,
+        actor_id: &str,
+        content: &str,
+        visibility: &str,
+        published_at: &str,
+        in_reply_to: Option<&str>,
+    ) -> Result<()> {
+        let content_html = escape_html(content);
+        let in_reply_to = in_reply_to
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let sql = format!(
+            r#"
+            INSERT INTO posts (
+                id, actor_id, content, content_html, visibility,
+                published_at, protocol, in_reply_to
+            ) VALUES (
+                {id}, {actor_id}, {content}, {content_html},
+                {visibility}, {published_at}, 'activitypub', {in_reply_to}
+            )
+            "#,
+            id = sql_literal(id),
+            actor_id = sql_literal(actor_id),
+            content = sql_literal(content),
+            content_html = sql_literal(&content_html),
+            visibility = sql_literal(visibility),
+            published_at = sql_literal(published_at),
+            in_reply_to = in_reply_to,
+        );
+        self.execute(&sql)
     }
 
     pub async fn create_encrypted_post(
@@ -102,15 +205,19 @@ impl D1Client {
         visibility: &str,
         published_at: &str,
         encrypted_message_json: &str,
+        in_reply_to: Option<&str>,
     ) -> Result<()> {
+        let in_reply_to = in_reply_to
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
         let sql = format!(
             r#"
             INSERT INTO posts (
                 id, actor_id, content, content_html, visibility,
-                published_at, protocol, encrypted_message
+                published_at, protocol, encrypted_message, in_reply_to
             ) VALUES (
                 {id}, {actor_id}, {fallback_content}, {fallback_content},
-                {visibility}, {published_at}, 'activitypub', {encrypted_message_json}
+                {visibility}, {published_at}, 'activitypub', {encrypted_message_json}, {in_reply_to}
             )
             "#,
             id = sql_literal(id),
@@ -119,6 +226,7 @@ impl D1Client {
             visibility = sql_literal(visibility),
             published_at = sql_literal(published_at),
             encrypted_message_json = sql_literal(encrypted_message_json),
+            in_reply_to = in_reply_to,
         );
         self.execute(&sql)
     }
@@ -129,7 +237,7 @@ impl D1Client {
         let sql = format!(
             r#"
             SELECT id, content, visibility, COALESCE(protocol, 'activitypub') AS protocol,
-                   published_at, atproto_uri
+                   published_at, atproto_uri, encrypted_message, in_reply_to
             FROM posts
             WHERE content LIKE '%{needle}%'
             ORDER BY published_at DESC
@@ -171,7 +279,7 @@ impl D1Client {
         let sql = format!(
             r#"
             SELECT object_id, actor_id, actor_username, actor_display_name,
-                   content, visibility, published_at, updated_at, protocol
+                   content, visibility, published_at, updated_at, protocol, encrypted_message
             FROM timeline_posts
             WHERE deleted_at IS NULL {before_filter}
             ORDER BY published_at DESC
@@ -179,6 +287,221 @@ impl D1Client {
             "#
         );
         self.query(&sql)
+    }
+
+    pub async fn list_followers(&self, limit: u16) -> Result<Vec<D1FollowerRow>> {
+        let limit = clamp_limit(limit);
+        let sql = format!(
+            r#"
+            SELECT id, actor_id, follower_actor_id, follower_inbox, follower_shared_inbox,
+                   status, created_at, updated_at
+            FROM followers
+            ORDER BY created_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn create_follower_deliveries(
+        &self,
+        post_id: &str,
+        _actor_id: &str,
+        _activity_json: &str,
+    ) -> Result<Vec<String>> {
+        let followers = self.list_followers(500).await?;
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let mut delivery_ids = Vec::new();
+
+        for follower in followers.into_iter().filter(|row| row.status == "approved") {
+            let delivery_id = format!("delivery-{}", uuid_like());
+            let sql = format!(
+                r#"
+                INSERT INTO deliveries (
+                    id, post_id, target_type, target_url, protocol,
+                    status, retry_count, created_at
+                ) VALUES (
+                    {id}, {post_id}, 'inbox', {target_url}, 'activitypub',
+                    'queued', 0, {created_at}
+                )
+                "#,
+                id = sql_literal(&delivery_id),
+                post_id = sql_literal(post_id),
+                target_url = sql_literal(&follower.follower_inbox),
+                created_at = sql_literal(&created_at),
+            );
+            self.execute(&sql)?;
+            delivery_ids.push(delivery_id);
+        }
+
+        Ok(delivery_ids)
+    }
+
+    pub async fn create_direct_deliveries(
+        &self,
+        post_id: &str,
+        _actor_id: &str,
+        _activity_json: &str,
+        recipients: &[String],
+    ) -> Result<Vec<String>> {
+        let followers = self.list_followers(500).await?;
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let mut delivery_ids = Vec::new();
+        let mut missing = Vec::new();
+        let approved: Vec<&D1FollowerRow> = recipients
+            .iter()
+            .filter_map(|recipient| {
+                followers
+                    .iter()
+                    .find(|row| row.status == "approved" && row.follower_actor_id == *recipient)
+            })
+            .collect();
+
+        for recipient in recipients {
+            if followers
+                .iter()
+                .any(|row| row.status == "approved" && row.follower_actor_id == *recipient)
+            {
+                continue;
+            }
+
+            missing.push(recipient.clone());
+        }
+
+        if !missing.is_empty() {
+            anyhow::bail!(
+                "direct recipients must be approved followers with known inboxes: {}",
+                missing.join(", ")
+            );
+        }
+
+        for follower in approved {
+            let delivery_id = format!("delivery-{}", uuid_like());
+            let sql = format!(
+                r#"
+                INSERT INTO deliveries (
+                    id, post_id, target_type, target_url, protocol,
+                    status, retry_count, created_at
+                ) VALUES (
+                    {id}, {post_id}, 'inbox', {target_url}, 'activitypub',
+                    'queued', 0, {created_at}
+                )
+                "#,
+                id = sql_literal(&delivery_id),
+                post_id = sql_literal(post_id),
+                target_url = sql_literal(&follower.follower_inbox),
+                created_at = sql_literal(&created_at),
+            );
+            self.execute(&sql)?;
+            delivery_ids.push(delivery_id);
+        }
+
+        Ok(delivery_ids)
+    }
+
+    pub async fn list_following(&self, limit: u16) -> Result<Vec<D1FollowingRow>> {
+        let limit = clamp_limit(limit);
+        let sql = format!(
+            r#"
+            SELECT id, actor_id, target_actor_id, target_inbox,
+                   status, created_at, accepted_at
+            FROM following
+            ORDER BY created_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn list_notifications(&self, limit: u16) -> Result<Vec<D1Notification>> {
+        let limit = clamp_limit(limit);
+        let sql = format!(
+            r#"
+            SELECT id, type AS kind, actor_id, actor_username, actor_display_name,
+                   actor_avatar_url, post_id, activity_id, content, read, created_at
+            FROM notifications
+            ORDER BY created_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn list_direct_messages(&self, limit: u16) -> Result<Vec<D1DirectMessage>> {
+        let limit = clamp_limit(limit);
+        let sql = format!(
+            r#"
+            SELECT id, conversation_id, sender_id, content, published_at, created_at
+            FROM direct_messages
+            ORDER BY published_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn list_blocks(&self, limit: u16) -> Result<Vec<D1Block>> {
+        let limit = clamp_limit(limit);
+        let sql = format!(
+            r#"
+            SELECT id, actor_id, blocked_domain, reason, created_at
+            FROM blocks
+            ORDER BY created_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn approve_follower(&self, actor_id: &str, follower_actor_id: &str) -> Result<()> {
+        let sql = format!(
+            "UPDATE followers SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE actor_id = {actor_id} AND follower_actor_id = {follower_actor_id}",
+            actor_id = sql_literal(actor_id),
+            follower_actor_id = sql_literal(follower_actor_id),
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn reject_follower(&self, actor_id: &str, follower_actor_id: &str) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM followers WHERE actor_id = {actor_id} AND follower_actor_id = {follower_actor_id}",
+            actor_id = sql_literal(actor_id),
+            follower_actor_id = sql_literal(follower_actor_id),
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn mark_notification_read(&self, id: &str) -> Result<()> {
+        let sql = format!(
+            "UPDATE notifications SET read = 1 WHERE id = {id}",
+            id = sql_literal(id)
+        );
+        self.execute(&sql)
+    }
+
+    #[allow(dead_code)]
+    pub async fn block_actor(&self, actor_id: &str, reason: Option<&str>) -> Result<()> {
+        let reason_sql = reason
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let sql = format!(
+            r#"
+            INSERT OR REPLACE INTO blocks (id, actor_id, reason, created_at)
+            VALUES ({id}, {actor_id}, {reason}, CURRENT_TIMESTAMP)
+            "#,
+            id = sql_literal(actor_id),
+            actor_id = sql_literal(actor_id),
+            reason = reason_sql,
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn unblock_actor(&self, actor_id: &str) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM blocks WHERE actor_id = {actor_id}",
+            actor_id = sql_literal(actor_id)
+        );
+        self.execute(&sql)
     }
 
     pub async fn list_friends(&self, actor: &str, limit: u16) -> Result<Vec<D1Friend>> {
@@ -317,6 +640,23 @@ fn sql_like_escape(value: &str) -> String {
 
 fn sql_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+fn uuid_like() -> String {
+    use rand::RngCore;
+
+    let mut bytes = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn wrangler_bin() -> Result<PathBuf> {

@@ -88,8 +88,8 @@ pub fn decrypt_message(
 ) -> Result<String> {
     validate_envelope(encrypted)?;
     let recipient = select_recipient(encrypted, my_key_id)?;
-    let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem)
-        .context("could not parse private key")?;
+    let private_key =
+        RsaPrivateKey::from_pkcs8_pem(private_key_pem).context("could not parse private key")?;
     let cek = private_key
         .decrypt(
             Oaep::new::<Sha256>(),
@@ -99,7 +99,9 @@ pub fn decrypt_message(
         )
         .context("could not unwrap content key")?;
 
-    let iv = STANDARD.decode(&encrypted.iv).context("iv is not valid base64")?;
+    let iv = STANDARD
+        .decode(&encrypted.iv)
+        .context("iv is not valid base64")?;
     let ciphertext = STANDARD
         .decode(&encrypted.ciphertext)
         .context("ciphertext is not valid base64")?;
@@ -135,10 +137,7 @@ This message was sent encrypted, so your current client can’t display it.<br>\
 }
 
 pub fn encrypted_message_from_json(value: Value) -> Result<EncryptedMessage> {
-    let encrypted = value
-        .get("encryptedMessage")
-        .cloned()
-        .unwrap_or(value);
+    let encrypted = value.get("encryptedMessage").cloned().unwrap_or(value);
     serde_json::from_value(encrypted).context("could not decode encryptedMessage")
 }
 

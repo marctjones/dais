@@ -13,7 +13,7 @@ pub struct BlueskyConfig {
     pub appview: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ConfigStore {
     root: PathBuf,
 }

@@ -29,9 +29,14 @@ pub enum Command {
     /// Manage private-mode friend relationships.
     #[command(subcommand)]
     Friends(FriendsCommand),
+    /// Inspect local ActivityPub followers.
+    #[command(subcommand)]
+    Followers(FollowersCommand),
     /// End-to-end encryption helpers for dais encryptedMessage v1.
     #[command(subcommand)]
     E2ee(E2eeCommand),
+    /// Launch the Rust terminal UI.
+    Tui(TuiArgs),
 }
 
 #[derive(Subcommand)]
@@ -120,15 +125,31 @@ pub struct CreatePostArgs {
     pub text: String,
     #[arg(long, value_enum, default_value_t = Visibility::Followers)]
     pub visibility: Visibility,
+    /// Shortcut for `--visibility public`.
+    #[arg(long)]
+    pub public: bool,
     #[arg(long, value_enum, default_value_t = Protocol::Both)]
     pub protocol: Protocol,
     /// End-to-end encrypt the ActivityPub post.
-    #[arg(long)]
+    #[arg(long, alias = "e2ee")]
     pub encrypt: bool,
     /// Recipient in key_id=public_key_pem_file form. Repeat for multiple recipients.
     #[arg(long = "recipient")]
     pub recipients: Vec<String>,
+    /// ActivityPub object URL this post replies to.
+    #[arg(long)]
+    pub reply_to: Option<String>,
+    /// Direct ActivityPub recipient actor URL. Repeat for multiple recipients.
+    #[arg(long = "to")]
+    pub to: Vec<String>,
     /// Store/read against production D1 for ActivityPub encrypted posts.
+    #[arg(long)]
+    pub remote: bool,
+}
+
+#[derive(Args)]
+pub struct TuiArgs {
+    /// Read from production D1 instead of local development D1.
     #[arg(long)]
     pub remote: bool,
 }
@@ -178,6 +199,17 @@ pub enum FriendsCommand {
         /// Local actor URL. Defaults to the production dais actor.
         #[arg(long, default_value = "https://social.dais.social/users/social")]
         actor: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum FollowersCommand {
+    /// List local ActivityPub followers.
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: u16,
+        #[arg(long)]
+        remote: bool,
     },
 }
 
