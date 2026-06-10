@@ -105,6 +105,7 @@ require_wrangler() {
 
 confirm_production() {
   [ "$ENVIRONMENT" = "production" ] || return 0
+  [ "$ACTION" = "build" ] && return 0
   [ "$DRY_RUN" = "true" ] && return 0
   [ "$ASSUME_YES" = "true" ] && return 0
   warn "About to deploy to PRODUCTION: ${TARGETS[*]}"

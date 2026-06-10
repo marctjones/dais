@@ -23,6 +23,7 @@ pub use traits::{
 
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Main entry point for the dais core library
 ///
@@ -112,10 +113,57 @@ impl DaisCore {
         ).await
     }
 
-    /// Create a new post
+    /// Create a new local ActivityPub post.
+    ///
+    /// Empty visibility uses instance_settings.default_visibility and falls back
+    /// to followers-only if settings are unavailable.
     pub async fn create_post(&self, content: String, visibility: String) -> CoreResult<String> {
-        // TODO: Implement in activitypub module
-        Err(CoreError::Internal("Not implemented".to_string()))
+        let configured_default = self.default_post_visibility().await;
+        let visibility = resolve_post_visibility(&visibility, Some(configured_default.as_str()))?;
+        let local_post_id = utils::generate_id();
+        let post_id = utils::post_url(
+            &self.config.activitypub_domain,
+            &self.config.username,
+            &local_post_id,
+        );
+        let actor_id = utils::actor_url(&self.config.activitypub_domain, &self.config.username);
+        let published_at = utils::now_rfc3339();
+        let content_html = utils::sanitize_html(&content);
+
+        let insert_with_protocol = r#"
+            INSERT INTO posts (
+                id, actor_id, content, content_html, visibility, published_at, protocol
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, 'activitypub'
+            )
+        "#;
+
+        let params = [
+            Value::String(post_id.clone()),
+            Value::String(actor_id.clone()),
+            Value::String(content.clone()),
+            Value::String(content_html.clone()),
+            Value::String(visibility.clone()),
+            Value::String(published_at.clone()),
+        ];
+
+        if let Err(err) = self.db.execute(insert_with_protocol, &params).await {
+            let insert_legacy = r#"
+                INSERT INTO posts (
+                    id, actor_id, content, content_html, visibility, published_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6
+                )
+            "#;
+            self.db.execute(insert_legacy, &params).await.map_err(|legacy_err| {
+                CoreError::Platform(crate::traits::PlatformError::Database(format!(
+                    "post insert failed: {}; legacy insert failed: {}",
+                    err, legacy_err
+                )))
+            })?;
+        }
+
+        Ok(post_id)
     }
 
     /// Get actor profile
@@ -206,6 +254,45 @@ impl DaisCore {
         // TODO: Implement in atproto module
         Err(CoreError::Internal("Not implemented".to_string()))
     }
+
+    async fn default_post_visibility(&self) -> String {
+        let query = "SELECT default_visibility FROM instance_settings WHERE id = 1";
+        match self.db.execute(query, &[]).await {
+            Ok(rows) => rows
+                .first()
+                .and_then(|row| row.get("default_visibility"))
+                .and_then(|value| value.as_str())
+                .filter(|visibility| is_valid_post_visibility(visibility))
+                .unwrap_or("followers")
+                .to_string(),
+            Err(_) => "followers".to_string(),
+        }
+    }
+}
+
+fn resolve_post_visibility(requested: &str, configured_default: Option<&str>) -> CoreResult<String> {
+    let requested = requested.trim();
+    if !requested.is_empty() {
+        return if is_valid_post_visibility(requested) {
+            Ok(requested.to_string())
+        } else {
+            Err(CoreError::InvalidActivity(format!(
+                "Invalid post visibility '{}'",
+                requested
+            )))
+        };
+    }
+
+    let configured = configured_default.unwrap_or("followers").trim();
+    if is_valid_post_visibility(configured) {
+        Ok(configured.to_string())
+    } else {
+        Ok("followers".to_string())
+    }
+}
+
+fn is_valid_post_visibility(visibility: &str) -> bool {
+    matches!(visibility, "public" | "unlisted" | "followers" | "direct")
 }
 
 // Non-WASM exports for Rust-to-Rust usage
@@ -251,5 +338,34 @@ mod tests {
 
         assert_eq!(config.activitypub_domain, deserialized.activitypub_domain);
         assert_eq!(config.username, deserialized.username);
+    }
+
+    #[test]
+    fn test_resolve_post_visibility_uses_private_default() {
+        assert_eq!(
+            resolve_post_visibility("", Some("followers")).unwrap(),
+            "followers"
+        );
+    }
+
+    #[test]
+    fn test_resolve_post_visibility_honors_explicit_public() {
+        assert_eq!(
+            resolve_post_visibility("public", Some("followers")).unwrap(),
+            "public"
+        );
+    }
+
+    #[test]
+    fn test_resolve_post_visibility_fails_closed_for_bad_default() {
+        assert_eq!(
+            resolve_post_visibility("", Some("not-valid")).unwrap(),
+            "followers"
+        );
+    }
+
+    #[test]
+    fn test_resolve_post_visibility_rejects_bad_explicit_value() {
+        assert!(resolve_post_visibility("not-valid", Some("followers")).is_err());
     }
 }
