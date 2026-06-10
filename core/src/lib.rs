@@ -201,6 +201,15 @@ impl DaisCore {
         activitypub::get_post_interactions(&*self.db, &post_id).await
     }
 
+    /// Get the local home timeline built from signed inbox delivery.
+    pub async fn get_home_timeline(
+        &self,
+        limit: u32,
+        before: Option<String>,
+    ) -> CoreResult<Vec<activitypub::TimelinePost>> {
+        activitypub::get_home_timeline(&*self.db, limit, before.as_deref()).await
+    }
+
     /// Deliver activity to a remote inbox
     pub async fn deliver_to_inbox(
         &self,

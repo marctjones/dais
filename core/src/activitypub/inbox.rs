@@ -241,7 +241,199 @@ pub async fn handle_create(
         return handle_reply(db, http, activity, in_reply_to, moderator).await;
     }
 
+    if is_accepted_following(db, &activity.actor).await? {
+        return ingest_timeline_post(db, http, activity).await;
+    }
+
     Ok(())
+}
+
+/// Handle Update activity for timeline Notes from accepted follows.
+pub async fn handle_update(
+    db: &dyn DatabaseProvider,
+    activity: &Activity,
+) -> CoreResult<()> {
+    let Some(object) = activity.object.as_ref() else {
+        return Ok(());
+    };
+    if object.get("type").and_then(|v| v.as_str()) != Some("Note") {
+        return Ok(());
+    }
+    if !is_accepted_following(db, &activity.actor).await? {
+        return Ok(());
+    }
+
+    let object_id = note_object_id(activity)?;
+    let content = object.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    let updated_at = object
+        .get("updated")
+        .and_then(|v| v.as_str())
+        .or_else(|| activity.published.as_deref())
+        .map(|value| value.to_string())
+        .unwrap_or_else(crate::utils::now_rfc3339);
+    let raw_object = serde_json::to_string(object)?;
+
+    let query = r#"
+        UPDATE timeline_posts
+        SET content = ?1,
+            content_html = ?2,
+            updated_at = ?3,
+            raw_object = ?4,
+            deleted_at = NULL
+        WHERE object_id = ?5
+    "#;
+
+    db.execute(query, &[
+        Value::String(content.to_string()),
+        Value::String(crate::utils::sanitize_html(content)),
+        Value::String(updated_at),
+        Value::String(raw_object),
+        Value::String(object_id),
+    ]).await?;
+
+    Ok(())
+}
+
+/// Handle Delete activity for timeline Notes from accepted follows.
+pub async fn handle_delete(
+    db: &dyn DatabaseProvider,
+    activity: &Activity,
+) -> CoreResult<()> {
+    if !is_accepted_following(db, &activity.actor).await? {
+        return Ok(());
+    }
+
+    let object_id = match activity.object.as_ref() {
+        Some(Value::String(id)) => id.to_string(),
+        Some(object) => object
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&activity.id)
+            .to_string(),
+        None => return Ok(()),
+    };
+
+    let deleted_at = activity
+        .published
+        .clone()
+        .unwrap_or_else(crate::utils::now_rfc3339);
+
+    let query = "UPDATE timeline_posts SET deleted_at = ?1 WHERE object_id = ?2";
+    db.execute(query, &[
+        Value::String(deleted_at),
+        Value::String(object_id),
+    ]).await?;
+
+    Ok(())
+}
+
+async fn is_accepted_following(
+    db: &dyn DatabaseProvider,
+    actor_id: &str,
+) -> CoreResult<bool> {
+    let query = "SELECT COUNT(*) AS count FROM following WHERE target_actor_id = ?1 AND status = 'accepted'";
+    let rows = db.execute(query, &[Value::String(actor_id.to_string())]).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("count"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) > 0)
+}
+
+async fn ingest_timeline_post(
+    db: &dyn DatabaseProvider,
+    http: &dyn HttpProvider,
+    activity: &Activity,
+) -> CoreResult<()> {
+    let object = activity.object.as_ref().ok_or_else(|| CoreError::InvalidActivity("Missing object".to_string()))?;
+    let object_id = note_object_id(activity)?;
+    let content = object.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    let published_at = object
+        .get("published")
+        .and_then(|v| v.as_str())
+        .or_else(|| activity.published.as_deref())
+        .map(|value| value.to_string())
+        .unwrap_or_else(crate::utils::now_rfc3339);
+    let visibility = infer_note_visibility(object);
+    let in_reply_to = object.get("inReplyTo").and_then(|v| v.as_str());
+    let raw_object = serde_json::to_string(object)?;
+    let raw_activity = serde_json::to_string(activity)?;
+
+    let (actor_username, actor_display_name, actor_avatar_url) =
+        extract_actor_info(http, &activity.actor).await.unwrap_or_else(|_| {
+            ("unknown".to_string(), "Unknown".to_string(), "".to_string())
+        });
+
+    let query = r#"
+        INSERT INTO timeline_posts (
+            id, object_id, actor_id, actor_username, actor_display_name,
+            actor_avatar_url, content, content_html, visibility, in_reply_to,
+            published_at, raw_object, raw_activity, protocol
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'activitypub')
+        ON CONFLICT(object_id) DO UPDATE SET
+            actor_id = excluded.actor_id,
+            actor_username = excluded.actor_username,
+            actor_display_name = excluded.actor_display_name,
+            actor_avatar_url = excluded.actor_avatar_url,
+            content = excluded.content,
+            content_html = excluded.content_html,
+            visibility = excluded.visibility,
+            in_reply_to = excluded.in_reply_to,
+            published_at = excluded.published_at,
+            raw_object = excluded.raw_object,
+            raw_activity = excluded.raw_activity,
+            deleted_at = NULL
+    "#;
+
+    db.execute(query, &[
+        Value::String(crate::utils::generate_uuid()),
+        Value::String(object_id),
+        Value::String(activity.actor.clone()),
+        Value::String(actor_username),
+        Value::String(actor_display_name),
+        Value::String(actor_avatar_url),
+        Value::String(content.to_string()),
+        Value::String(crate::utils::sanitize_html(content)),
+        Value::String(visibility),
+        in_reply_to.map(|s| Value::String(s.to_string())).unwrap_or(Value::Null),
+        Value::String(published_at),
+        Value::String(raw_object),
+        Value::String(raw_activity),
+    ]).await?;
+
+    Ok(())
+}
+
+fn note_object_id(activity: &Activity) -> CoreResult<String> {
+    activity
+        .object
+        .as_ref()
+        .and_then(|object| object.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|id| id.to_string())
+        .ok_or_else(|| CoreError::InvalidActivity("Missing Note id".to_string()))
+}
+
+fn infer_note_visibility(object: &Value) -> String {
+    let has_public = |field: &str| {
+        object
+            .get(field)
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values.iter().any(|value| {
+                    value.as_str() == Some("https://www.w3.org/ns/activitystreams#Public")
+                })
+            })
+            .unwrap_or(false)
+    };
+
+    if has_public("to") {
+        "public".to_string()
+    } else if has_public("cc") {
+        "unlisted".to_string()
+    } else {
+        "followers".to_string()
+    }
 }
 
 /// Handle direct message
@@ -543,6 +735,8 @@ pub async fn process_inbox_activity(
         "Follow" => handle_follow(db, &activity, our_actor_url).await?,
         "Undo" => handle_undo(db, &activity).await?,
         "Create" => handle_create(db, http, &activity, our_actor_url, moderator).await?,
+        "Update" => handle_update(db, &activity).await?,
+        "Delete" => handle_delete(db, &activity).await?,
         "Like" => handle_like(db, http, &activity).await?,
         "Announce" => handle_announce(db, http, &activity).await?,
         "Accept" => handle_accept(db, &activity).await?,

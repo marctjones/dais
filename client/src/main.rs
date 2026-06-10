@@ -224,15 +224,34 @@ async fn handle_stats(args: cli::StatsArgs) -> Result<()> {
 
 async fn handle_timeline(command: cli::TopLevelTimelineCommand, store: &ConfigStore) -> Result<()> {
     match command {
-        cli::TopLevelTimelineCommand::Home { limit, protocol } => {
+        cli::TopLevelTimelineCommand::Home {
+            limit,
+            protocol,
+            remote,
+            before,
+        } => {
             match protocol {
                 Protocol::Atproto => {
                     let mut client = atproto::AtprotoClient::from_config(&store.load_bluesky()?)?;
                     let feed = client.get_timeline(limit).await?;
                     output::print_feed(&feed.feed);
                 }
-                Protocol::ActivityPub | Protocol::Both => {
-                    println!("Home timeline for ActivityPub depends on private-mode inbox ingestion (#63)");
+                Protocol::ActivityPub => {
+                    let db = D1Client::new(remote)?;
+                    let posts = db.home_timeline(limit, before.as_deref()).await?;
+                    output::print_timeline(&posts);
+                }
+                Protocol::Both => {
+                    let db = D1Client::new(remote)?;
+                    let posts = db.home_timeline(limit, before.as_deref()).await?;
+                    output::print_timeline(&posts);
+
+                    if posts.is_empty() {
+                        let mut client =
+                            atproto::AtprotoClient::from_config(&store.load_bluesky()?)?;
+                        let feed = client.get_timeline(limit).await?;
+                        output::print_feed(&feed.feed);
+                    }
                 }
             }
         }

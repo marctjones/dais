@@ -1,5 +1,5 @@
 use crate::atproto::{FeedItem, Profile};
-use crate::d1::{D1Post, D1User, ServerStats};
+use crate::d1::{D1Post, D1TimelinePost, D1User, ServerStats};
 
 pub fn print_profile(profile: &Profile) {
     println!("@{}", profile.handle);
@@ -115,6 +115,35 @@ pub fn print_users(users: &[D1User]) {
             user.status,
             user.created_at.as_deref().unwrap_or("")
         );
+    }
+}
+
+pub fn print_timeline(posts: &[D1TimelinePost]) {
+    if posts.is_empty() {
+        println!("No timeline posts found");
+        return;
+    }
+
+    for post in posts {
+        let display_name = post
+            .actor_display_name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .or(post.actor_username.as_deref())
+            .unwrap_or(&post.actor_id);
+        println!(
+            "{} [{} / {}]",
+            post.published_at.as_deref().unwrap_or("unknown time"),
+            post.visibility.as_deref().unwrap_or("unknown"),
+            post.protocol.as_deref().unwrap_or("activitypub")
+        );
+        println!("{display_name} - {}", post.actor_id);
+        println!("{}", post.content);
+        println!("id={}", post.object_id);
+        if let Some(updated_at) = post.updated_at.as_deref().filter(|value| !value.is_empty()) {
+            println!("updated={updated_at}");
+        }
+        println!();
     }
 }
 

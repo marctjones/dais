@@ -24,6 +24,19 @@ pub struct D1User {
     pub created_at: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1TimelinePost {
+    pub object_id: String,
+    pub actor_id: String,
+    pub actor_username: Option<String>,
+    pub actor_display_name: Option<String>,
+    pub content: String,
+    pub visibility: Option<String>,
+    pub published_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub protocol: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ServerStats {
     pub followers_total: u64,
@@ -96,10 +109,33 @@ impl D1Client {
             FROM followers
             WHERE follower_actor_id LIKE '%{needle}%'
             UNION ALL
-            SELECT following_actor_id AS actor_id, 'following' AS relation, status, created_at
+            SELECT target_actor_id AS actor_id, 'following' AS relation, status, created_at
             FROM following
-            WHERE following_actor_id LIKE '%{needle}%'
+            WHERE target_actor_id LIKE '%{needle}%'
             ORDER BY created_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn home_timeline(
+        &self,
+        limit: u16,
+        before: Option<&str>,
+    ) -> Result<Vec<D1TimelinePost>> {
+        let limit = clamp_limit(limit);
+        let before_filter = before
+            .map(sql_literal)
+            .map(|value| format!("AND published_at < {value}"))
+            .unwrap_or_default();
+        let sql = format!(
+            r#"
+            SELECT object_id, actor_id, actor_username, actor_display_name,
+                   content, visibility, published_at, updated_at, protocol
+            FROM timeline_posts
+            WHERE deleted_at IS NULL {before_filter}
+            ORDER BY published_at DESC
             LIMIT {limit}
             "#
         );
@@ -218,6 +254,10 @@ fn clamp_limit(limit: u16) -> u16 {
 
 fn sql_like_escape(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+fn sql_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn wrangler_bin() -> Result<PathBuf> {

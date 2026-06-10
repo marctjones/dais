@@ -11,6 +11,7 @@ pub mod inbox;
 pub mod outbox;
 pub mod delivery;
 pub mod signatures;
+pub mod timeline;
 
 pub use types::*;
 pub use actor::*;
@@ -30,3 +31,4 @@ pub use delivery::{
     get_follower_inboxes, deliver_to_inbox, create_follower_deliveries,
     update_delivery_status, DeliveryJob,
 };
+pub use timeline::{get_home_timeline, TimelinePost};

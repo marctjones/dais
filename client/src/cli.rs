@@ -160,5 +160,9 @@ pub enum TopLevelTimelineCommand {
         limit: u16,
         #[arg(long, value_enum, default_value_t = Protocol::Both)]
         protocol: Protocol,
+        #[arg(long)]
+        remote: bool,
+        #[arg(long)]
+        before: Option<String>,
     },
 }
