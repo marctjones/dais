@@ -2,18 +2,21 @@ mod atproto;
 mod cli;
 mod config;
 mod d1;
+mod e2ee;
 mod output;
 mod routing;
 
 use anyhow::Result;
 use clap::Parser;
 use cli::{
-    BlueskyCommand, Cli, Command, FollowCommand, FriendsCommand, PostCommand, SearchCommand,
-    TimelineCommand,
+    BlueskyCommand, Cli, Command, E2eeCommand, FollowCommand, FriendsCommand, PostCommand,
+    SearchCommand, TimelineCommand,
 };
 use config::ConfigStore;
 use d1::D1Client;
 use routing::{effective_protocol, Protocol};
+use std::collections::BTreeMap;
+use std::fs;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,6 +30,7 @@ async fn main() -> Result<()> {
         Command::Stats(args) => handle_stats(args).await?,
         Command::Timeline(command) => handle_timeline(command, &store).await?,
         Command::Friends(command) => handle_friends(command).await?,
+        Command::E2ee(command) => handle_e2ee(command).await?,
     }
 
     Ok(())
@@ -221,6 +225,39 @@ async fn handle_stats(args: cli::StatsArgs) -> Result<()> {
     let db = D1Client::new(args.remote)?;
     let stats = db.stats().await?;
     output::print_server_stats(&stats, args.remote);
+    Ok(())
+}
+
+async fn handle_e2ee(command: E2eeCommand) -> Result<()> {
+    match command {
+        E2eeCommand::Encrypt(args) => {
+            let mut recipients = BTreeMap::new();
+            for recipient in args.recipients {
+                let (key_id, path) = recipient.split_once('=').ok_or_else(|| {
+                    anyhow::anyhow!("recipient must be in key_id=public_key_pem_file form")
+                })?;
+                recipients.insert(key_id.to_string(), fs::read_to_string(path)?);
+            }
+
+            let payload = e2ee::encrypted_note_payload(
+                &args.plaintext,
+                &recipients,
+                args.view_url.as_deref(),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+        E2eeCommand::Decrypt(args) => {
+            let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(args.input)?)?;
+            let encrypted = e2ee::encrypted_message_from_json(value)?;
+            let private_key = fs::read_to_string(args.private_key)?;
+            let plaintext = e2ee::decrypt_message(&encrypted, &private_key, args.key_id.as_deref())?;
+            println!("{plaintext}");
+        }
+        E2eeCommand::Fallback { view_url } => {
+            println!("{}", e2ee::fallback_content(view_url.as_deref()));
+        }
+    }
+
     Ok(())
 }
 

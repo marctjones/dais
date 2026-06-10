@@ -29,6 +29,9 @@ pub enum Command {
     /// Manage private-mode friend relationships.
     #[command(subcommand)]
     Friends(FriendsCommand),
+    /// End-to-end encryption helpers for dais encryptedMessage v1.
+    #[command(subcommand)]
+    E2ee(E2eeCommand),
 }
 
 #[derive(Subcommand)]
@@ -167,6 +170,41 @@ pub enum FriendsCommand {
         #[arg(long, default_value = "https://social.dais.social/users/social")]
         actor: String,
     },
+}
+
+#[derive(Subcommand)]
+pub enum E2eeCommand {
+    /// Encrypt plaintext and emit a Note payload with fallback content plus encryptedMessage.
+    Encrypt(EncryptArgs),
+    /// Decrypt an encryptedMessage JSON file or Note payload.
+    Decrypt(DecryptArgs),
+    /// Render the graceful fallback HTML content.
+    Fallback {
+        #[arg(long)]
+        view_url: Option<String>,
+    },
+}
+
+#[derive(Args)]
+pub struct EncryptArgs {
+    pub plaintext: String,
+    /// Recipient in key_id=public_key_pem_file form. Repeat for multiple recipients.
+    #[arg(long = "recipient", required = true)]
+    pub recipients: Vec<String>,
+    #[arg(long)]
+    pub view_url: Option<String>,
+}
+
+#[derive(Args)]
+pub struct DecryptArgs {
+    /// JSON file containing encryptedMessage or a Note payload with encryptedMessage.
+    pub input: String,
+    /// PKCS#8 PEM private key file.
+    #[arg(long)]
+    pub private_key: String,
+    /// Recipient key id to select. Optional only when the message has one recipient.
+    #[arg(long)]
+    pub key_id: Option<String>,
 }
 
 #[derive(Subcommand)]
