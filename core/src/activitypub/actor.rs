@@ -140,7 +140,7 @@ pub async fn get_actor_counts(
     };
 
     // Query for following count
-    let following_count_query = "SELECT COUNT(*) as count FROM following WHERE actor_id = ?1 AND status = 'approved'";
+    let following_count_query = "SELECT COUNT(*) as count FROM following WHERE actor_id = ?1 AND status = 'accepted'";
     let following_rows = db.execute(following_count_query, &[Value::String(actor_id.to_string())]).await?;
 
     let following_count = if !following_rows.is_empty() {
@@ -233,7 +233,7 @@ pub async fn get_following(
         let offset = (page_num.saturating_sub(1)) * items_per_page;
 
         let query = format!(
-            "SELECT target_actor_id FROM following WHERE actor_id = ?1 AND status = 'approved' ORDER BY created_at DESC LIMIT {} OFFSET {}",
+            "SELECT target_actor_id FROM following WHERE actor_id = ?1 AND status = 'accepted' ORDER BY created_at DESC LIMIT {} OFFSET {}",
             items_per_page, offset
         );
 
@@ -257,7 +257,7 @@ pub async fn get_following(
         }))
     } else {
         // Return collection summary
-        let count_query = "SELECT COUNT(*) as count FROM following WHERE actor_id = ?1 AND status = 'approved'";
+        let count_query = "SELECT COUNT(*) as count FROM following WHERE actor_id = ?1 AND status = 'accepted'";
         let rows = db.execute(count_query, &[Value::String(actor_url.clone())]).await?;
 
         let total_items = if !rows.is_empty() {

@@ -500,7 +500,7 @@ pub async fn handle_accept(
     if let Some(object_type) = activity.object.as_ref().and_then(|o| o.get("type")).and_then(|v| v.as_str()) {
         if object_type == "Follow" {
             // Update the following status to approved
-            let query = "UPDATE following SET status = 'approved' WHERE target_actor_id = ?1 AND status = 'pending'";
+            let query = "UPDATE following SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP WHERE target_actor_id = ?1 AND status = 'pending'";
             db.execute(query, &[Value::String(activity.actor.clone())]).await?;
         }
     }

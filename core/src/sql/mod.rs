@@ -16,6 +16,9 @@ use crate::traits::DatabaseDialect;
 /// # Examples
 ///
 /// ```
+/// use dais_core::sql::convert_placeholders;
+/// use dais_core::traits::DatabaseDialect;
+///
 /// // SQLite uses ?1, ?2, ?3
 /// let sql = "SELECT * FROM users WHERE id = ?1 AND name = ?2";
 /// let pg_sql = convert_placeholders(sql, DatabaseDialect::PostgreSQL);

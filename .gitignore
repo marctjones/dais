@@ -31,7 +31,11 @@ venv/
 # Rust
 target/
 Cargo.lock
+!client/Cargo.lock
 *.wasm
+
+# Node
+node_modules/
 
 # Cloudflare Workers
 .wrangler/

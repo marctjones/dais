@@ -35,6 +35,9 @@ set -euo pipefail
 # --- config ------------------------------------------------------------------
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKERS_DIR="$ROOT/platforms/cloudflare/workers"
+WRANGLER="$ROOT/node_modules/.bin/wrangler"
+[ -x "$WRANGLER" ] || WRANGLER="wrangler"
+BUILD_PATH="$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:$PATH"
 
 # Deploy order: backends first, router LAST (it proxies to the others' URLs).
 WORKERS=(webfinger actor inbox outbox pds delivery-queue auth landing router)
@@ -91,9 +94,12 @@ fi
 env_flag() { [ "$ENVIRONMENT" = "production" ] && printf -- "--env production" || printf ""; }
 
 require_wrangler() {
-  command -v wrangler >/dev/null 2>&1 || { err "wrangler not found (npm i -g wrangler)"; exit 1; }
-  if ! wrangler whoami >/dev/null 2>&1; then
-    warn "Not logged in to Cloudflare — run: wrangler login"; exit 1
+  if [ "$WRANGLER" = "wrangler" ] && ! command -v wrangler >/dev/null 2>&1; then
+    err "wrangler not found (run: npm install)"
+    exit 1
+  fi
+  if ! "$WRANGLER" whoami >/dev/null 2>&1; then
+    warn "Not logged in to Cloudflare - run: npx wrangler login"; exit 1
   fi
 }
 
@@ -127,7 +133,7 @@ run_one() {
   [ "$DRY_RUN" = "true" ] && flags="$flags --dry-run"
   [ "$mode" = "build" ] && flags="$flags --dry-run"
   info ">> $w  (env=$ENVIRONMENT${flags:+,$flags})"
-  ( cd "$dir" && wrangler deploy $flags )
+  ( cd "$dir" && PATH="$BUILD_PATH" "$WRANGLER" deploy $flags )
 }
 
 do_deploy() {
@@ -154,7 +160,7 @@ do_tail() {
   [ -n "$ONLY" ] || { err "tail requires --only <worker>"; exit 2; }
   local dir="$WORKERS_DIR/$ONLY"
   info "Tailing $ONLY (env=$ENVIRONMENT) — Ctrl-C to stop"
-  ( cd "$dir" && wrangler tail $(env_flag) )
+  ( cd "$dir" && PATH="$BUILD_PATH" "$WRANGLER" tail $(env_flag) )
 }
 
 case "$ACTION" in

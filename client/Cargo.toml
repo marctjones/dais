@@ -1,0 +1,48 @@
+[package]
+name = "dais-client"
+version = "0.1.0"
+edition = "2021"
+authors = ["Marc T Jones <marc@dais.social>"]
+description = "dais operator client — CLI + TUI for a single-user dais instance"
+license = "MIT"
+repository = "https://github.com/marctjones/dais"
+
+[[bin]]
+name = "dais"
+path = "src/main.rs"
+
+[dependencies]
+# CLI (noun-verb command tree, P5)
+clap = { version = "4", features = ["derive", "env"] }
+
+# TUI ("a mail client for the fediverse", §5)
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async / non-blocking I/O (P6)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util"] }
+
+# HTTP to the dais instance
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+
+# E2EE v1 (see docs/design/E2EE_WIRE_FORMAT.md) — MUST match the shipped wire format
+aes-gcm = "0.10"
+rsa = { version = "0.9", features = ["sha2"] }
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+
+# Errors / ergonomics
+anyhow = "1"
+thiserror = "2"
+directories = "5"   # config dir resolution (P4 precedence)
+
+[dev-dependencies]
+hex = "0.4"
+tempfile = "3"
