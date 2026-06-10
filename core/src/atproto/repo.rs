@@ -1,8 +1,7 @@
 /// AT Protocol repository operations
 ///
 /// TODO: Migrate from workers/pds/
-
-use crate::{CoreResult, CoreError};
+use crate::{CoreError, CoreResult};
 
 pub async fn get_repo() -> CoreResult<()> {
     // TODO: Implement repo operations

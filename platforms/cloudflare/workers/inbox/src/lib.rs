@@ -1,3 +1,8 @@
+use async_trait::async_trait;
+use dais_cloudflare::{D1Provider, WorkerHttpProvider};
+use dais_core::activitypub::{ContentModerator, HttpSignature};
+use dais_core::{CoreConfig, CoreError, DaisCore};
+use std::collections::HashMap;
 /// Refactored Inbox worker using dais-core
 ///
 /// This is a thin shim that:
@@ -8,13 +13,7 @@
 ///
 /// All inbox processing logic (Follow, Undo, Create, Like, Announce, etc.)
 /// is now in dais-core, making it reusable across platforms.
-
-use worker::{self, event, Request, Response, Env, Context, Router, RouteContext, Result, Headers};
-use dais_cloudflare::{D1Provider, WorkerHttpProvider};
-use dais_core::{DaisCore, CoreConfig, CoreError};
-use dais_core::activitypub::{HttpSignature, ContentModerator};
-use std::collections::HashMap;
-use async_trait::async_trait;
+use worker::{self, event, Context, Env, Headers, Request, Response, Result, RouteContext, Router};
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -27,7 +26,10 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let headers = Headers::new();
             headers.set("Access-Control-Allow-Origin", "*")?;
             headers.set("Access-Control-Allow-Methods", "POST, OPTIONS")?;
-            headers.set("Access-Control-Allow-Headers", "Content-Type, Signature, Date, Digest")?;
+            headers.set(
+                "Access-Control-Allow-Headers",
+                "Content-Type, Signature, Date, Digest",
+            )?;
             headers.set("Access-Control-Max-Age", "86400")?;
             Ok(Response::empty()?.with_headers(headers))
         })
@@ -47,7 +49,10 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
 
     // Get the request body as text
     let body = req.text().await?;
-    worker::console_log!("Activity body (first 200 chars): {}", &body[..std::cmp::min(200, body.len())]);
+    worker::console_log!(
+        "Activity body (first 200 chars): {}",
+        &body[..std::cmp::min(200, body.len())]
+    );
 
     // Parse the activity to validate JSON
     let activity: serde_json::Value = match serde_json::from_str(&body) {
@@ -102,11 +107,15 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
     let http = WorkerHttpProvider::new();
 
     // Get configuration from environment variables
-    let configured_domain = ctx.env.var("DOMAIN")
+    let configured_domain = ctx
+        .env
+        .var("DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "dais.social".to_string());
 
-    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+    let activitypub_domain = ctx
+        .env
+        .var("ACTIVITYPUB_DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| format!("social.{}", configured_domain));
 
@@ -116,12 +125,16 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
     // fails every signature. Verify against the configured public host instead.
     headers_map.insert("host".to_string(), activitypub_domain.clone());
 
-    let username_var = ctx.env.var("USERNAME")
+    let username_var = ctx
+        .env
+        .var("USERNAME")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "social".to_string());
 
     // Get private key from secrets (for sending Accept/Reject responses)
-    let private_key = ctx.env.secret("PRIVATE_KEY")
+    let private_key = ctx
+        .env
+        .secret("PRIVATE_KEY")
         .map(|s| s.to_string())
         .unwrap_or_else(|_| {
             worker::console_log!("WARNING: PRIVATE_KEY secret not found");
@@ -134,15 +147,15 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
         pds_domain: "".to_string(),
         username: username_var,
         private_key,
-        public_key: "".to_string(),  // Not needed for inbox
-        media_url: "".to_string(),    // Not needed for inbox
+        public_key: "".to_string(), // Not needed for inbox
+        media_url: "".to_string(),  // Not needed for inbox
     };
 
     // Initialize DaisCore
     let core = DaisCore::new(
         Box::new(db),
-        Box::new(PlaceholderStorage),  // Not used by inbox
-        Box::new(PlaceholderQueue),    // Not used by inbox currently
+        Box::new(PlaceholderStorage), // Not used by inbox
+        Box::new(PlaceholderQueue),   // Not used by inbox currently
         Box::new(http),
         config,
     );
@@ -161,13 +174,14 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
     }
 
     // Fetch actor's public key and verify signature
-    let public_key = match dais_core::activitypub::fetch_actor_public_key(&*core.http(), actor_id).await {
-        Ok(key) => key,
-        Err(e) => {
-            worker::console_log!("Failed to fetch actor public key: {}", e);
-            return Response::error("Failed to verify signature", 401);
-        }
-    };
+    let public_key =
+        match dais_core::activitypub::fetch_actor_public_key(&*core.http(), actor_id).await {
+            Ok(key) => key,
+            Err(e) => {
+                worker::console_log!("Failed to fetch actor public key: {}", e);
+                return Response::error("Failed to verify signature", 401);
+            }
+        };
 
     let verified = match dais_core::activitypub::verify_request(
         &public_key,
@@ -222,8 +236,8 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
 // but inbox doesn't currently use storage/queue
 
 use dais_core::traits::{
-    StorageProvider, QueueProvider, PlatformResult, PlatformError,
-    StorageMetadata, ObjectInfo, ListOptions, ListResult,
+    ListOptions, ListResult, ObjectInfo, PlatformError, PlatformResult, QueueProvider,
+    StorageMetadata, StorageProvider,
 };
 
 struct PlaceholderStorage;
@@ -234,7 +248,13 @@ impl StorageProvider for PlaceholderStorage {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 
-    async fn put_with_metadata(&self, _key: &str, _data: Vec<u8>, _content_type: &str, _metadata: StorageMetadata) -> PlatformResult<String> {
+    async fn put_with_metadata(
+        &self,
+        _key: &str,
+        _data: Vec<u8>,
+        _content_type: &str,
+        _metadata: StorageMetadata,
+    ) -> PlatformResult<String> {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 

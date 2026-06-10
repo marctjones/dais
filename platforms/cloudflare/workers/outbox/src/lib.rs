@@ -1,3 +1,8 @@
+use async_trait::async_trait;
+use dais_cloudflare::{D1Provider, WorkerHttpProvider};
+use dais_core::activitypub::requires_authorized_fetch;
+use dais_core::activitypub::{HttpSignature, Post};
+use dais_core::{CoreConfig, CoreError, DaisCore};
 /// Refactored Outbox worker using dais-core
 ///
 /// This is a thin shim that:
@@ -6,12 +11,7 @@
 /// 3. Calls core.get_outbox_posts() and core.get_post() for all business logic
 ///
 /// All outbox query logic is now in dais-core, making it reusable across platforms.
-
-use worker::{self, event, Request, Response, Env, Context, Router, RouteContext, Result, Headers};
-use dais_cloudflare::{D1Provider, WorkerHttpProvider};
-use dais_core::{DaisCore, CoreConfig, CoreError};
-use dais_core::activitypub::{Post, HttpSignature};
-use async_trait::async_trait;
+use worker::{self, event, Context, Env, Request, Response, Result, RouteContext, Router};
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -43,15 +43,21 @@ async fn handle_outbox(req: Request, ctx: RouteContext<()>) -> Result<Response> 
     let db = D1Provider::new(ctx.env.d1("DB")?);
 
     // Get configuration from environment variables
-    let configured_domain = ctx.env.var("DOMAIN")
+    let configured_domain = ctx
+        .env
+        .var("DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "dais.social".to_string());
 
-    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+    let activitypub_domain = ctx
+        .env
+        .var("ACTIVITYPUB_DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| format!("social.{}", configured_domain));
 
-    let username_var = ctx.env.var("USERNAME")
+    let username_var = ctx
+        .env
+        .var("USERNAME")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "social".to_string());
 
@@ -96,7 +102,8 @@ async fn handle_outbox(req: Request, ctx: RouteContext<()>) -> Result<Response> 
         let outbox_json = build_outbox_collection(&activitypub_domain, username, &posts);
 
         let mut resp = Response::from_json(&outbox_json)?;
-        resp.headers_mut().set("Content-Type", "application/activity+json")?;
+        resp.headers_mut()
+            .set("Content-Type", "application/activity+json")?;
         resp.headers_mut().set("Access-Control-Allow-Origin", "*")?;
         Ok(resp)
     }
@@ -124,15 +131,21 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let db = D1Provider::new(ctx.env.d1("DB")?);
 
     // Get configuration from environment variables
-    let configured_domain = ctx.env.var("DOMAIN")
+    let configured_domain = ctx
+        .env
+        .var("DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "dais.social".to_string());
 
-    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+    let activitypub_domain = ctx
+        .env
+        .var("ACTIVITYPUB_DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| format!("social.{}", configured_domain));
 
-    let username_var = ctx.env.var("USERNAME")
+    let username_var = ctx
+        .env
+        .var("USERNAME")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "social".to_string());
 
@@ -155,7 +168,10 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     );
 
     // Call core logic to get the post
-    let post = match core.get_post(username.to_string(), post_id.to_string()).await {
+    let post = match core
+        .get_post(username.to_string(), post_id.to_string())
+        .await
+    {
         Ok(p) => p,
         Err(e) => {
             worker::console_log!("Error fetching post: {}", e);
@@ -169,7 +185,7 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Authorized-fetch (#61): non-public posts are only served to an approved
     // follower who signs the GET. Anonymous / non-follower requests get 404 — so
     // the post's existence isn't even revealed on the pull side.
-    if post.visibility != "public" && post.visibility != "unlisted" {
+    if requires_authorized_fetch(&post.visibility) {
         if !is_authorized_follower(&req, &core, &activitypub_domain).await {
             worker::console_log!("Authorized-fetch denied for {}-only post", post.visibility);
             return Response::error("Not Found", 404);
@@ -185,7 +201,8 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         let note_json = build_note_object(&post);
 
         let mut resp = Response::from_json(&note_json)?;
-        resp.headers_mut().set("Content-Type", "application/activity+json")?;
+        resp.headers_mut()
+            .set("Content-Type", "application/activity+json")?;
         resp.headers_mut().set("Access-Control-Allow-Origin", "*")?;
         Ok(resp)
     }
@@ -230,12 +247,14 @@ async fn is_authorized_follower(req: &Request, core: &DaisCore, ap_domain: &str)
     }
 
     // Fetch the signer's public key and verify the GET signature.
-    let public_key = match dais_core::activitypub::fetch_actor_public_key(&*core.http(), &actor_id).await {
-        Ok(k) => k,
-        Err(_) => return false,
-    };
-    let verified = dais_core::activitypub::verify_request(&public_key, &http_sig, "GET", &path, &headers_map)
-        .unwrap_or(false);
+    let public_key =
+        match dais_core::activitypub::fetch_actor_public_key(&*core.http(), &actor_id).await {
+            Ok(k) => k,
+            Err(_) => return false,
+        };
+    let verified =
+        dais_core::activitypub::verify_request(&public_key, &http_sig, "GET", &path, &headers_map)
+            .unwrap_or(false);
     if !verified {
         return false;
     }
@@ -250,18 +269,21 @@ async fn is_authorized_follower(req: &Request, core: &DaisCore, ap_domain: &str)
 fn build_outbox_collection(domain: &str, username: &str, posts: &[Post]) -> serde_json::Value {
     let outbox_url = format!("https://{}/users/{}/outbox", domain, username);
 
-    let items: Vec<serde_json::Value> = posts.iter().map(|post| {
-        serde_json::json!({
-            "@context": "https://www.w3.org/ns/activitystreams",
-            "type": "Create",
-            "id": format!("{}#create", post.id),
-            "actor": format!("https://{}/users/{}", domain, username),
-            "published": post.published_at,
-            "to": ["https://www.w3.org/ns/activitystreams#Public"],
-            "cc": [format!("https://{}/users/{}/followers", domain, username)],
-            "object": build_note_object(post)
+    let items: Vec<serde_json::Value> = posts
+        .iter()
+        .map(|post| {
+            serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "type": "Create",
+                "id": format!("{}#create", post.id),
+                "actor": format!("https://{}/users/{}", domain, username),
+                "published": post.published_at,
+                "to": ["https://www.w3.org/ns/activitystreams#Public"],
+                "cc": [format!("https://{}/users/{}/followers", domain, username)],
+                "object": build_note_object(post)
+            })
         })
-    }).collect();
+        .collect();
 
     serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
@@ -315,8 +337,8 @@ fn build_note_object(post: &Post) -> serde_json::Value {
 // Placeholder providers for unused platform features
 
 use dais_core::traits::{
-    StorageProvider, QueueProvider, HttpProvider, PlatformResult, PlatformError,
-    StorageMetadata, ObjectInfo, ListOptions, ListResult,
+    HttpProvider, ListOptions, ListResult, ObjectInfo, PlatformError, PlatformResult,
+    QueueProvider, StorageMetadata, StorageProvider,
 };
 
 struct PlaceholderStorage;
@@ -327,7 +349,13 @@ impl StorageProvider for PlaceholderStorage {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 
-    async fn put_with_metadata(&self, _key: &str, _data: Vec<u8>, _content_type: &str, _metadata: StorageMetadata) -> PlatformResult<String> {
+    async fn put_with_metadata(
+        &self,
+        _key: &str,
+        _data: Vec<u8>,
+        _content_type: &str,
+        _metadata: StorageMetadata,
+    ) -> PlatformResult<String> {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 
@@ -389,7 +417,10 @@ struct PlaceholderHttp;
 
 #[async_trait(?Send)]
 impl HttpProvider for PlaceholderHttp {
-    async fn fetch(&self, _request: dais_core::traits::Request) -> PlatformResult<dais_core::traits::Response> {
+    async fn fetch(
+        &self,
+        _request: dais_core::traits::Request,
+    ) -> PlatformResult<dais_core::traits::Response> {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 }

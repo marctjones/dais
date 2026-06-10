@@ -1,10 +1,9 @@
+use crate::traits::DatabaseProvider;
 /// WebFinger protocol implementation
 ///
 /// WebFinger is used to discover information about users across different domains.
 /// See: RFC 7033
-
-use crate::{CoreResult, CoreError};
-use crate::traits::DatabaseProvider;
+use crate::{CoreError, CoreResult};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,7 +64,10 @@ pub async fn handle_webfinger(
 
     // Query database to verify user exists
     let rows = db
-        .execute("SELECT username FROM actors WHERE username = ?1", &[serde_json::Value::String(username.to_string())])
+        .execute(
+            "SELECT username FROM actors WHERE username = ?1",
+            &[serde_json::Value::String(username.to_string())],
+        )
         .await?;
 
     if rows.is_empty() {
@@ -103,8 +105,6 @@ pub async fn handle_webfinger(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_parse_resource() {
         let resource = "acct:user@example.com";

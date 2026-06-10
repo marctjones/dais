@@ -1,3 +1,4 @@
+use serde::Serialize;
 /// Refactored PDS (Personal Data Server) worker for AT Protocol
 ///
 /// This worker implements the AT Protocol endpoints for Bluesky compatibility.
@@ -10,10 +11,7 @@
 /// - GET /xrpc/com.atproto.sync.getRepo
 /// - GET /xrpc/app.bsky.feed.getAuthorFeed
 /// - WebSocket /xrpc/com.atproto.sync.subscribeRepos
-
 use worker::*;
-use dais_cloudflare::D1Provider;
-use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 struct ServerDescription {
@@ -56,7 +54,10 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let router = Router::new();
 
     router
-        .get_async("/xrpc/com.atproto.server.describeServer", handle_describe_server)
+        .get_async(
+            "/xrpc/com.atproto.server.describeServer",
+            handle_describe_server,
+        )
         .get_async("/xrpc/com.atproto.sync.getRepo", handle_get_repo)
         .get_async("/xrpc/app.bsky.feed.getAuthorFeed", handle_get_author_feed)
         .get("/health", |_req, _ctx| Response::ok("PDS OK"))
@@ -65,7 +66,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 }
 
 async fn handle_describe_server(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let domain = ctx.env.var("PDS_DOMAIN")
+    let domain = ctx
+        .env
+        .var("PDS_DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "pds.dais.social".to_string());
 
@@ -84,7 +87,8 @@ async fn handle_describe_server(_req: Request, ctx: RouteContext<()>) -> Result<
 async fn handle_get_repo(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Get DID from query parameter
     let url = req.url()?;
-    let did = url.query_pairs()
+    let did = url
+        .query_pairs()
         .find(|(key, _)| key == "did")
         .map(|(_, value)| value.to_string());
 
@@ -96,8 +100,7 @@ async fn handle_get_repo(req: Request, ctx: RouteContext<()>) -> Result<Response
     console_log!("Getting repo for DID: {}", did);
 
     // Get database
-    let db = ctx.env.d1("DB")?;
-    let db_provider = D1Provider::new(db);
+    let _db = ctx.env.d1("DB")?;
 
     // Query for repo data
     // TODO: Implement full AT Protocol repo export
@@ -114,7 +117,8 @@ async fn handle_get_repo(req: Request, ctx: RouteContext<()>) -> Result<Response
 async fn handle_get_author_feed(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Get actor from query parameter
     let url = req.url()?;
-    let actor = url.query_pairs()
+    let actor = url
+        .query_pairs()
         .find(|(key, _)| key == "actor")
         .map(|(_, value)| value.to_string());
 
@@ -126,8 +130,7 @@ async fn handle_get_author_feed(req: Request, ctx: RouteContext<()>) -> Result<R
     console_log!("Getting feed for actor: {}", actor);
 
     // Get database
-    let db = ctx.env.d1("DB")?;
-    let db_provider = D1Provider::new(db);
+    let _db = ctx.env.d1("DB")?;
 
     // Query for posts
     // TODO: Implement full AT Protocol feed
@@ -138,7 +141,7 @@ async fn handle_get_author_feed(req: Request, ctx: RouteContext<()>) -> Result<R
     }))
 }
 
-async fn handle_subscribe_repos(req: Request, env: Env) -> Result<Response> {
+async fn handle_subscribe_repos(_req: Request, env: Env) -> Result<Response> {
     console_log!("WebSocket upgrade requested for subscribeRepos");
 
     // Accept WebSocket upgrade
@@ -157,7 +160,7 @@ async fn handle_subscribe_repos(req: Request, env: Env) -> Result<Response> {
     Response::from_websocket(client)
 }
 
-async fn handle_websocket(mut ws: WebSocket, _env: Env) -> Result<()> {
+async fn handle_websocket(ws: WebSocket, _env: Env) -> Result<()> {
     // Accept the WebSocket connection
     ws.accept()?;
 

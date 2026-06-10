@@ -103,11 +103,6 @@ impl DatabaseProvider for D1Provider {
     }
 }
 
-/// Helper to convert worker::Error to PlatformError
-fn worker_error_to_platform(err: worker::Error) -> PlatformError {
-    PlatformError::Database(format!("Worker error: {:?}", err))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

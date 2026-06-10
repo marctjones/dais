@@ -5,7 +5,6 @@
 /// - Vercel: QStash (Upstash)
 /// - Netlify: Background Functions
 /// - Railway: BullMQ (Redis-backed)
-
 use super::PlatformResult;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -34,11 +33,7 @@ pub trait QueueProvider {
     /// # Arguments
     /// * `message` - Message to send (JSON)
     /// * `delay_seconds` - Delay before delivery
-    async fn send_delayed(
-        &self,
-        message: &str,
-        delay_seconds: u32,
-    ) -> PlatformResult<()>;
+    async fn send_delayed(&self, message: &str, delay_seconds: u32) -> PlatformResult<()>;
 
     /// Get approximate queue depth
     ///
@@ -60,7 +55,10 @@ pub trait QueueHandler {
     /// Called when a message fails after all retries
     async fn on_failed(&self, message: QueueMessage, error: String) -> PlatformResult<()> {
         // Default: log error (platforms can override for DLQ, etc.)
-        eprintln!("Message failed after retries: {:?}, error: {}", message, error);
+        eprintln!(
+            "Message failed after retries: {:?}, error: {}",
+            message, error
+        );
         Ok(())
     }
 }

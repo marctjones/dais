@@ -1,5 +1,4 @@
 /// Error types for dais core library
-
 use std::fmt;
 
 /// Result type for core operations

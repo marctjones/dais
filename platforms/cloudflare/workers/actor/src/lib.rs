@@ -300,7 +300,7 @@ async fn handle_following(req: Request, ctx: RouteContext<()>) -> Result<Respons
 // CORS helpers
 
 fn handle_cors_preflight() -> Result<Response> {
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     headers.set("Access-Control-Allow-Origin", "*")?;
     headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")?;
     headers.set("Access-Control-Allow-Headers", "Content-Type, Accept")?;

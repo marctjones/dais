@@ -3,16 +3,18 @@
 /// These traits define the interfaces that platform-specific implementations
 /// must provide. This allows the core ActivityPub/AT Protocol logic to remain
 /// platform-agnostic.
-
 pub mod database;
-pub mod storage;
-pub mod queue;
 pub mod http;
+pub mod queue;
+pub mod storage;
 
-pub use database::{DatabaseProvider, DatabaseDialect};
-pub use storage::{StorageProvider, StorageMetadata, ObjectInfo, ListOptions, ListResult};
-pub use queue::{QueueProvider, QueueHandler, QueueMessage, DeliveryMessage, SyncMessage, MediaProcessingMessage, MediaTask};
-pub use http::{HttpProvider, Request, Response, Method};
+pub use database::{DatabaseDialect, DatabaseProvider};
+pub use http::{HttpProvider, Method, Request, Response};
+pub use queue::{
+    DeliveryMessage, MediaProcessingMessage, MediaTask, QueueHandler, QueueMessage, QueueProvider,
+    SyncMessage,
+};
+pub use storage::{ListOptions, ListResult, ObjectInfo, StorageMetadata, StorageProvider};
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -70,7 +72,9 @@ impl Row {
     }
 
     pub fn get_string(&self, key: &str) -> Option<String> {
-        self.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+        self.get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
     pub fn get_i64(&self, key: &str) -> Option<i64> {

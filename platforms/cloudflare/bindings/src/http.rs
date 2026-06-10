@@ -39,7 +39,7 @@ impl HttpProvider for WorkerHttpProvider {
         init.with_method(method);
 
         // Add headers
-        let mut headers = worker::Headers::new();
+        let headers = worker::Headers::new();
         for (key, value) in &request.headers {
             headers
                 .set(key, value)

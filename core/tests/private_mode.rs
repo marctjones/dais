@@ -1,0 +1,424 @@
+use async_trait::async_trait;
+use dais_core::activitypub;
+use dais_core::traits::{
+    DatabaseDialect, DatabaseProvider, HttpProvider, PlatformResult, Request, Response, Row,
+    Statement,
+};
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Default)]
+struct FakeDb {
+    state: Arc<Mutex<FakeDbState>>,
+}
+
+#[derive(Default)]
+struct FakeDbState {
+    approved_following: HashSet<String>,
+    approved_followers: HashSet<String>,
+    friends_rows: Vec<Row>,
+    home_rows: Vec<Row>,
+    timeline_posts: HashMap<String, Row>,
+}
+
+impl FakeDb {
+    fn approve_following(&self, actor_id: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .approved_following
+            .insert(actor_id.to_string());
+    }
+
+    fn set_friends_rows(&self, rows: Vec<Row>) {
+        self.state.lock().unwrap().friends_rows = rows;
+    }
+
+    fn set_home_rows(&self, rows: Vec<Row>) {
+        self.state.lock().unwrap().home_rows = rows;
+    }
+
+    fn timeline_post(&self, object_id: &str) -> Option<Row> {
+        self.state
+            .lock()
+            .unwrap()
+            .timeline_posts
+            .get(object_id)
+            .cloned()
+    }
+}
+
+#[async_trait(?Send)]
+impl DatabaseProvider for FakeDb {
+    async fn execute(&self, sql: &str, params: &[Value]) -> PlatformResult<Vec<Row>> {
+        let mut state = self.state.lock().unwrap();
+
+        if sql.contains("SELECT COUNT(*) AS count FROM following") {
+            let actor_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            return Ok(vec![count_row(
+                (state.approved_following.contains(actor_id)) as u64,
+            )]);
+        }
+
+        if sql.contains("SELECT COUNT(*) as count FROM followers")
+            && sql.contains("status = 'approved'")
+        {
+            let actor_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            return Ok(vec![count_row(
+                (state.approved_followers.contains(actor_id)) as u64,
+            )]);
+        }
+
+        if sql.contains("FROM friends") {
+            return Ok(state.friends_rows.clone());
+        }
+
+        if sql.contains("FROM timeline_posts") && sql.contains("SELECT object_id") {
+            if !state.home_rows.is_empty() {
+                return Ok(state.home_rows.clone());
+            }
+
+            let mut rows: Vec<Row> = state.timeline_posts.values().cloned().collect();
+            rows.sort_by(|left, right| {
+                right
+                    .get_string("published_at")
+                    .cmp(&left.get_string("published_at"))
+            });
+            return Ok(rows);
+        }
+
+        if sql.contains("INSERT INTO timeline_posts") {
+            let object_id = params.get(1).and_then(Value::as_str).unwrap_or_default();
+            let mut row = Row::new();
+            insert_row_value(&mut row, "id", params.first());
+            insert_row_value(&mut row, "object_id", params.get(1));
+            insert_row_value(&mut row, "actor_id", params.get(2));
+            insert_row_value(&mut row, "actor_username", params.get(3));
+            insert_row_value(&mut row, "actor_display_name", params.get(4));
+            insert_row_value(&mut row, "actor_avatar_url", params.get(5));
+            insert_row_value(&mut row, "content", params.get(6));
+            insert_row_value(&mut row, "content_html", params.get(7));
+            insert_row_value(&mut row, "visibility", params.get(8));
+            insert_row_value(&mut row, "in_reply_to", params.get(9));
+            insert_row_value(&mut row, "published_at", params.get(10));
+            insert_row_value(&mut row, "raw_object", params.get(11));
+            insert_row_value(&mut row, "raw_activity", params.get(12));
+            insert_row_value(&mut row, "encrypted_message", params.get(13));
+            row.insert("deleted_at".to_string(), Value::Null);
+            row.insert(
+                "protocol".to_string(),
+                Value::String("activitypub".to_string()),
+            );
+            state.timeline_posts.insert(object_id.to_string(), row);
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("UPDATE timeline_posts") && sql.contains("SET content") {
+            let object_id = params.get(5).and_then(Value::as_str).unwrap_or_default();
+            if let Some(row) = state.timeline_posts.get_mut(object_id) {
+                set_row_value(row, "content", params.get(0));
+                set_row_value(row, "content_html", params.get(1));
+                set_row_value(row, "updated_at", params.get(2));
+                set_row_value(row, "raw_object", params.get(3));
+                set_row_value(row, "encrypted_message", params.get(4));
+                row.insert("deleted_at".to_string(), Value::Null);
+            }
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("UPDATE timeline_posts SET deleted_at") {
+            let deleted_at = params.get(0).cloned().unwrap_or(Value::Null);
+            let object_id = params.get(1).and_then(Value::as_str).unwrap_or_default();
+            if let Some(row) = state.timeline_posts.get_mut(object_id) {
+                row.insert("deleted_at".to_string(), deleted_at);
+            }
+            return Ok(Vec::new());
+        }
+
+        Ok(Vec::new())
+    }
+
+    async fn batch(&self, _statements: Vec<Statement>) -> PlatformResult<()> {
+        Ok(())
+    }
+
+    fn dialect(&self) -> DatabaseDialect {
+        DatabaseDialect::SQLite
+    }
+}
+
+struct FakeHttp {
+    actor_json: String,
+}
+
+#[async_trait(?Send)]
+impl HttpProvider for FakeHttp {
+    async fn fetch(&self, request: Request) -> PlatformResult<Response> {
+        Ok(Response {
+            status: 200,
+            headers: HashMap::new(),
+            body: self.actor_json.clone().into_bytes(),
+            url: request.url,
+        })
+    }
+}
+
+#[tokio::test]
+async fn inbox_create_ingests_timeline_post_for_accepted_following() {
+    let db = FakeDb::default();
+    db.approve_following("https://remote.example/users/alice");
+    let http = FakeHttp {
+        actor_json: json!({
+            "preferredUsername": "alice",
+            "name": "Alice",
+            "icon": { "url": "https://remote.example/avatar.png" }
+        })
+        .to_string(),
+    };
+
+    let activity = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Create".to_string(),
+        id: "https://remote.example/activities/1".to_string(),
+        actor: "https://remote.example/users/alice".to_string(),
+        object: Some(json!({
+            "type": "Note",
+            "id": "https://remote.example/users/alice/statuses/1",
+            "content": "private mode note",
+            "published": "2026-06-10T12:00:00Z",
+            "to": ["https://www.w3.org/ns/activitystreams#Public"]
+        })),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T12:00:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::process_inbox_activity(
+        &db,
+        &http,
+        activity,
+        "https://social.dais.social/users/social",
+        None,
+    )
+    .await
+    .expect("inbox create should ingest");
+
+    let row = db
+        .timeline_post("https://remote.example/users/alice/statuses/1")
+        .expect("timeline row should be stored");
+
+    assert_eq!(
+        row.get_string("actor_id").as_deref(),
+        Some("https://remote.example/users/alice")
+    );
+    assert_eq!(row.get_string("actor_username").as_deref(), Some("alice"));
+    assert_eq!(
+        row.get_string("content").as_deref(),
+        Some("private mode note")
+    );
+    assert_eq!(row.get_string("visibility").as_deref(), Some("public"));
+    assert_eq!(row.get_string("protocol").as_deref(), Some("activitypub"));
+}
+
+#[tokio::test]
+async fn inbox_update_and_delete_modify_timeline_post() {
+    let db = FakeDb::default();
+    db.approve_following("https://remote.example/users/alice");
+    db.set_home_rows(Vec::new());
+    db.set_friends_rows(Vec::new());
+
+    {
+        let mut row = Row::new();
+        row.insert("id".to_string(), Value::String("row-1".to_string()));
+        row.insert(
+            "object_id".to_string(),
+            Value::String("https://remote.example/users/alice/statuses/1".to_string()),
+        );
+        row.insert(
+            "actor_id".to_string(),
+            Value::String("https://remote.example/users/alice".to_string()),
+        );
+        row.insert("content".to_string(), Value::String("before".to_string()));
+        row.insert(
+            "content_html".to_string(),
+            Value::String("before".to_string()),
+        );
+        row.insert(
+            "visibility".to_string(),
+            Value::String("followers".to_string()),
+        );
+        row.insert(
+            "published_at".to_string(),
+            Value::String("2026-06-10T12:00:00Z".to_string()),
+        );
+        db.state.lock().unwrap().timeline_posts.insert(
+            "https://remote.example/users/alice/statuses/1".to_string(),
+            row,
+        );
+    }
+
+    let update = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Update".to_string(),
+        id: "https://remote.example/activities/2".to_string(),
+        actor: "https://remote.example/users/alice".to_string(),
+        object: Some(json!({
+            "type": "Note",
+            "id": "https://remote.example/users/alice/statuses/1",
+            "content": "after",
+            "updated": "2026-06-10T12:05:00Z",
+            "encryptedMessage": { "v": 1, "alg": "AES-256-GCM", "keyWrap": "RSA-OAEP-256", "iv": "a", "ciphertext": "b", "tag": "c", "recipients": [] }
+        })),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T12:05:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::inbox::handle_update(&db, &update)
+        .await
+        .expect("update should apply");
+
+    let updated = db
+        .timeline_post("https://remote.example/users/alice/statuses/1")
+        .expect("timeline row should remain");
+    assert_eq!(updated.get_string("content").as_deref(), Some("after"));
+    assert_eq!(
+        updated.get_string("updated_at").as_deref(),
+        Some("2026-06-10T12:05:00Z")
+    );
+    assert_eq!(updated.get_string("deleted_at"), None);
+
+    let delete = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Delete".to_string(),
+        id: "https://remote.example/activities/3".to_string(),
+        actor: "https://remote.example/users/alice".to_string(),
+        object: Some(Value::String(
+            "https://remote.example/users/alice/statuses/1".to_string(),
+        )),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T12:06:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::inbox::handle_delete(&db, &delete)
+        .await
+        .expect("delete should apply");
+
+    let deleted = db
+        .timeline_post("https://remote.example/users/alice/statuses/1")
+        .expect("timeline row should still exist");
+    assert_eq!(
+        deleted.get_string("deleted_at").as_deref(),
+        Some("2026-06-10T12:06:00Z")
+    );
+}
+
+#[tokio::test]
+async fn home_timeline_and_friends_views_map_rows() {
+    let db = FakeDb::default();
+
+    let mut home_row = Row::new();
+    home_row.insert("object_id".to_string(), Value::String("post-1".to_string()));
+    home_row.insert(
+        "actor_id".to_string(),
+        Value::String("https://remote.example/users/alice".to_string()),
+    );
+    home_row.insert(
+        "actor_username".to_string(),
+        Value::String("alice".to_string()),
+    );
+    home_row.insert(
+        "actor_display_name".to_string(),
+        Value::String("Alice".to_string()),
+    );
+    home_row.insert("content".to_string(), Value::String("hello".to_string()));
+    home_row.insert(
+        "visibility".to_string(),
+        Value::String("followers".to_string()),
+    );
+    home_row.insert(
+        "published_at".to_string(),
+        Value::String("2026-06-10T12:00:00Z".to_string()),
+    );
+    home_row.insert(
+        "protocol".to_string(),
+        Value::String("activitypub".to_string()),
+    );
+    db.set_home_rows(vec![home_row]);
+
+    let mut friend_row = Row::new();
+    friend_row.insert(
+        "local_actor_id".to_string(),
+        Value::String("https://social.dais.social/users/social".to_string()),
+    );
+    friend_row.insert(
+        "friend_actor_id".to_string(),
+        Value::String("https://remote.example/users/alice".to_string()),
+    );
+    friend_row.insert(
+        "friend_inbox".to_string(),
+        Value::String("https://remote.example/inbox".to_string()),
+    );
+    friend_row.insert("friend_shared_inbox".to_string(), Value::Null);
+    friend_row.insert(
+        "follower_since".to_string(),
+        Value::String("2026-06-01T00:00:00Z".to_string()),
+    );
+    friend_row.insert(
+        "following_since".to_string(),
+        Value::String("2026-06-02T00:00:00Z".to_string()),
+    );
+    friend_row.insert(
+        "accepted_at".to_string(),
+        Value::String("2026-06-03T00:00:00Z".to_string()),
+    );
+    db.set_friends_rows(vec![friend_row]);
+
+    let timeline = activitypub::get_home_timeline(&db, 20, None)
+        .await
+        .expect("home timeline should load");
+    assert_eq!(timeline.len(), 1);
+    assert_eq!(timeline[0].content, "hello");
+    assert_eq!(timeline[0].visibility, "followers");
+
+    let friends = activitypub::get_friends(&db, "https://social.dais.social/users/social", 20)
+        .await
+        .expect("friends should load");
+    assert_eq!(friends.len(), 1);
+    assert_eq!(
+        friends[0].friend_actor_id,
+        "https://remote.example/users/alice"
+    );
+    assert_eq!(
+        friends[0].accepted_at.as_deref(),
+        Some("2026-06-03T00:00:00Z")
+    );
+}
+
+fn count_row(count: u64) -> Row {
+    let mut row = Row::new();
+    row.insert("count".to_string(), Value::from(count));
+    row
+}
+
+fn insert_row_value(row: &mut Row, key: &str, value: Option<&Value>) {
+    row.insert(
+        key.to_string(),
+        value.cloned().unwrap_or_else(|| Value::Null),
+    );
+}
+
+fn set_row_value(row: &mut Row, key: &str, value: Option<&Value>) {
+    row.insert(
+        key.to_string(),
+        value.cloned().unwrap_or_else(|| Value::Null),
+    );
+}

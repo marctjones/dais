@@ -1,9 +1,8 @@
+use super::{auto_increment_column, boolean_type, json_type};
 /// Schema builder for portable database migrations
 ///
 /// Provides utilities to define database schemas that work across dialects
-
 use crate::traits::DatabaseDialect;
-use super::{auto_increment_column, boolean_type, json_type, timestamp_default};
 
 pub struct SchemaBuilder {
     dialect: DatabaseDialect,
@@ -18,9 +17,10 @@ impl SchemaBuilder {
     pub fn create_table(&self, name: &str, columns: &[ColumnDef]) -> String {
         let mut sql = format!("CREATE TABLE IF NOT EXISTS {} (\n", name);
 
-        let column_defs: Vec<String> = columns.iter().map(|col| {
-            self.column_definition(col)
-        }).collect();
+        let column_defs: Vec<String> = columns
+            .iter()
+            .map(|col| self.column_definition(col))
+            .collect();
 
         sql.push_str(&format!("  {}\n", column_defs.join(",\n  ")));
         sql.push(')');
@@ -85,7 +85,13 @@ impl SchemaBuilder {
     }
 
     /// Generate CREATE INDEX statement
-    pub fn create_index(&self, index_name: &str, table: &str, columns: &[&str], unique: bool) -> String {
+    pub fn create_index(
+        &self,
+        index_name: &str,
+        table: &str,
+        columns: &[&str],
+        unique: bool,
+    ) -> String {
         let unique_clause = if unique { "UNIQUE " } else { "" };
         format!(
             "CREATE {}INDEX IF NOT EXISTS {} ON {} ({})",

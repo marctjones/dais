@@ -1,12 +1,11 @@
+use crate::activitypub::signatures;
+use crate::error::{CoreError, CoreResult};
 /// ActivityPub activity delivery to remote inboxes
 ///
 /// Handles signing and delivering activities to followers
-
 use crate::traits::{DatabaseProvider, HttpProvider};
-use crate::error::{CoreResult, CoreError};
-use crate::activitypub::signatures;
-use std::collections::HashMap;
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// Delivery job information
 #[derive(Debug, Clone)]
@@ -30,7 +29,9 @@ pub async fn get_follower_inboxes(
         WHERE actor_id = ?1 AND status = 'approved'
     "#;
 
-    let rows = db.execute(query, &[Value::String(actor_id.to_string())]).await?;
+    let rows = db
+        .execute(query, &[Value::String(actor_id.to_string())])
+        .await?;
 
     let mut inboxes = Vec::new();
     for row in rows {
@@ -54,16 +55,19 @@ pub async fn deliver_to_inbox(
     let url = url::Url::parse(inbox_url)
         .map_err(|e| CoreError::InvalidActivity(format!("Invalid inbox URL: {}", e)))?;
 
-    let host = url.host_str()
+    let host = url
+        .host_str()
         .ok_or_else(|| CoreError::InvalidActivity("No host in inbox URL".to_string()))?;
     let path = url.path();
 
     // Generate Date header
-    let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+    let date = chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
 
     // Generate Digest header (SHA-256 of body)
-    use sha2::{Sha256, Digest as Sha2Digest};
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use sha2::{Digest as Sha2Digest, Sha256};
 
     let body_hash = Sha256::digest(activity_json.as_bytes());
     let digest = format!("SHA-256={}", BASE64.encode(&body_hash));
@@ -92,7 +96,8 @@ pub async fn deliver_to_inbox(
         path,
         &sign_headers,
         &headers_to_sign,
-    ).map_err(|e| CoreError::SignatureError(e))?;
+    )
+    .map_err(|e| CoreError::SignatureError(e))?;
 
     // Build request headers
     let mut headers = HashMap::new();
@@ -100,7 +105,10 @@ pub async fn deliver_to_inbox(
     headers.insert("Date".to_string(), date);
     headers.insert("Digest".to_string(), digest);
     headers.insert("Signature".to_string(), http_signature.to_header());
-    headers.insert("Content-Type".to_string(), "application/activity+json".to_string());
+    headers.insert(
+        "Content-Type".to_string(),
+        "application/activity+json".to_string(),
+    );
     headers.insert("User-Agent".to_string(), "dais/1.1.0".to_string());
 
     // Make the HTTP POST request
@@ -118,13 +126,11 @@ pub async fn deliver_to_inbox(
     if response.status >= 200 && response.status < 300 {
         Ok(())
     } else {
-        let error_body = String::from_utf8(response.body)
-            .unwrap_or_else(|_| "Unknown error".to_string());
+        let error_body =
+            String::from_utf8(response.body).unwrap_or_else(|_| "Unknown error".to_string());
         Err(CoreError::Internal(format!(
             "HTTP {} from {}: {}",
-            response.status,
-            inbox_url,
-            error_body
+            response.status, inbox_url, error_body
         )))
     }
 }
@@ -134,7 +140,7 @@ pub async fn create_follower_deliveries(
     db: &dyn DatabaseProvider,
     post_id: &str,
     actor_id: &str,
-    activity_json: &str,
+    _activity_json: &str,
 ) -> CoreResult<Vec<String>> {
     // Get all follower inboxes
     let inboxes = get_follower_inboxes(db, actor_id).await?;
@@ -148,19 +154,21 @@ pub async fn create_follower_deliveries(
 
         let query = r#"
             INSERT INTO deliveries (
-                id, post_id, target_type, target_url, actor_id,
-                activity_json, status, retry_count, created_at
-            ) VALUES (?1, ?2, 'inbox', ?3, ?4, ?5, 'pending', 0, ?6)
+                id, post_id, target_type, target_url, protocol,
+                status, retry_count, created_at
+            ) VALUES (?1, ?2, 'inbox', ?3, 'activitypub', 'queued', 0, ?4)
         "#;
 
-        db.execute(query, &[
-            Value::String(delivery_id.clone()),
-            Value::String(post_id.to_string()),
-            Value::String(inbox_url),
-            Value::String(actor_id.to_string()),
-            Value::String(activity_json.to_string()),
-            Value::String(created_at),
-        ]).await?;
+        db.execute(
+            query,
+            &[
+                Value::String(delivery_id.clone()),
+                Value::String(post_id.to_string()),
+                Value::String(inbox_url),
+                Value::String(created_at),
+            ],
+        )
+        .await?;
 
         delivery_ids.push(delivery_id);
     }
@@ -185,11 +193,15 @@ pub async fn update_delivery_status(
             WHERE id = ?3
         "#;
 
-        db.execute(query, &[
-            Value::String(now.clone()),
-            Value::String(now),
-            Value::String(delivery_id.to_string()),
-        ]).await?;
+        db.execute(
+            query,
+            &[
+                Value::String(now.clone()),
+                Value::String(now),
+                Value::String(delivery_id.to_string()),
+            ],
+        )
+        .await?;
     } else {
         let new_status = if retry_count >= 3 { "failed" } else { "retry" };
 
@@ -199,13 +211,19 @@ pub async fn update_delivery_status(
             WHERE id = ?5
         "#;
 
-        db.execute(query, &[
-            Value::String(new_status.to_string()),
-            Value::Number(serde_json::Number::from(retry_count + 1)),
-            Value::String(now),
-            error_message.map(|s| Value::String(s.to_string())).unwrap_or(Value::Null),
-            Value::String(delivery_id.to_string()),
-        ]).await?;
+        db.execute(
+            query,
+            &[
+                Value::String(new_status.to_string()),
+                Value::Number(serde_json::Number::from(retry_count + 1)),
+                Value::String(now),
+                error_message
+                    .map(|s| Value::String(s.to_string()))
+                    .unwrap_or(Value::Null),
+                Value::String(delivery_id.to_string()),
+            ],
+        )
+        .await?;
     }
 
     Ok(())

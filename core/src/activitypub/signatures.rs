@@ -3,16 +3,16 @@
 //! Implements the HTTP Signatures draft specification
 //! Based on: https://tools.ietf.org/html/draft-cavage-http-signatures
 
-use rsa::{RsaPrivateKey, RsaPublicKey};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use rsa::pkcs1v15::{Signature, SigningKey, VerifyingKey};
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
-use rsa::signature::{Signer, Verifier, SignatureEncoding};
-use rsa::pkcs1v15::{SigningKey, VerifyingKey, Signature};
-use sha2::Sha256;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use std::collections::HashMap;
+use rsa::signature::{SignatureEncoding, Signer, Verifier};
+use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde::Deserialize;
+use sha2::Sha256;
+use std::collections::HashMap;
 
-use crate::error::{CoreResult, CoreError};
+use crate::error::{CoreError, CoreResult};
 use crate::traits::HttpProvider;
 
 /// HTTP Signature header components
@@ -212,7 +212,10 @@ pub async fn fetch_actor_public_key(
 ) -> CoreResult<String> {
     // Build request
     let mut headers = HashMap::new();
-    headers.insert("Accept".to_string(), "application/activity+json".to_string());
+    headers.insert(
+        "Accept".to_string(),
+        "application/activity+json".to_string(),
+    );
 
     let request = crate::traits::Request {
         url: actor_url.to_string(),
@@ -224,7 +227,9 @@ pub async fn fetch_actor_public_key(
     };
 
     // Fetch actor profile
-    let response = http.fetch(request).await
+    let response = http
+        .fetch(request)
+        .await
         .map_err(|e| CoreError::Platform(e))?;
 
     if response.status < 200 || response.status >= 300 {
@@ -264,17 +269,25 @@ mod tests {
     fn test_build_signing_string() {
         let mut headers = HashMap::new();
         headers.insert("host".to_string(), "example.com".to_string());
-        headers.insert("date".to_string(), "Mon, 01 Jan 2024 00:00:00 GMT".to_string());
+        headers.insert(
+            "date".to_string(),
+            "Mon, 01 Jan 2024 00:00:00 GMT".to_string(),
+        );
 
         let signing_string = build_signing_string(
             "POST",
             "/inbox",
             &headers,
-            &["(request-target)".to_string(), "host".to_string(), "date".to_string()],
+            &[
+                "(request-target)".to_string(),
+                "host".to_string(),
+                "date".to_string(),
+            ],
         )
         .unwrap();
 
-        let expected = "(request-target): post /inbox\nhost: example.com\ndate: Mon, 01 Jan 2024 00:00:00 GMT";
+        let expected =
+            "(request-target): post /inbox\nhost: example.com\ndate: Mon, 01 Jan 2024 00:00:00 GMT";
         assert_eq!(signing_string, expected);
     }
 }

@@ -5,7 +5,6 @@
 /// - Vercel: Node.js fetch (global)
 /// - Netlify: Netlify Functions fetch
 /// - Generic: reqwest, hyper, etc.
-
 use super::PlatformResult;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -106,7 +105,8 @@ impl Request {
     }
 
     pub fn json_body(mut self, json: &str) -> Self {
-        self.headers.insert("Content-Type".to_string(), "application/json".to_string());
+        self.headers
+            .insert("Content-Type".to_string(), "application/json".to_string());
         self.body = Some(json.as_bytes().to_vec());
         self
     }
@@ -157,7 +157,8 @@ impl Response {
     /// Get header value (case-insensitive)
     pub fn header(&self, key: &str) -> Option<&String> {
         let key_lower = key.to_lowercase();
-        self.headers.iter()
+        self.headers
+            .iter()
             .find(|(k, _)| k.to_lowercase() == key_lower)
             .map(|(_, v)| v)
     }

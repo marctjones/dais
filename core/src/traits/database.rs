@@ -5,7 +5,6 @@
 /// - Vercel: Neon Postgres
 /// - Netlify: Neon Postgres or Turso
 /// - Railway: PostgreSQL
-
 use super::{PlatformResult, Row, Statement};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -102,6 +101,9 @@ mod tests {
     #[test]
     fn test_dialect_now() {
         assert_eq!(DatabaseDialect::SQLite.now_function(), "datetime('now')");
-        assert_eq!(DatabaseDialect::PostgreSQL.now_function(), "CURRENT_TIMESTAMP");
+        assert_eq!(
+            DatabaseDialect::PostgreSQL.now_function(),
+            "CURRENT_TIMESTAMP"
+        );
     }
 }

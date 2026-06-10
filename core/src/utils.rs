@@ -1,5 +1,4 @@
 /// Utility functions for dais core
-
 use chrono::Utc;
 
 /// Generate a unique ID for posts, activities, etc.
@@ -29,11 +28,13 @@ pub fn now_rfc3339() -> String {
 /// Get current timestamp in ISO 8601 format with milliseconds
 ///
 /// Example: "2026-03-15T23:15:45.123Z"
+#[allow(dead_code)]
 pub fn now_iso8601_millis() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
 /// Normalize ActivityPub ID (remove trailing slashes, etc.)
+#[allow(dead_code)]
 pub fn normalize_id(id: &str) -> String {
     id.trim_end_matches('/').to_string()
 }
@@ -44,6 +45,7 @@ pub fn normalize_id(id: &str) -> String {
 /// - "@user@example.com" -> "user"
 /// - "user@example.com" -> "user"
 /// - "user" -> "user"
+#[allow(dead_code)]
 pub fn extract_username(handle: &str) -> String {
     handle
         .trim_start_matches('@')
@@ -59,6 +61,7 @@ pub fn extract_username(handle: &str) -> String {
 /// - "@user@example.com" -> Some("example.com")
 /// - "user@example.com" -> Some("example.com")
 /// - "user" -> None
+#[allow(dead_code)]
 pub fn extract_domain(handle: &str) -> Option<String> {
     let parts: Vec<&str> = handle.trim_start_matches('@').split('@').collect();
     if parts.len() > 1 {
@@ -83,6 +86,7 @@ pub fn post_url(domain: &str, username: &str, post_id: &str) -> String {
 }
 
 /// Validate email address (basic check)
+#[allow(dead_code)]
 pub fn is_valid_email(email: &str) -> bool {
     email.contains('@') && email.contains('.')
 }
@@ -116,8 +120,14 @@ mod tests {
 
     #[test]
     fn test_extract_domain() {
-        assert_eq!(extract_domain("@user@example.com"), Some("example.com".to_string()));
-        assert_eq!(extract_domain("user@example.com"), Some("example.com".to_string()));
+        assert_eq!(
+            extract_domain("@user@example.com"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            extract_domain("user@example.com"),
+            Some("example.com".to_string())
+        );
         assert_eq!(extract_domain("user"), None);
     }
 

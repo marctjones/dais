@@ -2,7 +2,6 @@
 ///
 /// This module provides utilities to write SQL queries that work across
 /// SQLite (Cloudflare D1) and PostgreSQL (Vercel Postgres, Supabase, etc.)
-
 pub mod query;
 pub mod schema;
 

@@ -1,27 +1,13 @@
+use crate::activitypub::types::Person;
+use crate::error::{CoreError, CoreResult};
 /// Platform-agnostic actor logic for ActivityPub
 ///
 /// This module handles:
 /// - Fetching actor data from database
 /// - Building Person objects
 /// - Managing followers/following collections
-
 use crate::traits::DatabaseProvider;
-use crate::error::{CoreResult, CoreError};
-use crate::activitypub::types::Person;
 use serde_json::Value;
-
-/// Check whether an actor is an approved follower — used for authorized-fetch
-/// (pull-side) read gating of followers-only content.
-pub async fn is_approved_follower(db: &dyn DatabaseProvider, actor_url: &str) -> CoreResult<bool> {
-    let query = "SELECT COUNT(*) as count FROM followers WHERE follower_actor_id = ?1 AND status = 'approved'";
-    let rows = db.execute(query, &[Value::String(actor_url.to_string())]).await?;
-    if let Some(row) = rows.first() {
-        if let Some(count) = row.get("count").and_then(|v| v.as_u64()) {
-            return Ok(count > 0);
-        }
-    }
-    Ok(false)
-}
 
 /// Actor data from database
 #[derive(Debug, Clone)]
@@ -51,23 +37,30 @@ pub async fn get_actor(
 ) -> CoreResult<Person> {
     // Query for actor
     let query = "SELECT id, username, display_name, summary, public_key, icon, image FROM actors WHERE username = ?1";
-    let rows = db.execute(query, &[Value::String(username.to_string())]).await?;
+    let rows = db
+        .execute(query, &[Value::String(username.to_string())])
+        .await?;
 
     if rows.is_empty() {
-        return Err(CoreError::NotFound(format!("Actor '{}' not found", username)));
+        return Err(CoreError::NotFound(format!(
+            "Actor '{}' not found",
+            username
+        )));
     }
 
     let row = &rows[0];
 
     // Extract fields from row
-    let actor_username = row.get("username")
+    let actor_username = row
+        .get("username")
         .and_then(|v| match v {
             Value::String(s) => Some(s.clone()),
             _ => None,
         })
         .ok_or_else(|| CoreError::Internal("Missing username field".to_string()))?;
 
-    let public_key_pem = row.get("public_key")
+    let public_key_pem = row
+        .get("public_key")
         .and_then(|v| match v {
             Value::String(s) => Some(s.clone()),
             _ => None,
@@ -117,10 +110,13 @@ pub async fn get_actor_counts(
 ) -> CoreResult<ActorCounts> {
     // Query for post count
     let post_count_query = "SELECT COUNT(*) as count FROM posts WHERE actor_id = ?1";
-    let post_rows = db.execute(post_count_query, &[Value::String(actor_id.to_string())]).await?;
+    let post_rows = db
+        .execute(post_count_query, &[Value::String(actor_id.to_string())])
+        .await?;
 
     let post_count = if !post_rows.is_empty() {
-        post_rows[0].get("count")
+        post_rows[0]
+            .get("count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0)
     } else {
@@ -128,11 +124,15 @@ pub async fn get_actor_counts(
     };
 
     // Query for follower count
-    let follower_count_query = "SELECT COUNT(*) as count FROM followers WHERE actor_id = ?1 AND status = 'approved'";
-    let follower_rows = db.execute(follower_count_query, &[Value::String(actor_id.to_string())]).await?;
+    let follower_count_query =
+        "SELECT COUNT(*) as count FROM followers WHERE actor_id = ?1 AND status = 'approved'";
+    let follower_rows = db
+        .execute(follower_count_query, &[Value::String(actor_id.to_string())])
+        .await?;
 
     let follower_count = if !follower_rows.is_empty() {
-        follower_rows[0].get("count")
+        follower_rows[0]
+            .get("count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0)
     } else {
@@ -140,11 +140,18 @@ pub async fn get_actor_counts(
     };
 
     // Query for following count
-    let following_count_query = "SELECT COUNT(*) as count FROM following WHERE actor_id = ?1 AND status = 'accepted'";
-    let following_rows = db.execute(following_count_query, &[Value::String(actor_id.to_string())]).await?;
+    let following_count_query =
+        "SELECT COUNT(*) as count FROM following WHERE actor_id = ?1 AND status = 'accepted'";
+    let following_rows = db
+        .execute(
+            following_count_query,
+            &[Value::String(actor_id.to_string())],
+        )
+        .await?;
 
     let following_count = if !following_rows.is_empty() {
-        following_rows[0].get("count")
+        following_rows[0]
+            .get("count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0)
     } else {
@@ -177,9 +184,12 @@ pub async fn get_followers(
             items_per_page, offset
         );
 
-        let rows = db.execute(&query, &[Value::String(actor_url.clone())]).await?;
+        let rows = db
+            .execute(&query, &[Value::String(actor_url.clone())])
+            .await?;
 
-        let items: Vec<String> = rows.iter()
+        let items: Vec<String> = rows
+            .iter()
             .filter_map(|row| {
                 row.get("follower_actor_id").and_then(|v| match v {
                     Value::String(s) => Some(s.clone()),
@@ -197,13 +207,14 @@ pub async fn get_followers(
         }))
     } else {
         // Return collection summary
-        let count_query = "SELECT COUNT(*) as count FROM followers WHERE actor_id = ?1 AND status = 'approved'";
-        let rows = db.execute(count_query, &[Value::String(actor_url.clone())]).await?;
+        let count_query =
+            "SELECT COUNT(*) as count FROM followers WHERE actor_id = ?1 AND status = 'approved'";
+        let rows = db
+            .execute(count_query, &[Value::String(actor_url.clone())])
+            .await?;
 
         let total_items = if !rows.is_empty() {
-            rows[0].get("count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
+            rows[0].get("count").and_then(|v| v.as_u64()).unwrap_or(0)
         } else {
             0
         };
@@ -237,9 +248,12 @@ pub async fn get_following(
             items_per_page, offset
         );
 
-        let rows = db.execute(&query, &[Value::String(actor_url.clone())]).await?;
+        let rows = db
+            .execute(&query, &[Value::String(actor_url.clone())])
+            .await?;
 
-        let items: Vec<String> = rows.iter()
+        let items: Vec<String> = rows
+            .iter()
             .filter_map(|row| {
                 row.get("target_actor_id").and_then(|v| match v {
                     Value::String(s) => Some(s.clone()),
@@ -257,13 +271,14 @@ pub async fn get_following(
         }))
     } else {
         // Return collection summary
-        let count_query = "SELECT COUNT(*) as count FROM following WHERE actor_id = ?1 AND status = 'accepted'";
-        let rows = db.execute(count_query, &[Value::String(actor_url.clone())]).await?;
+        let count_query =
+            "SELECT COUNT(*) as count FROM following WHERE actor_id = ?1 AND status = 'accepted'";
+        let rows = db
+            .execute(count_query, &[Value::String(actor_url.clone())])
+            .await?;
 
         let total_items = if !rows.is_empty() {
-            rows[0].get("count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
+            rows[0].get("count").and_then(|v| v.as_u64()).unwrap_or(0)
         } else {
             0
         };

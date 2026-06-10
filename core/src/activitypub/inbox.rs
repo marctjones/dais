@@ -1,45 +1,26 @@
+use crate::activitypub::security::is_blocked_actor;
+use crate::activitypub::types::Activity;
+use crate::error::{CoreError, CoreResult};
 /// ActivityPub inbox processing
 ///
 /// Handles incoming activities from remote servers
-
 use crate::traits::{DatabaseProvider, HttpProvider};
-use crate::error::{CoreResult, CoreError};
-use crate::activitypub::types::Activity;
 use serde_json::Value;
 use std::collections::HashMap;
 
 /// Content moderation result
 #[derive(Debug, Clone)]
 pub struct ModerationResult {
-    pub status: String,      // "approved", "flagged", "rejected"
-    pub score: f64,          // 0.0-1.0 confidence score
-    pub flags: String,       // Comma-separated flags
-    pub hidden: bool,        // Should be hidden from display
+    pub status: String, // "approved", "flagged", "rejected"
+    pub score: f64,     // 0.0-1.0 confidence score
+    pub flags: String,  // Comma-separated flags
+    pub hidden: bool,   // Should be hidden from display
 }
 
 /// Trait for content moderation (platform-specific)
 #[async_trait::async_trait(?Send)]
 pub trait ContentModerator {
     async fn moderate(&self, content: &str) -> CoreResult<ModerationResult>;
-}
-
-/// Check if an actor is blocked
-pub async fn is_blocked(
-    db: &dyn DatabaseProvider,
-    actor_url: &str,
-) -> CoreResult<bool> {
-    // Schema: the moderation table is `blocks` keyed by `actor_id` (the blocked
-    // actor's URL), not `blocked_actors`/`actor_url`.
-    let query = "SELECT COUNT(*) as count FROM blocks WHERE actor_id = ?1";
-    let rows = db.execute(query, &[Value::String(actor_url.to_string())]).await?;
-
-    if !rows.is_empty() {
-        if let Some(count) = rows[0].get("count").and_then(|v| v.as_u64()) {
-            return Ok(count > 0);
-        }
-    }
-
-    Ok(false)
 }
 
 /// Extract actor info from actor URL (fetch remote actor profile)
@@ -64,7 +45,10 @@ pub async fn extract_actor_info(
 
     // Build request
     let mut headers = HashMap::new();
-    headers.insert("Accept".to_string(), "application/activity+json".to_string());
+    headers.insert(
+        "Accept".to_string(),
+        "application/activity+json".to_string(),
+    );
 
     let request = crate::traits::Request {
         url: actor_url.to_string(),
@@ -123,18 +107,28 @@ pub async fn create_notification(
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)
     "#;
 
-    db.execute(query, &[
-        Value::String(id),
-        Value::String(notification_type.to_string()),
-        Value::String(actor_id.to_string()),
-        Value::String(actor_username.to_string()),
-        Value::String(actor_display_name.to_string()),
-        Value::String(actor_avatar_url.to_string()),
-        post_id.map(|s| Value::String(s.to_string())).unwrap_or(Value::Null),
-        reply_id.map(|s| Value::String(s.to_string())).unwrap_or(Value::Null),
-        content.map(|s| Value::String(s.to_string())).unwrap_or(Value::Null),
-        Value::String(created_at),
-    ]).await?;
+    db.execute(
+        query,
+        &[
+            Value::String(id),
+            Value::String(notification_type.to_string()),
+            Value::String(actor_id.to_string()),
+            Value::String(actor_username.to_string()),
+            Value::String(actor_display_name.to_string()),
+            Value::String(actor_avatar_url.to_string()),
+            post_id
+                .map(|s| Value::String(s.to_string()))
+                .unwrap_or(Value::Null),
+            reply_id
+                .map(|s| Value::String(s.to_string()))
+                .unwrap_or(Value::Null),
+            content
+                .map(|s| Value::String(s.to_string()))
+                .unwrap_or(Value::Null),
+            Value::String(created_at),
+        ],
+    )
+    .await?;
 
     Ok(())
 }
@@ -155,41 +149,60 @@ pub async fn handle_follow(
         ) VALUES (?1, ?2, ?3, ?4, 'pending')
     "#;
 
-    db.execute(query, &[
-        Value::String(activity.id.clone()),
-        Value::String(our_actor_url.to_string()),
-        Value::String(activity.actor.clone()),
-        Value::String(follower_inbox),
-    ]).await?;
+    db.execute(
+        query,
+        &[
+            Value::String(activity.id.clone()),
+            Value::String(our_actor_url.to_string()),
+            Value::String(activity.actor.clone()),
+            Value::String(follower_inbox),
+        ],
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Handle Undo activity
-pub async fn handle_undo(
-    db: &dyn DatabaseProvider,
-    activity: &Activity,
-) -> CoreResult<()> {
+pub async fn handle_undo(db: &dyn DatabaseProvider, activity: &Activity) -> CoreResult<()> {
     // The object should be the activity being undone
-    if let Some(object_type) = activity.object.as_ref().and_then(|o| o.get("type")).and_then(|v| v.as_str()) {
+    if let Some(object_type) = activity
+        .object
+        .as_ref()
+        .and_then(|o| o.get("type"))
+        .and_then(|v| v.as_str())
+    {
         match object_type {
             "Follow" => {
                 // Remove the follower
                 let query = "DELETE FROM followers WHERE follower_actor_id = ?1";
-                db.execute(query, &[Value::String(activity.actor.clone())]).await?;
+                db.execute(query, &[Value::String(activity.actor.clone())])
+                    .await?;
             }
             "Like" => {
                 // Remove the like
-                if let Some(object_id) = activity.object.as_ref().and_then(|o| o.get("id")).and_then(|v| v.as_str()) {
+                if let Some(object_id) = activity
+                    .object
+                    .as_ref()
+                    .and_then(|o| o.get("id"))
+                    .and_then(|v| v.as_str())
+                {
                     let query = "DELETE FROM interactions WHERE id = ?1";
-                    db.execute(query, &[Value::String(object_id.to_string())]).await?;
+                    db.execute(query, &[Value::String(object_id.to_string())])
+                        .await?;
                 }
             }
             "Announce" => {
                 // Remove the boost
-                if let Some(object_id) = activity.object.as_ref().and_then(|o| o.get("id")).and_then(|v| v.as_str()) {
+                if let Some(object_id) = activity
+                    .object
+                    .as_ref()
+                    .and_then(|o| o.get("id"))
+                    .and_then(|v| v.as_str())
+                {
                     let query = "DELETE FROM interactions WHERE id = ?1";
-                    db.execute(query, &[Value::String(object_id.to_string())]).await?;
+                    db.execute(query, &[Value::String(object_id.to_string())])
+                        .await?;
                 }
             }
             _ => {}
@@ -208,7 +221,12 @@ pub async fn handle_create(
     moderator: Option<&dyn ContentModerator>,
 ) -> CoreResult<()> {
     // Check if the object is a Note (post/reply)
-    if let Some(object_type) = activity.object.as_ref().and_then(|o| o.get("type")).and_then(|v| v.as_str()) {
+    if let Some(object_type) = activity
+        .object
+        .as_ref()
+        .and_then(|o| o.get("type"))
+        .and_then(|v| v.as_str())
+    {
         if object_type != "Note" {
             return Ok(()); // Not a Note, nothing to do
         }
@@ -216,15 +234,19 @@ pub async fn handle_create(
         return Ok(());
     }
 
-    let object = activity.object.as_ref().ok_or_else(|| CoreError::InvalidActivity("Missing object".to_string()))?;
+    let object = activity
+        .object
+        .as_ref()
+        .ok_or_else(|| CoreError::InvalidActivity("Missing object".to_string()))?;
 
     // Check if this is a DM (to contains our actor, no Public)
-    let is_dm = object.get("to")
+    let is_dm = object
+        .get("to")
         .and_then(|to| to.as_array())
         .map(|to_array| {
-            let has_our_actor = to_array.iter().any(|recipient| {
-                recipient.as_str() == Some(our_actor_url)
-            });
+            let has_our_actor = to_array
+                .iter()
+                .any(|recipient| recipient.as_str() == Some(our_actor_url));
             let has_public = to_array.iter().any(|recipient| {
                 recipient.as_str() == Some("https://www.w3.org/ns/activitystreams#Public")
             });
@@ -249,10 +271,7 @@ pub async fn handle_create(
 }
 
 /// Handle Update activity for timeline Notes from accepted follows.
-pub async fn handle_update(
-    db: &dyn DatabaseProvider,
-    activity: &Activity,
-) -> CoreResult<()> {
+pub async fn handle_update(db: &dyn DatabaseProvider, activity: &Activity) -> CoreResult<()> {
     let Some(object) = activity.object.as_ref() else {
         return Ok(());
     };
@@ -288,23 +307,24 @@ pub async fn handle_update(
         WHERE object_id = ?6
     "#;
 
-    db.execute(query, &[
-        Value::String(content.to_string()),
-        Value::String(crate::utils::sanitize_html(content)),
-        Value::String(updated_at),
-        Value::String(raw_object),
-        encrypted_message.map(Value::String).unwrap_or(Value::Null),
-        Value::String(object_id),
-    ]).await?;
+    db.execute(
+        query,
+        &[
+            Value::String(content.to_string()),
+            Value::String(crate::utils::sanitize_html(content)),
+            Value::String(updated_at),
+            Value::String(raw_object),
+            encrypted_message.map(Value::String).unwrap_or(Value::Null),
+            Value::String(object_id),
+        ],
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Handle Delete activity for timeline Notes from accepted follows.
-pub async fn handle_delete(
-    db: &dyn DatabaseProvider,
-    activity: &Activity,
-) -> CoreResult<()> {
+pub async fn handle_delete(db: &dyn DatabaseProvider, activity: &Activity) -> CoreResult<()> {
     if !is_accepted_following(db, &activity.actor).await? {
         return Ok(());
     }
@@ -325,25 +345,26 @@ pub async fn handle_delete(
         .unwrap_or_else(crate::utils::now_rfc3339);
 
     let query = "UPDATE timeline_posts SET deleted_at = ?1 WHERE object_id = ?2";
-    db.execute(query, &[
-        Value::String(deleted_at),
-        Value::String(object_id),
-    ]).await?;
+    db.execute(
+        query,
+        &[Value::String(deleted_at), Value::String(object_id)],
+    )
+    .await?;
 
     Ok(())
 }
 
-async fn is_accepted_following(
-    db: &dyn DatabaseProvider,
-    actor_id: &str,
-) -> CoreResult<bool> {
+async fn is_accepted_following(db: &dyn DatabaseProvider, actor_id: &str) -> CoreResult<bool> {
     let query = "SELECT COUNT(*) AS count FROM following WHERE target_actor_id = ?1 AND status = 'accepted'";
-    let rows = db.execute(query, &[Value::String(actor_id.to_string())]).await?;
+    let rows = db
+        .execute(query, &[Value::String(actor_id.to_string())])
+        .await?;
     Ok(rows
         .first()
         .and_then(|row| row.get("count"))
         .and_then(|v| v.as_u64())
-        .unwrap_or(0) > 0)
+        .unwrap_or(0)
+        > 0)
 }
 
 async fn ingest_timeline_post(
@@ -351,7 +372,10 @@ async fn ingest_timeline_post(
     http: &dyn HttpProvider,
     activity: &Activity,
 ) -> CoreResult<()> {
-    let object = activity.object.as_ref().ok_or_else(|| CoreError::InvalidActivity("Missing object".to_string()))?;
+    let object = activity
+        .object
+        .as_ref()
+        .ok_or_else(|| CoreError::InvalidActivity("Missing object".to_string()))?;
     let object_id = note_object_id(activity)?;
     let content = object.get("content").and_then(|v| v.as_str()).unwrap_or("");
     let published_at = object
@@ -370,9 +394,9 @@ async fn ingest_timeline_post(
         .transpose()?;
 
     let (actor_username, actor_display_name, actor_avatar_url) =
-        extract_actor_info(http, &activity.actor).await.unwrap_or_else(|_| {
-            ("unknown".to_string(), "Unknown".to_string(), "".to_string())
-        });
+        extract_actor_info(http, &activity.actor)
+            .await
+            .unwrap_or_else(|_| ("unknown".to_string(), "Unknown".to_string(), "".to_string()));
 
     let query = r#"
         INSERT INTO timeline_posts (
@@ -396,22 +420,28 @@ async fn ingest_timeline_post(
             deleted_at = NULL
     "#;
 
-    db.execute(query, &[
-        Value::String(crate::utils::generate_uuid()),
-        Value::String(object_id),
-        Value::String(activity.actor.clone()),
-        Value::String(actor_username),
-        Value::String(actor_display_name),
-        Value::String(actor_avatar_url),
-        Value::String(content.to_string()),
-        Value::String(crate::utils::sanitize_html(content)),
-        Value::String(visibility),
-        in_reply_to.map(|s| Value::String(s.to_string())).unwrap_or(Value::Null),
-        Value::String(published_at),
-        Value::String(raw_object),
-        Value::String(raw_activity),
-        encrypted_message.map(Value::String).unwrap_or(Value::Null),
-    ]).await?;
+    db.execute(
+        query,
+        &[
+            Value::String(crate::utils::generate_uuid()),
+            Value::String(object_id),
+            Value::String(activity.actor.clone()),
+            Value::String(actor_username),
+            Value::String(actor_display_name),
+            Value::String(actor_avatar_url),
+            Value::String(content.to_string()),
+            Value::String(crate::utils::sanitize_html(content)),
+            Value::String(visibility),
+            in_reply_to
+                .map(|s| Value::String(s.to_string()))
+                .unwrap_or(Value::Null),
+            Value::String(published_at),
+            Value::String(raw_object),
+            Value::String(raw_activity),
+            encrypted_message.map(Value::String).unwrap_or(Value::Null),
+        ],
+    )
+    .await?;
 
     Ok(())
 }
@@ -455,17 +485,26 @@ async fn handle_direct_message(
     activity: &Activity,
     our_actor_url: &str,
 ) -> CoreResult<()> {
-    let object = activity.object.as_ref().ok_or_else(|| CoreError::InvalidActivity("Missing object".to_string()))?;
+    let object = activity
+        .object
+        .as_ref()
+        .ok_or_else(|| CoreError::InvalidActivity("Missing object".to_string()))?;
 
-    let dm_id = object.get("id").and_then(|v| v.as_str()).unwrap_or(&activity.id);
+    let dm_id = object
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&activity.id);
     let content = object.get("content").and_then(|v| v.as_str()).unwrap_or("");
-    let published_at = object.get("published").and_then(|v| v.as_str()).unwrap_or("");
+    let published_at = object
+        .get("published")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     // Fetch actor info
     let (actor_username, actor_display_name, actor_avatar_url) =
-        extract_actor_info(http, &activity.actor).await.unwrap_or_else(|_| {
-            ("unknown".to_string(), "Unknown".to_string(), "".to_string())
-        });
+        extract_actor_info(http, &activity.actor)
+            .await
+            .unwrap_or_else(|_| ("unknown".to_string(), "Unknown".to_string(), "".to_string()));
 
     // Store the DM
     let query = r#"
@@ -475,16 +514,20 @@ async fn handle_direct_message(
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)
     "#;
 
-    db.execute(query, &[
-        Value::String(dm_id.to_string()),
-        Value::String(activity.actor.clone()),
-        Value::String(our_actor_url.to_string()),
-        Value::String(actor_username.clone()),
-        Value::String(actor_display_name.clone()),
-        Value::String(actor_avatar_url.clone()),
-        Value::String(content.to_string()),
-        Value::String(published_at.to_string()),
-    ]).await?;
+    db.execute(
+        query,
+        &[
+            Value::String(dm_id.to_string()),
+            Value::String(activity.actor.clone()),
+            Value::String(our_actor_url.to_string()),
+            Value::String(actor_username.clone()),
+            Value::String(actor_display_name.clone()),
+            Value::String(actor_avatar_url.clone()),
+            Value::String(content.to_string()),
+            Value::String(published_at.to_string()),
+        ],
+    )
+    .await?;
 
     // Create notification
     create_notification(
@@ -497,7 +540,8 @@ async fn handle_direct_message(
         None,
         Some(dm_id),
         Some(content),
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -510,38 +554,53 @@ async fn handle_reply(
     in_reply_to: &str,
     moderator: Option<&dyn ContentModerator>,
 ) -> CoreResult<()> {
-    let object = activity.object.as_ref().ok_or_else(|| CoreError::InvalidActivity("Missing object".to_string()))?;
+    let object = activity
+        .object
+        .as_ref()
+        .ok_or_else(|| CoreError::InvalidActivity("Missing object".to_string()))?;
 
-    let reply_id = object.get("id").and_then(|v| v.as_str()).unwrap_or(&activity.id);
+    let reply_id = object
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&activity.id);
     let content = object.get("content").and_then(|v| v.as_str()).unwrap_or("");
-    let published_at = object.get("published").and_then(|v| v.as_str()).unwrap_or("");
+    let published_at = object
+        .get("published")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     // Fetch actor info
     let (actor_username, actor_display_name, actor_avatar_url) =
-        extract_actor_info(http, &activity.actor).await.unwrap_or_else(|_| {
-            ("unknown".to_string(), "Unknown".to_string(), "".to_string())
-        });
+        extract_actor_info(http, &activity.actor)
+            .await
+            .unwrap_or_else(|_| ("unknown".to_string(), "Unknown".to_string(), "".to_string()));
 
     // Check if in_reply_to is one of our posts
     let our_post_query = "SELECT id FROM posts WHERE id = ?1";
-    let our_post_result = db.execute(our_post_query, &[Value::String(in_reply_to.to_string())]).await?;
+    let our_post_result = db
+        .execute(our_post_query, &[Value::String(in_reply_to.to_string())])
+        .await?;
 
     if our_post_result.is_empty() {
         return Ok(()); // Not a reply to our post
     }
 
     // Run moderation if available
-    let (moderation_status, moderation_score, moderation_flags, hidden) = if let Some(mod_service) = moderator {
-        let result = mod_service.moderate(content).await.unwrap_or(ModerationResult {
-            status: "approved".to_string(),
-            score: 0.0,
-            flags: "".to_string(),
-            hidden: false,
-        });
-        (result.status, result.score, result.flags, result.hidden)
-    } else {
-        ("approved".to_string(), 0.0, "".to_string(), false)
-    };
+    let (moderation_status, moderation_score, moderation_flags, hidden) =
+        if let Some(mod_service) = moderator {
+            let result = mod_service
+                .moderate(content)
+                .await
+                .unwrap_or(ModerationResult {
+                    status: "approved".to_string(),
+                    score: 0.0,
+                    flags: "".to_string(),
+                    hidden: false,
+                });
+            (result.status, result.score, result.flags, result.hidden)
+        } else {
+            ("approved".to_string(), 0.0, "".to_string(), false)
+        };
 
     let checked_at = crate::utils::now_rfc3339();
 
@@ -555,21 +614,25 @@ async fn handle_reply(
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
     "#;
 
-    db.execute(insert_query, &[
-        Value::String(reply_id.to_string()),
-        Value::String(in_reply_to.to_string()),
-        Value::String(activity.actor.clone()),
-        Value::String(actor_username.clone()),
-        Value::String(actor_display_name.clone()),
-        Value::String(actor_avatar_url.clone()),
-        Value::String(content.to_string()),
-        Value::String(published_at.to_string()),
-        Value::String(moderation_status),
-        Value::Number(serde_json::Number::from_f64(moderation_score).unwrap()),
-        Value::String(moderation_flags),
-        Value::String(checked_at),
-        Value::Bool(hidden),
-    ]).await?;
+    db.execute(
+        insert_query,
+        &[
+            Value::String(reply_id.to_string()),
+            Value::String(in_reply_to.to_string()),
+            Value::String(activity.actor.clone()),
+            Value::String(actor_username.clone()),
+            Value::String(actor_display_name.clone()),
+            Value::String(actor_avatar_url.clone()),
+            Value::String(content.to_string()),
+            Value::String(published_at.to_string()),
+            Value::String(moderation_status),
+            Value::Number(serde_json::Number::from_f64(moderation_score).unwrap()),
+            Value::String(moderation_flags),
+            Value::String(checked_at),
+            Value::Bool(hidden),
+        ],
+    )
+    .await?;
 
     // Create notification only if not hidden
     if !hidden {
@@ -583,7 +646,8 @@ async fn handle_reply(
             Some(in_reply_to),
             Some(reply_id),
             Some(content),
-        ).await?;
+        )
+        .await?;
     }
 
     Ok(())
@@ -596,15 +660,17 @@ pub async fn handle_like(
     activity: &Activity,
 ) -> CoreResult<()> {
     // Extract the object being liked
-    let object_id = activity.object.as_ref()
+    let object_id = activity
+        .object
+        .as_ref()
         .and_then(|o| o.as_str())
         .ok_or_else(|| CoreError::InvalidActivity("Missing object ID".to_string()))?;
 
     // Fetch actor info
     let (actor_username, actor_display_name, actor_avatar_url) =
-        extract_actor_info(http, &activity.actor).await.unwrap_or_else(|_| {
-            ("unknown".to_string(), "Unknown".to_string(), "".to_string())
-        });
+        extract_actor_info(http, &activity.actor)
+            .await
+            .unwrap_or_else(|_| ("unknown".to_string(), "Unknown".to_string(), "".to_string()));
 
     let published_at = activity.published.as_deref().unwrap_or("");
 
@@ -616,15 +682,19 @@ pub async fn handle_like(
         ) VALUES (?1, 'like', ?2, ?3, ?4, ?5, ?6, ?7)
     "#;
 
-    db.execute(query, &[
-        Value::String(activity.id.clone()),
-        Value::String(activity.actor.clone()),
-        Value::String(actor_username.clone()),
-        Value::String(actor_display_name.clone()),
-        Value::String(actor_avatar_url.clone()),
-        Value::String(object_id.to_string()),
-        Value::String(published_at.to_string()),
-    ]).await?;
+    db.execute(
+        query,
+        &[
+            Value::String(activity.id.clone()),
+            Value::String(activity.actor.clone()),
+            Value::String(actor_username.clone()),
+            Value::String(actor_display_name.clone()),
+            Value::String(actor_avatar_url.clone()),
+            Value::String(object_id.to_string()),
+            Value::String(published_at.to_string()),
+        ],
+    )
+    .await?;
 
     // Create notification
     create_notification(
@@ -637,7 +707,8 @@ pub async fn handle_like(
         Some(object_id),
         None,
         None,
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -649,15 +720,17 @@ pub async fn handle_announce(
     activity: &Activity,
 ) -> CoreResult<()> {
     // Extract the object being announced
-    let object_id = activity.object.as_ref()
+    let object_id = activity
+        .object
+        .as_ref()
         .and_then(|o| o.as_str())
         .ok_or_else(|| CoreError::InvalidActivity("Missing object ID".to_string()))?;
 
     // Fetch actor info
     let (actor_username, actor_display_name, actor_avatar_url) =
-        extract_actor_info(http, &activity.actor).await.unwrap_or_else(|_| {
-            ("unknown".to_string(), "Unknown".to_string(), "".to_string())
-        });
+        extract_actor_info(http, &activity.actor)
+            .await
+            .unwrap_or_else(|_| ("unknown".to_string(), "Unknown".to_string(), "".to_string()));
 
     let published_at = activity.published.as_deref().unwrap_or("");
 
@@ -669,15 +742,19 @@ pub async fn handle_announce(
         ) VALUES (?1, 'boost', ?2, ?3, ?4, ?5, ?6, ?7)
     "#;
 
-    db.execute(query, &[
-        Value::String(activity.id.clone()),
-        Value::String(activity.actor.clone()),
-        Value::String(actor_username.clone()),
-        Value::String(actor_display_name.clone()),
-        Value::String(actor_avatar_url.clone()),
-        Value::String(object_id.to_string()),
-        Value::String(published_at.to_string()),
-    ]).await?;
+    db.execute(
+        query,
+        &[
+            Value::String(activity.id.clone()),
+            Value::String(activity.actor.clone()),
+            Value::String(actor_username.clone()),
+            Value::String(actor_display_name.clone()),
+            Value::String(actor_avatar_url.clone()),
+            Value::String(object_id.to_string()),
+            Value::String(published_at.to_string()),
+        ],
+    )
+    .await?;
 
     // Create notification
     create_notification(
@@ -690,22 +767,26 @@ pub async fn handle_announce(
         Some(object_id),
         None,
         None,
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Handle Accept activity (follow request approved)
-pub async fn handle_accept(
-    db: &dyn DatabaseProvider,
-    activity: &Activity,
-) -> CoreResult<()> {
+pub async fn handle_accept(db: &dyn DatabaseProvider, activity: &Activity) -> CoreResult<()> {
     // The object should be our Follow activity
-    if let Some(object_type) = activity.object.as_ref().and_then(|o| o.get("type")).and_then(|v| v.as_str()) {
+    if let Some(object_type) = activity
+        .object
+        .as_ref()
+        .and_then(|o| o.get("type"))
+        .and_then(|v| v.as_str())
+    {
         if object_type == "Follow" {
             // Update the following status to approved
             let query = "UPDATE following SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP WHERE target_actor_id = ?1 AND status = 'pending'";
-            db.execute(query, &[Value::String(activity.actor.clone())]).await?;
+            db.execute(query, &[Value::String(activity.actor.clone())])
+                .await?;
         }
     }
 
@@ -713,16 +794,19 @@ pub async fn handle_accept(
 }
 
 /// Handle Reject activity (follow request rejected)
-pub async fn handle_reject(
-    db: &dyn DatabaseProvider,
-    activity: &Activity,
-) -> CoreResult<()> {
+pub async fn handle_reject(db: &dyn DatabaseProvider, activity: &Activity) -> CoreResult<()> {
     // The object should be our Follow activity
-    if let Some(object_type) = activity.object.as_ref().and_then(|o| o.get("type")).and_then(|v| v.as_str()) {
+    if let Some(object_type) = activity
+        .object
+        .as_ref()
+        .and_then(|o| o.get("type"))
+        .and_then(|v| v.as_str())
+    {
         if object_type == "Follow" {
             // Remove the follow request
             let query = "DELETE FROM following WHERE target_actor_id = ?1 AND status = 'pending'";
-            db.execute(query, &[Value::String(activity.actor.clone())]).await?;
+            db.execute(query, &[Value::String(activity.actor.clone())])
+                .await?;
         }
     }
 
@@ -738,8 +822,11 @@ pub async fn process_inbox_activity(
     moderator: Option<&dyn ContentModerator>,
 ) -> CoreResult<()> {
     // Check if actor is blocked
-    if is_blocked(db, &activity.actor).await? {
-        return Err(CoreError::Unauthorized(format!("Actor is blocked: {}", activity.actor)));
+    if is_blocked_actor(db, &activity.actor).await? {
+        return Err(CoreError::Unauthorized(format!(
+            "Actor is blocked: {}",
+            activity.actor
+        )));
     }
 
     // Route to appropriate handler based on activity type

@@ -1,10 +1,9 @@
+use crate::error::{CoreError, CoreResult};
+use crate::sql::convert_placeholders;
 /// Database migration system
 ///
 /// Handles applying schema migrations to any database dialect
-
-use crate::traits::{DatabaseProvider, DatabaseDialect};
-use crate::error::{CoreResult, CoreError};
-use crate::sql::convert_placeholders;
+use crate::traits::{DatabaseDialect, DatabaseProvider};
 use serde_json::Value;
 
 /// Migration metadata
@@ -47,27 +46,33 @@ impl<'a> MigrationRunner<'a> {
         let dialect = self.db.dialect();
 
         let create_table = match dialect {
-            DatabaseDialect::SQLite => r#"
+            DatabaseDialect::SQLite => {
+                r#"
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
                     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
-            "#,
-            DatabaseDialect::PostgreSQL => r#"
+            "#
+            }
+            DatabaseDialect::PostgreSQL => {
+                r#"
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
                     applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
-            "#,
-            DatabaseDialect::MySQL => r#"
+            "#
+            }
+            DatabaseDialect::MySQL => {
+                r#"
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version INT PRIMARY KEY,
                     name TEXT NOT NULL,
                     applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
-            "#,
+            "#
+            }
         };
 
         self.db.execute(create_table, &[]).await?;
@@ -85,10 +90,7 @@ impl<'a> MigrationRunner<'a> {
             return Ok(0);
         }
 
-        let version = rows[0]
-            .get("version")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
+        let version = rows[0].get("version").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
         Ok(version)
     }
@@ -99,19 +101,19 @@ impl<'a> MigrationRunner<'a> {
 
         let sql = convert_placeholders(
             "SELECT COUNT(*) as count FROM schema_migrations WHERE version = ?1",
-            self.db.dialect()
+            self.db.dialect(),
         );
 
-        let rows = self.db.execute(&sql, &[Value::Number(version.into())]).await?;
+        let rows = self
+            .db
+            .execute(&sql, &[Value::Number(version.into())])
+            .await?;
 
         if rows.is_empty() {
             return Ok(false);
         }
 
-        let count = rows[0]
-            .get("count")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        let count = rows[0].get("count").and_then(|v| v.as_i64()).unwrap_or(0);
 
         Ok(count > 0)
     }
@@ -134,23 +136,25 @@ impl<'a> MigrationRunner<'a> {
             }
 
             self.db.execute(statement, &[]).await.map_err(|e| {
-                CoreError::Internal(format!(
-                    "Migration {} failed: {}",
-                    migration.version, e
-                ))
+                CoreError::Internal(format!("Migration {} failed: {}", migration.version, e))
             })?;
         }
 
         // Record migration
         let record_sql = convert_placeholders(
             "INSERT INTO schema_migrations (version, name) VALUES (?1, ?2)",
-            self.db.dialect()
+            self.db.dialect(),
         );
 
-        self.db.execute(&record_sql, &[
-            Value::Number(migration.version.into()),
-            Value::String(migration.name.clone()),
-        ]).await?;
+        self.db
+            .execute(
+                &record_sql,
+                &[
+                    Value::Number(migration.version.into()),
+                    Value::String(migration.name.clone()),
+                ],
+            )
+            .await?;
 
         Ok(())
     }
@@ -161,7 +165,10 @@ impl<'a> MigrationRunner<'a> {
 
         for migration in migrations {
             if !self.is_applied(migration.version).await? {
-                println!("Applying migration {}: {}", migration.version, migration.name);
+                println!(
+                    "Applying migration {}: {}",
+                    migration.version, migration.name
+                );
                 self.apply(migration).await?;
             }
         }
@@ -177,10 +184,12 @@ impl<'a> MigrationRunner<'a> {
         }
 
         // Get down SQL
-        let down_sql = migration.down_sql.as_ref()
-            .ok_or_else(|| CoreError::Internal(
-                format!("Migration {} has no down migration", migration.version)
-            ))?;
+        let down_sql = migration.down_sql.as_ref().ok_or_else(|| {
+            CoreError::Internal(format!(
+                "Migration {} has no down migration",
+                migration.version
+            ))
+        })?;
 
         // Convert SQL placeholders for the target dialect
         let sql = convert_placeholders(down_sql, self.db.dialect());
@@ -203,12 +212,12 @@ impl<'a> MigrationRunner<'a> {
         // Remove migration record
         let delete_sql = convert_placeholders(
             "DELETE FROM schema_migrations WHERE version = ?1",
-            self.db.dialect()
+            self.db.dialect(),
         );
 
-        self.db.execute(&delete_sql, &[
-            Value::Number(migration.version.into()),
-        ]).await?;
+        self.db
+            .execute(&delete_sql, &[Value::Number(migration.version.into())])
+            .await?;
 
         Ok(())
     }
@@ -223,7 +232,7 @@ mod tests {
         let migration = Migration::new(
             1,
             "initial_schema",
-            "CREATE TABLE users (id INTEGER PRIMARY KEY)"
+            "CREATE TABLE users (id INTEGER PRIMARY KEY)",
         );
 
         assert_eq!(migration.version, 1);

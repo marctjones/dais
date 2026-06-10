@@ -1,7 +1,6 @@
 /// ActivityPub type definitions
 ///
 /// These types represent ActivityPub objects, activities, and actors.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -155,12 +154,7 @@ pub struct Person {
 
 impl Person {
     /// Create a new Person actor
-    pub fn new(
-        _id: String,
-        username: String,
-        domain: String,
-        public_key_pem: String,
-    ) -> Self {
+    pub fn new(_id: String, username: String, domain: String, public_key_pem: String) -> Self {
         let base_url = format!("https://{}/users/{}", domain, username);
 
         Self {

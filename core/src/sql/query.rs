@@ -1,9 +1,8 @@
+use super::convert_placeholders;
 /// Query builder for portable SQL queries
 ///
 /// Provides a simple API to build SQL queries that work across dialects
-
 use crate::traits::DatabaseDialect;
-use super::convert_placeholders;
 
 pub struct QueryBuilder {
     dialect: DatabaseDialect,
@@ -107,7 +106,10 @@ mod tests {
             .limit(10)
             .build();
 
-        assert_eq!(query, "SELECT id, name FROM users WHERE id = ?1 ORDER BY name LIMIT 10");
+        assert_eq!(
+            query,
+            "SELECT id, name FROM users WHERE id = ?1 ORDER BY name LIMIT 10"
+        );
     }
 
     #[test]

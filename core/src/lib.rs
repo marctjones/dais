@@ -1,3 +1,8 @@
+pub mod activitypub;
+pub mod atproto;
+mod error;
+pub mod migrations;
+pub mod sql;
 /// dais-core: Platform-agnostic ActivityPub/AT Protocol implementation
 ///
 /// This library provides the core social protocol logic as a WASM module
@@ -5,23 +10,16 @@
 ///
 /// Platform-specific code (database, storage, queues, HTTP) is abstracted
 /// behind traits in the `traits` module.
-
 pub mod traits;
-pub mod activitypub;
-pub mod atproto;
-pub mod webfinger;
-pub mod sql;
-pub mod migrations;
-mod error;
 mod utils;
+pub mod webfinger;
 
 pub use error::{CoreError, CoreResult};
 pub use traits::{
-    DatabaseProvider, StorageProvider, QueueProvider, HttpProvider,
-    PlatformError, PlatformResult, Row, Statement,
+    DatabaseProvider, HttpProvider, PlatformError, PlatformResult, QueueProvider, Row, Statement,
+    StorageProvider,
 };
 
-use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -110,7 +108,8 @@ impl DaisCore {
             activity,
             &our_actor_url,
             moderator,
-        ).await
+        )
+        .await
     }
 
     /// Create a new local ActivityPub post.
@@ -155,12 +154,15 @@ impl DaisCore {
                     ?1, ?2, ?3, ?4, ?5, ?6
                 )
             "#;
-            self.db.execute(insert_legacy, &params).await.map_err(|legacy_err| {
-                CoreError::Platform(crate::traits::PlatformError::Database(format!(
-                    "post insert failed: {}; legacy insert failed: {}",
-                    err, legacy_err
-                )))
-            })?;
+            self.db
+                .execute(insert_legacy, &params)
+                .await
+                .map_err(|legacy_err| {
+                    CoreError::Platform(crate::traits::PlatformError::Database(format!(
+                        "post insert failed: {}; legacy insert failed: {}",
+                        err, legacy_err
+                    )))
+                })?;
         }
 
         Ok(post_id)
@@ -177,13 +179,23 @@ impl DaisCore {
     }
 
     /// Get followers collection for an actor
-    pub async fn get_followers(&self, username: String, page: Option<u32>) -> CoreResult<serde_json::Value> {
-        activitypub::get_followers(&*self.db, &username, &self.config.activitypub_domain, page).await
+    pub async fn get_followers(
+        &self,
+        username: String,
+        page: Option<u32>,
+    ) -> CoreResult<serde_json::Value> {
+        activitypub::get_followers(&*self.db, &username, &self.config.activitypub_domain, page)
+            .await
     }
 
     /// Get following collection for an actor
-    pub async fn get_following(&self, username: String, page: Option<u32>) -> CoreResult<serde_json::Value> {
-        activitypub::get_following(&*self.db, &username, &self.config.activitypub_domain, page).await
+    pub async fn get_following(
+        &self,
+        username: String,
+        page: Option<u32>,
+    ) -> CoreResult<serde_json::Value> {
+        activitypub::get_following(&*self.db, &username, &self.config.activitypub_domain, page)
+            .await
     }
 
     /// Get outbox posts for an actor
@@ -192,12 +204,19 @@ impl DaisCore {
     }
 
     /// Get a single post
-    pub async fn get_post(&self, username: String, post_id: String) -> CoreResult<activitypub::Post> {
+    pub async fn get_post(
+        &self,
+        username: String,
+        post_id: String,
+    ) -> CoreResult<activitypub::Post> {
         activitypub::get_post(&*self.db, &username, &post_id).await
     }
 
     /// Get post interactions (replies, likes, boosts)
-    pub async fn get_post_interactions(&self, post_id: String) -> CoreResult<activitypub::PostInteractions> {
+    pub async fn get_post_interactions(
+        &self,
+        post_id: String,
+    ) -> CoreResult<activitypub::PostInteractions> {
         activitypub::get_post_interactions(&*self.db, &post_id).await
     }
 
@@ -229,7 +248,8 @@ impl DaisCore {
             &actor_url,
             &activity_json,
             &self.config.private_key,
-        ).await
+        )
+        .await
     }
 
     /// Create delivery jobs for all followers
@@ -239,7 +259,8 @@ impl DaisCore {
         actor_id: String,
         activity_json: String,
     ) -> CoreResult<Vec<String>> {
-        activitypub::create_follower_deliveries(&*self.db, &post_id, &actor_id, &activity_json).await
+        activitypub::create_follower_deliveries(&*self.db, &post_id, &actor_id, &activity_json)
+            .await
     }
 
     /// WebFinger lookup
@@ -259,7 +280,7 @@ impl DaisCore {
     // AT Protocol methods (to be implemented)
 
     /// Handle AT Protocol commit
-    pub async fn handle_commit(&self, did: String, commit_cid: String) -> CoreResult<()> {
+    pub async fn handle_commit(&self, _did: String, _commit_cid: String) -> CoreResult<()> {
         // TODO: Implement in atproto module
         Err(CoreError::Internal("Not implemented".to_string()))
     }
@@ -285,7 +306,10 @@ impl DaisCore {
     }
 }
 
-fn resolve_post_visibility(requested: &str, configured_default: Option<&str>) -> CoreResult<String> {
+fn resolve_post_visibility(
+    requested: &str,
+    configured_default: Option<&str>,
+) -> CoreResult<String> {
     let requested = requested.trim();
     if !requested.is_empty() {
         return if is_valid_post_visibility(requested) {

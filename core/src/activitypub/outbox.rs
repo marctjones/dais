@@ -1,10 +1,9 @@
+use crate::error::{CoreError, CoreResult};
 /// ActivityPub outbox - retrieve and format posts for federation
 ///
 /// Handles queries for actor's outbox and individual posts
-
 use crate::traits::DatabaseProvider;
-use crate::error::{CoreResult, CoreError};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A post with all its data
@@ -48,19 +47,22 @@ pub struct Interaction {
 }
 
 /// Get all public posts for an actor's outbox
-pub async fn get_outbox_posts(
-    db: &dyn DatabaseProvider,
-    username: &str,
-) -> CoreResult<Vec<Post>> {
+pub async fn get_outbox_posts(db: &dyn DatabaseProvider, username: &str) -> CoreResult<Vec<Post>> {
     // Verify actor exists
     let actor_query = "SELECT id FROM actors WHERE username = ?1";
-    let actor_rows = db.execute(actor_query, &[Value::String(username.to_string())]).await?;
+    let actor_rows = db
+        .execute(actor_query, &[Value::String(username.to_string())])
+        .await?;
 
     if actor_rows.is_empty() {
-        return Err(CoreError::NotFound(format!("Actor '{}' not found", username)));
+        return Err(CoreError::NotFound(format!(
+            "Actor '{}' not found",
+            username
+        )));
     }
 
-    let actor_id = actor_rows[0].get("id")
+    let actor_id = actor_rows[0]
+        .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| CoreError::Internal("Missing actor id".to_string()))?
         .to_string();
@@ -79,16 +81,51 @@ pub async fn get_outbox_posts(
     let mut posts = Vec::new();
     for row in rows {
         posts.push(Post {
-            id: row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            actor_id: row.get("actor_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            content: row.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            content_html: row.get("content_html").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            visibility: row.get("visibility").and_then(|v| v.as_str()).unwrap_or("public").to_string(),
-            published_at: row.get("published_at").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            in_reply_to: row.get("in_reply_to").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            media_attachments: row.get("media_attachments").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            atproto_uri: row.get("atproto_uri").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            encrypted_message: row.get("encrypted_message").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            id: row
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            actor_id: row
+                .get("actor_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            content: row
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            content_html: row
+                .get("content_html")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            visibility: row
+                .get("visibility")
+                .and_then(|v| v.as_str())
+                .unwrap_or("public")
+                .to_string(),
+            published_at: row
+                .get("published_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            in_reply_to: row
+                .get("in_reply_to")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            media_attachments: row
+                .get("media_attachments")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            atproto_uri: row
+                .get("atproto_uri")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            encrypted_message: row
+                .get("encrypted_message")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         });
     }
 
@@ -113,28 +150,71 @@ pub async fn get_post(
         WHERE p.id LIKE ?1 AND a.username = ?2
     "#;
 
-    let rows = db.execute(post_query, &[
-        Value::String(post_path_pattern.clone()),
-        Value::String(username.to_string()),
-    ]).await?;
+    let rows = db
+        .execute(
+            post_query,
+            &[
+                Value::String(post_path_pattern.clone()),
+                Value::String(username.to_string()),
+            ],
+        )
+        .await?;
 
     if rows.is_empty() {
-        return Err(CoreError::NotFound(format!("Post not found: {}", post_path_pattern)));
+        return Err(CoreError::NotFound(format!(
+            "Post not found: {}",
+            post_path_pattern
+        )));
     }
 
     let row = &rows[0];
 
     Ok(Post {
-        id: row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        actor_id: row.get("actor_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        content: row.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        content_html: row.get("content_html").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        visibility: row.get("visibility").and_then(|v| v.as_str()).unwrap_or("public").to_string(),
-        published_at: row.get("published_at").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        in_reply_to: row.get("in_reply_to").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        media_attachments: row.get("media_attachments").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        atproto_uri: row.get("atproto_uri").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        encrypted_message: row.get("encrypted_message").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        id: row
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        actor_id: row
+            .get("actor_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        content: row
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        content_html: row
+            .get("content_html")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        visibility: row
+            .get("visibility")
+            .and_then(|v| v.as_str())
+            .unwrap_or("public")
+            .to_string(),
+        published_at: row
+            .get("published_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        in_reply_to: row
+            .get("in_reply_to")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        media_attachments: row
+            .get("media_attachments")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        atproto_uri: row
+            .get("atproto_uri")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        encrypted_message: row
+            .get("encrypted_message")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
     })
 }
 
@@ -151,16 +231,38 @@ pub async fn get_post_interactions(
         ORDER BY published_at ASC
     "#;
 
-    let reply_rows = db.execute(replies_query, &[Value::String(post_id.to_string())]).await?;
+    let reply_rows = db
+        .execute(replies_query, &[Value::String(post_id.to_string())])
+        .await?;
     let mut replies = Vec::new();
 
     for row in reply_rows {
         replies.push(Reply {
-            actor_username: row.get("actor_username").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            actor_display_name: row.get("actor_display_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            actor_avatar_url: row.get("actor_avatar_url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            content: row.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            published_at: row.get("published_at").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            actor_username: row
+                .get("actor_username")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            actor_display_name: row
+                .get("actor_display_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            actor_avatar_url: row
+                .get("actor_avatar_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            content: row
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            published_at: row
+                .get("published_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
         });
     }
 
@@ -172,14 +274,28 @@ pub async fn get_post_interactions(
         ORDER BY published_at DESC
     "#;
 
-    let like_rows = db.execute(likes_query, &[Value::String(post_id.to_string())]).await?;
+    let like_rows = db
+        .execute(likes_query, &[Value::String(post_id.to_string())])
+        .await?;
     let mut likes = Vec::new();
 
     for row in like_rows {
         likes.push(Interaction {
-            actor_username: row.get("actor_username").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            actor_display_name: row.get("actor_display_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            actor_avatar_url: row.get("actor_avatar_url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            actor_username: row
+                .get("actor_username")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            actor_display_name: row
+                .get("actor_display_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            actor_avatar_url: row
+                .get("actor_avatar_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             created_at: None,
         });
     }
@@ -192,15 +308,32 @@ pub async fn get_post_interactions(
         ORDER BY published_at DESC
     "#;
 
-    let boost_rows = db.execute(boosts_query, &[Value::String(post_id.to_string())]).await?;
+    let boost_rows = db
+        .execute(boosts_query, &[Value::String(post_id.to_string())])
+        .await?;
     let mut boosts = Vec::new();
 
     for row in boost_rows {
         boosts.push(Interaction {
-            actor_username: row.get("actor_username").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            actor_display_name: row.get("actor_display_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            actor_avatar_url: row.get("actor_avatar_url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            created_at: row.get("published_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            actor_username: row
+                .get("actor_username")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            actor_display_name: row
+                .get("actor_display_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            actor_avatar_url: row
+                .get("actor_avatar_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            created_at: row
+                .get("published_at")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         });
     }
 
