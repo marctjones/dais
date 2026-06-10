@@ -30,6 +30,28 @@ struct Links {
     terms_of_service: Option<String>,
 }
 
+#[durable_object]
+pub struct RelaySubscription {
+    _state: State,
+    _env: Env,
+}
+
+impl DurableObject for RelaySubscription {
+    fn new(state: State, env: Env) -> Self {
+        Self {
+            _state: state,
+            _env: env,
+        }
+    }
+
+    async fn fetch(&self, _req: Request) -> Result<Response> {
+        Response::error(
+            "AT Protocol relay subscription Durable Object is not active",
+            501,
+        )
+    }
+}
+
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
