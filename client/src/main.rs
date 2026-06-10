@@ -8,7 +8,8 @@ mod routing;
 use anyhow::Result;
 use clap::Parser;
 use cli::{
-    BlueskyCommand, Cli, Command, FollowCommand, PostCommand, SearchCommand, TimelineCommand,
+    BlueskyCommand, Cli, Command, FollowCommand, FriendsCommand, PostCommand, SearchCommand,
+    TimelineCommand,
 };
 use config::ConfigStore;
 use d1::D1Client;
@@ -25,6 +26,7 @@ async fn main() -> Result<()> {
         Command::Search(command) => handle_search(command).await?,
         Command::Stats(args) => handle_stats(args).await?,
         Command::Timeline(command) => handle_timeline(command, &store).await?,
+        Command::Friends(command) => handle_friends(command).await?,
     }
 
     Ok(())
@@ -219,6 +221,22 @@ async fn handle_stats(args: cli::StatsArgs) -> Result<()> {
     let db = D1Client::new(args.remote)?;
     let stats = db.stats().await?;
     output::print_server_stats(&stats, args.remote);
+    Ok(())
+}
+
+async fn handle_friends(command: FriendsCommand) -> Result<()> {
+    match command {
+        FriendsCommand::List {
+            limit,
+            remote,
+            actor,
+        } => {
+            let db = D1Client::new(remote)?;
+            let friends = db.list_friends(&actor, limit).await?;
+            output::print_friends(&friends);
+        }
+    }
+
     Ok(())
 }
 

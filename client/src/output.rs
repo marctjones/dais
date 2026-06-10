@@ -1,5 +1,5 @@
 use crate::atproto::{FeedItem, Profile};
-use crate::d1::{D1Post, D1TimelinePost, D1User, ServerStats};
+use crate::d1::{D1Friend, D1Post, D1TimelinePost, D1User, ServerStats};
 
 pub fn print_profile(profile: &Profile) {
     println!("@{}", profile.handle);
@@ -143,6 +143,34 @@ pub fn print_timeline(posts: &[D1TimelinePost]) {
         if let Some(updated_at) = post.updated_at.as_deref().filter(|value| !value.is_empty()) {
             println!("updated={updated_at}");
         }
+        println!();
+    }
+}
+
+pub fn print_friends(friends: &[D1Friend]) {
+    if friends.is_empty() {
+        println!("No friends found");
+        return;
+    }
+
+    for friend in friends {
+        println!("{}", friend.friend_actor_id);
+        if let Some(inbox) = friend.friend_inbox.as_deref().filter(|value| !value.is_empty()) {
+            println!("inbox={inbox}");
+        }
+        if let Some(shared) = friend
+            .friend_shared_inbox
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("shared_inbox={shared}");
+        }
+        println!(
+            "follower_since={} following_since={} accepted_at={}",
+            friend.follower_since.as_deref().unwrap_or(""),
+            friend.following_since.as_deref().unwrap_or(""),
+            friend.accepted_at.as_deref().unwrap_or("")
+        );
         println!();
     }
 }

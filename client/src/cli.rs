@@ -26,6 +26,9 @@ pub enum Command {
     /// Read timelines.
     #[command(subcommand)]
     Timeline(TopLevelTimelineCommand),
+    /// Manage private-mode friend relationships.
+    #[command(subcommand)]
+    Friends(FriendsCommand),
 }
 
 #[derive(Subcommand)]
@@ -150,6 +153,20 @@ pub enum SearchCommand {
 pub struct StatsArgs {
     #[arg(long)]
     pub remote: bool,
+}
+
+#[derive(Subcommand)]
+pub enum FriendsCommand {
+    /// List mutual approved/accepted follows.
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: u16,
+        #[arg(long)]
+        remote: bool,
+        /// Local actor URL. Defaults to the production dais actor.
+        #[arg(long, default_value = "https://social.dais.social/users/social")]
+        actor: String,
+    },
 }
 
 #[derive(Subcommand)]

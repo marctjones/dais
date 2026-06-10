@@ -210,6 +210,12 @@ impl DaisCore {
         activitypub::get_home_timeline(&*self.db, limit, before.as_deref()).await
     }
 
+    /// Get friends, derived from approved followers plus accepted following.
+    pub async fn get_friends(&self, limit: u32) -> CoreResult<Vec<activitypub::Friend>> {
+        let actor_id = utils::actor_url(&self.config.activitypub_domain, &self.config.username);
+        activitypub::get_friends(&*self.db, &actor_id, limit).await
+    }
+
     /// Deliver activity to a remote inbox
     pub async fn deliver_to_inbox(
         &self,

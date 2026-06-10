@@ -12,6 +12,7 @@ pub mod outbox;
 pub mod delivery;
 pub mod signatures;
 pub mod timeline;
+pub mod friends;
 
 pub use types::*;
 pub use actor::*;
@@ -32,3 +33,4 @@ pub use delivery::{
     update_delivery_status, DeliveryJob,
 };
 pub use timeline::{get_home_timeline, TimelinePost};
+pub use friends::{get_friends, Friend};

@@ -37,6 +37,16 @@ pub struct D1TimelinePost {
     pub protocol: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1Friend {
+    pub friend_actor_id: String,
+    pub friend_inbox: Option<String>,
+    pub friend_shared_inbox: Option<String>,
+    pub follower_since: Option<String>,
+    pub following_since: Option<String>,
+    pub accepted_at: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ServerStats {
     pub followers_total: u64,
@@ -136,6 +146,22 @@ impl D1Client {
             FROM timeline_posts
             WHERE deleted_at IS NULL {before_filter}
             ORDER BY published_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn list_friends(&self, actor: &str, limit: u16) -> Result<Vec<D1Friend>> {
+        let limit = clamp_limit(limit);
+        let actor = sql_literal(actor);
+        let sql = format!(
+            r#"
+            SELECT friend_actor_id, friend_inbox, friend_shared_inbox,
+                   follower_since, following_since, accepted_at
+            FROM friends
+            WHERE local_actor_id = {actor}
+            ORDER BY COALESCE(accepted_at, following_since, follower_since) DESC
             LIMIT {limit}
             "#
         );
