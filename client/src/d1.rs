@@ -94,6 +94,35 @@ impl D1Client {
         self.query(&sql)
     }
 
+    pub async fn create_encrypted_post(
+        &self,
+        id: &str,
+        actor_id: &str,
+        fallback_content: &str,
+        visibility: &str,
+        published_at: &str,
+        encrypted_message_json: &str,
+    ) -> Result<()> {
+        let sql = format!(
+            r#"
+            INSERT INTO posts (
+                id, actor_id, content, content_html, visibility,
+                published_at, protocol, encrypted_message
+            ) VALUES (
+                {id}, {actor_id}, {fallback_content}, {fallback_content},
+                {visibility}, {published_at}, 'activitypub', {encrypted_message_json}
+            )
+            "#,
+            id = sql_literal(id),
+            actor_id = sql_literal(actor_id),
+            fallback_content = sql_literal(fallback_content),
+            visibility = sql_literal(visibility),
+            published_at = sql_literal(published_at),
+            encrypted_message_json = sql_literal(encrypted_message_json),
+        );
+        self.execute(&sql)
+    }
+
     pub async fn search_posts(&self, needle: &str, limit: u16) -> Result<Vec<D1Post>> {
         let limit = clamp_limit(limit);
         let needle = sql_like_escape(needle);
@@ -247,6 +276,10 @@ impl D1Client {
         }
 
         parse_wrangler_results(&String::from_utf8_lossy(&output.stdout))
+    }
+
+    fn execute(&self, sql: &str) -> Result<()> {
+        self.query_values(sql).map(|_| ())
     }
 }
 

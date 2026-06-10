@@ -19,6 +19,7 @@ pub struct Post {
     pub in_reply_to: Option<String>,
     pub media_attachments: Option<String>, // JSON string
     pub atproto_uri: Option<String>,
+    pub encrypted_message: Option<String>,
 }
 
 /// Interactions on a post (for HTML rendering)
@@ -66,7 +67,8 @@ pub async fn get_outbox_posts(
 
     // Query for posts by this actor (public visibility only for outbox)
     let posts_query = r#"
-        SELECT id, actor_id, content, content_html, visibility, published_at, in_reply_to, media_attachments, atproto_uri
+        SELECT id, actor_id, content, content_html, visibility, published_at, in_reply_to,
+               media_attachments, atproto_uri, encrypted_message
         FROM posts
         WHERE actor_id = ?1 AND visibility IN ('public', 'unlisted')
         ORDER BY published_at DESC
@@ -86,6 +88,7 @@ pub async fn get_outbox_posts(
             in_reply_to: row.get("in_reply_to").and_then(|v| v.as_str()).map(|s| s.to_string()),
             media_attachments: row.get("media_attachments").and_then(|v| v.as_str()).map(|s| s.to_string()),
             atproto_uri: row.get("atproto_uri").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            encrypted_message: row.get("encrypted_message").and_then(|v| v.as_str()).map(|s| s.to_string()),
         });
     }
 
@@ -103,7 +106,8 @@ pub async fn get_post(
 
     let post_query = r#"
         SELECT p.id, p.actor_id, p.content, p.content_html, p.visibility,
-               p.published_at, p.in_reply_to, p.media_attachments, p.atproto_uri
+               p.published_at, p.in_reply_to, p.media_attachments, p.atproto_uri,
+               p.encrypted_message
         FROM posts p
         JOIN actors a ON p.actor_id = a.id
         WHERE p.id LIKE ?1 AND a.username = ?2
@@ -130,6 +134,7 @@ pub async fn get_post(
         in_reply_to: row.get("in_reply_to").and_then(|v| v.as_str()).map(|s| s.to_string()),
         media_attachments: row.get("media_attachments").and_then(|v| v.as_str()).map(|s| s.to_string()),
         atproto_uri: row.get("atproto_uri").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        encrypted_message: row.get("encrypted_message").and_then(|v| v.as_str()).map(|s| s.to_string()),
     })
 }
 

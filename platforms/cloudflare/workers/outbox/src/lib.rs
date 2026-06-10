@@ -303,6 +303,12 @@ fn build_note_object(post: &Post) -> serde_json::Value {
         }
     }
 
+    if let Some(ref encrypted_message) = post.encrypted_message {
+        if let Ok(encrypted) = serde_json::from_str::<serde_json::Value>(encrypted_message) {
+            note["encryptedMessage"] = encrypted;
+        }
+    }
+
     note
 }
 

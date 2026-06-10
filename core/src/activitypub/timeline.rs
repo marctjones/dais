@@ -17,6 +17,7 @@ pub struct TimelinePost {
     pub published_at: String,
     pub updated_at: Option<String>,
     pub protocol: String,
+    pub encrypted_message: Option<String>,
 }
 
 pub async fn get_home_timeline(
@@ -31,7 +32,7 @@ pub async fn get_home_timeline(
                 r#"
                 SELECT object_id, actor_id, actor_username, actor_display_name,
                        actor_avatar_url, content, content_html, visibility,
-                       in_reply_to, published_at, updated_at, protocol
+                       in_reply_to, published_at, updated_at, protocol, encrypted_message
                 FROM timeline_posts
                 WHERE deleted_at IS NULL AND published_at < ?1
                 ORDER BY published_at DESC
@@ -46,7 +47,7 @@ pub async fn get_home_timeline(
                 r#"
                 SELECT object_id, actor_id, actor_username, actor_display_name,
                        actor_avatar_url, content, content_html, visibility,
-                       in_reply_to, published_at, updated_at, protocol
+                       in_reply_to, published_at, updated_at, protocol, encrypted_message
                 FROM timeline_posts
                 WHERE deleted_at IS NULL
                 ORDER BY published_at DESC
@@ -77,6 +78,7 @@ pub async fn get_home_timeline(
             protocol: row
                 .get_string("protocol")
                 .unwrap_or_else(|| "activitypub".to_string()),
+            encrypted_message: row.get_string("encrypted_message"),
         })
         .collect())
 }

@@ -11,6 +11,7 @@ use worker::{self, event, Request, Response, Env, Context, Router, RouteContext,
 use dais_cloudflare::D1Provider;
 use dais_core::{DaisCore, CoreConfig};
 use shared::theme::Theme;
+use serde_json::Value;
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -22,8 +23,76 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/users/:username", handle_actor)
         .get_async("/users/:username/followers", handle_followers)
         .get_async("/users/:username/following", handle_following)
+        .get_async("/messages/:message_id", handle_encrypted_message)
         .run(req, env)
         .await
+}
+
+async fn handle_encrypted_message(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let message_id = match ctx.param("message_id") {
+        Some(id) => id,
+        None => return Response::error("Message ID required", 400),
+    };
+
+    let db = ctx.env.d1("DB")?;
+    let post_pattern = format!("%/posts/{}", message_id);
+    let post_rows = db
+        .prepare(
+            r#"
+            SELECT id, content, encrypted_message
+            FROM posts
+            WHERE encrypted_message IS NOT NULL
+              AND (id = ?1 OR id LIKE ?2)
+            LIMIT 1
+            "#,
+        )
+        .bind(&[message_id.into(), post_pattern.into()])?
+        .all()
+        .await?
+        .results::<serde_json::Map<String, Value>>()?;
+
+    let row = if let Some(row) = post_rows.into_iter().next() {
+        row
+    } else {
+        let object_pattern = format!("%{}", message_id);
+        let timeline_rows = db
+            .prepare(
+                r#"
+                SELECT object_id AS id, content, encrypted_message
+                FROM timeline_posts
+                WHERE encrypted_message IS NOT NULL
+                  AND (object_id = ?1 OR object_id LIKE ?2)
+                LIMIT 1
+                "#,
+            )
+            .bind(&[message_id.into(), object_pattern.into()])?
+            .all()
+            .await?
+            .results::<serde_json::Map<String, Value>>()?;
+
+        match timeline_rows.into_iter().next() {
+            Some(row) => row,
+            None => return Response::error("Encrypted message not found", 404),
+        }
+    };
+
+    let id = row.get("id").and_then(|value| value.as_str()).unwrap_or(message_id);
+    let fallback = row.get("content").and_then(|value| value.as_str()).unwrap_or("");
+    let encrypted_message = row
+        .get("encrypted_message")
+        .and_then(|value| value.as_str())
+        .unwrap_or("{}");
+
+    let mut headers = Headers::new();
+    headers.set("Content-Type", "text/html; charset=utf-8")?;
+    headers.set("Cache-Control", "no-store")?;
+    add_cors_headers(&mut headers)?;
+
+    Ok(Response::from_html(render_encrypted_message_html(
+        id,
+        fallback,
+        encrypted_message,
+    ))?.with_headers(headers))
 }
 
 async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -246,6 +315,138 @@ fn add_cors_headers(headers: &mut Headers) -> Result<()> {
 }
 
 // HTML rendering (platform-specific for now - uses Cloudflare Workers Theme)
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn render_encrypted_message_html(id: &str, fallback: &str, encrypted_message: &str) -> String {
+    let escaped_id = escape_html(id);
+    let escaped_fallback = escape_html(fallback);
+    let encrypted_json = serde_json::from_str::<Value>(encrypted_message)
+        .unwrap_or(Value::Null)
+        .to_string();
+
+    format!(
+        r##"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Encrypted dais message</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f7f7f2; color: #202124; }}
+    main {{ max-width: 760px; margin: 0 auto; padding: 32px 20px; }}
+    h1 {{ font-size: 28px; margin: 0 0 16px; }}
+    .panel {{ background: #fff; border: 1px solid #ddd8cc; border-radius: 8px; padding: 20px; margin: 16px 0; }}
+    label {{ display: block; font-weight: 650; margin-bottom: 8px; }}
+    textarea, input {{ width: 100%; box-sizing: border-box; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid #b8b1a2; border-radius: 6px; padding: 10px; }}
+    textarea {{ min-height: 160px; }}
+    button {{ appearance: none; border: 0; border-radius: 6px; background: #205c4a; color: white; padding: 10px 14px; font-weight: 700; cursor: pointer; }}
+    button + button {{ margin-left: 8px; }}
+    pre {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
+    .muted {{ color: #5f6368; }}
+    .error {{ color: #9b1c1c; }}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Encrypted dais message</h1>
+  <p class="muted">Message id: {escaped_id}</p>
+  <div class="panel">
+    <strong>Fallback shown to non-dais clients</strong>
+    <pre>{escaped_fallback}</pre>
+  </div>
+  <div class="panel">
+    <label for="private-key">Private key PEM</label>
+    <textarea id="private-key" autocomplete="off" spellcheck="false" placeholder="Paste a PKCS#8 RSA private key. The key stays in this browser and is not sent to dais."></textarea>
+    <p class="muted">If the URL has <code>#cek=...</code>, this page can decrypt with that link key instead. Do not put link keys in federation fallback content if you need confidentiality from the recipient server.</p>
+    <button id="decrypt">Decrypt</button>
+  </div>
+  <div class="panel">
+    <strong>Plaintext</strong>
+    <pre id="plaintext" class="muted">Not decrypted yet.</pre>
+  </div>
+  <details class="panel">
+    <summary>encryptedMessage JSON</summary>
+    <pre id="encrypted-json"></pre>
+  </details>
+</main>
+<script>
+const encryptedMessage = {encrypted_json};
+document.getElementById("encrypted-json").textContent = JSON.stringify(encryptedMessage, null, 2);
+
+const dec = new TextDecoder();
+function b64bytes(value) {{
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}}
+function pemBytes(pem) {{
+  const body = pem.replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s+/g, "");
+  return b64bytes(body);
+}}
+function fragmentParam(name) {{
+  const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+  return new URLSearchParams(hash).get(name);
+}}
+async function aesDecrypt(cekBytes) {{
+  const key = await crypto.subtle.importKey("raw", cekBytes, "AES-GCM", false, ["decrypt"]);
+  const plaintext = await crypto.subtle.decrypt(
+    {{ name: "AES-GCM", iv: b64bytes(encryptedMessage.iv) }},
+    key,
+    b64bytes(encryptedMessage.ciphertext)
+  );
+  return dec.decode(plaintext);
+}}
+async function decryptWithPrivateKey(pem) {{
+  const recipient = encryptedMessage.recipients && encryptedMessage.recipients.length === 1
+    ? encryptedMessage.recipients[0]
+    : null;
+  if (!recipient) throw new Error("Paste-key decrypt currently requires a single-recipient envelope.");
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    pemBytes(pem),
+    {{ name: "RSA-OAEP", hash: "SHA-256" }},
+    false,
+    ["decrypt"]
+  );
+  const cek = await crypto.subtle.decrypt(
+    {{ name: "RSA-OAEP" }},
+    key,
+    b64bytes(recipient.wrappedKey)
+  );
+  return aesDecrypt(new Uint8Array(cek));
+}}
+document.getElementById("decrypt").addEventListener("click", async () => {{
+  const output = document.getElementById("plaintext");
+  output.className = "muted";
+  output.textContent = "Decrypting...";
+  try {{
+    const cek = fragmentParam("cek");
+    const plaintext = cek
+      ? await aesDecrypt(b64bytes(cek))
+      : await decryptWithPrivateKey(document.getElementById("private-key").value);
+    output.className = "";
+    output.textContent = plaintext;
+  }} catch (error) {{
+    output.className = "error";
+    output.textContent = error && error.message ? error.message : String(error);
+  }}
+}});
+</script>
+</body>
+</html>"##
+    )
+}
 
 fn render_profile_html(
     person: &dais_core::activitypub::Person,

@@ -272,6 +272,10 @@ pub async fn handle_update(
         .map(|value| value.to_string())
         .unwrap_or_else(crate::utils::now_rfc3339);
     let raw_object = serde_json::to_string(object)?;
+    let encrypted_message = object
+        .get("encryptedMessage")
+        .map(serde_json::to_string)
+        .transpose()?;
 
     let query = r#"
         UPDATE timeline_posts
@@ -279,8 +283,9 @@ pub async fn handle_update(
             content_html = ?2,
             updated_at = ?3,
             raw_object = ?4,
+            encrypted_message = ?5,
             deleted_at = NULL
-        WHERE object_id = ?5
+        WHERE object_id = ?6
     "#;
 
     db.execute(query, &[
@@ -288,6 +293,7 @@ pub async fn handle_update(
         Value::String(crate::utils::sanitize_html(content)),
         Value::String(updated_at),
         Value::String(raw_object),
+        encrypted_message.map(Value::String).unwrap_or(Value::Null),
         Value::String(object_id),
     ]).await?;
 
@@ -358,6 +364,10 @@ async fn ingest_timeline_post(
     let in_reply_to = object.get("inReplyTo").and_then(|v| v.as_str());
     let raw_object = serde_json::to_string(object)?;
     let raw_activity = serde_json::to_string(activity)?;
+    let encrypted_message = object
+        .get("encryptedMessage")
+        .map(serde_json::to_string)
+        .transpose()?;
 
     let (actor_username, actor_display_name, actor_avatar_url) =
         extract_actor_info(http, &activity.actor).await.unwrap_or_else(|_| {
@@ -368,8 +378,8 @@ async fn ingest_timeline_post(
         INSERT INTO timeline_posts (
             id, object_id, actor_id, actor_username, actor_display_name,
             actor_avatar_url, content, content_html, visibility, in_reply_to,
-            published_at, raw_object, raw_activity, protocol
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'activitypub')
+            published_at, raw_object, raw_activity, encrypted_message, protocol
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'activitypub')
         ON CONFLICT(object_id) DO UPDATE SET
             actor_id = excluded.actor_id,
             actor_username = excluded.actor_username,
@@ -382,6 +392,7 @@ async fn ingest_timeline_post(
             published_at = excluded.published_at,
             raw_object = excluded.raw_object,
             raw_activity = excluded.raw_activity,
+            encrypted_message = excluded.encrypted_message,
             deleted_at = NULL
     "#;
 
@@ -399,6 +410,7 @@ async fn ingest_timeline_post(
         Value::String(published_at),
         Value::String(raw_object),
         Value::String(raw_activity),
+        encrypted_message.map(Value::String).unwrap_or(Value::Null),
     ]).await?;
 
     Ok(())

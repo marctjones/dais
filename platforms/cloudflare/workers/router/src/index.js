@@ -31,6 +31,8 @@ export default {
       targetUrl = env.OUTBOX_URL + path + url.search;
     } else if (path.match(/^\/users\/[^\/]+\/posts\//)) {
       targetUrl = env.OUTBOX_URL + path + url.search;
+    } else if (path.match(/^\/messages\/[^\/]+/)) {
+      targetUrl = env.ACTOR_URL + path + url.search;
     } else if (path.match(/^\/users\/[^\/]+/)) {
       targetUrl = env.ACTOR_URL + path + url.search;
     } else {

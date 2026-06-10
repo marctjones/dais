@@ -122,6 +122,15 @@ pub struct CreatePostArgs {
     pub visibility: Visibility,
     #[arg(long, value_enum, default_value_t = Protocol::Both)]
     pub protocol: Protocol,
+    /// End-to-end encrypt the ActivityPub post.
+    #[arg(long)]
+    pub encrypt: bool,
+    /// Recipient in key_id=public_key_pem_file form. Repeat for multiple recipients.
+    #[arg(long = "recipient")]
+    pub recipients: Vec<String>,
+    /// Store/read against production D1 for ActivityPub encrypted posts.
+    #[arg(long)]
+    pub remote: bool,
 }
 
 #[derive(Args)]

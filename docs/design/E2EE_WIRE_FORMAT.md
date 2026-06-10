@@ -92,6 +92,19 @@ To read it, open it in dais: <a href="{view_url}">{view_url}</a><br>
 
 When no `view_url` is available, the "To read it, open it in dais: …" line is omitted.
 
+### Fallback link security
+
+Do **not** include a decryption key in fallback `content` delivered through
+ActivityPub if the goal is confidentiality from the recipient's server. Mastodon
+and other non-dais servers store the fallback HTML, so a key embedded in the link
+path/query/fragment would be stored by that server too.
+
+A hosted dais read page may support a URL fragment key such as
+`#cek=<base64-content-key>` because browsers do not send fragments to the server,
+but that fragment must be delivered out-of-band or typed/pasted locally. The safe
+default fallback link is keyless: it identifies the ciphertext and lets a
+dais-compatible client/device decrypt locally.
+
 ---
 
 ## 5. Conformance vectors
