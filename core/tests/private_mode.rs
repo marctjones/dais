@@ -457,6 +457,23 @@ async fn public_actor_count_excludes_private_and_encrypted_posts() {
 }
 
 #[tokio::test]
+async fn anonymous_collection_pages_do_not_expose_social_graph_items() {
+    let db = FakeDb::default();
+
+    let followers = activitypub::get_followers(&db, "social", "social.dais.social", Some(1))
+        .await
+        .expect("followers page should render");
+    let following = activitypub::get_following(&db, "social", "social.dais.social", Some(1))
+        .await
+        .expect("following page should render");
+
+    assert_eq!(followers["type"], "OrderedCollectionPage");
+    assert_eq!(followers["orderedItems"], json!([]));
+    assert_eq!(following["type"], "OrderedCollectionPage");
+    assert_eq!(following["orderedItems"], json!([]));
+}
+
+#[tokio::test]
 async fn inbox_create_ingests_timeline_post_for_accepted_following() {
     let db = FakeDb::default();
     db.approve_following("https://remote.example/users/alice");

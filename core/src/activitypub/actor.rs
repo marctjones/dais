@@ -182,35 +182,14 @@ pub async fn get_followers(
     let actor_url = format!("https://{}/users/{}", domain, username);
 
     if let Some(page_num) = page {
-        // Return paginated collection page
-        let items_per_page = 50;
-        let offset = (page_num.saturating_sub(1)) * items_per_page;
-
-        let query = format!(
-            "SELECT follower_actor_id FROM followers WHERE actor_id = ?1 AND status = 'approved' ORDER BY created_at DESC LIMIT {} OFFSET {}",
-            items_per_page, offset
-        );
-
-        let rows = db
-            .execute(&query, &[Value::String(actor_url.clone())])
-            .await?;
-
-        let items: Vec<String> = rows
-            .iter()
-            .filter_map(|row| {
-                row.get("follower_actor_id").and_then(|v| match v {
-                    Value::String(s) => Some(s.clone()),
-                    _ => None,
-                })
-            })
-            .collect();
-
+        // Anonymous collection pages should not reveal the social graph. Keep
+        // the ActivityPub shape for compatibility, but do not expose actor IDs.
         Ok(serde_json::json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "type": "OrderedCollectionPage",
             "id": format!("https://{}/users/{}/followers?page={}", domain, username, page_num),
             "partOf": format!("https://{}/users/{}/followers", domain, username),
-            "orderedItems": items
+            "orderedItems": []
         }))
     } else {
         // Return collection summary
@@ -246,35 +225,14 @@ pub async fn get_following(
     let actor_url = format!("https://{}/users/{}", domain, username);
 
     if let Some(page_num) = page {
-        // Return paginated collection page
-        let items_per_page = 50;
-        let offset = (page_num.saturating_sub(1)) * items_per_page;
-
-        let query = format!(
-            "SELECT target_actor_id FROM following WHERE actor_id = ?1 AND status = 'accepted' ORDER BY created_at DESC LIMIT {} OFFSET {}",
-            items_per_page, offset
-        );
-
-        let rows = db
-            .execute(&query, &[Value::String(actor_url.clone())])
-            .await?;
-
-        let items: Vec<String> = rows
-            .iter()
-            .filter_map(|row| {
-                row.get("target_actor_id").and_then(|v| match v {
-                    Value::String(s) => Some(s.clone()),
-                    _ => None,
-                })
-            })
-            .collect();
-
+        // Anonymous collection pages should not reveal the social graph. Keep
+        // the ActivityPub shape for compatibility, but do not expose actor IDs.
         Ok(serde_json::json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "type": "OrderedCollectionPage",
             "id": format!("https://{}/users/{}/following?page={}", domain, username, page_num),
             "partOf": format!("https://{}/users/{}/following", domain, username),
-            "orderedItems": items
+            "orderedItems": []
         }))
     } else {
         // Return collection summary
