@@ -1,6 +1,7 @@
 use crate::atproto::{FeedItem, Profile};
 use crate::d1::{
-    D1Delivery, D1Friend, D1Notification, D1Post, D1TimelinePost, D1User, ServerStats,
+    D1ActivityRow, D1AllowlistHost, D1Block, D1Delivery, D1Friend, D1Notification, D1Post,
+    D1TimelinePost, D1TopPost, D1User, ServerStats,
 };
 use crate::delivery::{DeliveryEnqueueReport, DeliveryProcessReport};
 
@@ -106,6 +107,13 @@ pub fn print_posts(posts: &[D1Post]) {
         }
         println!("{}", post.content);
         println!("id={}", post.id);
+        if let Some(media) = post
+            .media_attachments
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("attachments={media}");
+        }
         if let Some(reply_to) = post
             .in_reply_to
             .as_deref()
@@ -330,7 +338,117 @@ pub fn print_server_stats(stats: &ServerStats, remote: bool) {
     println!("following total={}", stats.following_total);
     println!("posts total={}", stats.posts_total);
     println!("posts dual_protocol={}", stats.dual_protocol_posts);
+    println!("posts public={}", stats.public_posts);
+    println!("posts private={}", stats.private_posts);
+    println!("posts direct={}", stats.direct_posts);
+    println!("posts encrypted={}", stats.encrypted_posts);
+    println!("posts media={}", stats.media_posts);
     println!("activities total={}", stats.activities_total);
     println!("deliveries total={}", stats.deliveries_total);
+    println!("deliveries queued={}", stats.deliveries_queued);
+    println!("deliveries retry={}", stats.deliveries_retry);
+    println!("deliveries delivered={}", stats.deliveries_delivered);
     println!("deliveries failed={}", stats.deliveries_failed);
+    println!("notifications unread={}", stats.notifications_unread);
+    println!("blocks total={}", stats.blocks_total);
+    println!("allowlist hosts={}", stats.allowlist_hosts);
+    println!("closed network={}", stats.closed_network);
+}
+
+pub fn print_blocks(blocks: &[D1Block]) {
+    if blocks.is_empty() {
+        println!("No blocks found");
+        return;
+    }
+
+    for block in blocks {
+        println!("{}", block.id);
+        println!("actor={}", block.actor_id);
+        if let Some(domain) = block
+            .blocked_domain
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("domain={domain}");
+        }
+        if let Some(reason) = block.reason.as_deref().filter(|value| !value.is_empty()) {
+            println!("reason={reason}");
+        }
+        println!("created={}", block.created_at.as_deref().unwrap_or(""));
+        println!();
+    }
+}
+
+pub fn print_allowlist(hosts: &[D1AllowlistHost]) {
+    if hosts.is_empty() {
+        println!("No federation allowlist hosts found");
+        return;
+    }
+
+    for host in hosts {
+        println!(
+            "{} [{}]",
+            host.host,
+            if host.enabled.unwrap_or(0) == 1 {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        if let Some(note) = host.note.as_deref().filter(|value| !value.is_empty()) {
+            println!("note={note}");
+        }
+        println!("created={}", host.created_at.as_deref().unwrap_or(""));
+        println!("updated={}", host.updated_at.as_deref().unwrap_or(""));
+        println!();
+    }
+}
+
+pub fn print_activity_report(rows: &[D1ActivityRow]) {
+    if rows.is_empty() {
+        println!("No activity rows found");
+        return;
+    }
+
+    for row in rows {
+        println!(
+            "{} [{}{}] {}",
+            row.created_at.as_deref().unwrap_or("unknown time"),
+            row.kind,
+            row.status
+                .as_deref()
+                .map(|status| format!(" / {status}"))
+                .unwrap_or_default(),
+            row.id
+        );
+        if let Some(actor) = row.actor.as_deref().filter(|value| !value.is_empty()) {
+            println!("actor={actor}");
+        }
+        if let Some(object) = row.object.as_deref().filter(|value| !value.is_empty()) {
+            println!("object={object}");
+        }
+        println!();
+    }
+}
+
+pub fn print_top_posts(posts: &[D1TopPost]) {
+    if posts.is_empty() {
+        println!("No posts found");
+        return;
+    }
+
+    for post in posts {
+        println!(
+            "{} [{}] total={} replies={} likes={} boosts={}",
+            post.published_at.as_deref().unwrap_or("unknown time"),
+            post.visibility.as_deref().unwrap_or("unknown"),
+            post.total,
+            post.replies,
+            post.likes,
+            post.boosts
+        );
+        println!("{}", post.content);
+        println!("id={}", post.post_id);
+        println!();
+    }
 }

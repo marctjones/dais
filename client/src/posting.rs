@@ -49,6 +49,7 @@ pub struct PostDraft {
     pub starts_at: Option<String>,
     pub ends_at: Option<String>,
     pub location: Option<String>,
+    pub attachments: Vec<String>,
 }
 
 pub async fn update_activitypub_post(
@@ -268,6 +269,7 @@ struct CreateActivityInput<'a> {
     starts_at: Option<&'a str>,
     ends_at: Option<&'a str>,
     location: Option<&'a str>,
+    attachments: &'a [String],
 }
 
 impl PostDraft {
@@ -299,6 +301,7 @@ impl PostDraft {
             starts_at: args.starts_at,
             ends_at: args.ends_at,
             location: args.location,
+            attachments: args.attachments,
         })
     }
 }
@@ -366,6 +369,7 @@ pub async fn publish_post(
             starts_at: None,
             ends_at: None,
             location: None,
+            attachments: &[],
         })?;
         let delivery_ids =
             create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -403,6 +407,7 @@ pub async fn publish_post(
                 draft.starts_at.as_deref(),
                 draft.ends_at.as_deref(),
                 draft.location.as_deref(),
+                attachment_json(&draft.attachments)?.as_deref(),
             )
             .await?;
 
@@ -421,6 +426,7 @@ pub async fn publish_post(
                 starts_at: draft.starts_at.as_deref(),
                 ends_at: draft.ends_at.as_deref(),
                 location: draft.location.as_deref(),
+                attachments: &draft.attachments,
             })?;
             let delivery_ids =
                 create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -452,6 +458,7 @@ pub async fn publish_post(
                 draft.starts_at.as_deref(),
                 draft.ends_at.as_deref(),
                 draft.location.as_deref(),
+                attachment_json(&draft.attachments)?.as_deref(),
             )
             .await?;
 
@@ -470,6 +477,7 @@ pub async fn publish_post(
                 starts_at: draft.starts_at.as_deref(),
                 ends_at: draft.ends_at.as_deref(),
                 location: draft.location.as_deref(),
+                attachments: &draft.attachments,
             })?;
             let delivery_ids =
                 create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -543,6 +551,10 @@ fn build_create_activity_json(input: CreateActivityInput<'_>) -> Result<String> 
         });
     }
 
+    if !input.attachments.is_empty() {
+        note["attachment"] = serde_json::json!(attachment_values(input.attachments)?);
+    }
+
     if let Some(in_reply_to) = input.in_reply_to {
         note["inReplyTo"] = serde_json::json!(in_reply_to);
     }
@@ -578,6 +590,32 @@ fn activity_cc(visibility: &str, followers_collection: &str) -> Vec<String> {
         "public" | "unlisted" => vec![followers_collection.to_string()],
         _ => Vec::new(),
     }
+}
+
+fn attachment_json(attachments: &[String]) -> Result<Option<String>> {
+    if attachments.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::to_string(&attachment_values(
+        attachments,
+    )?)?))
+}
+
+fn attachment_values(attachments: &[String]) -> Result<Vec<serde_json::Value>> {
+    attachments
+        .iter()
+        .map(|attachment| {
+            if attachment.trim_start().starts_with('{') {
+                serde_json::from_str(attachment)
+                    .map_err(|error| anyhow!("invalid attachment JSON: {error}"))
+            } else {
+                Ok(serde_json::json!({
+                    "type": "Document",
+                    "url": attachment
+                }))
+            }
+        })
+        .collect()
 }
 
 fn activity_suffix(value: &str) -> String {

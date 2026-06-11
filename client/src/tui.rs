@@ -698,6 +698,7 @@ impl App {
             starts_at: None,
             ends_at: None,
             location: None,
+            attachments: Vec::new(),
         };
 
         let tx = self.tx.clone();
@@ -879,7 +880,7 @@ impl App {
                     return;
                 }
             };
-            match db.unblock_actor(&actor_id).await {
+            match db.unblock(&actor_id).await {
                 Ok(()) => {
                     let _ = tx.send(Message::Status(format!("Unblocked {actor_id}")));
                     let _ = tx.send(Message::Refresh(Tab::Blocks));
@@ -1349,8 +1350,9 @@ impl App {
                             post.published_at.as_deref().unwrap_or("unknown time")
                         ),
                         subtitle: format!(
-                            "{} · {}",
+                            "{} · {} · {}",
                             post.visibility.as_deref().unwrap_or("unknown"),
+                            post.protocol.as_deref().unwrap_or("activitypub"),
                             encryption_state(post.encrypted_message.is_some())
                         ),
                         details: post_detail(post),
@@ -1425,8 +1427,10 @@ impl App {
                     Entry {
                         title: "deliveries".to_string(),
                         subtitle: format!(
-                            "total={} failed={}",
-                            stats.deliveries_total, stats.deliveries_failed
+                            "total={} queued={} failed={}",
+                            stats.deliveries_total,
+                            stats.deliveries_queued,
+                            stats.deliveries_failed
                         ),
                         details: stats_detail(stats),
                     },
@@ -1531,17 +1535,29 @@ async fn load_search(
 
 fn stats_detail(stats: &ServerStats) -> String {
     format!(
-        "followers total: {}\nfollowers approved: {}\nfollowers pending: {}\nfollowers rejected: {}\nfollowing total: {}\nposts total: {}\nposts dual protocol: {}\nactivities total: {}\ndeliveries total: {}\ndeliveries failed: {}",
+        "followers total: {}\nfollowers approved: {}\nfollowers pending: {}\nfollowers rejected: {}\nfollowing total: {}\nposts total: {}\nposts public: {}\nposts private: {}\nposts direct: {}\nposts encrypted: {}\nposts media: {}\nposts dual protocol: {}\nactivities total: {}\ndeliveries total: {}\ndeliveries queued: {}\ndeliveries retry: {}\ndeliveries delivered: {}\ndeliveries failed: {}\nnotifications unread: {}\nblocks total: {}\nallowlist hosts: {}\nclosed network: {}",
         stats.followers_total,
         stats.followers_approved,
         stats.followers_pending,
         stats.followers_rejected,
         stats.following_total,
         stats.posts_total,
+        stats.public_posts,
+        stats.private_posts,
+        stats.direct_posts,
+        stats.encrypted_posts,
+        stats.media_posts,
         stats.dual_protocol_posts,
         stats.activities_total,
         stats.deliveries_total,
+        stats.deliveries_queued,
+        stats.deliveries_retry,
+        stats.deliveries_delivered,
         stats.deliveries_failed,
+        stats.notifications_unread,
+        stats.blocks_total,
+        stats.allowlist_hosts,
+        stats.closed_network,
     )
 }
 
@@ -1561,12 +1577,13 @@ fn timeline_detail(post: &D1TimelinePost) -> String {
 
 fn post_detail(post: &D1Post) -> String {
     format!(
-        "id: {}\nvisibility: {}\nprotocol: {}\npublished: {}\natproto: {}\n{}\n{}",
+        "id: {}\nvisibility: {}\nprotocol: {}\npublished: {}\natproto: {}\nattachments: {}\n{}\n{}",
         post.id,
         post.visibility.as_deref().unwrap_or("unknown"),
         post.protocol.as_deref().unwrap_or("activitypub"),
         post.published_at.as_deref().unwrap_or(""),
         post.atproto_uri.as_deref().unwrap_or(""),
+        post.media_attachments.as_deref().unwrap_or(""),
         encryption_state(post.encrypted_message.is_some()),
         post.content
     )

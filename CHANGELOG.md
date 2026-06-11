@@ -5,6 +5,27 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-06-11
+
+### Added
+- Added v0.19 Rust client parity polish:
+  - `dais media upload` and `dais media attachment` for R2-backed media helper
+    workflows and ActivityStreams attachment JSON generation.
+  - `dais post create --attachment` to persist and federate ActivityStreams
+    attachments with ActivityPub posts.
+  - `dais actors update` for local actor display-name, summary, icon, and header
+    metadata updates with queued ActivityPub `Update` delivery.
+  - `dais moderation` commands for actor/domain blocks, closed-network mode, and
+    federation allowlist management.
+  - `dais reports` commands for expanded server summary, recent activity, and
+    top-post engagement reports.
+- Expanded the TUI stats/post details to show protocol, attachment, delivery,
+  notification, block, and closed-network state.
+
+### Changed
+- README client examples now reflect media, actor-profile, moderation, and
+  report owner workflows.
+
 ## [1.20.1] - 2026-06-11
 
 ### Changed

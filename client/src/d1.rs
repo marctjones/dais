@@ -23,6 +23,7 @@ pub struct D1Post {
     pub in_reply_to: Option<String>,
     pub atproto_uri: Option<String>,
     pub encrypted_message: Option<String>,
+    pub media_attachments: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -33,6 +34,8 @@ pub struct D1Actor {
     pub actor_type: Option<String>,
     pub display_name: Option<String>,
     pub summary: Option<String>,
+    pub icon: Option<String>,
+    pub image: Option<String>,
 }
 
 pub struct EncryptedPostInsert<'a> {
@@ -141,6 +144,40 @@ pub struct D1Block {
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
+pub struct D1AllowlistHost {
+    pub host: String,
+    pub note: Option<String>,
+    pub enabled: Option<u64>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1ActivityRow {
+    pub id: String,
+    pub kind: String,
+    pub actor: Option<String>,
+    pub object: Option<String>,
+    pub status: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1TopPost {
+    pub post_id: String,
+    pub content: String,
+    pub visibility: Option<String>,
+    pub published_at: Option<String>,
+    pub replies: u64,
+    pub likes: u64,
+    pub boosts: u64,
+    pub total: u64,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct D1Delivery {
     pub id: String,
     pub post_id: String,
@@ -176,7 +213,19 @@ pub struct ServerStats {
     pub activities_total: u64,
     pub deliveries_total: u64,
     pub deliveries_failed: u64,
+    pub deliveries_queued: u64,
+    pub deliveries_retry: u64,
+    pub deliveries_delivered: u64,
     pub dual_protocol_posts: u64,
+    pub public_posts: u64,
+    pub private_posts: u64,
+    pub direct_posts: u64,
+    pub encrypted_posts: u64,
+    pub media_posts: u64,
+    pub notifications_unread: u64,
+    pub blocks_total: u64,
+    pub allowlist_hosts: u64,
+    pub closed_network: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -205,7 +254,7 @@ impl D1Client {
             SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
                    start_time, end_time, location,
                    visibility, COALESCE(protocol, 'activitypub') AS protocol,
-                   published_at, atproto_uri, encrypted_message, in_reply_to
+                   published_at, atproto_uri, encrypted_message, in_reply_to, media_attachments
             FROM posts
             ORDER BY published_at DESC
             LIMIT {limit}
@@ -228,6 +277,7 @@ impl D1Client {
         starts_at: Option<&str>,
         ends_at: Option<&str>,
         location: Option<&str>,
+        media_attachments_json: Option<&str>,
     ) -> Result<()> {
         let content_html = escape_html(content);
         let in_reply_to = in_reply_to
@@ -246,15 +296,19 @@ impl D1Client {
         let location = location
             .map(sql_literal)
             .unwrap_or_else(|| "NULL".to_string());
+        let media_attachments = media_attachments_json
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
         let sql = format!(
             r#"
             INSERT INTO posts (
                 id, actor_id, content, content_html, object_type, name, summary, visibility,
-                published_at, protocol, in_reply_to, start_time, end_time, location
+                published_at, protocol, in_reply_to, start_time, end_time, location,
+                media_attachments
             ) VALUES (
                 {id}, {actor_id}, {content}, {content_html}, {object_type}, {name}, {summary},
                 {visibility}, {published_at}, 'activitypub', {in_reply_to}, {starts_at}, {ends_at},
-                {location}
+                {location}, {media_attachments}
             )
             "#,
             id = sql_literal(id),
@@ -270,6 +324,7 @@ impl D1Client {
             starts_at = starts_at,
             ends_at = ends_at,
             location = location,
+            media_attachments = media_attachments,
         );
         self.execute(&sql)
     }
@@ -308,7 +363,7 @@ impl D1Client {
             SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
                    start_time, end_time, location,
                    visibility, COALESCE(protocol, 'activitypub') AS protocol,
-                   published_at, atproto_uri, encrypted_message, in_reply_to
+                   published_at, atproto_uri, encrypted_message, in_reply_to, media_attachments
             FROM posts
             WHERE content LIKE '%{needle}%'
             ORDER BY published_at DESC
@@ -645,6 +700,48 @@ impl D1Client {
         self.query(&sql)
     }
 
+    pub async fn block_actor(&self, actor_id: &str, reason: Option<&str>) -> Result<()> {
+        let reason_sql = reason
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let sql = format!(
+            r#"
+            INSERT OR REPLACE INTO blocks (id, actor_id, blocked_domain, reason, created_at)
+            VALUES ({id}, {actor_id}, NULL, {reason}, CURRENT_TIMESTAMP)
+            "#,
+            id = sql_literal(actor_id),
+            actor_id = sql_literal(actor_id),
+            reason = reason_sql,
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn block_domain(&self, domain: &str, reason: Option<&str>) -> Result<()> {
+        let normalized = normalize_host(domain);
+        let reason_sql = reason
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let sql = format!(
+            r#"
+            INSERT OR REPLACE INTO blocks (id, actor_id, blocked_domain, reason, created_at)
+            VALUES ({id}, {actor_id}, {blocked_domain}, {reason}, CURRENT_TIMESTAMP)
+            "#,
+            id = sql_literal(&normalized),
+            actor_id = sql_literal(&normalized),
+            blocked_domain = sql_literal(&normalized),
+            reason = reason_sql,
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn unblock(&self, value: &str) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM blocks WHERE actor_id = {value} OR blocked_domain = {value}",
+            value = sql_literal(value)
+        );
+        self.execute(&sql)
+    }
+
     pub async fn list_deliveries(
         &self,
         limit: u16,
@@ -697,31 +794,6 @@ impl D1Client {
         self.execute(&sql)
     }
 
-    #[allow(dead_code)]
-    pub async fn block_actor(&self, actor_id: &str, reason: Option<&str>) -> Result<()> {
-        let reason_sql = reason
-            .map(sql_literal)
-            .unwrap_or_else(|| "NULL".to_string());
-        let sql = format!(
-            r#"
-            INSERT OR REPLACE INTO blocks (id, actor_id, reason, created_at)
-            VALUES ({id}, {actor_id}, {reason}, CURRENT_TIMESTAMP)
-            "#,
-            id = sql_literal(actor_id),
-            actor_id = sql_literal(actor_id),
-            reason = reason_sql,
-        );
-        self.execute(&sql)
-    }
-
-    pub async fn unblock_actor(&self, actor_id: &str) -> Result<()> {
-        let sql = format!(
-            "DELETE FROM blocks WHERE actor_id = {actor_id}",
-            actor_id = sql_literal(actor_id)
-        );
-        self.execute(&sql)
-    }
-
     pub async fn list_friends(&self, actor: &str, limit: u16) -> Result<Vec<D1Friend>> {
         let limit = clamp_limit(limit);
         let actor = sql_literal(actor);
@@ -742,7 +814,7 @@ impl D1Client {
         let sql = format!(
             r#"
             SELECT id, username, COALESCE(actor_type, 'Person') AS actor_type,
-                   display_name, summary
+                   display_name, summary, icon, image
             FROM actors
             WHERE username = {username}
             "#,
@@ -752,6 +824,87 @@ impl D1Client {
             .map(serde_json::from_value)
             .transpose()
             .context("could not decode actor row")
+    }
+
+    pub async fn update_actor_profile(
+        &self,
+        username: &str,
+        display_name: Option<&str>,
+        summary: Option<&str>,
+        icon: Option<&str>,
+        image: Option<&str>,
+    ) -> Result<()> {
+        let mut assignments = vec!["updated_at = CURRENT_TIMESTAMP".to_string()];
+        if let Some(value) = display_name {
+            assignments.push(format!("display_name = {}", sql_literal(value)));
+        }
+        if let Some(value) = summary {
+            assignments.push(format!("summary = {}", sql_literal(value)));
+        }
+        if let Some(value) = icon {
+            assignments.push(format!("icon = {}", sql_literal(value)));
+            assignments.push(format!("avatar_url = {}", sql_literal(value)));
+        }
+        if let Some(value) = image {
+            assignments.push(format!("image = {}", sql_literal(value)));
+            assignments.push(format!("header_url = {}", sql_literal(value)));
+        }
+        if assignments.len() == 1 {
+            anyhow::bail!("no profile fields provided");
+        }
+        let sql = format!(
+            "UPDATE actors SET {} WHERE username = {}",
+            assignments.join(", "),
+            sql_literal(username)
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn list_allowlist_hosts(&self) -> Result<Vec<D1AllowlistHost>> {
+        self.query(
+            r#"
+            SELECT host, note, enabled, created_at, updated_at
+            FROM federation_allowlist
+            ORDER BY host ASC
+            "#,
+        )
+    }
+
+    pub async fn closed_network_enabled(&self) -> Result<bool> {
+        self.is_closed_network_enabled()
+    }
+
+    pub async fn set_closed_network(&self, enabled: bool) -> Result<()> {
+        let enabled = if enabled { 1 } else { 0 };
+        let sql = format!("UPDATE instance_settings SET closed_network = {enabled} WHERE id = 1");
+        self.execute(&sql)
+    }
+
+    pub async fn allow_federation_host(&self, host: &str, note: Option<&str>) -> Result<()> {
+        let host = normalize_host(host);
+        let note = note.map(sql_literal).unwrap_or_else(|| "NULL".to_string());
+        let sql = format!(
+            r#"
+            INSERT INTO federation_allowlist (host, note, enabled, created_at, updated_at)
+            VALUES ({host}, {note}, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(host) DO UPDATE SET
+                note = excluded.note,
+                enabled = 1,
+                updated_at = CURRENT_TIMESTAMP
+            "#,
+            host = sql_literal(&host),
+            note = note,
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn disallow_federation_host(&self, host: &str) -> Result<()> {
+        let host = normalize_host(host);
+        let sql = format!(
+            "DELETE FROM federation_allowlist WHERE host = {}",
+            sql_literal(&host)
+        );
+        self.execute(&sql)
     }
 
     pub async fn set_actor_type(
@@ -778,7 +931,7 @@ impl D1Client {
             SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
                    start_time, end_time, location, visibility,
                    COALESCE(protocol, 'activitypub') AS protocol, published_at, atproto_uri,
-                   encrypted_message, in_reply_to
+                   encrypted_message, in_reply_to, media_attachments
             FROM posts
             WHERE COALESCE(object_type, 'Note') = 'Event'
             ORDER BY COALESCE(start_time, published_at) DESC
@@ -802,7 +955,19 @@ impl D1Client {
                     (SELECT COUNT(*) FROM activities) AS activities_total,
                     (SELECT COUNT(*) FROM deliveries) AS deliveries_total,
                     (SELECT COUNT(*) FROM deliveries WHERE status='failed') AS deliveries_failed,
-                    (SELECT COUNT(*) FROM posts WHERE protocol='both') AS dual_protocol_posts
+                    (SELECT COUNT(*) FROM deliveries WHERE status='queued') AS deliveries_queued,
+                    (SELECT COUNT(*) FROM deliveries WHERE status='retry') AS deliveries_retry,
+                    (SELECT COUNT(*) FROM deliveries WHERE status='delivered') AS deliveries_delivered,
+                    (SELECT COUNT(*) FROM posts WHERE protocol='both') AS dual_protocol_posts,
+                    (SELECT COUNT(*) FROM posts WHERE visibility='public') AS public_posts,
+                    (SELECT COUNT(*) FROM posts WHERE visibility IN ('followers', 'unlisted')) AS private_posts,
+                    (SELECT COUNT(*) FROM posts WHERE visibility='direct') AS direct_posts,
+                    (SELECT COUNT(*) FROM posts WHERE encrypted_message IS NOT NULL) AS encrypted_posts,
+                    (SELECT COUNT(*) FROM posts WHERE media_attachments IS NOT NULL AND media_attachments != '') AS media_posts,
+                    (SELECT COUNT(*) FROM notifications WHERE read = 0 OR read IS NULL) AS notifications_unread,
+                    (SELECT COUNT(*) FROM blocks) AS blocks_total,
+                    (SELECT COUNT(*) FROM federation_allowlist WHERE enabled = 1) AS allowlist_hosts,
+                    (SELECT closed_network FROM instance_settings WHERE id = 1) AS closed_network
                 "#,
             )?
             .unwrap_or(Value::Null);
@@ -817,8 +982,100 @@ impl D1Client {
             activities_total: value_u64(&row, "activities_total"),
             deliveries_total: value_u64(&row, "deliveries_total"),
             deliveries_failed: value_u64(&row, "deliveries_failed"),
+            deliveries_queued: value_u64(&row, "deliveries_queued"),
+            deliveries_retry: value_u64(&row, "deliveries_retry"),
+            deliveries_delivered: value_u64(&row, "deliveries_delivered"),
             dual_protocol_posts: value_u64(&row, "dual_protocol_posts"),
+            public_posts: value_u64(&row, "public_posts"),
+            private_posts: value_u64(&row, "private_posts"),
+            direct_posts: value_u64(&row, "direct_posts"),
+            encrypted_posts: value_u64(&row, "encrypted_posts"),
+            media_posts: value_u64(&row, "media_posts"),
+            notifications_unread: value_u64(&row, "notifications_unread"),
+            blocks_total: value_u64(&row, "blocks_total"),
+            allowlist_hosts: value_u64(&row, "allowlist_hosts"),
+            closed_network: row
+                .get("closed_network")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                == 1,
         })
+    }
+
+    pub async fn activity_report(&self, limit: u16) -> Result<Vec<D1ActivityRow>> {
+        let limit = clamp_limit(limit);
+        let sql = format!(
+            r#"
+            SELECT id, type AS kind, actor, object, NULL AS status, received_at AS created_at
+            FROM activities
+            UNION ALL
+            SELECT id, 'delivery' AS kind, target_url AS actor, post_id AS object, status, created_at
+            FROM deliveries
+            ORDER BY created_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn top_posts(&self, limit: u16) -> Result<Vec<D1TopPost>> {
+        let limit = clamp_limit(limit);
+        let sql = format!(
+            r#"
+            SELECT
+                p.id AS post_id,
+                p.content,
+                p.visibility,
+                p.published_at,
+                (SELECT COUNT(*) FROM replies r WHERE r.post_id = p.id) AS replies,
+                (SELECT COUNT(*) FROM interactions i WHERE i.post_id = p.id AND i.type = 'like') AS likes,
+                (SELECT COUNT(*) FROM interactions i WHERE i.post_id = p.id AND i.type = 'boost') AS boosts,
+                (
+                    (SELECT COUNT(*) FROM replies r WHERE r.post_id = p.id) +
+                    (SELECT COUNT(*) FROM interactions i WHERE i.post_id = p.id)
+                ) AS total
+            FROM posts p
+            ORDER BY total DESC, p.published_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub fn upload_media(
+        &self,
+        bucket: &str,
+        key: &str,
+        path: &Path,
+        public_base_url: &str,
+    ) -> Result<String> {
+        let mut command = Command::new(wrangler_bin()?);
+        command
+            .args(["r2", "object", "put", &format!("{bucket}/{key}")])
+            .arg("--file")
+            .arg(path)
+            .current_dir(&self.worker_dir);
+        if self.remote {
+            command.arg("--remote");
+        } else {
+            command.arg("--local");
+        }
+
+        let output = command
+            .output()
+            .context("failed to run wrangler r2 object put")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "wrangler r2 object put failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(format!(
+            "{}/{}",
+            public_base_url.trim_end_matches('/'),
+            key.trim_start_matches('/')
+        ))
     }
 
     fn query<T: for<'de> Deserialize<'de>>(&self, sql: &str) -> Result<Vec<T>> {
@@ -955,6 +1212,19 @@ fn https_host(value: &str) -> Option<&str> {
     rest.split('/').next().filter(|host| !host.is_empty())
 }
 
+fn normalize_host(value: &str) -> String {
+    let trimmed = value
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/');
+    trimmed
+        .split('/')
+        .next()
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase()
+}
+
 fn normalized_delivery_status(value: &str) -> Result<&'static str> {
     match value.trim().to_ascii_lowercase().as_str() {
         "queued" => Ok("queued"),
@@ -1002,7 +1272,7 @@ fn wrangler_bin() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{https_host, parse_wrangler_results};
+    use super::{https_host, normalize_host, parse_wrangler_results};
 
     #[test]
     fn parses_wrangler_json_results_from_noisy_output() {
@@ -1028,5 +1298,18 @@ mod tests {
         );
         assert_eq!(https_host("http://mastodon.social/inbox"), None);
         assert_eq!(https_host("not a url"), None);
+    }
+
+    #[test]
+    fn normalizes_federation_hosts_for_owner_commands() {
+        assert_eq!(
+            normalize_host("https://Mastodon.Social/inbox"),
+            "mastodon.social"
+        );
+        assert_eq!(
+            normalize_host("http://example.com/users/alice"),
+            "example.com"
+        );
+        assert_eq!(normalize_host(" social.example/ "), "social.example");
     }
 }

@@ -1,5 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
+use std::path::PathBuf;
 
 use crate::routing::{Protocol, Visibility};
 
@@ -48,6 +49,15 @@ pub enum Command {
     /// Create and coordinate ActivityPub Event objects.
     #[command(subcommand)]
     Events(EventsCommand),
+    /// Upload and attach media for posts.
+    #[command(subcommand)]
+    Media(MediaCommand),
+    /// Manage moderation and federation safety settings.
+    #[command(subcommand)]
+    Moderation(ModerationCommand),
+    /// Expanded analytics and operational reports.
+    #[command(subcommand)]
+    Reports(ReportsCommand),
     /// Run instance diagnostics and conformance smoke checks.
     Doctor(DoctorArgs),
     /// Generate shell completions.
@@ -207,6 +217,8 @@ pub enum ActorsCommand {
         #[arg(long, default_value = "social")]
         username: String,
     },
+    /// Update local actor profile metadata.
+    Update(UpdateActorArgs),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -266,12 +278,150 @@ pub struct CreatePostArgs {
     /// ActivityStreams Event location label.
     #[arg(long)]
     pub location: Option<String>,
+    /// ActivityStreams attachment URL. Repeat for multiple attachments.
+    #[arg(long = "attachment")]
+    pub attachments: Vec<String>,
     /// Direct ActivityPub recipient actor URL. Repeat for multiple recipients.
     #[arg(long = "to")]
     pub to: Vec<String>,
     /// Store/read against production D1 for ActivityPub encrypted posts.
     #[arg(long)]
     pub remote: bool,
+}
+
+#[derive(Args)]
+pub struct UpdateActorArgs {
+    #[arg(long)]
+    pub remote: bool,
+    #[arg(long, default_value = "social")]
+    pub username: String,
+    /// Local actor URL used in the outgoing ActivityPub Update.
+    #[arg(long, default_value = "https://social.dais.social/users/social")]
+    pub actor: String,
+    #[arg(long)]
+    pub display_name: Option<String>,
+    #[arg(long)]
+    pub summary: Option<String>,
+    /// ActivityStreams icon URL.
+    #[arg(long)]
+    pub icon: Option<String>,
+    /// ActivityStreams image/header URL.
+    #[arg(long)]
+    pub image: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum MediaCommand {
+    /// Upload a local file to the configured R2 media bucket.
+    Upload(UploadMediaArgs),
+    /// Create an ActivityStreams attachment JSON object from a media URL.
+    Attachment(MediaAttachmentArgs),
+}
+
+#[derive(Args)]
+pub struct UploadMediaArgs {
+    pub path: PathBuf,
+    /// R2 object key. Defaults to media/<filename>.
+    #[arg(long)]
+    pub key: Option<String>,
+    /// Public URL base used after upload.
+    #[arg(long, default_value = "https://social.dais.social/media")]
+    pub public_base_url: String,
+    /// R2 bucket name.
+    #[arg(long, default_value = "dais-media")]
+    pub bucket: String,
+    /// Upload to Cloudflare remote R2 instead of local wrangler state.
+    #[arg(long)]
+    pub remote: bool,
+}
+
+#[derive(Args)]
+pub struct MediaAttachmentArgs {
+    pub url: String,
+    #[arg(long, default_value = "Document")]
+    pub kind: String,
+    #[arg(long)]
+    pub media_type: Option<String>,
+    #[arg(long)]
+    pub name: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum ModerationCommand {
+    /// List actor/domain blocks.
+    Blocks {
+        #[arg(long, default_value_t = 50)]
+        limit: u16,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Block one ActivityPub actor.
+    BlockActor {
+        actor_id: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Block one domain.
+    BlockDomain {
+        domain: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Remove an actor or domain block by id/domain.
+    Unblock {
+        value: String,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Show closed-network and allowlist settings.
+    Status {
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Enable or disable closed-network filtering.
+    ClosedNetwork {
+        enabled: bool,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Add or update an allowed federation host.
+    Allow {
+        host: String,
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Remove a federation allowlist host.
+    Disallow {
+        host: String,
+        #[arg(long)]
+        remote: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ReportsCommand {
+    /// Show the expanded operational summary.
+    Summary(StatsArgs),
+    /// Show recent activity rows.
+    Activity {
+        #[arg(long, default_value_t = 20)]
+        limit: u16,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Show top posts by locally tracked engagement.
+    TopPosts {
+        #[arg(long, default_value_t = 20)]
+        limit: u16,
+        #[arg(long)]
+        remote: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

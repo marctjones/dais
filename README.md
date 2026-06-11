@@ -44,7 +44,11 @@ client and the core-based Cloudflare worker tree.
   text.
 - Managed actor mode can publish the local ActivityPub actor as `Person`,
   `Group`, or `Organization` for personal, community, and small-business
-  deployment patterns.
+  deployment patterns, and can update display-name/icon/header metadata from
+  the Rust CLI.
+- Rust owner tooling includes media upload/attachment helpers, moderation and
+  closed-network allowlist controls, delivery/follower review, expanded reports,
+  and a TUI for day-to-day operation.
 
 Mastodon parity is not complete. Dais is currently best described as
 Mastodon-readable with a growing compatibility API, not a full Mastodon server
@@ -75,8 +79,13 @@ Common commands:
 cargo run --manifest-path client/Cargo.toml -- post create "private by default"
 cargo run --manifest-path client/Cargo.toml -- post create "public broadcast" --public --protocol both
 cargo run --manifest-path client/Cargo.toml -- post create "long-form private note" --object-type article --title "Long-form title" --summary "Short abstract" --protocol activitypub --remote
+cargo run --manifest-path client/Cargo.toml -- media attachment https://social.dais.social/media/example.png --kind Image --media-type image/png --name example
+cargo run --manifest-path client/Cargo.toml -- post create "post with media" --attachment '{"type":"Image","url":"https://social.dais.social/media/example.png","mediaType":"image/png"}' --remote
 cargo run --manifest-path client/Cargo.toml -- events create "Dinner" --starts-at 2026-06-12T18:00:00Z --location "Home" --remote
 cargo run --manifest-path client/Cargo.toml -- actors set-type organization --remote
+cargo run --manifest-path client/Cargo.toml -- actors update --display-name "dais" --summary "Private-by-default social server" --remote
+cargo run --manifest-path client/Cargo.toml -- moderation status --remote
+cargo run --manifest-path client/Cargo.toml -- reports summary --remote
 cargo run --manifest-path client/Cargo.toml -- timeline home --remote
 cargo run --manifest-path client/Cargo.toml -- friends list --remote
 cargo run --manifest-path client/Cargo.toml -- tui --remote

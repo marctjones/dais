@@ -14,8 +14,8 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use cli::{
     ActorsCommand, BlueskyCommand, Cli, Command, DeliveriesCommand, E2eeCommand, EventsCommand,
-    FollowCommand, FollowersCommand, FriendsCommand, NotificationsCommand, PostCommand,
-    SearchCommand, TimelineCommand,
+    FollowCommand, FollowersCommand, FriendsCommand, MediaCommand, ModerationCommand,
+    NotificationsCommand, PostCommand, ReportsCommand, SearchCommand, TimelineCommand,
 };
 use config::ConfigStore;
 use d1::D1Client;
@@ -46,6 +46,9 @@ async fn main() -> Result<()> {
         Command::Deliveries(command) => handle_deliveries(command).await?,
         Command::E2ee(command) => handle_e2ee(command).await?,
         Command::Events(command) => handle_events(command, &store).await?,
+        Command::Media(command) => handle_media(command).await?,
+        Command::Moderation(command) => handle_moderation(command).await?,
+        Command::Reports(command) => handle_reports(command).await?,
         Command::Doctor(args) => handle_doctor(args).await?,
         Command::Completions { shell } => {
             let mut command = Cli::command();
@@ -101,6 +104,69 @@ async fn handle_actors(command: ActorsCommand) -> Result<()> {
             let db = D1Client::new(remote)?;
             db.set_actor_type(&username, actor_type).await?;
             println!("@{username} actor type set to {actor_type}");
+        }
+        ActorsCommand::Update(args) => {
+            let db = D1Client::new(args.remote)?;
+            db.update_actor_profile(
+                &args.username,
+                args.display_name.as_deref(),
+                args.summary.as_deref(),
+                args.icon.as_deref(),
+                args.image.as_deref(),
+            )
+            .await?;
+            let actor = db
+                .get_actor(&args.username)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("actor not found: {}", args.username))?;
+            let mut object = serde_json::json!({
+                "id": args.actor,
+                "type": actor.actor_type.as_deref().unwrap_or("Person"),
+                "preferredUsername": actor.username,
+            });
+            if let Some(display_name) = actor.display_name.as_deref() {
+                object["name"] = serde_json::json!(display_name);
+            }
+            if let Some(summary) = actor.summary.as_deref() {
+                object["summary"] = serde_json::json!(summary);
+            }
+            if let Some(icon) = actor.icon.as_deref() {
+                object["icon"] = serde_json::json!({
+                    "type": "Image",
+                    "url": icon
+                });
+            }
+            if let Some(image) = actor.image.as_deref() {
+                object["image"] = serde_json::json!({
+                    "type": "Image",
+                    "url": image
+                });
+            }
+
+            let now = chrono::Utc::now().to_rfc3339();
+            let activity_id = format!("{}#updates/{}", args.actor, new_local_post_id());
+            let activity_json = serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": activity_id,
+                "type": "Update",
+                "actor": args.actor,
+                "published": now,
+                "to": ["https://www.w3.org/ns/activitystreams#Public"],
+                "object": object
+            })
+            .to_string();
+            let delivery_ids = db
+                .create_activity_deliveries(d1::ActivityDeliveryInsert {
+                    post_id: &args.actor,
+                    actor_id: &args.actor,
+                    activity_type: "Update",
+                    activity_json: &activity_json,
+                    target_inboxes: &[],
+                })
+                .await?;
+            println!("@{} profile updated", args.username);
+            println!("Activity: {activity_id}");
+            println!("Deliveries queued: {}", delivery_ids.len());
         }
     }
 
@@ -288,6 +354,7 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
                 starts_at: args.starts_at,
                 ends_at: args.ends_at,
                 location: args.location,
+                attachments: args.attachments,
                 to: args.to,
                 remote: args.remote,
             })?;
@@ -451,6 +518,7 @@ async fn handle_events(command: EventsCommand, store: &ConfigStore) -> Result<()
                 starts_at: Some(args.starts_at),
                 ends_at: args.ends_at,
                 location: args.location,
+                attachments: Vec::new(),
             };
             match publish_post(draft, store, &db).await? {
                 PostOutcome::ActivityPub {
@@ -539,6 +607,124 @@ async fn handle_events(command: EventsCommand, store: &ConfigStore) -> Result<()
                     event.id
                 );
             }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_media(command: MediaCommand) -> Result<()> {
+    match command {
+        MediaCommand::Upload(args) => {
+            let db = D1Client::new(args.remote)?;
+            let filename = args
+                .path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| anyhow::anyhow!("media path has no filename"))?;
+            let key = args.key.unwrap_or_else(|| {
+                format!("{}-{}", chrono::Utc::now().format("%Y%m%d%H%M%S"), filename)
+            });
+            let url = db.upload_media(&args.bucket, &key, &args.path, &args.public_base_url)?;
+            println!("Uploaded media");
+            println!("URL: {url}");
+            println!("Attachment:");
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "type": "Document",
+                    "url": url
+                }))?
+            );
+        }
+        MediaCommand::Attachment(args) => {
+            let mut value = serde_json::json!({
+                "type": args.kind,
+                "url": args.url
+            });
+            if let Some(media_type) = args.media_type {
+                value["mediaType"] = serde_json::json!(media_type);
+            }
+            if let Some(name) = args.name {
+                value["name"] = serde_json::json!(name);
+            }
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_moderation(command: ModerationCommand) -> Result<()> {
+    match command {
+        ModerationCommand::Blocks { limit, remote } => {
+            let db = D1Client::new(remote)?;
+            let blocks = db.list_blocks(limit).await?;
+            output::print_blocks(&blocks);
+        }
+        ModerationCommand::BlockActor {
+            actor_id,
+            reason,
+            remote,
+        } => {
+            let db = D1Client::new(remote)?;
+            db.block_actor(&actor_id, reason.as_deref()).await?;
+            println!("Blocked actor {actor_id}");
+        }
+        ModerationCommand::BlockDomain {
+            domain,
+            reason,
+            remote,
+        } => {
+            let db = D1Client::new(remote)?;
+            db.block_domain(&domain, reason.as_deref()).await?;
+            println!("Blocked domain {domain}");
+        }
+        ModerationCommand::Unblock { value, remote } => {
+            let db = D1Client::new(remote)?;
+            db.unblock(&value).await?;
+            println!("Unblocked {value}");
+        }
+        ModerationCommand::Status { remote } => {
+            let db = D1Client::new(remote)?;
+            println!("Closed network: {}", db.closed_network_enabled().await?);
+            let allowlist = db.list_allowlist_hosts().await?;
+            output::print_allowlist(&allowlist);
+            let blocks = db.list_blocks(50).await?;
+            println!("Blocks: {}", blocks.len());
+        }
+        ModerationCommand::ClosedNetwork { enabled, remote } => {
+            let db = D1Client::new(remote)?;
+            db.set_closed_network(enabled).await?;
+            println!("Closed network set to {enabled}");
+        }
+        ModerationCommand::Allow { host, note, remote } => {
+            let db = D1Client::new(remote)?;
+            db.allow_federation_host(&host, note.as_deref()).await?;
+            println!("Allowed federation host {host}");
+        }
+        ModerationCommand::Disallow { host, remote } => {
+            let db = D1Client::new(remote)?;
+            db.disallow_federation_host(&host).await?;
+            println!("Removed federation allowlist host {host}");
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_reports(command: ReportsCommand) -> Result<()> {
+    match command {
+        ReportsCommand::Summary(args) => handle_stats(args).await?,
+        ReportsCommand::Activity { limit, remote } => {
+            let db = D1Client::new(remote)?;
+            let rows = db.activity_report(limit).await?;
+            output::print_activity_report(&rows);
+        }
+        ReportsCommand::TopPosts { limit, remote } => {
+            let db = D1Client::new(remote)?;
+            let posts = db.top_posts(limit).await?;
+            output::print_top_posts(&posts);
         }
     }
 
