@@ -275,8 +275,8 @@ pub async fn get_post_interactions(
     let likes_query = r#"
         SELECT actor_username, actor_display_name, actor_avatar_url
         FROM interactions
-        WHERE post_id = ?1 AND type = 'like'
-        ORDER BY published_at DESC
+        WHERE (post_id = ?1 OR object_url = ?1) AND type = 'like'
+        ORDER BY created_at DESC
     "#;
 
     let like_rows = db
@@ -307,10 +307,10 @@ pub async fn get_post_interactions(
 
     // Fetch boosts
     let boosts_query = r#"
-        SELECT actor_username, actor_display_name, actor_avatar_url, published_at
+        SELECT actor_username, actor_display_name, actor_avatar_url, created_at
         FROM interactions
-        WHERE post_id = ?1 AND type = 'boost'
-        ORDER BY published_at DESC
+        WHERE (post_id = ?1 OR object_url = ?1) AND type = 'boost'
+        ORDER BY created_at DESC
     "#;
 
     let boost_rows = db
@@ -336,7 +336,7 @@ pub async fn get_post_interactions(
                 .unwrap_or("")
                 .to_string(),
             created_at: row
-                .get("published_at")
+                .get("created_at")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         });
