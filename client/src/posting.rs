@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use crate::atproto::AtprotoClient;
 use crate::cli::{CreatePostArgs, E2eeFallbackMode};
 use crate::config::ConfigStore;
-use crate::d1::D1Client;
+use crate::d1::{D1Client, EncryptedPostInsert};
 use crate::e2ee;
 use crate::new_local_post_id;
 use crate::routing::{effective_protocol, Protocol, Visibility};
@@ -38,6 +38,17 @@ pub struct PostDraft {
     pub reply_to: Option<String>,
     pub to: Vec<String>,
     pub e2ee_fallback: E2eeFallbackMode,
+}
+
+struct CreateActivityInput<'a> {
+    actor_id: &'a str,
+    post_id: &'a str,
+    content: &'a str,
+    visibility: &'a str,
+    published_at: &'a str,
+    encrypted_message: Option<serde_json::Value>,
+    in_reply_to: Option<&'a str>,
+    recipients: &'a [String],
 }
 
 impl PostDraft {
@@ -97,27 +108,28 @@ pub async fn publish_post(
         };
         let encrypted_json = serde_json::to_string(&payload.encrypted_message)?;
         let published_at = chrono::Utc::now().to_rfc3339();
-        db.create_encrypted_post(
-            &post_id,
+        let visibility = draft.visibility.to_string();
+        db.create_encrypted_post(EncryptedPostInsert {
+            id: &post_id,
             actor_id,
-            &fallback_content,
-            &draft.visibility.to_string(),
-            &published_at,
-            &encrypted_json,
-            draft.reply_to.as_deref(),
-        )
+            fallback_content: &fallback_content,
+            visibility: &visibility,
+            published_at: &published_at,
+            encrypted_message_json: &encrypted_json,
+            in_reply_to: draft.reply_to.as_deref(),
+        })
         .await?;
 
-        let activity_json = build_create_activity_json(
+        let activity_json = build_create_activity_json(CreateActivityInput {
             actor_id,
-            &post_id,
-            &fallback_content,
-            &draft.visibility.to_string(),
-            &published_at,
-            Some(serde_json::to_value(&payload.encrypted_message)?),
-            draft.reply_to.as_deref(),
-            &draft.to,
-        )?;
+            post_id: &post_id,
+            content: &fallback_content,
+            visibility: &visibility,
+            published_at: &published_at,
+            encrypted_message: Some(serde_json::to_value(&payload.encrypted_message)?),
+            in_reply_to: draft.reply_to.as_deref(),
+            recipients: &draft.to,
+        })?;
         let delivery_ids =
             create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
 
@@ -151,16 +163,16 @@ pub async fn publish_post(
             )
             .await?;
 
-            let activity_json = build_create_activity_json(
+            let activity_json = build_create_activity_json(CreateActivityInput {
                 actor_id,
-                &post_id,
-                &draft.text,
-                &draft.visibility.to_string(),
-                &published_at,
-                None,
-                draft.reply_to.as_deref(),
-                &draft.to,
-            )?;
+                post_id: &post_id,
+                content: &draft.text,
+                visibility: &draft.visibility.to_string(),
+                published_at: &published_at,
+                encrypted_message: None,
+                in_reply_to: draft.reply_to.as_deref(),
+                recipients: &draft.to,
+            })?;
             let delivery_ids =
                 create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
 
@@ -188,16 +200,16 @@ pub async fn publish_post(
             )
             .await?;
 
-            let activity_json = build_create_activity_json(
+            let activity_json = build_create_activity_json(CreateActivityInput {
                 actor_id,
-                &post_id,
-                &draft.text,
-                &draft.visibility.to_string(),
-                &published_at,
-                None,
-                draft.reply_to.as_deref(),
-                &draft.to,
-            )?;
+                post_id: &post_id,
+                content: &draft.text,
+                visibility: &draft.visibility.to_string(),
+                published_at: &published_at,
+                encrypted_message: None,
+                in_reply_to: draft.reply_to.as_deref(),
+                recipients: &draft.to,
+            })?;
             let delivery_ids =
                 create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
 
@@ -228,27 +240,18 @@ async fn create_deliveries(
         .await
 }
 
-fn build_create_activity_json(
-    actor_id: &str,
-    post_id: &str,
-    content: &str,
-    visibility: &str,
-    published_at: &str,
-    encrypted_message: Option<serde_json::Value>,
-    in_reply_to: Option<&str>,
-    recipients: &[String],
-) -> Result<String> {
-    let followers_collection = format!("{actor_id}/followers");
-    let to = activity_to(visibility, &followers_collection, recipients);
-    let cc = activity_cc(visibility, &followers_collection);
+fn build_create_activity_json(input: CreateActivityInput<'_>) -> Result<String> {
+    let followers_collection = format!("{}/followers", input.actor_id);
+    let to = activity_to(input.visibility, &followers_collection, input.recipients);
+    let cc = activity_cc(input.visibility, &followers_collection);
 
     let mut note = serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
         "type": "Note",
-        "id": post_id,
-        "attributedTo": actor_id,
-        "content": content,
-        "published": published_at,
+        "id": input.post_id,
+        "attributedTo": input.actor_id,
+        "content": input.content,
+        "published": input.published_at,
         "to": to
     });
 
@@ -256,20 +259,20 @@ fn build_create_activity_json(
         note["cc"] = serde_json::json!(cc);
     }
 
-    if let Some(in_reply_to) = in_reply_to {
+    if let Some(in_reply_to) = input.in_reply_to {
         note["inReplyTo"] = serde_json::json!(in_reply_to);
     }
 
-    if let Some(encrypted_message) = encrypted_message {
+    if let Some(encrypted_message) = input.encrypted_message {
         note["encryptedMessage"] = encrypted_message;
     }
 
     let activity = serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
         "type": "Create",
-        "id": format!("{post_id}#create"),
-        "actor": actor_id,
-        "published": published_at,
+        "id": format!("{}#create", input.post_id),
+        "actor": input.actor_id,
+        "published": input.published_at,
         "to": note["to"].clone(),
         "cc": note.get("cc").cloned().unwrap_or_else(|| serde_json::json!([])),
         "object": note

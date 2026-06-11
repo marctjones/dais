@@ -19,6 +19,16 @@ pub struct D1Post {
     pub encrypted_message: Option<String>,
 }
 
+pub struct EncryptedPostInsert<'a> {
+    pub id: &'a str,
+    pub actor_id: &'a str,
+    pub fallback_content: &'a str,
+    pub visibility: &'a str,
+    pub published_at: &'a str,
+    pub encrypted_message_json: &'a str,
+    pub in_reply_to: Option<&'a str>,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct D1User {
@@ -197,17 +207,9 @@ impl D1Client {
         self.execute(&sql)
     }
 
-    pub async fn create_encrypted_post(
-        &self,
-        id: &str,
-        actor_id: &str,
-        fallback_content: &str,
-        visibility: &str,
-        published_at: &str,
-        encrypted_message_json: &str,
-        in_reply_to: Option<&str>,
-    ) -> Result<()> {
-        let in_reply_to = in_reply_to
+    pub async fn create_encrypted_post(&self, post: EncryptedPostInsert<'_>) -> Result<()> {
+        let in_reply_to = post
+            .in_reply_to
             .map(sql_literal)
             .unwrap_or_else(|| "NULL".to_string());
         let sql = format!(
@@ -220,12 +222,12 @@ impl D1Client {
                 {visibility}, {published_at}, 'activitypub', {encrypted_message_json}, {in_reply_to}
             )
             "#,
-            id = sql_literal(id),
-            actor_id = sql_literal(actor_id),
-            fallback_content = sql_literal(fallback_content),
-            visibility = sql_literal(visibility),
-            published_at = sql_literal(published_at),
-            encrypted_message_json = sql_literal(encrypted_message_json),
+            id = sql_literal(post.id),
+            actor_id = sql_literal(post.actor_id),
+            fallback_content = sql_literal(post.fallback_content),
+            visibility = sql_literal(post.visibility),
+            published_at = sql_literal(post.published_at),
+            encrypted_message_json = sql_literal(post.encrypted_message_json),
             in_reply_to = in_reply_to,
         );
         self.execute(&sql)

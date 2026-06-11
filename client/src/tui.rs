@@ -86,6 +86,8 @@ enum Mode {
 enum ComposeField {
     Body,
     Recipients,
+    DirectRecipients,
+    ReplyTo,
 }
 
 #[derive(Clone, Debug)]
@@ -204,6 +206,8 @@ fn char_to_byte_idx(value: &str, char_idx: usize) -> usize {
 struct ComposeState {
     body: TextBuffer,
     recipients: TextBuffer,
+    direct_recipients: TextBuffer,
+    reply_to: TextBuffer,
     visibility: Visibility,
     protocol: Protocol,
     encrypt: bool,
@@ -215,6 +219,8 @@ impl ComposeState {
         Self {
             body: TextBuffer::new(),
             recipients: TextBuffer::from_text(""),
+            direct_recipients: TextBuffer::from_text(""),
+            reply_to: TextBuffer::from_text(""),
             visibility: Visibility::Followers,
             protocol: Protocol::ActivityPub,
             encrypt: false,
@@ -225,6 +231,8 @@ impl ComposeState {
     fn reset(&mut self) {
         self.body.clear();
         self.recipients.clear();
+        self.direct_recipients.clear();
+        self.reply_to.clear();
         self.visibility = Visibility::Followers;
         self.protocol = Protocol::ActivityPub;
         self.encrypt = false;
@@ -403,6 +411,14 @@ impl App {
                 self.mode = Mode::Compose;
                 self.status = "Compose private post".to_string();
             }
+            KeyCode::Char('d') => {
+                self.compose.reset();
+                self.compose.visibility = Visibility::Direct;
+                self.compose.protocol = Protocol::ActivityPub;
+                self.compose.field = ComposeField::DirectRecipients;
+                self.mode = Mode::Compose;
+                self.status = "Compose direct message".to_string();
+            }
             KeyCode::Char('/') => {
                 self.mode = Mode::Search;
                 self.status = "Search".to_string();
@@ -438,13 +454,17 @@ impl App {
             KeyCode::Tab => {
                 self.compose.field = match self.compose.field {
                     ComposeField::Body => ComposeField::Recipients,
-                    ComposeField::Recipients => ComposeField::Body,
+                    ComposeField::Recipients => ComposeField::DirectRecipients,
+                    ComposeField::DirectRecipients => ComposeField::ReplyTo,
+                    ComposeField::ReplyTo => ComposeField::Body,
                 };
             }
             KeyCode::BackTab => {
                 self.compose.field = match self.compose.field {
-                    ComposeField::Body => ComposeField::Recipients,
+                    ComposeField::Body => ComposeField::ReplyTo,
                     ComposeField::Recipients => ComposeField::Body,
+                    ComposeField::DirectRecipients => ComposeField::Recipients,
+                    ComposeField::ReplyTo => ComposeField::DirectRecipients,
                 };
             }
             KeyCode::Char('v') => {
@@ -467,10 +487,8 @@ impl App {
                 self.send_compose();
             }
             KeyCode::Enter => {
-                if self.compose.field == ComposeField::Recipients {
-                    self.compose.recipients.insert_newline();
-                } else {
-                    self.compose.body.insert_newline();
+                if self.compose.field != ComposeField::ReplyTo {
+                    self.current_compose_buffer().insert_newline();
                 }
             }
             KeyCode::Backspace => {
@@ -516,6 +534,8 @@ impl App {
         match self.compose.field {
             ComposeField::Body => &mut self.compose.body,
             ComposeField::Recipients => &mut self.compose.recipients,
+            ComposeField::DirectRecipients => &mut self.compose.direct_recipients,
+            ComposeField::ReplyTo => &mut self.compose.reply_to,
         }
     }
 
@@ -540,7 +560,7 @@ impl App {
         }
         let current = *self.selection.get(&self.active).unwrap_or(&0);
         let next = if delta.is_negative() {
-            current.saturating_sub(delta.unsigned_abs() as usize)
+            current.saturating_sub(delta.unsigned_abs())
         } else {
             current.saturating_add(delta as usize)
         };
@@ -637,6 +657,25 @@ impl App {
                 }
             }
         }
+        let to: Vec<String> = self
+            .compose
+            .direct_recipients
+            .text()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+        if self.compose.visibility == Visibility::Direct && to.is_empty() {
+            self.status = "Direct posts need at least one actor URL".to_string();
+            return;
+        }
+        let reply_to = self.compose.reply_to.text().trim().to_string();
+        let reply_to = if reply_to.is_empty() {
+            None
+        } else {
+            Some(reply_to)
+        };
 
         let draft = PostDraft {
             text,
@@ -644,8 +683,8 @@ impl App {
             protocol: self.compose.protocol,
             encrypt: self.compose.encrypt,
             recipients: recipients.into_iter().collect(),
-            reply_to: None,
-            to: Vec::new(),
+            reply_to,
+            to,
             e2ee_fallback: crate::cli::E2eeFallbackMode::Strict,
         };
 
@@ -985,7 +1024,7 @@ impl App {
 
     fn draw_footer(&self, frame: &mut Frame<'_>, area: Rect) {
         let left = match self.mode {
-            Mode::Normal => "q quit · tab switch · r refresh · c compose · / search · a approve · x reject · m read · u unblock",
+            Mode::Normal => "q quit · tab switch · r refresh · c compose · d direct · / search · a approve · x reject · m read · u unblock",
             Mode::Compose => "ctrl+s send · tab field · v visibility · p protocol · e e2ee · esc cancel",
             Mode::Search => "enter search · esc cancel · backspace edit",
         };
@@ -1043,19 +1082,64 @@ impl App {
 
         let editor_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .constraints([Constraint::Percentage(64), Constraint::Percentage(36)])
             .split(layout[1]);
         let body = Paragraph::new(self.compose.body.text())
-            .block(Block::default().borders(Borders::ALL).title("Body"))
-            .wrap(Wrap { trim: false });
-        let recipients = Paragraph::new(self.compose.recipients.text())
-            .block(Block::default().borders(Borders::ALL).title("Recipients"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(compose_field_title(
+                        "Body",
+                        self.compose.field == ComposeField::Body,
+                    )),
+            )
             .wrap(Wrap { trim: false });
         frame.render_widget(body, editor_chunks[0]);
-        frame.render_widget(recipients, editor_chunks[1]);
+
+        let recipient_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(38),
+                Constraint::Percentage(38),
+                Constraint::Percentage(24),
+            ])
+            .split(editor_chunks[1]);
+        let e2ee_recipients = Paragraph::new(self.compose.recipients.text())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(compose_field_title(
+                        "E2EE keys",
+                        self.compose.field == ComposeField::Recipients,
+                    )),
+            )
+            .wrap(Wrap { trim: false });
+        let direct_recipients = Paragraph::new(self.compose.direct_recipients.text())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(compose_field_title(
+                        "Direct actor URLs",
+                        self.compose.field == ComposeField::DirectRecipients,
+                    )),
+            )
+            .wrap(Wrap { trim: false });
+        let reply_to = Paragraph::new(self.compose.reply_to.text())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(compose_field_title(
+                        "Reply to URL",
+                        self.compose.field == ComposeField::ReplyTo,
+                    )),
+            )
+            .wrap(Wrap { trim: false });
+        frame.render_widget(e2ee_recipients, recipient_chunks[0]);
+        frame.render_widget(direct_recipients, recipient_chunks[1]);
+        frame.render_widget(reply_to, recipient_chunks[2]);
 
         let instructions = Paragraph::new(
-            "Enter inserts newline. Tab switches field. V toggles audience. P toggles protocol. E toggles E2EE. Ctrl+S sends.",
+            "E2EE keys use key_id=public_key_pem_file. Direct messages use one actor URL per line. Ctrl+S sends.",
         )
         .block(Block::default().borders(Borders::ALL));
         frame.render_widget(instructions, layout[2]);
@@ -1451,6 +1535,14 @@ fn encryption_state(encrypted: bool) -> &'static str {
         "[encrypted]"
     } else {
         "[plaintext]"
+    }
+}
+
+fn compose_field_title(label: &str, active: bool) -> String {
+    if active {
+        format!("> {label}")
+    } else {
+        label.to_string()
     }
 }
 
