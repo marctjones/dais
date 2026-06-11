@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use crate::error::{CoreError, CoreResult};
 use crate::traits::HttpProvider;
 
+pub const INBOUND_SIGNATURE_MAX_SKEW_SECONDS: i64 = 12 * 60 * 60;
+
 /// HTTP Signature header components
 #[derive(Debug, Clone)]
 pub struct HttpSignature {
@@ -181,6 +183,75 @@ pub fn verify_request(
     verify_signature_raw(public_key_pem, &signing_string, &http_signature.signature)
 }
 
+pub fn validate_inbound_post_signature_policy(
+    http_signature: &HttpSignature,
+    headers: &HashMap<String, String>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
+    require_signed_headers(
+        http_signature,
+        &["(request-target)", "host", "date", "digest"],
+    )?;
+
+    let digest_header = headers
+        .get("digest")
+        .ok_or_else(|| "Missing required Digest header".to_string())?;
+    if digest_header.trim().is_empty() {
+        return Err("Digest header is empty".to_string());
+    }
+
+    let date_header = headers
+        .get("date")
+        .ok_or_else(|| "Missing required Date header".to_string())?;
+    validate_http_date_window(date_header, now, INBOUND_SIGNATURE_MAX_SKEW_SECONDS)?;
+
+    Ok(())
+}
+
+pub fn validate_inbound_post_signature_policy_now(
+    http_signature: &HttpSignature,
+    headers: &HashMap<String, String>,
+) -> Result<(), String> {
+    validate_inbound_post_signature_policy(http_signature, headers, chrono::Utc::now())
+}
+
+pub fn require_signed_headers(
+    http_signature: &HttpSignature,
+    required_headers: &[&str],
+) -> Result<(), String> {
+    for required in required_headers {
+        if !http_signature
+            .headers
+            .iter()
+            .any(|header| header.eq_ignore_ascii_case(required))
+        {
+            return Err(format!(
+                "Signature does not cover required header: {}",
+                required
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_http_date_window(
+    date_header: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    max_skew_seconds: i64,
+) -> Result<(), String> {
+    let signed_at = chrono::DateTime::parse_from_rfc2822(date_header)
+        .map_err(|e| format!("Invalid Date header: {}", e))?
+        .with_timezone(&chrono::Utc);
+    let skew = now.signed_duration_since(signed_at).num_seconds().abs();
+    if skew > max_skew_seconds {
+        return Err(format!(
+            "Date header outside allowed replay window: {} seconds",
+            skew
+        ));
+    }
+    Ok(())
+}
+
 /// Verify SHA-256 digest header
 pub fn verify_digest(body: &str, digest_header: &str) -> Result<bool, String> {
     use sha2::Digest;
@@ -289,5 +360,81 @@ mod tests {
         let expected =
             "(request-target): post /inbox\nhost: example.com\ndate: Mon, 01 Jan 2024 00:00:00 GMT";
         assert_eq!(signing_string, expected);
+    }
+
+    #[test]
+    fn inbound_policy_requires_digest_and_core_signed_headers() {
+        let sig = HttpSignature {
+            key_id: "https://example.com/users/alice#main-key".to_string(),
+            algorithm: "rsa-sha256".to_string(),
+            headers: vec![
+                "(request-target)".to_string(),
+                "host".to_string(),
+                "date".to_string(),
+            ],
+            signature: "abc".to_string(),
+        };
+        let mut headers = HashMap::new();
+        headers.insert("host".to_string(), "social.example".to_string());
+        headers.insert(
+            "date".to_string(),
+            "Thu, 11 Jun 2026 12:00:00 GMT".to_string(),
+        );
+
+        let err = validate_inbound_post_signature_policy(
+            &sig,
+            &headers,
+            chrono::DateTime::parse_from_rfc2822("Thu, 11 Jun 2026 12:00:00 GMT")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("digest"));
+    }
+
+    #[test]
+    fn inbound_policy_accepts_required_headers_with_fresh_date() {
+        let sig = HttpSignature {
+            key_id: "https://example.com/users/alice#main-key".to_string(),
+            algorithm: "rsa-sha256".to_string(),
+            headers: vec![
+                "(request-target)".to_string(),
+                "host".to_string(),
+                "date".to_string(),
+                "digest".to_string(),
+            ],
+            signature: "abc".to_string(),
+        };
+        let mut headers = HashMap::new();
+        headers.insert("host".to_string(), "social.example".to_string());
+        headers.insert(
+            "date".to_string(),
+            "Thu, 11 Jun 2026 12:00:00 GMT".to_string(),
+        );
+        headers.insert("digest".to_string(), "SHA-256=abc".to_string());
+
+        validate_inbound_post_signature_policy(
+            &sig,
+            &headers,
+            chrono::DateTime::parse_from_rfc2822("Thu, 11 Jun 2026 12:01:00 GMT")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        )
+        .expect("fresh signed request policy should pass");
+    }
+
+    #[test]
+    fn inbound_policy_rejects_stale_date() {
+        let err = validate_http_date_window(
+            "Thu, 11 Jun 2026 12:00:00 GMT",
+            chrono::DateTime::parse_from_rfc2822("Fri, 12 Jun 2026 01:00:01 GMT")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            INBOUND_SIGNATURE_MAX_SKEW_SECONDS,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("outside allowed replay window"));
     }
 }

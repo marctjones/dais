@@ -31,8 +31,9 @@ pub use security::{
     ANONYMOUS_PUBLIC_POST_SQL_PREDICATE, E2EE_FALLBACK_MARKER,
 };
 pub use signatures::{
-    build_signing_string, fetch_actor_public_key, sign_request, verify_digest, verify_request,
-    HttpSignature,
+    build_signing_string, fetch_actor_public_key, sign_request, validate_http_date_window,
+    validate_inbound_post_signature_policy, validate_inbound_post_signature_policy_now,
+    verify_digest, verify_request, HttpSignature, INBOUND_SIGNATURE_MAX_SKEW_SECONDS,
 };
 pub use timeline::{get_home_timeline, TimelinePost};
 pub use types::*;
