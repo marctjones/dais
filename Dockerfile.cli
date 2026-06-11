@@ -1,5 +1,5 @@
 # Rust client shell for dais management
-FROM rust:1.83-slim
+FROM rust:1.96-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
