@@ -5,6 +5,14 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.8] - 2026-06-11
+
+### Added
+- Added `docs/design/E2EE_DM_SPIKE.md` with the #71 recommendation:
+  MLS/OpenMLS over signed ActivityPub delivery for decentralized dais E2EE DMs,
+  with actor-published device key packages, TOFU plus safety-number verification,
+  a `daisEncryptedMessage` v2 wire format, and a scoped 1:1 prototype plan.
+
 ## [1.17.7] - 2026-06-11
 
 ### Added
