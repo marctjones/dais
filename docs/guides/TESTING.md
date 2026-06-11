@@ -87,6 +87,36 @@ The report uses separate result groups:
 compatibility gaps that should be tracked as GitHub issues before becoming hard
 release gates.
 
+#### `scripts/federation-matrix.mjs`
+
+Runs a compatibility matrix for the current dais deployment and optional remote
+fediverse targets. This is the v0.16 federation-lab gate: it checks discovery,
+actor shape, public outbox safety, anonymous private/E2EE denial, unsigned inbox
+rejection, the read-only Mastodon API floor, and the AT Protocol PDS
+`describeServer` endpoint.
+
+**Usage:**
+```bash
+npm run test:federation-matrix
+```
+
+**Optional remote target probes:**
+```bash
+DAIS_FEDERATION_TARGETS='[
+  {"name":"mastodon.social","acct":"somebody@mastodon.social","actor":"https://mastodon.social/users/somebody"},
+  {"name":"pixelfed.social","acct":"somebody@pixelfed.social"}
+]' npm run test:federation-matrix
+```
+
+The script emits a markdown table by default and JSON with:
+
+```bash
+node scripts/federation-matrix.mjs --json
+```
+
+`FAIL` exits non-zero. `INFO` rows mean a live lab target, token, or credential
+is not configured and do not block release by themselves.
+
 #### `scripts/test-phase1-local.sh`
 
 Tests Phase 1 functionality:
