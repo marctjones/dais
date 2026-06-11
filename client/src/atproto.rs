@@ -96,12 +96,25 @@ struct RecordsResponse {
 #[derive(Debug, Deserialize)]
 struct RecordView {
     uri: String,
-    value: FollowRecordValue,
+    value: RecordValue,
 }
 
 #[derive(Debug, Deserialize)]
-struct FollowRecordValue {
-    subject: Option<String>,
+struct RecordValue {
+    subject: Option<RecordSubject>,
+    #[serde(rename = "$type")]
+    record_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RecordSubject {
+    Did(String),
+    Ref {
+        uri: String,
+        #[serde(rename = "cid")]
+        _cid: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -111,6 +124,20 @@ struct PostRecord<'a> {
     text: &'a str,
     #[serde(rename = "createdAt")]
     created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply: Option<ReplyRef<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplyRef<'a> {
+    root: StrongRef<'a>,
+    parent: StrongRef<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct StrongRef<'a> {
+    uri: &'a str,
+    cid: &'a str,
 }
 
 impl AtprotoClient {
@@ -186,6 +213,7 @@ impl AtprotoClient {
             record_type: "app.bsky.feed.post",
             text,
             created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            reply: None,
         };
 
         self.post_json(
@@ -199,6 +227,63 @@ impl AtprotoClient {
             Some(token),
         )
         .await
+    }
+
+    pub async fn reply_post(
+        &mut self,
+        text: &str,
+        parent_uri: &str,
+        parent_cid: &str,
+        root_uri: &str,
+        root_cid: &str,
+    ) -> Result<CreatedRecord> {
+        self.ensure_session().await?;
+        let token = self.token()?;
+        let record = PostRecord {
+            record_type: "app.bsky.feed.post",
+            text,
+            created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            reply: Some(ReplyRef {
+                root: StrongRef {
+                    uri: root_uri,
+                    cid: root_cid,
+                },
+                parent: StrongRef {
+                    uri: parent_uri,
+                    cid: parent_cid,
+                },
+            }),
+        };
+
+        self.post_json(
+            &self.service,
+            "com.atproto.repo.createRecord",
+            json!({
+                "repo": self.did,
+                "collection": "app.bsky.feed.post",
+                "record": record,
+            }),
+            Some(token),
+        )
+        .await
+    }
+
+    pub async fn like(&mut self, uri: &str, cid: &str) -> Result<CreatedRecord> {
+        self.create_subject_record("app.bsky.feed.like", uri, cid)
+            .await
+    }
+
+    pub async fn unlike(&mut self, uri: &str) -> Result<()> {
+        self.delete_subject_record("app.bsky.feed.like", uri).await
+    }
+
+    pub async fn repost(&mut self, uri: &str, cid: &str) -> Result<CreatedRecord> {
+        self.create_subject_record("app.bsky.feed.repost", uri, cid)
+            .await
+    }
+
+    pub async fn unrepost(&mut self, uri: &str) -> Result<()> {
+        self.delete_subject_record("app.bsky.feed.repost", uri).await
     }
 
     pub async fn get_profile(&mut self, actor: &str) -> Result<Profile> {
@@ -275,7 +360,10 @@ impl AtprotoClient {
         let follow_uri = records
             .records
             .into_iter()
-            .find(|record| record.value.subject.as_deref() == Some(subject_did))
+            .find(|record| match record.value.subject.as_ref() {
+                Some(RecordSubject::Did(did)) => did == subject_did,
+                _ => false,
+            })
             .map(|record| record.uri)
             .ok_or_else(|| anyhow!("not following DID {subject_did}"))?;
         let rkey = follow_uri
@@ -291,6 +379,91 @@ impl AtprotoClient {
                 json!({
                     "repo": self.did,
                     "collection": "app.bsky.graph.follow",
+                    "rkey": rkey,
+                }),
+                Some(token),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn create_subject_record(
+        &mut self,
+        collection: &str,
+        uri: &str,
+        cid: &str,
+    ) -> Result<CreatedRecord> {
+        self.ensure_session().await?;
+        let token = self.token()?;
+
+        self.post_json(
+            &self.service,
+            "com.atproto.repo.createRecord",
+            json!({
+                "repo": self.did,
+                "collection": collection,
+                "record": {
+                    "$type": collection,
+                    "subject": {
+                        "uri": uri,
+                        "cid": cid,
+                    },
+                    "createdAt": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                },
+            }),
+            Some(token),
+        )
+        .await
+    }
+
+    async fn delete_subject_record(&mut self, collection: &str, uri: &str) -> Result<()> {
+        self.ensure_session().await?;
+        let token = self.token()?;
+        let records: RecordsResponse = self
+            .get_json_auth(
+                &self.service,
+                "com.atproto.repo.listRecords",
+                &[
+                    ("repo", self.did.as_str()),
+                    ("collection", collection),
+                    ("limit", "100"),
+                ],
+                Some(token),
+            )
+            .await?;
+
+        let record_uri = records
+            .records
+            .into_iter()
+            .find(|record| {
+                record.value.record_type.as_deref() == Some(collection)
+                    && record
+                        .value
+                        .subject
+                        .as_ref()
+                        .is_some_and(|subject| match subject {
+                            RecordSubject::Ref {
+                                uri: subject_uri, ..
+                            } => subject_uri == uri,
+                            RecordSubject::Did(_) => false,
+                        })
+            })
+            .map(|record| record.uri)
+            .ok_or_else(|| anyhow!("no {collection} record found for {uri}"))?;
+        let rkey = record_uri
+            .rsplit('/')
+            .next()
+            .filter(|part| !part.is_empty())
+            .ok_or_else(|| anyhow!("could not extract rkey from {record_uri}"))?;
+
+        let _: serde_json::Value = self
+            .post_json(
+                &self.service,
+                "com.atproto.repo.deleteRecord",
+                json!({
+                    "repo": self.did,
+                    "collection": collection,
                     "rkey": rkey,
                 }),
                 Some(token),

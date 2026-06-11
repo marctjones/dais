@@ -90,6 +90,44 @@ pub struct LoginArgs {
 pub enum PostCommand {
     /// Create a public Bluesky post.
     Create { text: String },
+    /// Reply to a Bluesky post. Requires the parent/root URI and CID.
+    Reply {
+        text: String,
+        #[arg(long)]
+        uri: String,
+        #[arg(long)]
+        cid: String,
+        /// Root URI when replying inside an existing thread. Defaults to --uri.
+        #[arg(long)]
+        root_uri: Option<String>,
+        /// Root CID when replying inside an existing thread. Defaults to --cid.
+        #[arg(long)]
+        root_cid: Option<String>,
+    },
+    /// Like a Bluesky post.
+    Like {
+        #[arg(long)]
+        uri: String,
+        #[arg(long)]
+        cid: String,
+    },
+    /// Remove your like from a Bluesky post.
+    Unlike {
+        #[arg(long)]
+        uri: String,
+    },
+    /// Repost a Bluesky post.
+    Repost {
+        #[arg(long)]
+        uri: String,
+        #[arg(long)]
+        cid: String,
+    },
+    /// Remove your repost of a Bluesky post.
+    Unrepost {
+        #[arg(long)]
+        uri: String,
+    },
     /// List posts from yourself or another handle.
     List {
         #[arg(long)]

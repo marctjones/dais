@@ -127,6 +127,47 @@ async fn handle_bluesky_post(command: PostCommand, store: &ConfigStore) -> Resul
                 println!("CID: {cid}");
             }
         }
+        PostCommand::Reply {
+            text,
+            uri,
+            cid,
+            root_uri,
+            root_cid,
+        } => {
+            let mut client = atproto::AtprotoClient::from_config(&store.load_bluesky()?)?;
+            let root_uri = root_uri.unwrap_or_else(|| uri.clone());
+            let root_cid = root_cid.unwrap_or_else(|| cid.clone());
+            let created = client
+                .reply_post(&text, &uri, &cid, &root_uri, &root_cid)
+                .await?;
+            println!("Replied on Bluesky");
+            println!("URI: {}", created.uri);
+            if let Some(cid) = created.cid {
+                println!("CID: {cid}");
+            }
+        }
+        PostCommand::Like { uri, cid } => {
+            let mut client = atproto::AtprotoClient::from_config(&store.load_bluesky()?)?;
+            let created = client.like(&uri, &cid).await?;
+            println!("Liked Bluesky post");
+            println!("URI: {}", created.uri);
+        }
+        PostCommand::Unlike { uri } => {
+            let mut client = atproto::AtprotoClient::from_config(&store.load_bluesky()?)?;
+            client.unlike(&uri).await?;
+            println!("Removed Bluesky like");
+        }
+        PostCommand::Repost { uri, cid } => {
+            let mut client = atproto::AtprotoClient::from_config(&store.load_bluesky()?)?;
+            let created = client.repost(&uri, &cid).await?;
+            println!("Reposted Bluesky post");
+            println!("URI: {}", created.uri);
+        }
+        PostCommand::Unrepost { uri } => {
+            let mut client = atproto::AtprotoClient::from_config(&store.load_bluesky()?)?;
+            client.unrepost(&uri).await?;
+            println!("Removed Bluesky repost");
+        }
         PostCommand::List { handle, limit } => {
             let mut client = atproto::AtprotoClient::from_config(&store.load_bluesky()?)?;
             client.ensure_session().await?;
