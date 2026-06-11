@@ -2,6 +2,7 @@ pub mod activitypub;
 pub mod atproto;
 mod error;
 pub mod migrations;
+pub mod protocol;
 pub mod sql;
 /// dais-core: shared ActivityPub/AT Protocol implementation
 ///

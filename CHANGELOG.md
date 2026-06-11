@@ -5,6 +5,18 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.6] - 2026-06-11
+
+### Added
+- Added `dais-core::protocol` with:
+  - `ProtocolAdapter`
+  - `CapabilitySet`
+  - concrete ActivityPub and ATProto adapter capability declarations
+  - protocol-agnostic post, message, identity, timeline, and receipt intent
+    structs
+  - honest routing that selects only protocols capable of expressing the
+    requested audience and reports dropped protocols with the missing capability.
+
 ## [1.17.5] - 2026-06-11
 
 ### Added
