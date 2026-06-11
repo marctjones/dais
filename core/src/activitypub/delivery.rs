@@ -24,7 +24,7 @@ pub async fn get_follower_inboxes(
     actor_id: &str,
 ) -> CoreResult<Vec<String>> {
     let query = r#"
-        SELECT follower_inbox
+        SELECT DISTINCT COALESCE(follower_shared_inbox, follower_inbox) AS follower_inbox
         FROM followers
         WHERE actor_id = ?1 AND status = 'approved'
     "#;

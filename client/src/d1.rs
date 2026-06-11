@@ -332,6 +332,11 @@ impl D1Client {
 
         for follower in followers.into_iter().filter(|row| row.status == "approved") {
             let delivery_id = format!("delivery-{}", uuid_like());
+            let target_url = follower
+                .follower_shared_inbox
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .unwrap_or(&follower.follower_inbox);
             let sql = format!(
                 r#"
                 INSERT INTO deliveries (
@@ -344,7 +349,7 @@ impl D1Client {
                 "#,
                 id = sql_literal(&delivery_id),
                 post_id = sql_literal(post_id),
-                target_url = sql_literal(&follower.follower_inbox),
+                target_url = sql_literal(target_url),
                 created_at = sql_literal(&created_at),
             );
             self.execute(&sql)?;

@@ -5,6 +5,34 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.1] - 2026-06-11
+
+### Fixed
+- Fixed Mastodon follower delivery endpoint discovery. Inbound `Follow`
+  handling now fetches the remote actor document and stores its published
+  `inbox` and `endpoints.sharedInbox` instead of deriving `actor_url + /inbox`.
+- Repeated `Follow` activities now refresh stored inbox/sharedInbox values
+  without downgrading existing approval state.
+- Follower fan-out now prefers `follower_shared_inbox` for normal follower
+  deliveries while direct delivery continues to use the actor-specific inbox.
+- Backfilled the production Mastodon follower row for
+  `https://mastodon.social/users/marcjones` with
+  `https://mastodon.social/inbox` as the shared inbox.
+
+### Deployed
+- Deployed production `inbox`, `actor`, and `delivery-queue` workers.
+- Verification passed:
+  - `cargo test --manifest-path core/Cargo.toml`
+  - `cargo check --manifest-path client/Cargo.toml`
+  - `npm run test:activitypub-conformance` (`PASS=15 FAIL=0 MISSING=0 INFO=2`)
+  - `npm run test:federation-matrix` (`PASS=10 FAIL=0 INFO=1`)
+
+### Known limitations
+- A live smoke delivery was created and correctly targeted
+  `https://mastodon.social/inbox`, but it remains queued because the local shell
+  does not have `DELIVERY_ADMIN_TOKEN` and Wrangler 4.99 does not expose a direct
+  queue message-send command.
+
 ## [1.17.0] - 2026-06-11
 
 ### Added

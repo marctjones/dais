@@ -10,6 +10,12 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::Write;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActorDeliveryInfo {
+    inbox: String,
+    shared_inbox: Option<String>,
+}
+
 /// Content moderation result
 #[derive(Debug, Clone)]
 pub struct ModerationResult {
@@ -87,6 +93,63 @@ pub async fn extract_actor_info(
     ))
 }
 
+async fn fetch_actor_delivery_info(
+    http: &dyn HttpProvider,
+    actor_url: &str,
+) -> CoreResult<ActorDeliveryInfo> {
+    let mut headers = HashMap::new();
+    headers.insert(
+        "Accept".to_string(),
+        "application/activity+json, application/ld+json".to_string(),
+    );
+
+    let request = crate::traits::Request {
+        url: actor_url.to_string(),
+        method: crate::traits::Method::Get,
+        headers,
+        body: None,
+        timeout: Some(30),
+        follow_redirects: true,
+    };
+
+    let response = http.fetch(request).await?;
+    if response.status < 200 || response.status >= 300 {
+        return Ok(ActorDeliveryInfo {
+            inbox: fallback_actor_inbox(actor_url),
+            shared_inbox: None,
+        });
+    }
+
+    let json_str = String::from_utf8(response.body)
+        .map_err(|e| CoreError::Serialization(format!("Invalid UTF-8: {}", e)))?;
+    actor_delivery_info_from_json(actor_url, &json_str)
+}
+
+fn actor_delivery_info_from_json(actor_url: &str, json_str: &str) -> CoreResult<ActorDeliveryInfo> {
+    let value: Value = serde_json::from_str(json_str)?;
+    let inbox = value
+        .get("inbox")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| fallback_actor_inbox(actor_url));
+    let shared_inbox = value
+        .get("endpoints")
+        .and_then(|endpoints| endpoints.get("sharedInbox"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    Ok(ActorDeliveryInfo {
+        inbox,
+        shared_inbox,
+    })
+}
+
+fn fallback_actor_inbox(actor_url: &str) -> String {
+    format!("{}/inbox", actor_url.trim_end_matches('/'))
+}
+
 /// Create a notification in the database
 pub async fn create_notification(
     db: &dyn DatabaseProvider,
@@ -138,17 +201,20 @@ pub async fn create_notification(
 /// Handle Follow activity
 pub async fn handle_follow(
     db: &dyn DatabaseProvider,
+    http: &dyn HttpProvider,
     activity: &Activity,
     our_actor_url: &str,
 ) -> CoreResult<()> {
-    // Extract follower's inbox from their actor object
-    let follower_inbox = format!("{}/inbox", activity.actor);
+    let delivery = fetch_actor_delivery_info(http, &activity.actor).await?;
 
-    // Insert into followers table with 'pending' status
     let query = r#"
-        INSERT OR IGNORE INTO followers (
-            id, actor_id, follower_actor_id, follower_inbox, status
-        ) VALUES (?1, ?2, ?3, ?4, 'pending')
+        INSERT INTO followers (
+            id, actor_id, follower_actor_id, follower_inbox, follower_shared_inbox, status
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending')
+        ON CONFLICT(actor_id, follower_actor_id) DO UPDATE SET
+            follower_inbox = excluded.follower_inbox,
+            follower_shared_inbox = excluded.follower_shared_inbox,
+            updated_at = CURRENT_TIMESTAMP
     "#;
 
     db.execute(
@@ -157,7 +223,11 @@ pub async fn handle_follow(
             Value::String(activity.id.clone()),
             Value::String(our_actor_url.to_string()),
             Value::String(activity.actor.clone()),
-            Value::String(follower_inbox),
+            Value::String(delivery.inbox),
+            delivery
+                .shared_inbox
+                .map(Value::String)
+                .unwrap_or(Value::Null),
         ],
     )
     .await?;
@@ -890,7 +960,7 @@ pub async fn process_inbox_activity(
 
     // Route to appropriate handler based on activity type
     match activity.activity_type.as_str() {
-        "Follow" => handle_follow(db, &activity, our_actor_url).await?,
+        "Follow" => handle_follow(db, http, &activity, our_actor_url).await?,
         "Undo" => handle_undo(db, &activity).await?,
         "Create" => handle_create(db, http, &activity, our_actor_url, moderator).await?,
         "Update" => handle_update(db, &activity).await?,
@@ -905,4 +975,49 @@ pub async fn process_inbox_activity(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{actor_delivery_info_from_json, fallback_actor_inbox};
+
+    #[test]
+    fn actor_delivery_info_prefers_published_inbox_and_shared_inbox() {
+        let json = r#"{
+            "id": "https://mastodon.example/users/alice",
+            "type": "Person",
+            "inbox": "https://mastodon.example/users/alice/inbox",
+            "endpoints": {
+                "sharedInbox": "https://mastodon.example/inbox"
+            }
+        }"#;
+
+        let delivery =
+            actor_delivery_info_from_json("https://mastodon.example/users/alice", json).unwrap();
+
+        assert_eq!(delivery.inbox, "https://mastodon.example/users/alice/inbox");
+        assert_eq!(
+            delivery.shared_inbox.as_deref(),
+            Some("https://mastodon.example/inbox")
+        );
+    }
+
+    #[test]
+    fn actor_delivery_info_falls_back_to_actor_inbox() {
+        let json = r#"{"id":"https://remote.example/users/bob","type":"Person"}"#;
+
+        let delivery =
+            actor_delivery_info_from_json("https://remote.example/users/bob/", json).unwrap();
+
+        assert_eq!(delivery.inbox, "https://remote.example/users/bob/inbox");
+        assert_eq!(delivery.shared_inbox, None);
+    }
+
+    #[test]
+    fn fallback_actor_inbox_trims_trailing_slash() {
+        assert_eq!(
+            fallback_actor_inbox("https://remote.example/users/bob/"),
+            "https://remote.example/users/bob/inbox"
+        );
+    }
 }
