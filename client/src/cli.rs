@@ -33,6 +33,9 @@ pub enum Command {
     /// Inspect local ActivityPub followers.
     #[command(subcommand)]
     Followers(FollowersCommand),
+    /// Inspect ActivityPub notifications.
+    #[command(subcommand)]
+    Notifications(NotificationsCommand),
     /// End-to-end encryption helpers for dais encryptedMessage v1.
     #[command(subcommand)]
     E2ee(E2eeCommand),
@@ -254,6 +257,23 @@ pub enum FollowersCommand {
     List {
         #[arg(long, default_value_t = 50)]
         limit: u16,
+        #[arg(long)]
+        remote: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum NotificationsCommand {
+    /// List local ActivityPub notifications.
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: u16,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Mark one notification as read.
+    Read {
+        id: String,
         #[arg(long)]
         remote: bool,
     },

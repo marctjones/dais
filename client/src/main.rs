@@ -13,7 +13,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use cli::{
     BlueskyCommand, Cli, Command, E2eeCommand, FollowCommand, FollowersCommand, FriendsCommand,
-    PostCommand, SearchCommand, TimelineCommand,
+    NotificationsCommand, PostCommand, SearchCommand, TimelineCommand,
 };
 use config::ConfigStore;
 use d1::D1Client;
@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
         Command::Timeline(command) => handle_timeline(command, &store).await?,
         Command::Friends(command) => handle_friends(command).await?,
         Command::Followers(command) => handle_followers(command).await?,
+        Command::Notifications(command) => handle_notifications(command).await?,
         Command::E2ee(command) => handle_e2ee(command).await?,
         Command::Doctor(args) => handle_doctor(args).await?,
         Command::Completions { shell } => {
@@ -382,6 +383,23 @@ async fn handle_followers(command: FollowersCommand) -> Result<()> {
                     follower.follower_actor_id, follower.status, follower.follower_inbox
                 );
             }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_notifications(command: NotificationsCommand) -> Result<()> {
+    match command {
+        NotificationsCommand::List { limit, remote } => {
+            let db = D1Client::new(remote)?;
+            let notifications = db.list_notifications(limit).await?;
+            output::print_notifications(&notifications);
+        }
+        NotificationsCommand::Read { id, remote } => {
+            let db = D1Client::new(remote)?;
+            db.mark_notification_read(&id).await?;
+            println!("Marked notification {id} read");
         }
     }
 

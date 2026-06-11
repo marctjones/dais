@@ -1,5 +1,5 @@
 use crate::atproto::{FeedItem, Profile};
-use crate::d1::{D1Friend, D1Post, D1TimelinePost, D1User, ServerStats};
+use crate::d1::{D1Friend, D1Notification, D1Post, D1TimelinePost, D1User, ServerStats};
 
 pub fn print_profile(profile: &Profile) {
     println!("@{}", profile.handle);
@@ -190,6 +190,50 @@ pub fn print_friends(friends: &[D1Friend]) {
             friend.following_since.as_deref().unwrap_or(""),
             friend.accepted_at.as_deref().unwrap_or("")
         );
+        println!();
+    }
+}
+
+pub fn print_notifications(notifications: &[D1Notification]) {
+    if notifications.is_empty() {
+        println!("No notifications found");
+        return;
+    }
+
+    for notification in notifications {
+        let read = if notification.read.unwrap_or(false) {
+            "read"
+        } else {
+            "unread"
+        };
+        let actor = notification
+            .actor_display_name
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .or(notification.actor_username.as_deref())
+            .unwrap_or(&notification.actor_id);
+        println!(
+            "{} [{} / {}] {}",
+            notification.created_at.as_deref().unwrap_or("unknown time"),
+            notification.kind,
+            read,
+            actor
+        );
+        println!("actor={}", notification.actor_id);
+        println!("id={}", notification.id);
+        if let Some(post_id) = notification.post_id.as_deref().filter(|value| !value.is_empty()) {
+            println!("post={post_id}");
+        }
+        if let Some(activity_id) = notification
+            .activity_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("activity={activity_id}");
+        }
+        if let Some(content) = notification.content.as_deref().filter(|value| !value.is_empty()) {
+            println!("{content}");
+        }
         println!();
     }
 }

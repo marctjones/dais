@@ -213,22 +213,22 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         }
     }
 
+    let interactions = match core.get_post_interactions(post.id.clone()).await {
+        Ok(interactions) => interactions,
+        Err(e) => {
+            worker::console_log!("Error fetching post interactions: {}", e);
+            return Response::error(format!("Internal error: {}", e), 500);
+        }
+    };
+
     if wants_html {
-        let html = render_post_html(&activitypub_domain, username, &post);
+        let html = render_post_html(&activitypub_domain, username, &post, &interactions);
         let mut resp = Response::from_html(html)?;
         resp.headers_mut()
             .set("Content-Type", "text/html; charset=utf-8")?;
         resp.headers_mut().set("Access-Control-Allow-Origin", "*")?;
         Ok(resp)
     } else {
-        let interactions = match core.get_post_interactions(post.id.clone()).await {
-            Ok(interactions) => interactions,
-            Err(e) => {
-                worker::console_log!("Error fetching post interactions: {}", e);
-                return Response::error(format!("Internal error: {}", e), 500);
-            }
-        };
-
         // Return ActivityPub JSON
         let note_json = build_note_object(&post, Some(&interactions));
 
@@ -361,7 +361,12 @@ fn render_outbox_html(domain: &str, username: &str, posts: &[Post]) -> String {
     )
 }
 
-fn render_post_html(domain: &str, username: &str, post: &Post) -> String {
+fn render_post_html(
+    domain: &str,
+    username: &str,
+    post: &Post,
+    interactions: &dais_core::activitypub::outbox::PostInteractions,
+) -> String {
     let reply_html = post
         .in_reply_to
         .as_ref()
@@ -386,13 +391,16 @@ fn render_post_html(domain: &str, username: &str, post: &Post) -> String {
 <article class="post post-full">
     {reply_html}
     <div class="content">{content}</div>
-    <footer>{visibility}</footer>
+    <footer>{visibility} · {reply_count} replies · {like_count} likes · {boost_count} boosts</footer>
 </article>"#,
             domain = escape_html(domain),
             published = escape_html(&post.published_at),
             post_url = public_post_path(domain, username, post),
             content = escape_html(&post.content),
             visibility = escape_html(&post.visibility),
+            reply_count = interactions.replies.len(),
+            like_count = interactions.likes.len(),
+            boost_count = interactions.boosts.len(),
         ),
     )
 }
