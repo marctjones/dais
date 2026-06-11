@@ -204,8 +204,11 @@ pub async fn handle_follow(
     http: &dyn HttpProvider,
     activity: &Activity,
     our_actor_url: &str,
+    _private_key_pem: &str,
 ) -> CoreResult<()> {
     let delivery = fetch_actor_delivery_info(http, &activity.actor).await?;
+    let inbox = delivery.inbox;
+    let shared_inbox = delivery.shared_inbox;
 
     let query = r#"
         INSERT INTO followers (
@@ -223,11 +226,8 @@ pub async fn handle_follow(
             Value::String(activity.id.clone()),
             Value::String(our_actor_url.to_string()),
             Value::String(activity.actor.clone()),
-            Value::String(delivery.inbox),
-            delivery
-                .shared_inbox
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+            Value::String(inbox.clone()),
+            shared_inbox.map(Value::String).unwrap_or(Value::Null),
         ],
     )
     .await?;
@@ -948,6 +948,7 @@ pub async fn process_inbox_activity(
     http: &dyn HttpProvider,
     activity: Activity,
     our_actor_url: &str,
+    private_key_pem: &str,
     moderator: Option<&dyn ContentModerator>,
 ) -> CoreResult<()> {
     // Check if actor is blocked
@@ -960,7 +961,7 @@ pub async fn process_inbox_activity(
 
     // Route to appropriate handler based on activity type
     match activity.activity_type.as_str() {
-        "Follow" => handle_follow(db, http, &activity, our_actor_url).await?,
+        "Follow" => handle_follow(db, http, &activity, our_actor_url, private_key_pem).await?,
         "Undo" => handle_undo(db, &activity).await?,
         "Create" => handle_create(db, http, &activity, our_actor_url, moderator).await?,
         "Update" => handle_update(db, &activity).await?,

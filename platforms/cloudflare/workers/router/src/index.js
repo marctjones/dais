@@ -44,6 +44,8 @@ export default {
       targetUrl = env.OUTBOX_URL + path + url.search;
     } else if (path.match(/^\/messages\/[^\/]+/)) {
       targetUrl = env.ACTOR_URL + path + url.search;
+    } else if (path.startsWith('/admin/followers/')) {
+      targetUrl = env.DELIVERY_QUEUE_URL + path.replace('/admin', '') + url.search;
     } else if (path.startsWith('/admin/deliveries/')) {
       targetUrl = env.DELIVERY_QUEUE_URL + path.replace('/admin', '') + url.search;
     } else if (path.match(/^\/users\/[^\/]+/)) {

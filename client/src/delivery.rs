@@ -16,6 +16,13 @@ pub struct DeliveryEnqueueReport {
     pub status: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct FollowerAcceptReport {
+    pub follower_actor_id: String,
+    pub accepted: bool,
+    pub inbox: String,
+}
+
 #[derive(Serialize)]
 struct DeliveryProcessRequest<'a> {
     delivery_id: &'a str,
@@ -24,6 +31,43 @@ struct DeliveryProcessRequest<'a> {
 #[derive(Serialize)]
 struct DeliveryEnqueueRequest<'a> {
     delivery_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct FollowerAcceptRequest<'a> {
+    actor_id: &'a str,
+    follower_actor_id: &'a str,
+}
+
+pub async fn send_follower_accept(
+    base_url: &str,
+    actor_id: &str,
+    follower_actor_id: &str,
+) -> Result<FollowerAcceptReport> {
+    let url = format!("{}/admin/followers/accept", base_url.trim_end_matches('/'));
+
+    let response = reqwest::Client::new()
+        .post(url)
+        .header("Content-Type", "application/json")
+        .json(&FollowerAcceptRequest {
+            actor_id,
+            follower_actor_id,
+        })
+        .send()
+        .await
+        .context("follower accept request failed")?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("could not read follower accept response")?;
+
+    if !status.is_success() {
+        return Err(anyhow!("follower accept returned HTTP {status}: {body}"));
+    }
+
+    serde_json::from_str(&body).context("could not decode follower accept response")
 }
 
 pub async fn enqueue_delivery(base_url: &str, delivery_id: &str) -> Result<DeliveryEnqueueReport> {

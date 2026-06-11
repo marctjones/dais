@@ -430,6 +430,30 @@ async fn handle_followers(command: FollowersCommand) -> Result<()> {
                 );
             }
         }
+        FollowersCommand::Approve {
+            follower_actor_id,
+            remote,
+            actor,
+            base_url,
+        } => {
+            let db = D1Client::new(remote)?;
+            db.approve_follower(&actor, &follower_actor_id).await?;
+            let report =
+                delivery::send_follower_accept(&base_url, &actor, &follower_actor_id).await?;
+            println!(
+                "Approved {} accepted={} inbox={}",
+                report.follower_actor_id, report.accepted, report.inbox
+            );
+        }
+        FollowersCommand::Reject {
+            follower_actor_id,
+            remote,
+            actor,
+        } => {
+            let db = D1Client::new(remote)?;
+            db.reject_follower(&actor, &follower_actor_id).await?;
+            println!("Rejected {follower_actor_id}");
+        }
     }
 
     Ok(())

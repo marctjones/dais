@@ -782,11 +782,22 @@ impl App {
                 }
             };
             match db.approve_follower(&actor_id, &follower).await {
-                Ok(()) => {
-                    let _ = tx.send(Message::Status(format!("Approved {follower}")));
-                    let _ = tx.send(Message::Refresh(Tab::Followers));
-                    let _ = tx.send(Message::Refresh(Tab::Friends));
-                }
+                Ok(()) => match crate::delivery::send_follower_accept(
+                    default_base_url(remote),
+                    &actor_id,
+                    &follower,
+                )
+                .await
+                {
+                    Ok(_) => {
+                        let _ = tx.send(Message::Status(format!("Approved {follower}")));
+                        let _ = tx.send(Message::Refresh(Tab::Followers));
+                        let _ = tx.send(Message::Refresh(Tab::Friends));
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Message::Error(error.to_string()));
+                    }
+                },
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
                 }
@@ -1579,6 +1590,14 @@ fn encryption_state(encrypted: bool) -> &'static str {
         "[encrypted]"
     } else {
         "[plaintext]"
+    }
+}
+
+fn default_base_url(remote: bool) -> &'static str {
+    if remote {
+        "https://social.dais.social"
+    } else {
+        "http://localhost:8790"
     }
 }
 

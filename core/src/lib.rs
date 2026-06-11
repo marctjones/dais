@@ -107,6 +107,7 @@ impl DaisCore {
             &*self.http,
             activity,
             &our_actor_url,
+            &self.config.private_key,
             moderator,
         )
         .await

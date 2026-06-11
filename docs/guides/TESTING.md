@@ -222,6 +222,15 @@ cargo run --manifest-path client/Cargo.toml -- deliveries process <delivery-id>
 cargo run --manifest-path client/Cargo.toml -- deliveries process-queued --remote --limit 10
 ```
 
+If Mastodon shows a follow request as pending, approve it from dais so the
+server sends a signed ActivityPub `Accept`:
+
+```bash
+cargo run --manifest-path client/Cargo.toml -- followers approve \
+  https://mastodon.social/users/marcjones \
+  --remote
+```
+
 Operational notes:
 - `toot auth` shows which account is active. Use `toot activate <account>` or
   global `toot --as <account> ...` when multiple accounts are configured.

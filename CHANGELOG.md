@@ -5,6 +5,21 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.3] - 2026-06-11
+
+### Fixed
+- Followers approved from the Rust CLI/TUI now receive a signed ActivityPub
+  `Accept`, so Mastodon can complete the follow lifecycle before followers-only
+  deliveries are expected to appear in the home timeline.
+- Follow `Accept` delivery now prefers the follower's shared inbox when present,
+  matching normal Mastodon delivery behavior.
+
+### Added
+- Added `dais followers approve <actor-url>` and
+  `dais followers reject <actor-url>`.
+- Added a delivery-worker `/admin/followers/accept` route that only sends
+  Accept for follower rows already marked `approved`.
+
 ## [1.17.2] - 2026-06-11
 
 ### Added

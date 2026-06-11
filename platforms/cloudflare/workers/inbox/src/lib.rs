@@ -164,12 +164,10 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
     let actor_id = activity["actor"].as_str().unwrap_or("");
     worker::console_log!("Verifying signature from actor: {}", actor_id);
 
-    if let Err(e) =
-        dais_core::activitypub::validate_inbound_post_signature_policy_now(
-            &http_signature,
-            &headers_map,
-        )
-    {
+    if let Err(e) = dais_core::activitypub::validate_inbound_post_signature_policy_now(
+        &http_signature,
+        &headers_map,
+    ) {
         worker::console_log!("Inbound signature policy failed: {}", e);
         return Response::error("Invalid signature policy", 401);
     }

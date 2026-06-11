@@ -327,6 +327,27 @@ pub enum FollowersCommand {
         #[arg(long)]
         remote: bool,
     },
+    /// Approve a follower and send an ActivityPub Accept.
+    Approve {
+        follower_actor_id: String,
+        #[arg(long)]
+        remote: bool,
+        /// Local actor URL. Defaults to the production dais actor.
+        #[arg(long, default_value = "https://social.dais.social/users/social")]
+        actor: String,
+        /// Social/ActivityPub base URL that routes /admin/followers/accept.
+        #[arg(long, default_value = "https://social.dais.social")]
+        base_url: String,
+    },
+    /// Reject/remove a follower.
+    Reject {
+        follower_actor_id: String,
+        #[arg(long)]
+        remote: bool,
+        /// Local actor URL. Defaults to the production dais actor.
+        #[arg(long, default_value = "https://social.dais.social/users/social")]
+        actor: String,
+    },
 }
 
 #[derive(Subcommand)]

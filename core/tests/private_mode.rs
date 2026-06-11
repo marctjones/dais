@@ -534,6 +534,7 @@ async fn inbox_create_ingests_timeline_post_for_accepted_following() {
         &http,
         activity,
         "https://social.dais.social/users/social",
+        "",
         None,
     )
     .await
@@ -769,7 +770,7 @@ async fn inbox_direct_message_uses_conversation_schema() {
         extra: HashMap::new(),
     };
 
-    activitypub::process_inbox_activity(&db, &http, activity, local_actor, None)
+    activitypub::process_inbox_activity(&db, &http, activity, local_actor, "", None)
         .await
         .expect("direct message should ingest");
 

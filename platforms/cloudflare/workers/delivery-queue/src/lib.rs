@@ -29,6 +29,12 @@ struct DeliveryEnqueueRequest {
     delivery_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct FollowerAcceptRequest {
+    actor_id: Option<String>,
+    follower_actor_id: String,
+}
+
 #[derive(Debug, Serialize)]
 struct DeliveryProcessReport {
     delivery_id: String,
@@ -44,6 +50,13 @@ struct DeliveryEnqueueReport {
     status: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct FollowerAcceptReport {
+    follower_actor_id: String,
+    accepted: bool,
+    inbox: String,
+}
+
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
@@ -53,6 +66,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     router
         .post_async("/deliveries/enqueue", handle_enqueue_delivery)
         .post_async("/deliveries/process", handle_process_delivery)
+        .post_async("/followers/accept", handle_follower_accept)
         .run(req, env)
         .await
 }
@@ -271,6 +285,106 @@ async fn handle_enqueue_delivery(mut req: Request, ctx: RouteContext<()>) -> Res
     Ok(resp)
 }
 
+async fn handle_follower_accept(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let body = req.text().await?;
+    let request: FollowerAcceptRequest = serde_json::from_str(&body)
+        .map_err(|_| worker::Error::RustError("Invalid JSON body".to_string()))?;
+    let actor_id = request
+        .actor_id
+        .unwrap_or_else(|| "https://social.dais.social/users/social".to_string());
+
+    let db = ctx.env.d1("DB")?;
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, follower_inbox, follower_shared_inbox, status
+            FROM followers
+            WHERE actor_id = ?1 AND follower_actor_id = ?2
+            LIMIT 1
+            "#,
+        )
+        .bind(&[
+            actor_id.clone().into(),
+            request.follower_actor_id.clone().into(),
+        ])?
+        .all()
+        .await?
+        .results::<serde_json::Map<String, Value>>()?;
+
+    let Some(row) = rows.into_iter().next() else {
+        return Response::error("Follower not found", 404);
+    };
+    let status = row
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if status != "approved" {
+        return Response::error("Follower is not approved", 409);
+    }
+
+    let follow_id = row
+        .get("id")
+        .and_then(|value| value.as_str())
+        .unwrap_or(&request.follower_actor_id);
+    let inbox = row
+        .get("follower_shared_inbox")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .or_else(|| row.get("follower_inbox").and_then(|value| value.as_str()))
+        .unwrap_or("");
+    if inbox.is_empty() {
+        return Response::error("Follower inbox not found", 500);
+    }
+
+    let private_key = ctx
+        .env
+        .secret("PRIVATE_KEY")
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    if private_key.trim().is_empty() {
+        return Response::error("Private key not configured", 500);
+    }
+
+    let accept = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!("{actor_id}#accepts/{}", accept_suffix(follow_id)),
+        "type": "Accept",
+        "actor": actor_id,
+        "to": [request.follower_actor_id.clone()],
+        "object": {
+            "id": follow_id,
+            "type": "Follow",
+            "actor": request.follower_actor_id,
+            "object": actor_id
+        }
+    });
+
+    let http = WorkerHttpProvider::new();
+    dais_core::activitypub::deliver_to_inbox(
+        &http,
+        inbox,
+        &actor_id,
+        &accept.to_string(),
+        &private_key,
+    )
+    .await
+    .map_err(|error| worker::Error::RustError(error.to_string()))?;
+
+    let mut resp = Response::from_json(&FollowerAcceptReport {
+        follower_actor_id: accept
+            .get("to")
+            .and_then(|value| value.as_array())
+            .and_then(|values| values.first())
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string(),
+        accepted: true,
+        inbox: inbox.to_string(),
+    })?;
+    resp.headers_mut().set("Content-Type", "application/json")?;
+    Ok(resp)
+}
+
 async fn process_delivery(
     core: &DaisCore,
     delivery_id: &str,
@@ -291,10 +405,16 @@ async fn process_delivery(
             p.published_at,
             p.encrypted_message,
             p.in_reply_to,
-            f.follower_actor_id AS delivery_recipient
+            (
+                SELECT follower_actor_id
+                FROM followers f
+                WHERE f.status = 'approved'
+                  AND (f.follower_inbox = d.target_url OR f.follower_shared_inbox = d.target_url)
+                ORDER BY updated_at DESC
+                LIMIT 1
+            ) AS delivery_recipient
         FROM deliveries d
         JOIN posts p ON p.id = d.post_id
-        LEFT JOIN followers f ON f.follower_inbox = d.target_url
         WHERE d.id = ?1 AND d.status IN ('queued', 'retry')
     "#;
 
@@ -425,6 +545,15 @@ fn is_delivery_id(value: &str) -> bool {
         .is_some_and(|suffix| suffix.len() >= 12 && suffix.chars().all(|ch| ch.is_ascii_hexdigit()))
 }
 
+fn accept_suffix(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .take(24)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn build_create_activity_json(
     actor_id: &str,
     post_id: &str,
@@ -501,7 +630,9 @@ fn activity_to(
         "direct" => delivery_recipient
             .map(|recipient| vec![recipient.to_string()])
             .unwrap_or_default(),
-        _ => vec![followers_collection.to_string()],
+        _ => delivery_recipient
+            .map(|recipient| vec![followers_collection.to_string(), recipient.to_string()])
+            .unwrap_or_else(|| vec![followers_collection.to_string()]),
     }
 }
 
