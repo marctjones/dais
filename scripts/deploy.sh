@@ -113,6 +113,28 @@ confirm_production() {
   [ "$reply" = "yes" ] || { err "Aborted."; exit 1; }
 }
 
+check_delivery_queue_consumer() {
+  [ "$ENVIRONMENT" = "production" ] || return 0
+  [ "$ACTION" = "deploy" ] || return 0
+  [ "$DRY_RUN" = "true" ] && return 0
+
+  local needs_delivery_queue="false"
+  for w in "${TARGETS[@]}"; do
+    [ "$w" = "delivery-queue" ] && needs_delivery_queue="true"
+  done
+  [ "$needs_delivery_queue" = "true" ] || return 0
+
+  local consumers
+  consumers="$("$WRANGLER" queues consumer list delivery-queue 2>/dev/null || true)"
+  if printf "%s\n" "$consumers" | grep -q "delivery-queue[[:space:]]"; then
+    err "delivery-queue has a stale consumer attached to script 'delivery-queue'."
+    err "Remove it before production deploy:"
+    err "  npx wrangler queues consumer remove delivery-queue delivery-queue"
+    err "Then redeploy delivery-queue-production."
+    exit 1
+  fi
+}
+
 # --- actions -----------------------------------------------------------------
 do_list() {
   info "Workers in $WORKERS_DIR (deploy order):"
@@ -140,6 +162,7 @@ run_one() {
 do_deploy() {
   require_wrangler
   confirm_production
+  check_delivery_queue_consumer
   local failed=() deployed=()
   for w in "${TARGETS[@]}"; do
     if run_one "$w" "$ACTION"; then

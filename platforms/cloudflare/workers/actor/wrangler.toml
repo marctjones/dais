@@ -37,8 +37,3 @@ queue = "delivery-queue"
 binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
-
-# Queue producer for delivery jobs
-[[queues.producers]]
-binding = "DELIVERY_QUEUE"
-queue = "delivery-queue"
