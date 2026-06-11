@@ -29,6 +29,14 @@ struct FakeDbState {
 }
 
 impl FakeDb {
+    fn approve_follower(&self, actor_id: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .approved_followers
+            .insert(actor_id.to_string());
+    }
+
     fn approve_following(&self, actor_id: &str) {
         self.state
             .lock()
@@ -359,6 +367,22 @@ impl HttpProvider for FakeHttp {
             url: request.url,
         })
     }
+}
+
+#[tokio::test]
+async fn approved_follower_policy_accepts_known_actor() {
+    let db = FakeDb::default();
+    let actor_id = "https://mastodon.social/users/alice";
+
+    assert!(!activitypub::is_approved_follower(&db, actor_id)
+        .await
+        .unwrap());
+
+    db.approve_follower(actor_id);
+
+    assert!(activitypub::is_approved_follower(&db, actor_id)
+        .await
+        .unwrap());
 }
 
 #[tokio::test]
