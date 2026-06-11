@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "test:activitypub-conformance": "node scripts/activitypub-conformance.mjs"
+  },
   "devDependencies": {
     "wrangler": "^4.99.0"
   }

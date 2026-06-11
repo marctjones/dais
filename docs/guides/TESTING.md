@@ -55,6 +55,38 @@ wrangler --version
 
 ### Test Scripts
 
+#### `scripts/activitypub-conformance.mjs`
+
+Runs a production/local conformance audit for the public ActivityPub, WebFinger,
+Mastodon-compatibility, and dais private-by-default surfaces.
+
+**Usage:**
+```bash
+npm run test:activitypub-conformance
+```
+
+**Environment overrides:**
+```bash
+DAIS_SOCIAL_BASE_URL=https://social.dais.social \
+DAIS_PDS_BASE_URL=https://pds.dais.social \
+DAIS_USERNAME=social \
+DAIS_ACCT_DOMAIN=social.dais.social \
+DAIS_PRIMARY_ACCT_DOMAIN=dais.social \
+DAIS_PUBLIC_POST_PATH=/users/social/posts/20260608212713-5dafca61 \
+DAIS_PRIVATE_POST_PATH=/users/social/posts/20260608215639-2ddf52c8 \
+npm run test:activitypub-conformance
+```
+
+The report uses separate result groups:
+- `SPEC`: W3C ActivityPub, ActivityStreams 2.0, and RFC 7033 WebFinger checks.
+- `MASTODON`: Mastodon-published conventions and extensions such as `publicKey`,
+  locked-profile signaling, content payload fields, and signed-fetch coverage.
+- `DAIS-PRIVACY`: dais-specific private-by-default expectations.
+
+`FAIL` exits non-zero and should block release. `MISSING` identifies known
+compatibility gaps that should be tracked as GitHub issues before becoming hard
+release gates.
+
 #### `scripts/test-phase1-local.sh`
 
 Tests Phase 1 functionality:
