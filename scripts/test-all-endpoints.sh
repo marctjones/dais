@@ -27,7 +27,7 @@ function test_endpoint() {
     fi
 
     status=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | head -n-1)
+    body=$(printf "%s\n" "$response" | sed '$d')
 
     if [ "$status" = "$expected_status" ]; then
         echo -e "${GREEN}✓ PASS${NC} (HTTP $status)"

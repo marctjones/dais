@@ -97,6 +97,10 @@ function summarize(value) {
   return String(value).replaceAll("\n", " ").slice(0, 180);
 }
 
+function rkeyFromAtUri(uri) {
+  return typeof uri === "string" ? uri.split("/").pop() : "";
+}
+
 async function record(area, target, capability, fn) {
   try {
     const detail = await fn();
@@ -248,6 +252,58 @@ async function atprotoFloor() {
       throw new Error("missing availableUserDomains");
     }
     return res.json.availableUserDomains.join(", ");
+  });
+
+  await record("atproto", config.pdsBaseUrl, "PDS repo metadata", async () => {
+    const did = `did:web:${config.acctDomain}`;
+    const status = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.sync.getRepoStatus?did=${encodeURIComponent(did)}`, {
+      headers: { Accept: "application/json" },
+    });
+    const repos = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.sync.listRepos`, {
+      headers: { Accept: "application/json" },
+    });
+    const repo = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(did)}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (status.status !== 200 || repos.status !== 200 || repo.status !== 200) {
+      throw new Error(`expected 200s, got ${status.status}/${repos.status}/${repo.status}`);
+    }
+    if (status.json?.did !== did || !asArray(repos.json?.repos).some((entry) => entry.did === did)) {
+      throw new Error("repo status/listRepos did not include dais DID");
+    }
+    if (!asArray(repo.json?.collections).includes("app.bsky.feed.post")) {
+      throw new Error("describeRepo missing app.bsky.feed.post");
+    }
+    return `${status.json.status}; collections ${repo.json.collections.join(", ")}`;
+  });
+
+  await record("atproto", config.pdsBaseUrl, "PDS public feed and getRecord", async () => {
+    const did = `did:web:${config.acctDomain}`;
+    const feed = await request(`${config.pdsBaseUrl}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(did)}&limit=1`, {
+      headers: { Accept: "application/json" },
+    });
+    if (feed.status !== 200) throw new Error(`feed expected 200, got ${feed.status}`);
+    const firstPost = feed.json?.feed?.[0]?.post;
+    const rkey = rkeyFromAtUri(firstPost?.uri);
+    if (!rkey) return "feed is reachable; no public posts returned";
+    const record = await request(
+      `${config.pdsBaseUrl}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=app.bsky.feed.post&rkey=${encodeURIComponent(rkey)}`,
+      { headers: { Accept: "application/json" } },
+    );
+    if (record.status !== 200) throw new Error(`getRecord expected 200, got ${record.status}`);
+    if (record.json?.value?.$type !== "app.bsky.feed.post") {
+      throw new Error(`unexpected record ${summarize(JSON.stringify(record.json))}`);
+    }
+    return rkey;
+  });
+
+  await record("atproto", config.pdsBaseUrl, "PDS subscribeRepos status", async () => {
+    const res = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.sync.subscribeRepos`, {
+      headers: { Accept: "application/json" },
+    });
+    if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
+    if (res.json?.transport !== "websocket") throw new Error("missing websocket transport status");
+    return res.json.status;
   });
 }
 

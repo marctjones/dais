@@ -5,6 +5,25 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.5] - 2026-06-11
+
+### Added
+- Added a Bluesky/ATProto public PDS compatibility floor:
+  - `/.well-known/did.json`
+  - `com.atproto.sync.getRepoStatus`
+  - `com.atproto.sync.listRepos`
+  - `com.atproto.repo.describeRepo`
+  - `com.atproto.repo.getRecord`
+- PDS public author feeds and records are now backed by public, unencrypted D1
+  posts instead of placeholder empty responses.
+- Anonymous `com.atproto.sync.subscribeRepos` browser/curl requests now return a
+  JSON status document while WebSocket upgrade requests continue using the
+  WebSocket path.
+
+### Changed
+- Expanded the conformance, federation matrix, and endpoint smoke scripts to
+  cover the PDS public read floor.
+
 ## [1.17.4] - 2026-06-11
 
 ### Added

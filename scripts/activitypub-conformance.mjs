@@ -112,6 +112,10 @@ function summarizeJson(value) {
   return JSON.stringify(value).slice(0, 220);
 }
 
+function rkeyFromAtUri(uri) {
+  return typeof uri === "string" ? uri.split("/").pop() : "";
+}
+
 async function runRequirement(test) {
   try {
     await test.run({
@@ -336,16 +340,44 @@ const tests = [
     const describe = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.server.describeServer`, {
       headers: { Accept: "application/json" },
     });
+    const did = describe.json?.did || `did:web:${config.acctDomain}`;
     const repo = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.sync.getRepo?did=did:web:${config.acctDomain}`, {
       headers: { Accept: "application/json" },
     });
     const feed = await request(`${config.pdsBaseUrl}/xrpc/app.bsky.feed.getAuthorFeed?actor=${config.acctDomain}`, {
       headers: { Accept: "application/json" },
     });
-    if (describe.status !== 200 || repo.status !== 200 || feed.status !== 200) {
-      return t.fail(`expected 200s, got ${describe.status}/${repo.status}/${feed.status}`);
+    const status = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.sync.getRepoStatus?did=${encodeURIComponent(did)}`, {
+      headers: { Accept: "application/json" },
+    });
+    const repos = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.sync.listRepos`, {
+      headers: { Accept: "application/json" },
+    });
+    const describedRepo = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(did)}`, {
+      headers: { Accept: "application/json" },
+    });
+    const subscribeStatus = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.sync.subscribeRepos`, {
+      headers: { Accept: "application/json" },
+    });
+    const statuses = [describe, repo, feed, status, repos, describedRepo, subscribeStatus].map((res) => res.status);
+    if (statuses.some((statusCode) => statusCode !== 200)) {
+      return t.fail(`expected 200s, got ${statuses.join("/")}`);
     }
-    t.pass("describeServer/getRepo/getAuthorFeed return 200");
+    if (status.json?.did !== did || !Array.isArray(repos.json?.repos) || !Array.isArray(describedRepo.json?.collections)) {
+      return t.fail("PDS repo metadata shape is incomplete");
+    }
+    const firstPost = feed.json?.feed?.[0]?.post;
+    const rkey = rkeyFromAtUri(firstPost?.uri);
+    if (rkey) {
+      const record = await request(
+        `${config.pdsBaseUrl}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=app.bsky.feed.post&rkey=${encodeURIComponent(rkey)}`,
+        { headers: { Accept: "application/json" } },
+      );
+      if (record.status !== 200 || record.json?.value?.$type !== "app.bsky.feed.post") {
+        return t.fail(`getRecord expected feed post, got ${record.status} ${summarizeJson(record.json)}`);
+      }
+    }
+    t.pass("PDS identity, repo, record, feed, and subscribe status endpoints return compatible JSON");
   }),
 ];
 
