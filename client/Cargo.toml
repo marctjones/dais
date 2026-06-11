@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 # CLI (noun-verb command tree, P5)
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 
 # TUI ("a mail client for the fediverse", §5)
 ratatui = "0.29"

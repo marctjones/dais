@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 use crate::routing::{Protocol, Visibility};
 
@@ -35,6 +36,13 @@ pub enum Command {
     /// End-to-end encryption helpers for dais encryptedMessage v1.
     #[command(subcommand)]
     E2ee(E2eeCommand),
+    /// Run instance diagnostics and conformance smoke checks.
+    Doctor(DoctorArgs),
+    /// Generate shell completions.
+    Completions {
+        /// Shell to generate completions for.
+        shell: Shell,
+    },
     /// Launch the Rust terminal UI.
     Tui(TuiArgs),
 }
@@ -165,6 +173,31 @@ pub struct TuiArgs {
     /// Read from production D1 instead of local development D1.
     #[arg(long)]
     pub remote: bool,
+}
+
+#[derive(Args)]
+pub struct DoctorArgs {
+    /// Social/ActivityPub base URL.
+    #[arg(long, default_value = "https://social.dais.social")]
+    pub social_base_url: String,
+    /// AT Protocol PDS base URL.
+    #[arg(long, default_value = "https://pds.dais.social")]
+    pub pds_base_url: String,
+    /// Local username.
+    #[arg(long, default_value = "social")]
+    pub username: String,
+    /// WebFinger account domain.
+    #[arg(long, default_value = "social.dais.social")]
+    pub acct_domain: String,
+    /// Known public post path or URL used for object dereference smoke checks.
+    #[arg(long, default_value = "/users/social/posts/20260608212713-5dafca61")]
+    pub public_post: String,
+    /// Known private/E2EE post path or URL used for anonymous-denial smoke checks.
+    #[arg(long, default_value = "/users/social/posts/20260608215639-2ddf52c8")]
+    pub private_post: String,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]

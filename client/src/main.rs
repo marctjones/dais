@@ -2,6 +2,7 @@ mod atproto;
 mod cli;
 mod config;
 mod d1;
+mod doctor;
 mod e2ee;
 mod output;
 mod posting;
@@ -9,7 +10,7 @@ mod routing;
 mod tui;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::{
     BlueskyCommand, Cli, Command, E2eeCommand, FollowCommand, FollowersCommand, FriendsCommand,
     PostCommand, SearchCommand, TimelineCommand,
@@ -36,9 +37,29 @@ async fn main() -> Result<()> {
         Command::Friends(command) => handle_friends(command).await?,
         Command::Followers(command) => handle_followers(command).await?,
         Command::E2ee(command) => handle_e2ee(command).await?,
+        Command::Doctor(args) => handle_doctor(args).await?,
+        Command::Completions { shell } => {
+            let mut command = Cli::command();
+            let name = command.get_name().to_string();
+            clap_complete::generate(shell, &mut command, name, &mut std::io::stdout());
+        }
         Command::Tui(args) => tui::run(args.remote, &store).await?,
     }
 
+    Ok(())
+}
+
+async fn handle_doctor(args: cli::DoctorArgs) -> Result<()> {
+    let json = args.json;
+    let report = doctor::run(&args).await;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        doctor::print_report(&report);
+    }
+    if report.has_failures() {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
