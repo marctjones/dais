@@ -15,6 +15,10 @@ export default {
       return fetch(targetRequest);
     }
 
+    if (hostname === 'social.dais.social' && path === '/') {
+      return Response.redirect(new URL('/users/social', url).toString(), 302);
+    }
+
     // Serve media files from R2
     if (path.startsWith('/media/')) {
       return handleMedia(request, env, path);
@@ -25,6 +29,9 @@ export default {
 
     if (path.startsWith('/.well-known/webfinger')) {
       targetUrl = env.WEBFINGER_URL + path + url.search;
+    } else if (path.match(/^\/@[^\/]+$/)) {
+      const username = path.slice(2);
+      targetUrl = env.ACTOR_URL + `/users/${encodeURIComponent(username)}` + url.search;
     } else if (path.match(/^\/users\/[^\/]+\/inbox/)) {
       targetUrl = env.INBOX_URL + path + url.search;
     } else if (path.match(/^\/users\/[^\/]+\/outbox/)) {

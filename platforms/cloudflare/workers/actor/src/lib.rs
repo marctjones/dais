@@ -1,3 +1,7 @@
+use dais_cloudflare::D1Provider;
+use dais_core::{CoreConfig, DaisCore};
+use serde_json::Value;
+use shared::theme::Theme;
 /// Refactored Actor worker using dais-core
 ///
 /// This is a thin shim that:
@@ -6,12 +10,9 @@
 /// 3. Calls core.get_actor() / core.get_followers() / core.get_following()
 /// 4. Handles content negotiation (JSON vs HTML)
 /// 5. Renders HTML using Theme (platform-specific for now)
-
-use worker::{self, event, Request, Response, Env, Context, Router, RouteContext, Result, Method, Headers};
-use dais_cloudflare::D1Provider;
-use dais_core::{DaisCore, CoreConfig};
-use shared::theme::Theme;
-use serde_json::Value;
+use worker::{
+    self, event, Context, Env, Headers, Method, Request, Response, Result, RouteContext, Router,
+};
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -76,8 +77,14 @@ async fn handle_encrypted_message(_req: Request, ctx: RouteContext<()>) -> Resul
         }
     };
 
-    let id = row.get("id").and_then(|value| value.as_str()).unwrap_or(message_id);
-    let fallback = row.get("content").and_then(|value| value.as_str()).unwrap_or("");
+    let id = row
+        .get("id")
+        .and_then(|value| value.as_str())
+        .unwrap_or(message_id);
+    let fallback = row
+        .get("content")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     let encrypted_message = row
         .get("encrypted_message")
         .and_then(|value| value.as_str())
@@ -92,7 +99,8 @@ async fn handle_encrypted_message(_req: Request, ctx: RouteContext<()>) -> Resul
         id,
         fallback,
         encrypted_message,
-    ))?.with_headers(headers))
+    ))?
+    .with_headers(headers))
 }
 
 async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -101,9 +109,20 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         return handle_cors_preflight();
     }
 
+    let force_json = req
+        .url()
+        .ok()
+        .map(|url| {
+            url.query_pairs()
+                .any(|(key, value)| key == "format" && value == "json")
+        })
+        .unwrap_or(false);
+
     // Check Accept header for content negotiation
     let accept_header = req.headers().get("Accept")?.unwrap_or_default();
-    let wants_html = accept_header.contains("text/html") && !accept_header.contains("application/activity+json");
+    let wants_html = !force_json
+        && accept_header.contains("text/html")
+        && !accept_header.contains("application/activity+json");
 
     // Get username from URL
     let username = match ctx.param("username") {
@@ -115,14 +134,18 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let db = D1Provider::new(ctx.env.d1("DB")?);
 
     // Get configuration from environment variables
-    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+    let activitypub_domain = ctx
+        .env
+        .var("ACTIVITYPUB_DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "social.dais.social".to_string());
 
     let config = CoreConfig {
         activitypub_domain: activitypub_domain.clone(),
         pds_domain: "".to_string(),
-        username: ctx.env.var("USERNAME")
+        username: ctx
+            .env
+            .var("USERNAME")
             .map(|v| v.to_string())
             .unwrap_or_else(|_| "social".to_string()),
         private_key: "".to_string(),
@@ -166,18 +189,31 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         headers.set("Content-Type", "text/html; charset=utf-8")?;
         add_cors_headers(&mut headers)?;
 
-        let theme_name = ctx.env.var("THEME")
+        let theme_name = ctx
+            .env
+            .var("THEME")
             .map(|v| v.to_string())
             .unwrap_or_else(|_| "dais".to_string());
         let theme = Theme::from_name(&theme_name);
 
         let post_count = counts.as_ref().map(|c| c.post_count as usize).unwrap_or(0);
-        let follower_count = counts.as_ref().map(|c| c.follower_count as usize).unwrap_or(0);
+        let follower_count = counts
+            .as_ref()
+            .map(|c| c.follower_count as usize)
+            .unwrap_or(0);
 
         let icon_url = person.icon.as_ref().map(|i| i.url.clone());
         let image_url = person.image.as_ref().map(|i| i.url.clone());
 
-        let html = render_profile_html(&person, &username, post_count, follower_count, &theme, icon_url, image_url);
+        let html = render_profile_html(
+            &person,
+            &username,
+            post_count,
+            follower_count,
+            &theme,
+            icon_url,
+            image_url,
+        );
         Ok(Response::from_html(html)?.with_headers(headers))
     } else {
         let mut headers = Headers::new();
@@ -209,7 +245,9 @@ async fn handle_followers(req: Request, ctx: RouteContext<()>) -> Result<Respons
     // Initialize platform providers
     let db = D1Provider::new(ctx.env.d1("DB")?);
 
-    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+    let activitypub_domain = ctx
+        .env
+        .var("ACTIVITYPUB_DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "social.dais.social".to_string());
 
@@ -264,7 +302,9 @@ async fn handle_following(req: Request, ctx: RouteContext<()>) -> Result<Respons
     // Initialize platform providers
     let db = D1Provider::new(ctx.env.d1("DB")?);
 
-    let activitypub_domain = ctx.env.var("ACTIVITYPUB_DOMAIN")
+    let activitypub_domain = ctx
+        .env
+        .var("ACTIVITYPUB_DOMAIN")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "social.dais.social".to_string());
 
@@ -455,20 +495,22 @@ fn render_profile_html(
     follower_count: usize,
     theme: &Theme,
     icon_url: Option<String>,
-    image_url: Option<String>
+    image_url: Option<String>,
 ) -> String {
     let display_name = person.name.as_ref().unwrap_or(&person.preferred_username);
     let summary = person.summary.as_deref().unwrap_or("");
+    let actor_domain = actor_domain_from_id(&person.id).unwrap_or("social.dais.social");
 
     let light = &theme.light;
     let dark = &theme.dark;
 
-    format!(r#"<!DOCTYPE html>
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{display_name} (@{username}@dais.social)</title>
+    <title>{display_name} (@{username}@{actor_domain})</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -689,7 +731,7 @@ fn render_profile_html(
             <div class="header">
                 {avatar_html}
                 <h1>{display_name}</h1>
-                <div class="handle">@{handle_username}@dais.social</div>
+                <div class="handle">@{handle_username}@{actor_domain}</div>
             </div>
 
             {bio_html}
@@ -711,7 +753,7 @@ fn render_profile_html(
 
             <div class="actions">
                 <a href="/users/{outbox_username}/outbox" class="button button-primary">View Posts</a>
-                <a href="{person_id}" class="button button-secondary">ActivityPub JSON</a>
+                <a href="{person_id}?format=json" class="button button-secondary">ActivityPub JSON</a>
             </div>
         </div>
 
@@ -739,18 +781,27 @@ fn render_profile_html(
         dark_border = dark.border,
         // Content
         header_html = if let Some(ref header_url) = image_url {
-            format!(r#"<div class="profile-header"><img src="{}" alt="Profile header" class="header-image"></div>"#, header_url)
+            format!(
+                r#"<div class="profile-header"><img src="{}" alt="Profile header" class="header-image"></div>"#,
+                header_url
+            )
         } else {
             String::new()
         },
         avatar_html = if let Some(ref avatar_url) = icon_url {
-            format!(r#"<div class="avatar"><img src="{}" alt="Profile picture" class="avatar-image"></div>"#, avatar_url)
+            format!(
+                r#"<div class="avatar"><img src="{}" alt="Profile picture" class="avatar-image"></div>"#,
+                avatar_url
+            )
         } else {
-            format!(r#"<div class="avatar"><div class="avatar-letter">{}</div></div>"#,
-                display_name.chars().next().unwrap_or('?').to_uppercase())
+            format!(
+                r#"<div class="avatar"><div class="avatar-letter">{}</div></div>"#,
+                display_name.chars().next().unwrap_or('?').to_uppercase()
+            )
         },
         display_name = display_name,
         handle_username = username,
+        actor_domain = actor_domain,
         bio_html = if !summary.is_empty() {
             format!(r#"<div class="bio">{}</div>"#, summary)
         } else {
@@ -763,10 +814,17 @@ fn render_profile_html(
     )
 }
 
+fn actor_domain_from_id(actor_id: &str) -> Option<&str> {
+    actor_id
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .filter(|domain| !domain.is_empty())
+}
+
 // Placeholder providers for unused platform features
 
-use dais_core::traits::*;
 use async_trait::async_trait;
+use dais_core::traits::*;
 
 struct PlaceholderStorage;
 
@@ -776,7 +834,13 @@ impl StorageProvider for PlaceholderStorage {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 
-    async fn put_with_metadata(&self, _key: &str, _data: Vec<u8>, _content_type: &str, _metadata: StorageMetadata) -> PlatformResult<String> {
+    async fn put_with_metadata(
+        &self,
+        _key: &str,
+        _data: Vec<u8>,
+        _content_type: &str,
+        _metadata: StorageMetadata,
+    ) -> PlatformResult<String> {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 
@@ -796,7 +860,10 @@ impl StorageProvider for PlaceholderStorage {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 
-    async fn list_detailed(&self, _options: dais_core::traits::ListOptions) -> PlatformResult<dais_core::traits::ListResult> {
+    async fn list_detailed(
+        &self,
+        _options: dais_core::traits::ListOptions,
+    ) -> PlatformResult<dais_core::traits::ListResult> {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 
@@ -838,7 +905,10 @@ struct PlaceholderHttp;
 
 #[async_trait(?Send)]
 impl HttpProvider for PlaceholderHttp {
-    async fn fetch(&self, _request: dais_core::traits::Request) -> PlatformResult<dais_core::traits::Response> {
+    async fn fetch(
+        &self,
+        _request: dais_core::traits::Request,
+    ) -> PlatformResult<dais_core::traits::Response> {
         Err(PlatformError::Internal("Not implemented".to_string()))
     }
 }

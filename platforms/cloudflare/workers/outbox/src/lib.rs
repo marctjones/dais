@@ -35,9 +35,18 @@ async fn handle_outbox(req: Request, ctx: RouteContext<()>) -> Result<Response> 
 
     worker::console_log!("Fetching outbox for user: {}", username);
 
+    let force_json = req
+        .url()
+        .ok()
+        .map(|url| {
+            url.query_pairs()
+                .any(|(key, value)| key == "format" && value == "json")
+        })
+        .unwrap_or(false);
+
     // Check Accept header for content negotiation
     let accept = req.headers().get("Accept")?.unwrap_or_default();
-    let wants_html = accept.contains("text/html");
+    let wants_html = !force_json && accept.contains("text/html");
 
     // Initialize platform providers
     let db = D1Provider::new(ctx.env.d1("DB")?);
@@ -94,9 +103,12 @@ async fn handle_outbox(req: Request, ctx: RouteContext<()>) -> Result<Response> 
     worker::console_log!("Found {} posts", posts.len());
 
     if wants_html {
-        // Return HTML view (platform-specific)
-        // TODO: Implement HTML rendering with theme support
-        Response::error("HTML rendering not implemented yet", 501)
+        let html = render_outbox_html(&activitypub_domain, username, &posts);
+        let mut resp = Response::from_html(html)?;
+        resp.headers_mut()
+            .set("Content-Type", "text/html; charset=utf-8")?;
+        resp.headers_mut().set("Access-Control-Allow-Origin", "*")?;
+        Ok(resp)
     } else {
         // Return ActivityPub JSON
         let outbox_json = build_outbox_collection(&activitypub_domain, username, &posts);
@@ -123,9 +135,18 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
 
     worker::console_log!("Fetching post: /users/{}/posts/{}", username, post_id);
 
+    let force_json = req
+        .url()
+        .ok()
+        .map(|url| {
+            url.query_pairs()
+                .any(|(key, value)| key == "format" && value == "json")
+        })
+        .unwrap_or(false);
+
     // Check Accept header for content negotiation
     let accept = req.headers().get("Accept")?.unwrap_or_default();
-    let wants_html = accept.contains("text/html");
+    let wants_html = !force_json && accept.contains("text/html");
 
     // Initialize platform providers
     let db = D1Provider::new(ctx.env.d1("DB")?);
@@ -193,9 +214,12 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     }
 
     if wants_html {
-        // Return HTML view (platform-specific)
-        // TODO: Implement HTML rendering with theme support and interactions
-        Response::error("HTML rendering not implemented yet", 501)
+        let html = render_post_html(&activitypub_domain, username, &post);
+        let mut resp = Response::from_html(html)?;
+        resp.headers_mut()
+            .set("Content-Type", "text/html; charset=utf-8")?;
+        resp.headers_mut().set("Access-Control-Allow-Origin", "*")?;
+        Ok(resp)
     } else {
         // Return ActivityPub JSON
         let note_json = build_note_object(&post);
@@ -332,6 +356,205 @@ fn build_note_object(post: &Post) -> serde_json::Value {
     }
 
     note
+}
+
+fn render_outbox_html(domain: &str, username: &str, posts: &[Post]) -> String {
+    let post_items = if posts.is_empty() {
+        r#"<p class="empty">No public posts yet.</p>"#.to_string()
+    } else {
+        posts
+            .iter()
+            .map(render_post_card)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    render_page(
+        &format!("@{username}@{domain} posts"),
+        &format!(
+            r#"<header class="page-header">
+    <a class="back-link" href="/users/{username}">← Profile</a>
+    <h1>@{username}@{domain}</h1>
+    <p>{count} public posts</p>
+    <a class="json-link" href="/users/{username}/outbox?format=json">ActivityPub JSON</a>
+</header>
+<main class="feed">{post_items}</main>"#,
+            domain = escape_html(domain),
+            count = posts.len()
+        ),
+    )
+}
+
+fn render_post_html(domain: &str, username: &str, post: &Post) -> String {
+    let reply_html = post
+        .in_reply_to
+        .as_ref()
+        .map(|reply| {
+            format!(
+                r#"<p class="reply">Replying to <a href="{href}">{label}</a></p>"#,
+                href = escape_attr(reply),
+                label = escape_html(reply)
+            )
+        })
+        .unwrap_or_default();
+
+    render_page(
+        &format!("Post by @{username}@{domain}"),
+        &format!(
+            r#"<header class="page-header">
+    <a class="back-link" href="/users/{username}/outbox">← Posts</a>
+    <h1>Post</h1>
+    <p>@{username}@{domain} · {published}</p>
+    <a class="json-link" href="{post_url}?format=json">ActivityPub JSON</a>
+</header>
+<article class="post post-full">
+    {reply_html}
+    <div class="content">{content}</div>
+    <footer>{visibility}</footer>
+</article>"#,
+            domain = escape_html(domain),
+            published = escape_html(&post.published_at),
+            post_url = public_post_path(domain, username, post),
+            content = escape_html(&post.content),
+            visibility = escape_html(&post.visibility),
+        ),
+    )
+}
+
+fn render_post_card(post: &Post) -> String {
+    format!(
+        r#"<article class="post">
+    <a class="post-link" href="{href}">
+        <time>{published}</time>
+        <div class="content">{content}</div>
+    </a>
+</article>"#,
+        href = escape_attr(&post_path(post)),
+        published = escape_html(&post.published_at),
+        content = escape_html(&post.content),
+    )
+}
+
+fn render_page(title: &str, body: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>
+        * {{ box-sizing: border-box; }}
+        body {{
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #fffaf5;
+            color: #292524;
+            line-height: 1.6;
+        }}
+        .wrap {{
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 32px 20px 56px;
+        }}
+        .page-header {{
+            border-bottom: 1px solid #fed7aa;
+            margin-bottom: 24px;
+            padding-bottom: 20px;
+        }}
+        h1 {{
+            margin: 8px 0 4px;
+            font-size: 32px;
+            line-height: 1.2;
+        }}
+        p {{ margin: 0; color: #78716c; }}
+        a {{ color: #c2410c; }}
+        .back-link, .json-link {{
+            display: inline-block;
+            font-weight: 700;
+            text-decoration: none;
+        }}
+        .json-link {{ margin-top: 12px; }}
+        .feed {{
+            display: grid;
+            gap: 14px;
+        }}
+        .post {{
+            background: #ffffff;
+            border: 1px solid #fed7aa;
+            border-radius: 8px;
+            padding: 18px;
+        }}
+        .post-link {{
+            color: inherit;
+            display: block;
+            text-decoration: none;
+        }}
+        time, footer, .reply {{
+            color: #78716c;
+            display: block;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }}
+        .content {{
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }}
+        .post-full .content {{
+            font-size: 18px;
+        }}
+        .empty {{
+            background: #ffffff;
+            border: 1px solid #fed7aa;
+            border-radius: 8px;
+            padding: 18px;
+        }}
+        @media (prefers-color-scheme: dark) {{
+            body {{ background: #1c1917; color: #fafaf9; }}
+            .page-header {{ border-bottom-color: #44403c; }}
+            p, time, footer, .reply {{ color: #d6d3d1; }}
+            a {{ color: #fdba74; }}
+            .post, .empty {{ background: #292524; border-color: #44403c; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="wrap">{body}</div>
+</body>
+</html>"#,
+        title = escape_html(title),
+    )
+}
+
+fn post_path(post: &Post) -> String {
+    post.id
+        .strip_prefix("https://")
+        .and_then(|rest| {
+            rest.find('/')
+                .map(|index| format!("/{}", &rest[index + 1..]))
+        })
+        .unwrap_or_else(|| post.id.clone())
+}
+
+fn public_post_path(domain: &str, username: &str, post: &Post) -> String {
+    if post.id.starts_with("https://") {
+        post.id.clone()
+    } else {
+        format!("https://{domain}/users/{username}/posts/{}", post.id)
+    }
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn escape_attr(value: &str) -> String {
+    escape_html(value)
 }
 
 // Placeholder providers for unused platform features
