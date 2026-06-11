@@ -340,14 +340,11 @@ Complete feature list for dais single-user ActivityPub & AT Protocol server.
 
 ## Roadmap (Future Features)
 
-### Planned for v2.0 (Multi-platform Support)
-- Vercel deployment support
-- Netlify Edge Functions support
-- Deno Deploy support
-- Platform abstraction layer
-- Multi-platform CLI
-
-### Planned for v1.x
+### Planned for later releases
+- Mastodon-compatible API for mobile/desktop clients
+- Bluesky public parity
+- Personal AppView for followed Bluesky accounts
+- E2EE private messaging and private reader flows
 - WebAuthn/Passkeys
 - OAuth 2.0 server
 - Custom themes

@@ -1,10 +1,8 @@
-/// Queue abstraction trait for platform-agnostic background jobs
+/// Queue abstraction trait for Worker background jobs and tests
 ///
 /// Implementations:
 /// - Cloudflare: Cloudflare Queues
-/// - Vercel: QStash (Upstash)
-/// - Netlify: Background Functions
-/// - Railway: BullMQ (Redis-backed)
+/// - Tests: mock providers
 use super::PlatformResult;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

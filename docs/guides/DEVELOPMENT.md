@@ -163,16 +163,16 @@ cargo run --manifest-path client/Cargo.toml -- --help
 This will:
 - Launch 4 Cloudflare Workers in local mode (tmux windows)
 - Create local D1 database in `.wrangler/state/v3/d1/`
-- Seed with test actor `marc@localhost` and sample followers
+- Seed with test actor `social@localhost` and sample followers
 
 ### 3. Test the Setup
 
 ```bash
 # Test WebFinger discovery
-curl "http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost"
+curl "http://localhost:8787/.well-known/webfinger?resource=acct:social@localhost"
 
 # Test Actor endpoint
-curl -H "Accept: application/activity+json" "http://localhost:8788/users/marc"
+curl -H "Accept: application/activity+json" "http://localhost:8788/users/social"
 
 # Test Stats command
 dais stats
@@ -263,8 +263,8 @@ rm -rf platforms/cloudflare/workers/webfinger/.wrangler/state/
 The `seed-local-db.sh` script creates:
 
 ### Test Actor
-- **Username**: `marc`
-- **Full ID**: `acct:marc@localhost` / `https://localhost/users/marc`
+- **Username**: `social`
+- **Full ID**: `acct:social@localhost` / `https://localhost/users/social`
 - **Keys**: Uses keypair from `cli/test_keys/`
 
 ### Sample Followers
@@ -279,7 +279,7 @@ The `seed-local-db.sh` script creates:
 ### Sample Post
 
 One sample post is created with:
-- **ID**: `https://localhost/users/marc/posts/001`
+- **ID**: `https://localhost/users/social/posts/001`
 - **Content**: "Hello from local dais development! This is a test post."
 - **Visibility**: public
 
@@ -289,7 +289,7 @@ One sample post is created with:
 
 ```bash
 # Discover actor
-curl "http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost"
+curl "http://localhost:8787/.well-known/webfinger?resource=acct:social@localhost"
 
 # Expected: JSON with actor URL and links
 ```
@@ -298,7 +298,7 @@ curl "http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost"
 
 ```bash
 # Get actor profile
-curl -H "Accept: application/activity+json" "http://localhost:8788/users/marc"
+curl -H "Accept: application/activity+json" "http://localhost:8788/users/social"
 
 # Expected: ActivityPub Person object with public key
 ```
@@ -364,12 +364,12 @@ dais post delete <post-id>
 
 ```bash
 # Get outbox collection
-curl -H "Accept: application/activity+json" "http://localhost:8790/users/marc/outbox"
+curl -H "Accept: application/activity+json" "http://localhost:8790/users/social/outbox"
 
 # Expected: OrderedCollection with posts
 
 # Get individual post
-curl -H "Accept: application/activity+json" "http://localhost:8790/users/marc/posts/001"
+curl -H "Accept: application/activity+json" "http://localhost:8790/users/social/posts/001"
 
 # Expected: Note object
 ```
@@ -416,7 +416,7 @@ The CLI looks for configuration in `~/.dais/config.toml`. For local development,
 [server]
 domain = "localhost"
 activitypub_domain = "localhost"
-username = "marc"
+username = "social"
 
 [cloudflare]
 account_id = "test-account-id"

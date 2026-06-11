@@ -70,28 +70,27 @@ https://github.com/yourusername/dais/releases/tag/v1.0.0
 
 ## 📋 Post-Release
 
-### Create Multi-Platform Branch
+### Create Next Release Branch
 
 ```bash
-# Create and checkout new branch for v2.0 development
-git checkout -b feature/multi-platform
+# Create and checkout a branch for the next focused milestone
+git checkout -b feature/<short-name>
 
 # Push branch to GitHub
-git push -u origin feature/multi-platform
+git push -u origin feature/<short-name>
 ```
 
 This branch will be for:
-- Rust + WASM core refactoring
-- Platform abstraction layer
-- Vercel adapter implementation
-- Multi-platform CLI support
+- A focused release-sized improvement
+- Tests and conformance checks for the changed behavior
+- Documentation updates for user-visible changes
 
 ### Update Issues
 
 - [ ] Close completed issues
-- [ ] Create issue for v1.0.1 bug fixes
-- [ ] Create milestone for v2.0.0
-- [ ] Label issues as `cloudflare` or `multi-platform`
+- [ ] Create follow-up issues for release-blocking bugs
+- [ ] Create the next incremental milestone when needed
+- [ ] Assign issues to the next incremental release milestone
 
 ### Documentation
 
@@ -108,7 +107,7 @@ After release, watch for:
 - [ ] Documentation gaps
 - [ ] Bug reports
 
-Create v1.0.1 patch release if critical bugs found.
+Create a patch release if critical bugs are found.
 
 ---
 
@@ -125,8 +124,8 @@ git push origin main
 git push origin v1.0.0
 
 # Create new branch
-git checkout -b feature/multi-platform
-git push -u origin feature/multi-platform
+git checkout -b feature/<short-name>
+git push -u origin feature/<short-name>
 
 # View release
 git show v1.0.0

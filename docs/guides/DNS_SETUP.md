@@ -85,13 +85,13 @@ Wait 1-2 minutes for DNS propagation, then test:
 
 ```bash
 # Test WebFinger endpoint
-curl -i "https://dais.social/.well-known/webfinger?resource=acct:marc@dais.social"
+curl -i "https://dais.social/.well-known/webfinger?resource=acct:social@dais.social"
 
 # Test Actor endpoint
-curl -i "https://social.dais.social/users/marc"
+curl -i "https://social.dais.social/users/social"
 
 # Test Inbox endpoint (requires POST with signature)
-curl -i "https://social.dais.social/users/marc/inbox"
+curl -i "https://social.dais.social/users/social/inbox"
 ```
 
 Expected responses:
@@ -103,7 +103,7 @@ Expected responses:
 
 From a Mastodon or Pleroma instance:
 
-1. Search for: `@marc@dais.social`
+1. Search for: `@social@dais.social`
 2. Click "Follow"
 3. Check follow request on your server:
 

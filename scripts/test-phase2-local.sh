@@ -19,10 +19,10 @@ PASSED=0
 # Test 1: Outbox Collection
 echo -e "${BLUE}Test 1: Outbox Collection${NC}"
 echo -e "${BLUE}───────────────────────────────────────────────${NC}"
-echo "curl -H 'Accept: application/activity+json' 'http://localhost:8790/users/marc/outbox'"
+echo "curl -H 'Accept: application/activity+json' 'http://localhost:8790/users/social/outbox'"
 echo ""
 
-RESPONSE=$(curl -s -H "Accept: application/activity+json" "http://localhost:8790/users/marc/outbox")
+RESPONSE=$(curl -s -H "Accept: application/activity+json" "http://localhost:8790/users/social/outbox")
 
 if echo "$RESPONSE" | jq -e '.type == "OrderedCollection"' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Outbox has correct type (OrderedCollection)${NC}"
@@ -33,7 +33,7 @@ else
     ((FAILED++))
 fi
 
-if echo "$RESPONSE" | jq -e '.id == "https://social.dais.social/users/marc/outbox"' > /dev/null 2>&1; then
+if echo "$RESPONSE" | jq -e '.id == "https://social.dais.social/users/social/outbox"' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Outbox has correct ID${NC}"
     ((PASSED++))
 else
@@ -54,10 +54,10 @@ echo ""
 # Test 2: Individual Post
 echo -e "${BLUE}Test 2: Individual Post (from seed data)${NC}"
 echo -e "${BLUE}───────────────────────────────────────────────${NC}"
-echo "curl -H 'Accept: application/activity+json' 'http://localhost:8790/users/marc/posts/001'"
+echo "curl -H 'Accept: application/activity+json' 'http://localhost:8790/users/social/posts/001'"
 echo ""
 
-RESPONSE=$(curl -s -H "Accept: application/activity+json" "http://localhost:8790/users/marc/posts/001")
+RESPONSE=$(curl -s -H "Accept: application/activity+json" "http://localhost:8790/users/social/posts/001")
 
 if echo "$RESPONSE" | jq -e '.type == "Note"' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Post has correct type (Note)${NC}"
@@ -117,7 +117,7 @@ else
 fi
 
 # Verify the outbox now has at least 2 items (seed post + test post)
-RESPONSE=$(curl -s -H "Accept: application/activity+json" "http://localhost:8790/users/marc/outbox")
+RESPONSE=$(curl -s -H "Accept: application/activity+json" "http://localhost:8790/users/social/outbox")
 
 TOTAL_ITEMS=$(echo "$RESPONSE" | jq -r '.totalItems')
 if [ "$TOTAL_ITEMS" -ge 2 ]; then
@@ -133,10 +133,10 @@ echo ""
 # Test 5: Outbox Options (CORS)
 echo -e "${BLUE}Test 5: Outbox CORS (OPTIONS)${NC}"
 echo -e "${BLUE}───────────────────────────────────────────────${NC}"
-echo "curl -X OPTIONS 'http://localhost:8790/users/marc/outbox'"
+echo "curl -X OPTIONS 'http://localhost:8790/users/social/outbox'"
 echo ""
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X OPTIONS "http://localhost:8790/users/marc/outbox")
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X OPTIONS "http://localhost:8790/users/social/outbox")
 
 if [ "$STATUS" = "200" ]; then
     echo -e "${GREEN}✓ Outbox OPTIONS returns 200${NC}"

@@ -252,10 +252,10 @@ run_test() {
 
 # Run tests
 run_test "WebFinger returns 200" \
-  "curl -sf http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost"
+  "curl -sf http://localhost:8787/.well-known/webfinger?resource=acct:social@localhost"
 
 run_test "Actor returns JSON" \
-  "curl -sf -H 'Accept: application/activity+json' http://localhost:8788/users/marc | jq -e '.type == \"Person\"'"
+  "curl -sf -H 'Accept: application/activity+json' http://localhost:8788/users/social | jq -e '.type == \"Person\"'"
 
 # Summary
 echo ""
@@ -559,14 +559,14 @@ run_test "Actor rejects invalid username" \
 ```bash
 # Test 404 handling
 run_test "Returns 404 for missing post" \
-  "curl -s -o /dev/null -w '%{http_code}' http://localhost:8790/users/marc/posts/missing | grep 404"
+  "curl -s -o /dev/null -w '%{http_code}' http://localhost:8790/users/social/posts/missing | grep 404"
 ```
 
 3. **Add performance tests:**
 ```bash
 # Test response time
 run_test "WebFinger responds in <100ms" \
-  "time curl -s http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost | grep -q 'marc@localhost' && test \${PIPESTATUS[0]} -eq 0"
+  "time curl -s http://localhost:8787/.well-known/webfinger?resource=acct:social@localhost | grep -q 'social@localhost' && test \${PIPESTATUS[0]} -eq 0"
 ```
 
 ## Best Practices
@@ -595,7 +595,7 @@ run_test "WebFinger responds in <100ms" \
    ```bash
    # Test that errors are handled
    run_test "Invalid JSON returns 400" \
-     "curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8789/users/marc/inbox -d 'invalid' | grep 400"
+     "curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8789/users/social/inbox -d 'invalid' | grep 400"
    ```
 
 5. **Document test dependencies**
@@ -609,10 +609,10 @@ run_test "WebFinger responds in <100ms" \
 
 ```bash
 # Test WebFinger endpoint
-ab -n 1000 -c 10 "http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost"
+ab -n 1000 -c 10 "http://localhost:8787/.well-known/webfinger?resource=acct:social@localhost"
 
 # Test Actor endpoint
-ab -n 1000 -c 10 -H "Accept: application/activity+json" "http://localhost:8788/users/marc"
+ab -n 1000 -c 10 -H "Accept: application/activity+json" "http://localhost:8788/users/social"
 ```
 
 ### Analyze Results

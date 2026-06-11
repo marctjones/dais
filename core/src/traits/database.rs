@@ -1,10 +1,8 @@
-/// Database abstraction trait for platform-agnostic database operations
+/// Database abstraction trait for Cloudflare-backed database operations
 ///
 /// Implementations:
 /// - Cloudflare: D1 (SQLite)
-/// - Vercel: Neon Postgres
-/// - Netlify: Neon Postgres or Turso
-/// - Railway: PostgreSQL
+/// - Tests: in-memory/mock providers
 use super::{PlatformResult, Row, Statement};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -33,16 +31,16 @@ pub trait DatabaseProvider {
     fn dialect(&self) -> DatabaseDialect;
 }
 
-/// SQL dialect variations between platforms
+/// SQL dialect variations used by production D1 and query-generation tests
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseDialect {
-    /// SQLite (Cloudflare D1, Turso)
+    /// SQLite (Cloudflare D1)
     SQLite,
 
-    /// PostgreSQL (Neon, Railway, Supabase)
+    /// PostgreSQL test/helper dialect
     PostgreSQL,
 
-    /// MySQL (PlanetScale, Vitess)
+    /// MySQL test/helper dialect
     MySQL,
 }
 

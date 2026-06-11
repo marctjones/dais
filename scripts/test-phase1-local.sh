@@ -19,12 +19,12 @@ PASSED=0
 # Test 1: WebFinger Discovery
 echo -e "${BLUE}Test 1: WebFinger Discovery${NC}"
 echo -e "${BLUE}───────────────────────────────────────────────${NC}"
-echo "curl 'http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost'"
+echo "curl 'http://localhost:8787/.well-known/webfinger?resource=acct:social@localhost'"
 echo ""
 
-RESPONSE=$(curl -s "http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost")
+RESPONSE=$(curl -s "http://localhost:8787/.well-known/webfinger?resource=acct:social@localhost")
 
-if echo "$RESPONSE" | jq -e '.subject == "acct:marc@localhost"' > /dev/null 2>&1; then
+if echo "$RESPONSE" | jq -e '.subject == "acct:social@localhost"' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ WebFinger returned correct subject${NC}"
     ((PASSED++))
 else
@@ -46,10 +46,10 @@ echo ""
 # Test 2: Actor Profile
 echo -e "${BLUE}Test 2: Actor Profile${NC}"
 echo -e "${BLUE}───────────────────────────────────────────────${NC}"
-echo "curl -H 'Accept: application/activity+json' 'http://localhost:8788/users/marc'"
+echo "curl -H 'Accept: application/activity+json' 'http://localhost:8788/users/social'"
 echo ""
 
-RESPONSE=$(curl -s -H "Accept: application/activity+json" "http://localhost:8788/users/marc")
+RESPONSE=$(curl -s -H "Accept: application/activity+json" "http://localhost:8788/users/social")
 
 if echo "$RESPONSE" | jq -e '.type == "Person"' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Actor has correct type (Person)${NC}"
@@ -60,7 +60,7 @@ else
     ((FAILED++))
 fi
 
-if echo "$RESPONSE" | jq -e '.id == "https://social.dais.social/users/marc"' > /dev/null 2>&1; then
+if echo "$RESPONSE" | jq -e '.id == "https://social.dais.social/users/social"' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Actor has correct ID${NC}"
     ((PASSED++))
 else
@@ -76,7 +76,7 @@ else
     ((FAILED++))
 fi
 
-if echo "$RESPONSE" | jq -e '.inbox == "https://social.dais.social/users/marc/inbox"' > /dev/null 2>&1; then
+if echo "$RESPONSE" | jq -e '.inbox == "https://social.dais.social/users/social/inbox"' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Actor has inbox URL${NC}"
     ((PASSED++))
 else
@@ -84,7 +84,7 @@ else
     ((FAILED++))
 fi
 
-if echo "$RESPONSE" | jq -e '.outbox == "https://social.dais.social/users/marc/outbox"' > /dev/null 2>&1; then
+if echo "$RESPONSE" | jq -e '.outbox == "https://social.dais.social/users/social/outbox"' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Actor has outbox URL${NC}"
     ((PASSED++))
 else
@@ -97,10 +97,10 @@ echo ""
 # Test 3: Inbox Endpoint (OPTIONS)
 echo -e "${BLUE}Test 3: Inbox Endpoint (OPTIONS)${NC}"
 echo -e "${BLUE}───────────────────────────────────────────────${NC}"
-echo "curl -X OPTIONS 'http://localhost:8789/users/marc/inbox'"
+echo "curl -X OPTIONS 'http://localhost:8789/users/social/inbox'"
 echo ""
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X OPTIONS "http://localhost:8789/users/marc/inbox")
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X OPTIONS "http://localhost:8789/users/social/inbox")
 
 if [ "$STATUS" = "200" ]; then
     echo -e "${GREEN}✓ Inbox OPTIONS returns 200${NC}"

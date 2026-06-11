@@ -1,36 +1,37 @@
-# dais v1.1 Architecture Guide
+# dais Architecture Guide
 
-**Date**: March 15, 2026
-**Version**: v1.1.0
+**Status:** Cloudflare-only production architecture. Provider traits remain for
+testability and clean module boundaries, not for alternate hosting targets.
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Multi-Platform Architecture](#multi-platform-architecture)
+2. [Cloudflare Architecture](#cloudflare-architecture)
 3. [Core Abstraction Layer](#core-abstraction-layer)
-4. [Platform Bindings](#platform-bindings)
+4. [Cloudflare Bindings](#cloudflare-bindings)
 5. [Database Abstraction](#database-abstraction)
 6. [Worker Pattern](#worker-pattern)
-7. [Adding a New Platform](#adding-a-new-platform)
+7. [Testing With Provider Traits](#testing-with-provider-traits)
 8. [Migration System](#migration-system)
 9. [Best Practices](#best-practices)
 
 ## Overview
 
-dais v1.1 introduces a **multi-platform architecture** that enables running the same ActivityPub server logic on different cloud platforms with minimal code duplication.
+dais runs on **Cloudflare Workers, D1, R2, Queues, and Cloudflare Access**. The
+core Rust library keeps platform traits so protocol logic can be tested without
+Cloudflare, but Cloudflare is the only supported deployment target.
 
 **Key Benefits**:
-- 85-90% code reuse across platforms
-- Support for multiple databases (SQLite, PostgreSQL, MySQL)
-- Platform-specific optimizations possible
-- Easy to add new platforms
+- Shared Rust core for ActivityPub, AT Protocol, security policy, and tests.
+- Thin Cloudflare worker shims for routing, request handling, and bindings.
+- In-memory/mock providers for integration tests.
+- Cloudflare-specific deployment and operational assumptions are explicit.
 
-**Supported Platforms**:
+**Supported Deployment Target**:
 - ✅ Cloudflare Workers (D1 SQLite)
-- 🔜 Vercel Edge Functions (Neon PostgreSQL) - Planned v1.2
-- 🔜 Netlify Edge Functions (Turso SQLite / Neon PostgreSQL) - Planned v1.3
+- ❌ Other hosting platforms are not supported deployment targets.
 
-## Multi-Platform Architecture
+## Cloudflare Architecture
 
 ### Three-Layer Design
 
@@ -42,14 +43,14 @@ dais v1.1 introduces a **multi-platform architecture** that enables running the 
 └─────────────────────────────────────────────┘
                     ▼
 ┌─────────────────────────────────────────────┐
-│      Platform Bindings (Per-Platform)       │
+│      Cloudflare Bindings                    │
 │   D1Provider, CloudflareQueueProvider       │
 │         (5-10% of code)                     │
 └─────────────────────────────────────────────┘
                     ▼
 ┌─────────────────────────────────────────────┐
-│     Platform-Agnostic Core (dais-core)      │
-│  Business Logic, ActivityPub Protocol       │
+│     Testable Core (dais-core)               │
+│  Protocol Logic, Security Policy, Tests     │
 │         (85-90% of code)                    │
 └─────────────────────────────────────────────┘
 ```
@@ -58,7 +59,7 @@ dais v1.1 introduces a **multi-platform architecture** that enables running the 
 
 ```
 dais/
-├── core/                       # Platform-agnostic library
+├── core/                       # Shared protocol and policy library
 │   ├── src/
 │   │   ├── types/             # ActivityPub types
 │   │   ├── traits/            # Platform abstraction traits
@@ -84,11 +85,7 @@ dais/
 │   │       ├── actor/
 │   │       ├── inbox/
 │   │       └── ...
-│   └── vercel/                # Future platform
-│       ├── bindings/
-│       └── functions/
-│
-└── cli/                       # dais CLI tool
+└── client/                    # Rust CLI/TUI client
 ```
 
 ## Core Abstraction Layer
@@ -191,11 +188,11 @@ impl DaisCore {
 }
 ```
 
-## Platform Bindings
+## Cloudflare Bindings
 
 ### Cloudflare Example
 
-Each platform implements the core traits using platform-specific APIs.
+Cloudflare worker shims implement the core traits using Worker APIs.
 
 **D1Provider** (SQLite for Cloudflare):
 
@@ -233,47 +230,19 @@ impl DatabaseProvider for D1Provider {
 }
 ```
 
-### Vercel Example (Future)
-
-**NeonProvider** (PostgreSQL for Vercel):
-
-```rust
-use dais_core::traits::{DatabaseProvider, DatabaseDialect};
-use vercel_postgres::Client;
-
-pub struct NeonProvider {
-    client: Client,
-}
-
-#[async_trait]
-impl DatabaseProvider for NeonProvider {
-    async fn query(&self, sql: &str, params: &[Value]) -> CoreResult<Vec<Row>> {
-        let rows = self.client.query(sql, params).await?;
-        Ok(convert_rows(rows))
-    }
-
-    async fn execute(&self, sql: &str, params: &[Value]) -> CoreResult<u64> {
-        let result = self.client.execute(sql, params).await?;
-        Ok(result)
-    }
-
-    fn dialect(&self) -> DatabaseDialect {
-        DatabaseDialect::PostgreSQL
-    }
-}
-```
-
 ## Database Abstraction
 
 ### SQL Dialect Support
 
-The core library supports three database dialects:
+Production uses Cloudflare D1/SQLite. The core library retains SQL dialect
+helpers so tests can exercise query generation and so protocol logic remains
+decoupled from Worker bindings:
 
 ```rust
 pub enum DatabaseDialect {
-    SQLite,     // Cloudflare D1, Turso
-    PostgreSQL, // Neon, Railway, Supabase
-    MySQL,      // PlanetScale
+    SQLite,     // Cloudflare D1
+    PostgreSQL, // test/helper dialect
+    MySQL,      // test/helper dialect
 }
 ```
 
@@ -464,151 +433,11 @@ impl DaisCore {
 }
 ```
 
-## Adding a New Platform
+## Testing With Provider Traits
 
-### Step-by-Step Guide
-
-**1. Create Platform Bindings Directory**
-
-```bash
-mkdir -p platforms/vercel/bindings/src
-cd platforms/vercel/bindings
-```
-
-**2. Create Cargo.toml**
-
-```toml
-[package]
-name = "dais-vercel"
-version = "1.1.0"
-edition = "2021"
-
-[dependencies]
-dais-core = { path = "../../../core" }
-async-trait = "0.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-vercel-postgres = "0.5"  # Example dependency
-```
-
-**3. Implement DatabaseProvider**
-
-```rust
-// platforms/vercel/bindings/src/neon.rs
-use dais_core::traits::{DatabaseProvider, DatabaseDialect};
-use async_trait::async_trait;
-
-pub struct NeonProvider {
-    connection_string: String,
-}
-
-impl NeonProvider {
-    pub fn new(connection_string: String) -> Self {
-        Self { connection_string }
-    }
-}
-
-#[async_trait]
-impl DatabaseProvider for NeonProvider {
-    async fn query(&self, sql: &str, params: &[Value]) -> CoreResult<Vec<Row>> {
-        // Use vercel-postgres or tokio-postgres
-        // Convert placeholders: SQLite ?1 -> PostgreSQL $1
-        let postgres_sql = convert_placeholders(sql, DatabaseDialect::PostgreSQL);
-
-        // Execute query using Vercel's Postgres API
-        // ...
-    }
-
-    async fn execute(&self, sql: &str, params: &[Value]) -> CoreResult<u64> {
-        // Execute statement
-        // ...
-    }
-
-    fn dialect(&self) -> DatabaseDialect {
-        DatabaseDialect::PostgreSQL
-    }
-}
-```
-
-**4. Implement Other Providers**
-
-```rust
-// platforms/vercel/bindings/src/blob.rs - Vercel Blob Storage
-pub struct VercelBlobProvider { /* ... */ }
-
-// platforms/vercel/bindings/src/http.rs - Vercel Edge Runtime
-pub struct VercelHttpProvider { /* ... */ }
-
-// platforms/vercel/bindings/src/queue.rs - Vercel Queue (or alternative)
-pub struct VercelQueueProvider { /* ... */ }
-```
-
-**5. Create Worker Functions**
-
-```typescript
-// platforms/vercel/functions/webfinger.ts
-import { createWasmInstance } from './wasm-loader';
-
-export default async function handler(req: Request) {
-  const url = new URL(req.url);
-  const resource = url.searchParams.get('resource');
-
-  if (!resource) {
-    return new Response('Missing resource parameter', { status: 400 });
-  }
-
-  // Initialize WASM module with Vercel providers
-  const instance = await createWasmInstance({
-    database: process.env.POSTGRES_URL,
-    storage: process.env.BLOB_READ_WRITE_TOKEN,
-  });
-
-  const response = await instance.webfinger(resource);
-
-  return new Response(JSON.stringify(response), {
-    headers: { 'Content-Type': 'application/jrd+json' },
-  });
-}
-```
-
-**6. Test Compilation**
-
-```bash
-cd platforms/vercel/bindings
-cargo check
-```
-
-**7. Deploy**
-
-```bash
-vercel deploy
-```
-
-### Platform Requirements
-
-For a new platform to work with dais, it needs:
-
-1. **Database Support**:
-   - SQLite, PostgreSQL, or MySQL
-   - Async query interface
-   - Transaction support (recommended)
-
-2. **HTTP Client**:
-   - Async HTTP requests
-   - Support for custom headers (for ActivityPub)
-   - TLS/HTTPS support
-
-3. **Object Storage** (optional):
-   - File upload/download
-   - Public URLs for media
-
-4. **Background Jobs** (optional):
-   - Queue for delivery retries
-   - Can be replaced with alternative mechanism
-
-5. **WASM Support**:
-   - Platform must support WebAssembly
-   - Rust compilation to wasm32-unknown-unknown
+Provider traits let the core protocol code run against in-memory and mock
+implementations in tests. Production bindings live under
+`platforms/cloudflare/`.
 
 ## Migration System
 

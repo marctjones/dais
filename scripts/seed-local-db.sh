@@ -56,7 +56,7 @@ echo -e "${GREEN}Step 2: Reading test keys...${NC}"
 PUBLIC_KEY=$(cat "$TEST_KEYS_DIR/public.pem")
 PRIVATE_KEY=$(cat "$TEST_KEYS_DIR/private.pem")
 
-echo -e "${GREEN}Step 3: Seeding test actor (marc@localhost)...${NC}"
+echo -e "${GREEN}Step 3: Seeding test actor (social@localhost)...${NC}"
 
 # Insert test actor
 wrangler d1 execute DB --local --command="
@@ -72,16 +72,16 @@ INSERT OR REPLACE INTO actors (
     followers_url,
     following_url
 ) VALUES (
-    'https://localhost/users/marc',
-    'marc',
-    'Marc (Test User)',
+    'https://localhost/users/social',
+    'social',
+    'Social (Test User)',
     'Local development test account for dais ActivityPub server',
     '${PUBLIC_KEY}',
     '${PRIVATE_KEY}',
-    'https://localhost/users/marc/inbox',
-    'https://localhost/users/marc/outbox',
-    'https://localhost/users/marc/followers',
-    'https://localhost/users/marc/following'
+    'https://localhost/users/social/inbox',
+    'https://localhost/users/social/outbox',
+    'https://localhost/users/social/followers',
+    'https://localhost/users/social/following'
 );
 "
 
@@ -97,7 +97,7 @@ INSERT OR REPLACE INTO followers (
     status
 ) VALUES (
     'follow-alice-001',
-    'https://localhost/users/marc',
+    'https://localhost/users/social',
     'https://mastodon.social/users/alice',
     'https://mastodon.social/users/alice/inbox',
     'approved'
@@ -114,7 +114,7 @@ INSERT OR REPLACE INTO followers (
     status
 ) VALUES (
     'follow-bob-001',
-    'https://localhost/users/marc',
+    'https://localhost/users/social',
     'https://pleroma.example.com/users/bob',
     'https://pleroma.example.com/users/bob/inbox',
     'approved'
@@ -131,7 +131,7 @@ INSERT OR REPLACE INTO followers (
     status
 ) VALUES (
     'follow-charlie-001',
-    'https://localhost/users/marc',
+    'https://localhost/users/social',
     'https://pixelfed.social/users/charlie',
     'https://pixelfed.social/users/charlie/inbox',
     'pending'
@@ -148,7 +148,7 @@ INSERT OR REPLACE INTO followers (
     status
 ) VALUES (
     'follow-dave-001',
-    'https://localhost/users/marc',
+    'https://localhost/users/social',
     'https://mastodon.example.com/users/dave',
     'https://mastodon.example.com/users/dave/inbox',
     'rejected'
@@ -167,8 +167,8 @@ INSERT OR REPLACE INTO posts (
     visibility,
     published_at
 ) VALUES (
-    'https://localhost/users/marc/posts/001',
-    'https://localhost/users/marc',
+    'https://localhost/users/social/posts/001',
+    'https://localhost/users/social',
     'Hello from local dais development! This is a test post.',
     '<p>Hello from local dais development! This is a test post.</p>',
     'public',
@@ -179,12 +179,12 @@ INSERT OR REPLACE INTO posts (
 echo -e "${GREEN}✓ Database seeded successfully!${NC}"
 echo ""
 echo "Summary:"
-echo "  • Actor: marc@localhost"
+echo "  • Actor: social@localhost"
 echo "  • Approved followers: 2 (alice, bob)"
 echo "  • Pending followers: 1 (charlie)"
 echo "  • Rejected followers: 1 (dave)"
 echo "  • Sample posts: 1"
 echo ""
 echo "Test the setup with:"
-echo -e "  ${BLUE}curl 'http://localhost:8787/.well-known/webfinger?resource=acct:marc@localhost'${NC}"
-echo -e "  ${BLUE}curl -H 'Accept: application/activity+json' 'http://localhost:8788/users/marc'${NC}"
+echo -e "  ${BLUE}curl 'http://localhost:8787/.well-known/webfinger?resource=acct:social@localhost'${NC}"
+echo -e "  ${BLUE}curl -H 'Accept: application/activity+json' 'http://localhost:8788/users/social'${NC}"

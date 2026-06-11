@@ -221,7 +221,7 @@ dais post create "Hello"  # → went to localhost
 dais post create "Hello" --remote  # → went to production
 ```
 
-### After (v1.0.1+)
+### After (current)
 
 ```bash
 # Default is now production

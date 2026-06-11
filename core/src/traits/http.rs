@@ -1,10 +1,8 @@
-/// HTTP client abstraction trait for platform-agnostic requests
+/// HTTP client abstraction trait for Worker requests and tests
 ///
 /// Implementations:
 /// - Cloudflare: Cloudflare Workers fetch API
-/// - Vercel: Node.js fetch (global)
-/// - Netlify: Netlify Functions fetch
-/// - Generic: reqwest, hyper, etc.
+/// - Tests: mock providers
 use super::PlatformResult;
 use async_trait::async_trait;
 use std::collections::HashMap;

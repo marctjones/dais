@@ -1,11 +1,8 @@
-/// Storage abstraction trait for platform-agnostic object storage
+/// Storage abstraction trait for Worker object storage and tests
 ///
 /// Implementations:
 /// - Cloudflare: R2
-/// - Vercel: Vercel Blob
-/// - Netlify: Netlify Blobs
-/// - Railway: S3-compatible storage
-/// - Generic: AWS S3, MinIO, Backblaze B2
+/// - Tests: mock providers
 use super::PlatformResult;
 use async_trait::async_trait;
 

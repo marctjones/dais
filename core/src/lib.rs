@@ -3,13 +3,13 @@ pub mod atproto;
 mod error;
 pub mod migrations;
 pub mod sql;
-/// dais-core: Platform-agnostic ActivityPub/AT Protocol implementation
+/// dais-core: shared ActivityPub/AT Protocol implementation
 ///
 /// This library provides the core social protocol logic as a WASM module
-/// that can run on any platform (Cloudflare Workers, Vercel, Netlify, etc.)
+/// for Cloudflare Workers.
 ///
-/// Platform-specific code (database, storage, queues, HTTP) is abstracted
-/// behind traits in the `traits` module.
+/// Cloudflare-specific code (database, storage, queues, HTTP) is abstracted
+/// behind traits in the `traits` module so core logic can be tested directly.
 pub mod traits;
 mod utils;
 pub mod webfinger;

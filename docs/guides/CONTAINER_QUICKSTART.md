@@ -133,9 +133,9 @@ docker-compose down -v
 | Service | Port | URL |
 |---------|------|-----|
 | WebFinger | 8787 | http://localhost:8787/.well-known/webfinger |
-| Actor | 8788 | http://localhost:8788/users/marc |
-| Inbox | 8789 | http://localhost:8789/users/marc/inbox |
-| Outbox | 8790 | http://localhost:8790/users/marc/outbox |
+| Actor | 8788 | http://localhost:8788/users/social |
+| Inbox | 8789 | http://localhost:8789/users/social/inbox |
+| Outbox | 8790 | http://localhost:8790/users/social/outbox |
 
 ## Troubleshooting
 

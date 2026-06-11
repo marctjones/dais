@@ -1,7 +1,7 @@
-/// SQL abstraction layer for portable queries across database dialects
+/// SQL abstraction layer for Cloudflare D1 plus test dialect helpers
 ///
-/// This module provides utilities to write SQL queries that work across
-/// SQLite (Cloudflare D1) and PostgreSQL (Vercel Postgres, Supabase, etc.)
+/// Production uses SQLite through Cloudflare D1. Additional dialect helpers are
+/// retained for query-generation tests and internal portability boundaries.
 pub mod query;
 pub mod schema;
 
