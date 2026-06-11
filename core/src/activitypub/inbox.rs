@@ -1,4 +1,4 @@
-use crate::activitypub::security::is_blocked_actor;
+use crate::activitypub::security::{is_blocked_actor, is_federation_host_allowed};
 use crate::activitypub::types::Activity;
 use crate::error::{CoreError, CoreResult};
 /// ActivityPub inbox processing
@@ -955,6 +955,12 @@ pub async fn process_inbox_activity(
     if is_blocked_actor(db, &activity.actor).await? {
         return Err(CoreError::Unauthorized(format!(
             "Actor is blocked: {}",
+            activity.actor
+        )));
+    }
+    if !is_federation_host_allowed(db, &activity.actor).await? {
+        return Err(CoreError::Unauthorized(format!(
+            "Actor host is not allowlisted while closed_network is enabled: {}",
             activity.actor
         )));
     }

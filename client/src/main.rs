@@ -351,9 +351,15 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
         }
         cli::TopLevelPostCommand::Boost(args) => {
             let db = D1Client::new(args.remote)?;
-            let outcome =
-                publish_interaction(&db, &args.actor, &args.object_id, "boost", false, args.inbox)
-                    .await?;
+            let outcome = publish_interaction(
+                &db,
+                &args.actor,
+                &args.object_id,
+                "boost",
+                false,
+                args.inbox,
+            )
+            .await?;
             print_activity_outcome("Queued ActivityPub Announce", &outcome);
         }
         cli::TopLevelPostCommand::Unboost(args) => {

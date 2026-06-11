@@ -483,6 +483,28 @@ async fn process_delivery(
     let retry_count = row.get("retry_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
     console_log!("Delivering to: {}", target_url);
+    if !dais_core::activitypub::is_federation_host_allowed(core.db(), target_url)
+        .await
+        .map_err(|error| worker::Error::RustError(error.to_string()))?
+    {
+        if let Err(update_err) = dais_core::activitypub::update_delivery_status(
+            core.db(),
+            delivery_id,
+            false,
+            Some("delivery target is not allowlisted while closed_network is enabled"),
+            3,
+        )
+        .await
+        {
+            console_log!("Failed to update delivery status: {}", update_err);
+        }
+        return Ok(DeliveryProcessReport {
+            delivery_id: delivery_id.to_string(),
+            success: false,
+            retryable: false,
+            retry_count,
+        });
+    }
 
     let activity_json = match stored_activity_json {
         Some(value) if !value.trim().is_empty() => value.to_string(),

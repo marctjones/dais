@@ -148,11 +148,8 @@ pub async fn publish_interaction(
         "boost" => "Announce",
         other => anyhow::bail!("unsupported interaction type {other}"),
     };
-    let interaction_activity_id = format!(
-        "{actor_id}#{}s/{}",
-        interaction,
-        activity_suffix(object_id)
-    );
+    let interaction_activity_id =
+        format!("{actor_id}#{}s/{}", interaction, activity_suffix(object_id));
 
     let (activity_id, delivery_type, activity_json) = if undo {
         let undo_id = format!(

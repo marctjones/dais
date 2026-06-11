@@ -26,9 +26,10 @@ pub use outbox::{
     PostInteractions, Reply,
 };
 pub use security::{
-    is_anonymous_public_post, is_approved_follower, is_blocked_actor, read_policy_from_visibility,
-    requires_authorized_fetch, requires_authorized_post_fetch, ReadPolicy,
-    ANONYMOUS_PUBLIC_POST_SQL_PREDICATE, E2EE_FALLBACK_MARKER,
+    is_anonymous_public_post, is_approved_follower, is_blocked_actor, is_closed_network_enabled,
+    is_federation_host_allowed, read_policy_from_visibility, requires_authorized_fetch,
+    requires_authorized_post_fetch, ReadPolicy, ANONYMOUS_PUBLIC_POST_SQL_PREDICATE,
+    E2EE_FALLBACK_MARKER,
 };
 pub use signatures::{
     build_signing_string, fetch_actor_public_key, sign_request, validate_http_date_window,

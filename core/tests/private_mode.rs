@@ -26,9 +26,23 @@ struct FakeDbState {
     direct_messages: HashMap<String, Row>,
     participants: HashSet<(String, String)>,
     notifications: Vec<Row>,
+    closed_network: bool,
+    allowlisted_hosts: HashSet<String>,
 }
 
 impl FakeDb {
+    fn set_closed_network(&self, enabled: bool) {
+        self.state.lock().unwrap().closed_network = enabled;
+    }
+
+    fn allow_host(&self, host: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .allowlisted_hosts
+            .insert(host.to_string());
+    }
+
     fn approve_follower(&self, actor_id: &str) {
         self.state
             .lock()
@@ -145,6 +159,22 @@ impl DatabaseProvider for FakeDb {
                 .cloned()
                 .map(|row| vec![row])
                 .unwrap_or_default());
+        }
+
+        if sql.contains("SELECT closed_network FROM instance_settings") {
+            let mut row = Row::new();
+            row.insert(
+                "closed_network".to_string(),
+                Value::Number((state.closed_network as i64).into()),
+            );
+            return Ok(vec![row]);
+        }
+
+        if sql.contains("FROM federation_allowlist") {
+            let host = params.first().and_then(Value::as_str).unwrap_or_default();
+            return Ok(vec![count_row(
+                state.allowlisted_hosts.contains(host) as u64
+            )]);
         }
 
         if sql.contains("COUNT(*) as count") && sql.contains("FROM posts") {
@@ -383,6 +413,43 @@ async fn approved_follower_policy_accepts_known_actor() {
     assert!(activitypub::is_approved_follower(&db, actor_id)
         .await
         .unwrap());
+}
+
+#[tokio::test]
+async fn federation_allowlist_is_default_open() {
+    let db = FakeDb::default();
+
+    assert!(
+        activitypub::is_federation_host_allowed(&db, "https://unlisted.example/users/alice")
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn federation_allowlist_accepts_allowed_host_when_closed() {
+    let db = FakeDb::default();
+    db.set_closed_network(true);
+    db.allow_host("trusted.example");
+
+    assert!(
+        activitypub::is_federation_host_allowed(&db, "https://trusted.example/users/alice")
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn federation_allowlist_rejects_unlisted_host_when_closed() {
+    let db = FakeDb::default();
+    db.set_closed_network(true);
+    db.allow_host("trusted.example");
+
+    assert!(
+        !activitypub::is_federation_host_allowed(&db, "https://unlisted.example/users/alice")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]

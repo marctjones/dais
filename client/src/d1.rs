@@ -360,6 +360,9 @@ impl D1Client {
                 .as_deref()
                 .filter(|value| !value.is_empty())
                 .unwrap_or(&follower.follower_inbox);
+            if !self.is_federation_target_allowed(target_url)? {
+                continue;
+            }
             let sql = format!(
                 r#"
                 INSERT INTO deliveries (
@@ -422,6 +425,9 @@ impl D1Client {
 
         for follower in approved {
             let delivery_id = format!("delivery-{}", uuid_like());
+            if !self.is_federation_target_allowed(&follower.follower_inbox)? {
+                continue;
+            }
             let sql = format!(
                 r#"
                 INSERT INTO deliveries (
@@ -471,6 +477,7 @@ impl D1Client {
 
         targets.sort();
         targets.dedup();
+        targets.retain(|target| self.is_federation_target_allowed(target).unwrap_or(false));
 
         let created_at = chrono::Utc::now().to_rfc3339();
         let mut delivery_ids = Vec::new();
@@ -784,6 +791,46 @@ impl D1Client {
     fn execute(&self, sql: &str) -> Result<()> {
         self.query_values(sql).map(|_| ())
     }
+
+    fn is_closed_network_enabled(&self) -> Result<bool> {
+        let row = match self.query_one("SELECT closed_network FROM instance_settings WHERE id = 1")
+        {
+            Ok(row) => row,
+            Err(_) => return Ok(false),
+        };
+        Ok(row
+            .as_ref()
+            .and_then(|value| value.get("closed_network"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            == 1)
+    }
+
+    fn is_federation_target_allowed(&self, target_url: &str) -> Result<bool> {
+        if !self.is_closed_network_enabled()? {
+            return Ok(true);
+        }
+
+        let Some(host) = https_host(target_url) else {
+            return Ok(false);
+        };
+        let sql = format!(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM federation_allowlist
+            WHERE host = {host}
+              AND enabled = 1
+            "#,
+            host = sql_literal(host),
+        );
+        let count = self
+            .query_one(&sql)?
+            .as_ref()
+            .and_then(|row| row.get("count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        Ok(count > 0)
+    }
 }
 
 fn parse_wrangler_results(output: &str) -> Result<Vec<Value>> {
@@ -820,6 +867,11 @@ fn sql_like_escape(value: &str) -> String {
 
 fn sql_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+fn https_host(value: &str) -> Option<&str> {
+    let rest = value.strip_prefix("https://")?;
+    rest.split('/').next().filter(|host| !host.is_empty())
 }
 
 fn normalized_delivery_status(value: &str) -> Result<&'static str> {
@@ -869,7 +921,7 @@ fn wrangler_bin() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_wrangler_results;
+    use super::{https_host, parse_wrangler_results};
 
     #[test]
     fn parses_wrangler_json_results_from_noisy_output() {
@@ -881,5 +933,19 @@ mod tests {
         "#;
         let rows = parse_wrangler_results(output).unwrap();
         assert_eq!(rows[0]["count"], 2);
+    }
+
+    #[test]
+    fn extracts_https_host_for_allowlist_checks() {
+        assert_eq!(
+            https_host("https://mastodon.social/inbox"),
+            Some("mastodon.social")
+        );
+        assert_eq!(
+            https_host("https://social.example/users/alice/inbox"),
+            Some("social.example")
+        );
+        assert_eq!(https_host("http://mastodon.social/inbox"), None);
+        assert_eq!(https_host("not a url"), None);
     }
 }

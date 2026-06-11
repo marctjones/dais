@@ -1,4 +1,4 @@
-use crate::activitypub::signatures;
+use crate::activitypub::{is_federation_host_allowed, signatures};
 use crate::error::{CoreError, CoreResult};
 /// ActivityPub activity delivery to remote inboxes
 ///
@@ -148,7 +148,10 @@ pub async fn create_follower_deliveries(
     let mut delivery_ids = Vec::new();
 
     for inbox_url in inboxes {
-        // Create delivery record
+        if !is_federation_host_allowed(db, &inbox_url).await? {
+            continue;
+        }
+
         let delivery_id = crate::utils::generate_uuid();
         let created_at = crate::utils::now_rfc3339();
 

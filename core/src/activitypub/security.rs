@@ -93,6 +93,48 @@ pub async fn is_approved_follower(db: &dyn DatabaseProvider, actor_url: &str) ->
     Ok(false)
 }
 
+pub async fn is_closed_network_enabled(db: &dyn DatabaseProvider) -> CoreResult<bool> {
+    let query = "SELECT closed_network FROM instance_settings WHERE id = 1";
+    let rows = match db.execute(query, &[]).await {
+        Ok(rows) => rows,
+        Err(_) => return Ok(false),
+    };
+
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("closed_network"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        == 1)
+}
+
+pub async fn is_federation_host_allowed(
+    db: &dyn DatabaseProvider,
+    remote_url: &str,
+) -> CoreResult<bool> {
+    if !is_closed_network_enabled(db).await? {
+        return Ok(true);
+    }
+
+    let Some(host) = actor_domain(remote_url) else {
+        return Ok(false);
+    };
+
+    let query = r#"
+        SELECT COUNT(*) AS count
+        FROM federation_allowlist
+        WHERE host = ?1
+          AND enabled = 1
+    "#;
+    let rows = db.execute(query, &[Value::String(host)]).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        > 0)
+}
+
 pub fn require_https_url(value: &str) -> CoreResult<Url> {
     let url = Url::parse(value)
         .map_err(|_| CoreError::InvalidActivity(format!("Invalid actor URL: {}", value)))?;
