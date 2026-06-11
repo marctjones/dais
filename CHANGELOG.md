@@ -5,6 +5,27 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] - 2026-06-11
+
+### Added
+- Added v0.22 Tauri owner app foundation:
+  - `client-core` Rust crate for shared CLI/TUI/Tauri/future-mobile owner
+    models, privacy badges, protocol route warnings, source items, moderation
+    state, diagnostics, and owner snapshots.
+  - Tauri v2 app shell in `apps/owner-tauri` with adaptive navigation for Home,
+    Posts, Sources, Notifications, Followers, Profile, Moderation, Deliveries,
+    Settings, and Diagnostics.
+  - Local settings storage for instance URL and owner token.
+  - Responsive frontend layout that collapses to narrow/mobile widths for later
+    Android packaging.
+  - Owner app guide documenting desktop run/build flow and Android readiness
+    constraints.
+
+### Known Gaps
+- The secure HTTPS owner API remains the next required server-side piece before
+  the desktop/mobile app can perform live owner workflows without Wrangler/D1
+  access.
+
 ## [1.23.1] - 2026-06-11
 
 ### Fixed

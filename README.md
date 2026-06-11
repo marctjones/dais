@@ -16,6 +16,8 @@ Live instance: `@social@dais.social`
 - Cloudflare Workers: `platforms/cloudflare/workers/`
 - Cloudflare bindings: `platforms/cloudflare/bindings/`
 - Rust CLI/TUI client: `client/`
+- Shared owner-client models: `client-core/`
+- Tauri owner app shell: `apps/owner-tauri/`
 - D1 migrations: `cli/migrations/`
 
 The old Python CLI and legacy `workers/` tree have been retired. Use the Rust
@@ -98,6 +100,18 @@ cargo run --manifest-path client/Cargo.toml -- tui --remote
 ```
 
 Private/followers visibility is the default. Public posting is explicit.
+
+## Owner App
+
+The first-party desktop owner app shell lives in `apps/owner-tauri` and reuses
+Rust models from `client-core`. It is currently an adaptive Tauri v2 shell for
+the owner workflows while the scoped HTTPS owner API is still being built.
+
+```bash
+cd apps/owner-tauri
+npm install
+npm run build
+```
 
 ## Development
 

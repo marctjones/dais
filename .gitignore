@@ -32,6 +32,7 @@ venv/
 target/
 Cargo.lock
 !client/Cargo.lock
+!apps/owner-tauri/src-tauri/Cargo.lock
 *.wasm
 
 # Node
