@@ -5,6 +5,104 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-06-11
+
+### Added
+- Added rich ActivityPub object metadata to posts with additive D1 columns:
+  `object_type`, `name`, and `summary`.
+- Added migration `cli/migrations/013_rich_activitypub_objects.sql`.
+- Added Rust CLI support for ActivityStreams `Note`, `Article`, and `Document`
+  creation via `post create --object-type note|article|document`.
+- Added `--title` and `--summary` options for rich ActivityPub objects.
+- Core outbox rendering now emits stored ActivityStreams object type, name, and
+  summary metadata.
+- Delivery queue now preserves object type/name/summary in outbound Create
+  activities.
+- Mastodon API status fallback now flattens title, summary, and body into
+  coherent `content` and `plain_text`.
+- Added unit coverage for rich ActivityPub object metadata rendering.
+
+### Changed
+- Rich `Article` and `Document` posts are ActivityPub-only for now. The CLI
+  rejects Bluesky/both routing for those objects rather than silently degrading
+  semantics.
+- Encrypted rich-object posts are rejected for now; encrypted posts continue to
+  use the existing Note fallback flow.
+- TUI posting remains Note-only until dedicated rich-object compose/read controls
+  are implemented.
+
+### Deployed
+- Applied the production D1 migration to `dais-social`.
+- Deployed all production Cloudflare workers on 2026-06-11, including the
+  `landing-production` worker for `dais.social` and `www.dais.social`.
+- Production verification passed:
+  - `cargo check --manifest-path client/Cargo.toml`
+  - `cargo test --manifest-path core/Cargo.toml`
+  - `npm run test:activitypub-conformance` (`PASS=15 FAIL=0 MISSING=0 INFO=2`)
+  - `npm run test:federation-matrix` (`PASS=10 FAIL=0 INFO=1`)
+- Production smoke created a followers-only Article and verified anonymous
+  ActivityPub fetch returned `404`, preserving private-default behavior.
+
+### Known limitations
+- First-class rich-object read/edit commands, TUI rich-object controls,
+  attachment/R2 behavior, and conformance rows for public/authorized rich object
+  shape remain open in issue #91.
+- Mastodon parity remains partial: useful read/API/federation floor, not full
+  Mastodon client or server parity.
+
+## [1.16.0] - 2026-06-11
+
+### Added
+- Added `scripts/federation-matrix.mjs`, a repeatable federation compatibility
+  matrix for production/local dais deployments.
+- Added `npm run test:federation-matrix`.
+- Matrix checks cover WebFinger, actor/signing key shape, anonymous outbox
+  privacy, public post dereference, anonymous private/E2EE denial, unsigned
+  inbox rejection, Mastodon API read floor, and AT Protocol PDS
+  `describeServer`.
+- Matrix supports optional remote fediverse probes through
+  `DAIS_FEDERATION_TARGETS`.
+- Documented the matrix runner in `docs/guides/TESTING.md`.
+
+### Verified
+- Production run on 2026-06-11 passed with `PASS=10 FAIL=0 INFO=1`.
+- Existing ActivityPub/Mastodon conformance gate still passed with
+  `PASS=15 FAIL=0 MISSING=0 INFO=2`.
+
+### Known limitations
+- Live Mastodon/Pleroma/Misskey/Pixelfed target accounts still need to be
+  configured to turn the remote matrix row from `INFO` into concrete target
+  coverage.
+
+## [1.15.12] - 2026-06-11
+
+### Added
+- Added the initial read-only Mastodon API compatibility floor on the production
+  router:
+  - `GET /api/v1/instance`
+  - `POST /api/v1/apps`
+  - `GET /oauth/authorize`
+  - `POST /oauth/token`
+  - `POST /oauth/revoke`
+  - `GET /api/v1/accounts/verify_credentials`
+  - `GET /api/v1/accounts/:id`
+  - `GET /api/v1/accounts/:id/statuses`
+  - `GET /api/v1/timelines/public`
+  - `GET /api/v1/timelines/home`
+  - `GET /api/v1/statuses/:id`
+  - `GET /api/v1/notifications`
+
+### Changed
+- Public Mastodon API timelines and status reads expose only public,
+  non-encrypted posts.
+- Authenticated Mastodon API reads require the configured bearer token.
+- Private and E2EE content remains excluded from anonymous API and outbox reads.
+
+### Known limitations
+- OAuth is still compatibility-level, not a complete app/token lifecycle.
+- Mastodon write APIs, media upload, relationship APIs, search, filters,
+  bookmarks, conversations, and streaming remain future work.
+
 ## [1.3.0] - 2026-06-08
 
 **Milestone: the server actually federates.** End-to-end federation with Mastodon
