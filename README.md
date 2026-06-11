@@ -49,6 +49,9 @@ client and the core-based Cloudflare worker tree.
 - Rust owner tooling includes media upload/attachment helpers, moderation and
   closed-network allowlist controls, delivery/follower review, expanded reports,
   and a TUI for day-to-day operation.
+- Public source subscriptions can ingest standards-based RSS/Atom feeds into a
+  private reader item model with rights-policy metadata; scheduled Cloudflare
+  refresh stores metadata/excerpts only and never reposts automatically.
 
 Mastodon parity is not complete. Dais is currently best described as
 Mastodon-readable with a growing compatibility API, not a full Mastodon server
@@ -86,6 +89,9 @@ cargo run --manifest-path client/Cargo.toml -- actors set-type organization --re
 cargo run --manifest-path client/Cargo.toml -- actors update --display-name "dais" --summary "Private-by-default social server" --remote
 cargo run --manifest-path client/Cargo.toml -- moderation status --remote
 cargo run --manifest-path client/Cargo.toml -- reports summary --remote
+cargo run --manifest-path client/Cargo.toml -- sources add rss https://www.w3.org/blog/news/feed/ --title "W3C News" --remote
+cargo run --manifest-path client/Cargo.toml -- sources refresh --remote
+cargo run --manifest-path client/Cargo.toml -- sources items --remote
 cargo run --manifest-path client/Cargo.toml -- timeline home --remote
 cargo run --manifest-path client/Cargo.toml -- friends list --remote
 cargo run --manifest-path client/Cargo.toml -- tui --remote

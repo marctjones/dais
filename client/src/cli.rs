@@ -58,6 +58,9 @@ pub enum Command {
     /// Expanded analytics and operational reports.
     #[command(subcommand)]
     Reports(ReportsCommand),
+    /// Manage public source subscriptions and private reader items.
+    #[command(subcommand)]
+    Sources(SourcesCommand),
     /// Run instance diagnostics and conformance smoke checks.
     Doctor(DoctorArgs),
     /// Generate shell completions.
@@ -422,6 +425,82 @@ pub enum ReportsCommand {
         #[arg(long)]
         remote: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum SourcesCommand {
+    /// Add a standards-based public source subscription.
+    Add {
+        #[command(subcommand)]
+        command: SourceAddCommand,
+    },
+    /// List configured public source subscriptions.
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: u16,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Remove a source subscription and its ingested items.
+    Remove {
+        id: String,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// Refresh one source, or all active sources when no id is supplied.
+    Refresh {
+        id: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        remote: bool,
+    },
+    /// List ingested private reader items.
+    Items {
+        #[arg(long)]
+        source_id: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: u16,
+        #[arg(long)]
+        unread: bool,
+        #[arg(long)]
+        remote: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SourceAddCommand {
+    /// Subscribe to an RSS feed URL.
+    Rss(SourceAddArgs),
+    /// Subscribe to an Atom feed URL.
+    Atom(SourceAddArgs),
+    /// Register an official or licensed API source placeholder.
+    Api(SourceAddArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct SourceAddArgs {
+    pub url: String,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub cadence_minutes: Option<u16>,
+    #[arg(long)]
+    pub api_secret_name: Option<String>,
+    #[arg(long, default_value_t = true)]
+    pub private_reader_only: bool,
+    #[arg(long, default_value_t = true)]
+    pub excerpt_only: bool,
+    #[arg(long, default_value_t = true)]
+    pub link_required: bool,
+    #[arg(long, default_value_t = true)]
+    pub attribution_required: bool,
+    #[arg(long)]
+    pub no_image: bool,
+    #[arg(long)]
+    pub full_text_allowed: bool,
+    #[arg(long)]
+    pub remote: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

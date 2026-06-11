@@ -8,6 +8,7 @@ mod e2ee;
 mod output;
 mod posting;
 mod routing;
+mod sources;
 mod tui;
 
 use anyhow::Result;
@@ -49,6 +50,7 @@ async fn main() -> Result<()> {
         Command::Media(command) => handle_media(command).await?,
         Command::Moderation(command) => handle_moderation(command).await?,
         Command::Reports(command) => handle_reports(command).await?,
+        Command::Sources(command) => handle_sources(command).await?,
         Command::Doctor(args) => handle_doctor(args).await?,
         Command::Completions { shell } => {
             let mut command = Cli::command();
@@ -725,6 +727,89 @@ async fn handle_reports(command: ReportsCommand) -> Result<()> {
             let db = D1Client::new(remote)?;
             let posts = db.top_posts(limit).await?;
             output::print_top_posts(&posts);
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_sources(command: cli::SourcesCommand) -> Result<()> {
+    match command {
+        cli::SourcesCommand::Add { command } => match command {
+            cli::SourceAddCommand::Rss(args) => {
+                let db = D1Client::new(args.remote)?;
+                let id = sources::add_source(&db, "rss", args).await?;
+                println!("Added RSS source {id}");
+            }
+            cli::SourceAddCommand::Atom(args) => {
+                let db = D1Client::new(args.remote)?;
+                let id = sources::add_source(&db, "atom", args).await?;
+                println!("Added Atom source {id}");
+            }
+            cli::SourceAddCommand::Api(args) => {
+                let db = D1Client::new(args.remote)?;
+                let id = sources::add_source(&db, "api", args).await?;
+                println!("Registered API source {id}");
+                println!("API refresh adapters are policy/config placeholders in v0.20.");
+            }
+        },
+        cli::SourcesCommand::List { limit, remote } => {
+            let db = D1Client::new(remote)?;
+            output::print_sources(&db.list_sources(limit).await?);
+        }
+        cli::SourcesCommand::Remove { id, remote } => {
+            let db = D1Client::new(remote)?;
+            db.remove_source(&id).await?;
+            println!("Removed source {id}");
+        }
+        cli::SourcesCommand::Refresh {
+            id,
+            dry_run,
+            remote,
+        } => {
+            let db = D1Client::new(remote)?;
+            let sources = if let Some(id) = id {
+                vec![db
+                    .get_source(&id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("source not found: {id}"))?]
+            } else {
+                db.active_sources().await?
+            };
+            if sources.is_empty() {
+                println!("No active sources found");
+                return Ok(());
+            }
+            for source in sources {
+                match sources::refresh_source(&db, &source, dry_run).await {
+                    Ok(report) => {
+                        println!(
+                            "{} fetched={} parsed={} stored={} {}",
+                            report.source_id,
+                            report.fetched,
+                            report.parsed_items,
+                            report.stored_items,
+                            report.url
+                        );
+                    }
+                    Err(error) => {
+                        let _ = db.mark_source_error(&source.id, &error.to_string()).await;
+                        println!("{} error={}", source.id, error);
+                    }
+                }
+            }
+        }
+        cli::SourcesCommand::Items {
+            source_id,
+            limit,
+            unread,
+            remote,
+        } => {
+            let db = D1Client::new(remote)?;
+            let items = db
+                .list_source_items(source_id.as_deref(), limit, unread)
+                .await?;
+            output::print_source_items(&items);
         }
     }
 

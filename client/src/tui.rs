@@ -21,7 +21,7 @@ use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
 use crate::d1::{
     D1Block, D1Client, D1Delivery, D1DirectMessage, D1FollowerRow, D1FollowingRow, D1Friend,
-    D1Notification, D1Post, D1TimelinePost, D1User, ServerStats,
+    D1Notification, D1Post, D1SourceItem, D1TimelinePost, D1User, ServerStats,
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
@@ -38,12 +38,13 @@ enum Tab {
     DMs,
     Search,
     Bluesky,
+    Sources,
     Stats,
     Blocks,
 }
 
 impl Tab {
-    fn all() -> [Tab; 12] {
+    fn all() -> [Tab; 13] {
         [
             Tab::Home,
             Tab::Posts,
@@ -55,6 +56,7 @@ impl Tab {
             Tab::DMs,
             Tab::Search,
             Tab::Bluesky,
+            Tab::Sources,
             Tab::Stats,
             Tab::Blocks,
         ]
@@ -72,6 +74,7 @@ impl Tab {
             Tab::DMs => "DMs",
             Tab::Search => "Search",
             Tab::Bluesky => "Bluesky",
+            Tab::Sources => "Sources",
             Tab::Stats => "Stats",
             Tab::Blocks => "Blocks",
         }
@@ -272,6 +275,7 @@ enum TabData {
         query: String,
     },
     Bluesky(Vec<crate::atproto::FeedItem>),
+    Sources(Vec<D1SourceItem>),
     Stats(ServerStats),
     Blocks(Vec<D1Block>),
 }
@@ -352,6 +356,7 @@ struct App {
     search_posts: Vec<D1Post>,
     search_users: Vec<D1User>,
     bluesky_feed: Vec<crate::atproto::FeedItem>,
+    source_items: Vec<D1SourceItem>,
     stats: Option<ServerStats>,
     blocks: Vec<D1Block>,
 }
@@ -390,6 +395,7 @@ impl App {
             search_posts: Vec::new(),
             search_users: Vec::new(),
             bluesky_feed: Vec::new(),
+            source_items: Vec::new(),
             stats: None,
             blocks: Vec::new(),
         }
@@ -919,6 +925,7 @@ impl App {
                         self.search.query = TextBuffer::from_text(&query);
                     }
                     TabData::Bluesky(value) => self.bluesky_feed = value,
+                    TabData::Sources(value) => self.source_items = value,
                     TabData::Stats(value) => self.stats = Some(value),
                     TabData::Blocks(value) => self.blocks = value,
                 }
@@ -1401,6 +1408,34 @@ impl App {
                     }
                 })
                 .collect(),
+            Tab::Sources => self
+                .source_items
+                .iter()
+                .map(|item| Entry {
+                    title: item.title.clone(),
+                    subtitle: format!(
+                        "{} · {}{}",
+                        item.source_type,
+                        item.published_at
+                            .as_deref()
+                            .or(item.fetched_at.as_deref())
+                            .unwrap_or("unknown time"),
+                        if item.read.unwrap_or(0) == 1 {
+                            " · read"
+                        } else {
+                            ""
+                        }
+                    ),
+                    details: format!(
+                        "source: {}\nurl: {}\nauthor: {}\npolicy: {}\n\n{}",
+                        item.source_id,
+                        item.canonical_url.as_deref().unwrap_or(""),
+                        item.author.as_deref().unwrap_or(""),
+                        item.rights_policy_json,
+                        item.excerpt.as_deref().unwrap_or("")
+                    ),
+                })
+                .collect(),
             Tab::Stats => self.stats.as_ref().map_or_else(Vec::new, |stats| {
                 vec![
                     Entry {
@@ -1461,6 +1496,7 @@ impl App {
             Tab::Stats => "No stats loaded yet".to_string(),
             Tab::Search => "Run a search with /".to_string(),
             Tab::Bluesky => "Login to Bluesky and refresh".to_string(),
+            Tab::Sources => "No source items loaded".to_string(),
             _ => "No data".to_string(),
         }
     }
@@ -1510,6 +1546,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             client.ensure_session().await?;
             let feed = client.get_timeline(50).await?;
             Ok(TabData::Bluesky(feed.feed))
+        }
+        Tab::Sources => {
+            let db = D1Client::new(remote)?;
+            Ok(TabData::Sources(
+                db.list_source_items(None, 50, false).await?,
+            ))
         }
         Tab::Stats => {
             let db = D1Client::new(remote)?;

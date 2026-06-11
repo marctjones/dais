@@ -178,6 +178,77 @@ pub struct D1TopPost {
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
+pub struct D1SourceSubscription {
+    pub id: String,
+    pub source_type: String,
+    pub url: String,
+    pub title: Option<String>,
+    pub homepage_url: Option<String>,
+    pub status: String,
+    pub refresh_cadence_minutes: u64,
+    pub last_fetched_at: Option<String>,
+    pub next_fetch_at: Option<String>,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub last_error: Option<String>,
+    pub error_count: u64,
+    pub policy_json: String,
+    pub api_secret_name: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1SourceItem {
+    pub id: String,
+    pub source_id: String,
+    pub source_type: String,
+    pub title: String,
+    pub canonical_url: Option<String>,
+    pub external_id: Option<String>,
+    pub author: Option<String>,
+    pub published_at: Option<String>,
+    pub fetched_at: Option<String>,
+    pub excerpt: Option<String>,
+    pub content_type: Option<String>,
+    pub hash: String,
+    pub thumbnail_url: Option<String>,
+    pub rights_policy_json: String,
+    pub read: Option<u64>,
+    pub summary: Option<String>,
+    pub raw_metadata_json: Option<String>,
+}
+
+pub struct SourceSubscriptionInsert<'a> {
+    pub id: &'a str,
+    pub source_type: &'a str,
+    pub url: &'a str,
+    pub title: Option<&'a str>,
+    pub cadence_minutes: u16,
+    pub policy_json: &'a str,
+    pub api_secret_name: Option<&'a str>,
+}
+
+pub struct SourceItemInsert<'a> {
+    pub id: &'a str,
+    pub source_id: &'a str,
+    pub source_type: &'a str,
+    pub title: &'a str,
+    pub canonical_url: Option<&'a str>,
+    pub external_id: Option<&'a str>,
+    pub author: Option<&'a str>,
+    pub published_at: Option<&'a str>,
+    pub excerpt: Option<&'a str>,
+    pub content_type: Option<&'a str>,
+    pub hash: &'a str,
+    pub thumbnail_url: Option<&'a str>,
+    pub rights_policy_json: &'a str,
+    pub raw_metadata_json: Option<&'a str>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct D1Delivery {
     pub id: String,
     pub post_id: String,
@@ -1036,6 +1107,247 @@ impl D1Client {
                 ) AS total
             FROM posts p
             ORDER BY total DESC, p.published_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn add_source_subscription(
+        &self,
+        source: SourceSubscriptionInsert<'_>,
+    ) -> Result<()> {
+        let title = source
+            .title
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let api_secret_name = source
+            .api_secret_name
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let sql = format!(
+            r#"
+            INSERT INTO source_subscriptions (
+                id, source_type, url, title, refresh_cadence_minutes, policy_json,
+                api_secret_name, next_fetch_at, created_at, updated_at
+            ) VALUES (
+                {id}, {source_type}, {url}, {title}, {cadence}, {policy_json},
+                {api_secret_name}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT(url) DO UPDATE SET
+                source_type = excluded.source_type,
+                title = excluded.title,
+                refresh_cadence_minutes = excluded.refresh_cadence_minutes,
+                policy_json = excluded.policy_json,
+                api_secret_name = excluded.api_secret_name,
+                status = 'active',
+                updated_at = CURRENT_TIMESTAMP
+            "#,
+            id = sql_literal(source.id),
+            source_type = sql_literal(source.source_type),
+            url = sql_literal(source.url),
+            title = title,
+            cadence = source.cadence_minutes,
+            policy_json = sql_literal(source.policy_json),
+            api_secret_name = api_secret_name,
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn list_sources(&self, limit: u16) -> Result<Vec<D1SourceSubscription>> {
+        let limit = clamp_limit(limit);
+        let sql = format!(
+            r#"
+            SELECT id, source_type, url, title, homepage_url, status,
+                   refresh_cadence_minutes, last_fetched_at, next_fetch_at, etag,
+                   last_modified, last_error, error_count, policy_json,
+                   api_secret_name, created_at, updated_at
+            FROM source_subscriptions
+            ORDER BY updated_at DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn get_source(&self, id: &str) -> Result<Option<D1SourceSubscription>> {
+        let sql = format!(
+            r#"
+            SELECT id, source_type, url, title, homepage_url, status,
+                   refresh_cadence_minutes, last_fetched_at, next_fetch_at, etag,
+                   last_modified, last_error, error_count, policy_json,
+                   api_secret_name, created_at, updated_at
+            FROM source_subscriptions
+            WHERE id = {id}
+            "#,
+            id = sql_literal(id)
+        );
+        Ok(self.query(&sql)?.into_iter().next())
+    }
+
+    pub async fn active_sources(&self) -> Result<Vec<D1SourceSubscription>> {
+        self.query(
+            r#"
+            SELECT id, source_type, url, title, homepage_url, status,
+                   refresh_cadence_minutes, last_fetched_at, next_fetch_at, etag,
+                   last_modified, last_error, error_count, policy_json,
+                   api_secret_name, created_at, updated_at
+            FROM source_subscriptions
+            WHERE status = 'active'
+            ORDER BY updated_at DESC
+            LIMIT 200
+            "#,
+        )
+    }
+
+    pub async fn remove_source(&self, id: &str) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM source_subscriptions WHERE id = {}",
+            sql_literal(id)
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn upsert_source_item(&self, item: SourceItemInsert<'_>) -> Result<()> {
+        let canonical_url = item
+            .canonical_url
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let external_id = item
+            .external_id
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let author = item
+            .author
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let published_at = item
+            .published_at
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let excerpt = item
+            .excerpt
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let content_type = item
+            .content_type
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let thumbnail_url = item
+            .thumbnail_url
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let raw_metadata_json = item
+            .raw_metadata_json
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let sql = format!(
+            r#"
+            INSERT OR IGNORE INTO source_items (
+                id, source_id, source_type, title, canonical_url, external_id, author,
+                published_at, excerpt, content_type, hash, thumbnail_url,
+                rights_policy_json, raw_metadata_json, fetched_at, created_at, updated_at
+            ) VALUES (
+                {id}, {source_id}, {source_type}, {title}, {canonical_url}, {external_id}, {author},
+                {published_at}, {excerpt}, {content_type}, {hash}, {thumbnail_url},
+                {rights_policy_json}, {raw_metadata_json}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
+            )
+            "#,
+            id = sql_literal(item.id),
+            source_id = sql_literal(item.source_id),
+            source_type = sql_literal(item.source_type),
+            title = sql_literal(item.title),
+            canonical_url = canonical_url,
+            external_id = external_id,
+            author = author,
+            published_at = published_at,
+            excerpt = excerpt,
+            content_type = content_type,
+            hash = sql_literal(item.hash),
+            thumbnail_url = thumbnail_url,
+            rights_policy_json = sql_literal(item.rights_policy_json),
+            raw_metadata_json = raw_metadata_json,
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn mark_source_refreshed(
+        &self,
+        id: &str,
+        cadence_minutes: u64,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<()> {
+        let next_fetch = chrono::Utc::now() + chrono::Duration::minutes(cadence_minutes as i64);
+        let etag = etag.map(sql_literal).unwrap_or_else(|| "etag".to_string());
+        let last_modified = last_modified
+            .map(sql_literal)
+            .unwrap_or_else(|| "last_modified".to_string());
+        let sql = format!(
+            r#"
+            UPDATE source_subscriptions
+            SET status = 'active',
+                last_fetched_at = CURRENT_TIMESTAMP,
+                next_fetch_at = {next_fetch},
+                etag = COALESCE({etag}, etag),
+                last_modified = COALESCE({last_modified}, last_modified),
+                last_error = NULL,
+                error_count = 0,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = {id}
+            "#,
+            next_fetch = sql_literal(&next_fetch.to_rfc3339()),
+            etag = etag,
+            last_modified = last_modified,
+            id = sql_literal(id),
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn mark_source_error(&self, id: &str, error: &str) -> Result<()> {
+        let sql = format!(
+            r#"
+            UPDATE source_subscriptions
+            SET status = 'error',
+                last_error = {error},
+                error_count = error_count + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = {id}
+            "#,
+            error = sql_literal(error),
+            id = sql_literal(id),
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn list_source_items(
+        &self,
+        source_id: Option<&str>,
+        limit: u16,
+        unread: bool,
+    ) -> Result<Vec<D1SourceItem>> {
+        let limit = clamp_limit(limit);
+        let mut filters = Vec::new();
+        if let Some(source_id) = source_id {
+            filters.push(format!("source_id = {}", sql_literal(source_id)));
+        }
+        if unread {
+            filters.push("read = 0".to_string());
+        }
+        let where_clause = if filters.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", filters.join(" AND "))
+        };
+        let sql = format!(
+            r#"
+            SELECT id, source_id, source_type, title, canonical_url, external_id, author,
+                   published_at, fetched_at, excerpt, content_type, hash, thumbnail_url,
+                   rights_policy_json, read, summary, raw_metadata_json
+            FROM source_items
+            {where_clause}
+            ORDER BY COALESCE(published_at, fetched_at) DESC
             LIMIT {limit}
             "#
         );

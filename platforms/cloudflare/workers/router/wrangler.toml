@@ -12,6 +12,9 @@ binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
+[triggers]
+crons = ["*/30 * * * *"]
+
 [env.production]
 name = "router-production"
 routes = [
@@ -27,6 +30,9 @@ bucket_name = "dais-media"
 binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+[env.production.triggers]
+crons = ["*/30 * * * *"]
 
 [env.production.vars]
 WEBFINGER_URL = "https://webfinger-production.marc-t-jones.workers.dev"

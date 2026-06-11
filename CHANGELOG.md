@@ -5,6 +5,27 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.0] - 2026-06-11
+
+### Added
+- Added v0.20 public source subscriptions:
+  - D1 schema for `source_subscriptions` and normalized private-reader
+    `source_items`.
+  - Rust `dais sources` commands for add/list/remove/refresh/items.
+  - Rust-native RSS/Atom parsing through the MIT-licensed `feed-rs` crate, with
+    fixture coverage for normalized title/link/author/date/excerpt ingestion.
+  - Per-source rights-policy fields for private-reader-only, excerpt-only,
+    link-required, attribution-required, no-image, and full-text-allowed.
+  - API-backed source refresh for NewsAPI-style `articles[]` and JSON Feed-style
+    `items[]`, with secret-name references for official/licensed feeds without
+    storing credentials in source rows.
+  - TUI Sources tab for reading ingested source items.
+  - Router Worker scheduled refresh for due RSS/Atom sources every 30 minutes,
+    storing metadata/excerpts without automatic reposting or federation.
+
+### Changed
+- README now includes the public source subscription workflow.
+
 ## [1.21.0] - 2026-06-11
 
 ### Added

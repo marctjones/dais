@@ -1,7 +1,7 @@
 use crate::atproto::{FeedItem, Profile};
 use crate::d1::{
     D1ActivityRow, D1AllowlistHost, D1Block, D1Delivery, D1Friend, D1Notification, D1Post,
-    D1TimelinePost, D1TopPost, D1User, ServerStats,
+    D1SourceItem, D1SourceSubscription, D1TimelinePost, D1TopPost, D1User, ServerStats,
 };
 use crate::delivery::{DeliveryEnqueueReport, DeliveryProcessReport};
 
@@ -449,6 +449,83 @@ pub fn print_top_posts(posts: &[D1TopPost]) {
         );
         println!("{}", post.content);
         println!("id={}", post.post_id);
+        println!();
+    }
+}
+
+pub fn print_sources(sources: &[D1SourceSubscription]) {
+    if sources.is_empty() {
+        println!("No source subscriptions found");
+        return;
+    }
+
+    for source in sources {
+        println!(
+            "{} [{} / {}] {}",
+            source.id, source.source_type, source.status, source.url
+        );
+        if let Some(title) = source.title.as_deref().filter(|value| !value.is_empty()) {
+            println!("title={title}");
+        }
+        println!("cadence_minutes={}", source.refresh_cadence_minutes);
+        println!(
+            "last_fetched={}",
+            source.last_fetched_at.as_deref().unwrap_or("")
+        );
+        println!(
+            "next_fetch={}",
+            source.next_fetch_at.as_deref().unwrap_or("")
+        );
+        if let Some(error) = source
+            .last_error
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("last_error={error}");
+        }
+        println!("policy={}", source.policy_json);
+        println!();
+    }
+}
+
+pub fn print_source_items(items: &[D1SourceItem]) {
+    if items.is_empty() {
+        println!("No source items found");
+        return;
+    }
+
+    for item in items {
+        println!(
+            "{} [{}{}]",
+            item.published_at
+                .as_deref()
+                .or(item.fetched_at.as_deref())
+                .unwrap_or("unknown time"),
+            item.source_type,
+            if item.read.unwrap_or(0) == 1 {
+                " / read"
+            } else {
+                ""
+            }
+        );
+        println!("{}", item.title);
+        if let Some(author) = item.author.as_deref().filter(|value| !value.is_empty()) {
+            println!("by={author}");
+        }
+        if let Some(url) = item
+            .canonical_url
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("url={url}");
+        }
+        if let Some(excerpt) = item.excerpt.as_deref().filter(|value| !value.is_empty()) {
+            println!("{excerpt}");
+        }
+        println!(
+            "id={} source={} policy={}",
+            item.id, item.source_id, item.rights_policy_json
+        );
         println!();
     }
 }

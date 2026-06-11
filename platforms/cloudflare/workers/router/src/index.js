@@ -1,4 +1,8 @@
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(refreshDueSources(env));
+  },
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -64,6 +68,247 @@ export default {
     return fetch(targetRequest);
   },
 };
+
+async function refreshDueSources(env) {
+  const now = new Date().toISOString();
+  const { results } = await env.DB.prepare(`
+    SELECT id, source_type, url, refresh_cadence_minutes, etag, last_modified, policy_json, api_secret_name
+    FROM source_subscriptions
+    WHERE status = 'active'
+      AND source_type IN ('rss', 'atom', 'api')
+      AND (next_fetch_at IS NULL OR next_fetch_at <= ?)
+    ORDER BY COALESCE(next_fetch_at, created_at) ASC
+    LIMIT 20
+  `).bind(now).all();
+
+  for (const source of results || []) {
+    try {
+      await refreshFeedSource(env, source);
+    } catch (error) {
+      await env.DB.prepare(`
+        UPDATE source_subscriptions
+        SET status = 'error',
+            last_error = ?,
+            error_count = error_count + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(String(error && error.message ? error.message : error).slice(0, 500), source.id).run();
+    }
+  }
+}
+
+async function refreshFeedSource(env, source) {
+  const headers = new Headers({ 'User-Agent': 'dais-source-refresh/1.0' });
+  if (source.etag) headers.set('If-None-Match', source.etag);
+  if (source.last_modified) headers.set('If-Modified-Since', source.last_modified);
+  if (source.api_secret_name && env[source.api_secret_name]) {
+    headers.set('Authorization', `Bearer ${env[source.api_secret_name]}`);
+  }
+
+  const response = await fetch(source.url, { headers });
+  const nextFetchAt = new Date(
+    Date.now() + Math.max(5, Number(source.refresh_cadence_minutes || 60)) * 60 * 1000
+  ).toISOString();
+
+  if (response.status === 304) {
+    await markSourceRefreshed(env, source, nextFetchAt, source.etag, source.last_modified);
+    return;
+  }
+  if (!response.ok) {
+    throw new Error(`source fetch failed with HTTP ${response.status}`);
+  }
+
+  const policy = parsePolicy(source.policy_json);
+  const body = await response.text();
+  const items = (source.source_type === 'api'
+    ? parseApiItems(body, source, policy)
+    : parseFeedItems(body, source, policy)
+  ).slice(0, 50);
+  for (const item of items) {
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO source_items (
+        id, source_id, source_type, title, canonical_url, external_id, author,
+        published_at, excerpt, content_type, hash, thumbnail_url, rights_policy_json,
+        raw_metadata_json, fetched_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).bind(
+      item.id,
+      source.id,
+      source.source_type,
+      item.title,
+      item.canonicalUrl,
+      item.externalId,
+      item.author,
+      item.publishedAt,
+      item.excerpt,
+      'text/html',
+      item.hash,
+      item.thumbnailUrl,
+      JSON.stringify(policy),
+      JSON.stringify({ scheduled: true })
+    ).run();
+  }
+
+  await markSourceRefreshed(
+    env,
+    source,
+    nextFetchAt,
+    response.headers.get('ETag') || source.etag,
+    response.headers.get('Last-Modified') || source.last_modified
+  );
+}
+
+async function markSourceRefreshed(env, source, nextFetchAt, etag, lastModified) {
+  await env.DB.prepare(`
+    UPDATE source_subscriptions
+    SET status = 'active',
+        last_fetched_at = CURRENT_TIMESTAMP,
+        next_fetch_at = ?,
+        etag = COALESCE(?, etag),
+        last_modified = COALESCE(?, last_modified),
+        last_error = NULL,
+        error_count = 0,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(nextFetchAt, etag || null, lastModified || null, source.id).run();
+}
+
+function parseFeedItems(xml, source, policy) {
+  const rssItems = blocks(xml, 'item');
+  if (rssItems.length > 0) {
+    return rssItems.map((item) => normalizeFeedBlock(item, source, policy, 'rss'));
+  }
+  return blocks(xml, 'entry').map((item) => normalizeFeedBlock(item, source, policy, 'atom'));
+}
+
+function parseApiItems(body, source, policy) {
+  const value = JSON.parse(body);
+  const rows = Array.isArray(value.articles) ? value.articles : Array.isArray(value.items) ? value.items : [];
+  return rows.map((row) => normalizeApiItem(row, source, policy));
+}
+
+function normalizeApiItem(row, source, policy) {
+  const title = String(row.title || '(untitled source item)').trim();
+  const canonicalUrl = row.url || row.external_url || null;
+  const externalId = row.id || row.guid || canonicalUrl || title;
+  const author = row.author || row.byline || (row.source && row.source.name) || null;
+  const publishedAt = normalizeDate(row.publishedAt || row.date_published || row.published_at);
+  const excerptSource = row.description || row.summary || row.excerpt || '';
+  const excerpt = excerptSource
+    ? excerptText(excerptSource, policy.full_text_allowed && !policy.excerpt_only ? 2000 : 800)
+    : null;
+  const seed = `${source.id}\n${externalId}\n${canonicalUrl || ''}\n${title}`;
+  const hash = stableId(seed);
+  return {
+    id: `src-${hash.slice(0, 24)}`,
+    title,
+    canonicalUrl,
+    externalId,
+    author,
+    publishedAt,
+    excerpt,
+    thumbnailUrl: policy.no_image ? null : (row.urlToImage || row.image || null),
+    hash,
+  };
+}
+
+function normalizeFeedBlock(block, source, policy, kind) {
+  const title = textTag(block, 'title') || '(untitled source item)';
+  const canonicalUrl = kind === 'atom'
+    ? attrTag(block, 'link', 'href') || textTag(block, 'link')
+    : textTag(block, 'link');
+  const externalId = textTag(block, 'guid') || textTag(block, 'id') || canonicalUrl || title;
+  const author = textTag(block, 'author') || textTag(block, 'dc:creator') || textTag(block, 'name');
+  const publishedAt = normalizeDate(textTag(block, 'pubDate') || textTag(block, 'published') || textTag(block, 'updated'));
+  const rawExcerpt = textTag(block, 'description') || textTag(block, 'summary') || '';
+  const excerpt = rawExcerpt ? excerptText(rawExcerpt, policy.full_text_allowed && !policy.excerpt_only ? 2000 : 800) : null;
+  const seed = `${source.id}\n${externalId}\n${canonicalUrl || ''}\n${title}`;
+  const hash = stableId(seed);
+  return {
+    id: `src-${hash.slice(0, 24)}`,
+    title,
+    canonicalUrl: canonicalUrl || null,
+    externalId: externalId || null,
+    author: author || null,
+    publishedAt,
+    excerpt,
+    thumbnailUrl: policy.no_image ? null : attrTag(block, 'media:thumbnail', 'url'),
+    hash,
+  };
+}
+
+function blocks(xml, tag) {
+  const re = new RegExp(`<${escapeRegex(tag)}\\b[^>]*>([\\s\\S]*?)<\\/${escapeRegex(tag)}>`, 'gi');
+  return Array.from(xml.matchAll(re)).map((match) => match[1]);
+}
+
+function textTag(xml, tag) {
+  const re = new RegExp(`<${escapeRegex(tag)}\\b[^>]*>([\\s\\S]*?)<\\/${escapeRegex(tag)}>`, 'i');
+  const match = xml.match(re);
+  return match ? decodeXml(stripCdata(match[1]).replace(/<[^>]*>/g, ' ').trim()) : null;
+}
+
+function attrTag(xml, tag, attr) {
+  const re = new RegExp(`<${escapeRegex(tag)}\\b([^>]*)>`, 'i');
+  const match = xml.match(re);
+  if (!match) return null;
+  const attrRe = new RegExp(`${escapeRegex(attr)}=["']([^"']+)["']`, 'i');
+  const attrMatch = match[1].match(attrRe);
+  return attrMatch ? decodeXml(attrMatch[1]) : null;
+}
+
+function parsePolicy(value) {
+  try {
+    return Object.assign({
+      private_reader_only: true,
+      excerpt_only: true,
+      link_required: true,
+      attribution_required: true,
+      no_image: false,
+      full_text_allowed: false,
+    }, JSON.parse(value || '{}'));
+  } catch {
+    return {
+      private_reader_only: true,
+      excerpt_only: true,
+      link_required: true,
+      attribution_required: true,
+      no_image: false,
+      full_text_allowed: false,
+    };
+  }
+}
+
+function normalizeDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function excerptText(value, maxChars) {
+  return decodeXml(value)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxChars);
+}
+
+function stripCdata(value) {
+  return value.replace(/^<!\[CDATA\[/, '').replace(/\]\]>$/, '');
+}
+
+function decodeXml(value) {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 async function handleMedia(request, env, path) {
   // Extract filename from /media/filename.ext
