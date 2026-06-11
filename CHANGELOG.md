@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not have `DELIVERY_ADMIN_TOKEN` and Wrangler 4.99 does not expose a direct
   queue message-send command.
 
+### Documentation
+- Documented installing and using `toot` for Mastodon-side federation testing in
+  `docs/guides/TESTING.md`, including when to use it, when not to use it, auth,
+  timeline checks, follow/reply/favourite/reblog commands, and integration with
+  `scripts/test-federation-smoke.sh`.
+
 ## [1.17.0] - 2026-06-11
 
 ### Added

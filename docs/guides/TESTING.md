@@ -117,6 +117,111 @@ node scripts/federation-matrix.mjs --json
 `FAIL` exits non-zero. `INFO` rows mean a live lab target, token, or credential
 is not configured and do not block release by themselves.
 
+#### Mastodon-side testing with `toot`
+
+Use [`toot`](https://toot.readthedocs.io/) when the test must see dais from a
+real Mastodon account's point of view. The conformance and federation-matrix
+scripts validate dais endpoints directly; `toot` validates what Mastodon
+actually received, indexed, and exposes through its own API.
+
+Use `toot` for:
+- Confirming a dais post delivered to a Mastodon follower's home timeline.
+- Confirming Mastodon can follow `@social@dais.social` and view the profile.
+- Replying, favouriting, and boosting from Mastodon back to dais.
+- Checking whether a delivery failure is on the dais side or Mastodon side.
+- Exercising `scripts/test-federation-smoke.sh` with a real Mastodon account.
+
+Do not use `toot` for:
+- Unit tests or CI that must run without external credentials.
+- Proving private/E2EE plaintext confidentiality. `toot` can only see the
+  Mastodon fallback content, not dais-only decrypted content.
+- Tests that should not mutate a real Mastodon account. Follow, post, reply,
+  favourite, and reblog commands are live account actions.
+
+Install `toot` in an isolated local virtualenv:
+
+```bash
+python3 -m venv .venv-toot
+.venv-toot/bin/python -m pip install -U pip toot
+```
+
+Activate it for interactive work:
+
+```bash
+source .venv-toot/bin/activate
+toot --version
+```
+
+Or run it without activation:
+
+```bash
+.venv-toot/bin/toot --version
+```
+
+Authenticate a Mastodon account. Browser login is preferred because it avoids
+putting the account password into terminal history:
+
+```bash
+toot login --instance mastodon.social
+toot auth
+toot whoami
+```
+
+If browser login is not possible, `toot login_cli` exists, but use it only for
+temporary test accounts or when you understand where local credentials are
+stored.
+
+Basic Mastodon-side checks:
+
+```bash
+# Confirm Mastodon can resolve the dais account.
+toot whois @social@dais.social
+
+# Follow dais from the active Mastodon account.
+toot follow @social@dais.social
+
+# Read the Mastodon home timeline and look for delivered dais posts.
+toot timelines home --limit 20 --no-pager
+
+# Inspect a known Mastodon status by ID.
+toot status <status-id> --json
+
+# Reply from Mastodon to a status.
+toot post "reply from Mastodon-side smoke test" --reply-to <status-id> --visibility private
+
+# Favourite and boost a status from Mastodon.
+toot favourite <status-id> --json
+toot reblog <status-id> --visibility private --json
+```
+
+For the dais federation smoke harness, set `TOOT_BIN` to the virtualenv binary
+and require timeline assertion only when you expect the live Mastodon account to
+see the post:
+
+```bash
+TOOT_BIN=.venv-toot/bin/toot \
+DAIS_BASE_URL=https://social.dais.social \
+DELIVERY_ADMIN_TOKEN="$DELIVERY_ADMIN_TOKEN" \
+REMOTE_TIMELINE_ASSERT=1 \
+./scripts/test-federation-smoke.sh
+```
+
+The smoke harness creates a followers-only dais post, processes delivery through
+the production delivery worker when `DELIVERY_ADMIN_TOKEN` is set, then polls the
+Mastodon home timeline through `toot`. If `DELIVERY_ADMIN_TOKEN` is not set, the
+script can still run local endpoint, roster, and E2EE checks, but it will skip
+the live delivery-processing step.
+
+Operational notes:
+- `toot auth` shows which account is active. Use `toot activate <account>` or
+  global `toot --as <account> ...` when multiple accounts are configured.
+- Keep live smoke text unique, for example by including a timestamp, so timeline
+  assertions do not match an older post.
+- Prefer followers-only/private visibility for smoke tests unless the purpose is
+  public timeline behavior.
+- Clean up public Mastodon-side test posts with `toot delete <status-id>` when a
+  test creates visible noise.
+
 #### `scripts/test-phase1-local.sh`
 
 Tests Phase 1 functionality:
