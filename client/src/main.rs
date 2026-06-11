@@ -239,6 +239,9 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
                 e2ee_fallback,
                 recipients: args.recipients,
                 reply_to: args.reply_to,
+                object_type: args.object_type,
+                title: args.title,
+                summary: args.summary,
                 to: args.to,
                 remote: args.remote,
             })?;

@@ -262,7 +262,8 @@ async function mastodonAccount(env) {
 
 async function mastodonStatuses(env, limit) {
   const rows = await env.DB.prepare(
-    `SELECT id, actor_id, content, content_html, visibility, published_at, in_reply_to
+    `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+            name, summary, visibility, published_at, in_reply_to
      FROM posts
      WHERE visibility = 'public'
        AND encrypted_message IS NULL
@@ -276,7 +277,8 @@ async function mastodonStatuses(env, limit) {
 
 async function mastodonStatus(env, id) {
   const row = await env.DB.prepare(
-    `SELECT id, actor_id, content, content_html, visibility, published_at, in_reply_to
+    `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+            name, summary, visibility, published_at, in_reply_to
      FROM posts
      WHERE id = ?1
        AND visibility = 'public'
@@ -297,8 +299,8 @@ function statusJson(row, account) {
     in_reply_to_id: row.in_reply_to || null,
     in_reply_to_account_id: null,
     reblog: null,
-    content: row.content_html || escapeHtml(row.content || ''),
-    plain_text: row.content || '',
+    content: mastodonStatusContent(row),
+    plain_text: mastodonPlainText(row),
     created_at: row.published_at,
     edited_at: null,
     emojis: [],
@@ -317,6 +319,18 @@ function statusJson(row, account) {
     card: null,
     poll: null,
   };
+}
+
+function mastodonPlainText(row) {
+  return [row.name, row.summary, row.content].filter(Boolean).join('\n\n');
+}
+
+function mastodonStatusContent(row) {
+  const parts = [];
+  if (row.name) parts.push(`<p><strong>${escapeHtml(row.name)}</strong></p>`);
+  if (row.summary) parts.push(`<p>${escapeHtml(row.summary)}</p>`);
+  parts.push(row.content_html || escapeHtml(row.content || ''));
+  return parts.join('');
 }
 
 async function mastodonNotifications(env, limit) {

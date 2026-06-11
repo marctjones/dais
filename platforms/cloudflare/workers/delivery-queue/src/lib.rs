@@ -220,6 +220,9 @@ async fn process_delivery(
             p.actor_id,
             p.content,
             p.content_html,
+            COALESCE(p.object_type, 'Note') AS object_type,
+            p.name,
+            p.summary,
             p.visibility,
             p.published_at,
             p.encrypted_message,
@@ -260,6 +263,12 @@ async fn process_delivery(
         .get("content_html")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let object_type = row
+        .get("object_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Note");
+    let name = row.get("name").and_then(|v| v.as_str());
+    let summary = row.get("summary").and_then(|v| v.as_str());
     let visibility = row
         .get("visibility")
         .and_then(|v| v.as_str())
@@ -283,6 +292,9 @@ async fn process_delivery(
         post_id,
         content,
         content_html,
+        object_type,
+        name,
+        summary,
         visibility,
         published_at,
         encrypted_message,
@@ -348,6 +360,9 @@ fn build_create_activity_json(
     post_id: &str,
     content: &str,
     content_html: &str,
+    object_type: &str,
+    name: Option<&str>,
+    summary: Option<&str>,
     visibility: &str,
     published_at: &str,
     encrypted_message: Option<serde_json::Value>,
@@ -360,7 +375,7 @@ fn build_create_activity_json(
 
     let mut note = serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
-        "type": "Note",
+        "type": object_type,
         "id": post_id,
         "attributedTo": actor_id,
         "content": content,
@@ -374,6 +389,14 @@ fn build_create_activity_json(
 
     if !content_html.is_empty() {
         note["contentMap"] = serde_json::json!({ "en": content_html });
+    }
+
+    if let Some(name) = name {
+        note["name"] = serde_json::json!(name);
+    }
+
+    if let Some(summary) = summary {
+        note["summary"] = serde_json::json!(summary);
     }
 
     if let Some(in_reply_to) = in_reply_to {

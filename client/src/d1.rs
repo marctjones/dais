@@ -11,6 +11,9 @@ use serde_json::Value;
 pub struct D1Post {
     pub id: String,
     pub content: String,
+    pub object_type: Option<String>,
+    pub name: Option<String>,
+    pub summary: Option<String>,
     pub visibility: Option<String>,
     pub protocol: Option<String>,
     pub published_at: Option<String>,
@@ -163,7 +166,8 @@ impl D1Client {
         let limit = clamp_limit(limit);
         let sql = format!(
             r#"
-            SELECT id, content, visibility, COALESCE(protocol, 'activitypub') AS protocol,
+            SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
+                   visibility, COALESCE(protocol, 'activitypub') AS protocol,
                    published_at, atproto_uri, encrypted_message, in_reply_to
             FROM posts
             ORDER BY published_at DESC
@@ -181,18 +185,25 @@ impl D1Client {
         visibility: &str,
         published_at: &str,
         in_reply_to: Option<&str>,
+        object_type: crate::cli::ActivityObjectType,
+        name: Option<&str>,
+        summary: Option<&str>,
     ) -> Result<()> {
         let content_html = escape_html(content);
         let in_reply_to = in_reply_to
             .map(sql_literal)
             .unwrap_or_else(|| "NULL".to_string());
+        let name = name.map(sql_literal).unwrap_or_else(|| "NULL".to_string());
+        let summary = summary
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
         let sql = format!(
             r#"
             INSERT INTO posts (
-                id, actor_id, content, content_html, visibility,
+                id, actor_id, content, content_html, object_type, name, summary, visibility,
                 published_at, protocol, in_reply_to
             ) VALUES (
-                {id}, {actor_id}, {content}, {content_html},
+                {id}, {actor_id}, {content}, {content_html}, {object_type}, {name}, {summary},
                 {visibility}, {published_at}, 'activitypub', {in_reply_to}
             )
             "#,
@@ -200,6 +211,9 @@ impl D1Client {
             actor_id = sql_literal(actor_id),
             content = sql_literal(content),
             content_html = sql_literal(&content_html),
+            object_type = sql_literal(&object_type.to_string()),
+            name = name,
+            summary = summary,
             visibility = sql_literal(visibility),
             published_at = sql_literal(published_at),
             in_reply_to = in_reply_to,
@@ -238,7 +252,8 @@ impl D1Client {
         let needle = sql_like_escape(needle);
         let sql = format!(
             r#"
-            SELECT id, content, visibility, COALESCE(protocol, 'activitypub') AS protocol,
+            SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
+                   visibility, COALESCE(protocol, 'activitypub') AS protocol,
                    published_at, atproto_uri, encrypted_message, in_reply_to
             FROM posts
             WHERE content LIKE '%{needle}%'

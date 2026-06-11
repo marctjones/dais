@@ -51,8 +51,9 @@ pub async fn run(args: &DoctorArgs) -> DoctorReport {
     checks.push(DoctorCheck {
         id: "SIGNED-FIXTURE",
         status: DoctorStatus::Info,
-        detail: "valid signed inbox and authorized-fetch fixtures require remote actor key material"
-            .to_string(),
+        detail:
+            "valid signed inbox and authorized-fetch fixtures require remote actor key material"
+                .to_string(),
     });
 
     DoctorReport {
@@ -209,7 +210,10 @@ async fn check_outbox(client: &reqwest::Client, config: &DoctorConfig) -> Doctor
             if json.get("type").and_then(Value::as_str) != Some("OrderedCollection") {
                 fail("OUTBOX", "outbox is not an OrderedCollection")
             } else if leaked {
-                fail("OUTBOX", "anonymous outbox leaks encrypted fallback content")
+                fail(
+                    "OUTBOX",
+                    "anonymous outbox leaks encrypted fallback content",
+                )
             } else {
                 let count = json
                     .get("totalItems")
@@ -287,10 +291,7 @@ async fn check_inbox_unsigned_rejected(
     config: &DoctorConfig,
 ) -> DoctorCheck {
     let url = config.social_url(&format!("{}/inbox", config.actor_path));
-    let preflight = client
-        .request(reqwest::Method::OPTIONS, &url)
-        .send()
-        .await;
+    let preflight = client.request(reqwest::Method::OPTIONS, &url).send().await;
     let post = client
         .post(&url)
         .header(CONTENT_TYPE, "application/activity+json")
@@ -305,20 +306,30 @@ async fn check_inbox_unsigned_rejected(
         }
         (Ok(preflight), Ok(post)) => fail(
             "INBOX",
-            format!("expected preflight 2xx and POST 401, got {}/{}", preflight.status(), post.status()),
+            format!(
+                "expected preflight 2xx and POST 401, got {}/{}",
+                preflight.status(),
+                post.status()
+            ),
         ),
         (Err(error), _) | (_, Err(error)) => fail("INBOX", error.to_string()),
     }
 }
 
 async fn check_pds(client: &reqwest::Client, config: &DoctorConfig) -> DoctorCheck {
-    let url = format!("{}/xrpc/com.atproto.server.describeServer", config.pds_base_url);
+    let url = format!(
+        "{}/xrpc/com.atproto.server.describeServer",
+        config.pds_base_url
+    );
     match get_json(client, &url, "application/json").await {
         Ok(json) => {
             if json.get("availableUserDomains").is_some() {
                 pass("PDS", "describeServer available")
             } else {
-                fail("PDS", "describeServer response missing availableUserDomains")
+                fail(
+                    "PDS",
+                    "describeServer response missing availableUserDomains",
+                )
             }
         }
         Err(error) => fail("PDS", error.to_string()),

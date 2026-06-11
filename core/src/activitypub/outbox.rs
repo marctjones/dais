@@ -14,6 +14,9 @@ pub struct Post {
     pub actor_id: String,
     pub content: String,
     pub content_html: Option<String>,
+    pub object_type: String,
+    pub name: Option<String>,
+    pub summary: Option<String>,
     pub visibility: String,
     pub published_at: String,
     pub in_reply_to: Option<String>,
@@ -72,7 +75,8 @@ pub async fn get_outbox_posts(db: &dyn DatabaseProvider, username: &str) -> Core
     // followers/direct, or encrypted fallback records here.
     let posts_query = format!(
         r#"
-        SELECT id, actor_id, content, content_html, visibility, published_at, in_reply_to,
+        SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+               name, summary, visibility, published_at, in_reply_to,
                media_attachments, atproto_uri, encrypted_message
         FROM posts
         WHERE actor_id = ?1
@@ -103,6 +107,19 @@ pub async fn get_outbox_posts(db: &dyn DatabaseProvider, username: &str) -> Core
                 .to_string(),
             content_html: row
                 .get("content_html")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            object_type: row
+                .get("object_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Note")
+                .to_string(),
+            name: row
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            summary: row
+                .get("summary")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             visibility: row
@@ -147,7 +164,8 @@ pub async fn get_post(
     let post_path_pattern = format!("%/users/{}/posts/{}", username, post_id_param);
 
     let post_query = r#"
-        SELECT p.id, p.actor_id, p.content, p.content_html, p.visibility,
+        SELECT p.id, p.actor_id, p.content, p.content_html, COALESCE(p.object_type, 'Note') AS object_type,
+               p.name, p.summary, p.visibility,
                p.published_at, p.in_reply_to, p.media_attachments, p.atproto_uri,
                p.encrypted_message
         FROM posts p
@@ -192,6 +210,19 @@ pub async fn get_post(
             .to_string(),
         content_html: row
             .get("content_html")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        object_type: row
+            .get("object_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Note")
+            .to_string(),
+        name: row
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        summary: row
+            .get("summary")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         visibility: row
@@ -365,7 +396,7 @@ pub fn build_note_object(post: &Post, interactions: Option<&PostInteractions>) -
 
     let mut note = json!({
         "@context": "https://www.w3.org/ns/activitystreams",
-        "type": "Note",
+        "type": post.object_type,
         "id": post.id,
         "url": post.id,
         "attributedTo": post.actor_id,
@@ -392,6 +423,14 @@ pub fn build_note_object(post: &Post, interactions: Option<&PostInteractions>) -
 
     if let Some(ref content_html) = post.content_html {
         note["contentMap"] = json!({ "en": content_html });
+    }
+
+    if let Some(ref name) = post.name {
+        note["name"] = json!(name);
+    }
+
+    if let Some(ref summary) = post.summary {
+        note["summary"] = json!(summary);
     }
 
     if let Some(ref in_reply_to) = post.in_reply_to {
@@ -438,6 +477,9 @@ mod tests {
             actor_id: "https://social.example/users/social".to_string(),
             content: "hello".to_string(),
             content_html: None,
+            object_type: "Note".to_string(),
+            name: None,
+            summary: None,
             visibility: visibility.to_string(),
             published_at: "2026-06-11T00:00:00Z".to_string(),
             in_reply_to: None,
@@ -491,5 +533,20 @@ mod tests {
             serde_json::json!(["https://social.example/users/social/followers"])
         );
         assert_eq!(note["cc"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn note_builder_preserves_rich_activitypub_object_metadata() {
+        let mut post = post_with_visibility("public");
+        post.object_type = "Article".to_string();
+        post.name = Some("A long-form title".to_string());
+        post.summary = Some("Short abstract".to_string());
+
+        let article = build_note_object(&post, None);
+
+        assert_eq!(article["type"], "Article");
+        assert_eq!(article["name"], "A long-form title");
+        assert_eq!(article["summary"], "Short abstract");
+        assert_eq!(article["content"], "hello");
     }
 }

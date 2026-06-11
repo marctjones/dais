@@ -686,6 +686,9 @@ impl App {
             reply_to,
             to,
             e2ee_fallback: crate::cli::E2eeFallbackMode::Strict,
+            object_type: crate::cli::ActivityObjectType::Note,
+            title: None,
+            summary: None,
         };
 
         let tx = self.tx.clone();

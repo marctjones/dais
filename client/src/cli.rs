@@ -191,12 +191,38 @@ pub struct CreatePostArgs {
     /// ActivityPub object URL this post replies to.
     #[arg(long)]
     pub reply_to: Option<String>,
+    /// ActivityStreams object type to publish.
+    #[arg(long, value_enum, default_value_t = ActivityObjectType::Note)]
+    pub object_type: ActivityObjectType,
+    /// ActivityStreams name/title for rich objects such as Article or Document.
+    #[arg(long)]
+    pub title: Option<String>,
+    /// ActivityStreams summary for rich objects.
+    #[arg(long)]
+    pub summary: Option<String>,
     /// Direct ActivityPub recipient actor URL. Repeat for multiple recipients.
     #[arg(long = "to")]
     pub to: Vec<String>,
     /// Store/read against production D1 for ActivityPub encrypted posts.
     #[arg(long)]
     pub remote: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ActivityObjectType {
+    Note,
+    Article,
+    Document,
+}
+
+impl std::fmt::Display for ActivityObjectType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActivityObjectType::Note => f.write_str("Note"),
+            ActivityObjectType::Article => f.write_str("Article"),
+            ActivityObjectType::Document => f.write_str("Document"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

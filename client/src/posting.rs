@@ -4,7 +4,7 @@ use std::fs;
 use anyhow::{anyhow, Result};
 
 use crate::atproto::AtprotoClient;
-use crate::cli::{CreatePostArgs, E2eeFallbackMode};
+use crate::cli::{ActivityObjectType, CreatePostArgs, E2eeFallbackMode};
 use crate::config::ConfigStore;
 use crate::d1::{D1Client, EncryptedPostInsert};
 use crate::e2ee;
@@ -38,6 +38,9 @@ pub struct PostDraft {
     pub reply_to: Option<String>,
     pub to: Vec<String>,
     pub e2ee_fallback: E2eeFallbackMode,
+    pub object_type: ActivityObjectType,
+    pub title: Option<String>,
+    pub summary: Option<String>,
 }
 
 struct CreateActivityInput<'a> {
@@ -49,6 +52,9 @@ struct CreateActivityInput<'a> {
     encrypted_message: Option<serde_json::Value>,
     in_reply_to: Option<&'a str>,
     recipients: &'a [String],
+    object_type: ActivityObjectType,
+    title: Option<&'a str>,
+    summary: Option<&'a str>,
 }
 
 impl PostDraft {
@@ -74,6 +80,9 @@ impl PostDraft {
             reply_to: args.reply_to,
             to: args.to,
             e2ee_fallback: args.e2ee_fallback,
+            object_type: args.object_type,
+            title: args.title,
+            summary: args.summary,
         })
     }
 }
@@ -86,6 +95,12 @@ pub async fn publish_post(
     let effective = effective_protocol(draft.protocol, draft.visibility);
     if draft.visibility == Visibility::Direct && draft.to.is_empty() {
         anyhow::bail!("direct posts require at least one --to actor URL");
+    }
+    if draft.object_type != ActivityObjectType::Note && effective != Protocol::ActivityPub {
+        anyhow::bail!("Article and Document posts can only be sent to ActivityPub");
+    }
+    if draft.encrypt && draft.object_type != ActivityObjectType::Note {
+        anyhow::bail!("encrypted posts currently use Note fallback objects");
     }
 
     if draft.encrypt {
@@ -129,6 +144,9 @@ pub async fn publish_post(
             encrypted_message: Some(serde_json::to_value(&payload.encrypted_message)?),
             in_reply_to: draft.reply_to.as_deref(),
             recipients: &draft.to,
+            object_type: ActivityObjectType::Note,
+            title: None,
+            summary: None,
         })?;
         let delivery_ids =
             create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -160,6 +178,9 @@ pub async fn publish_post(
                 &draft.visibility.to_string(),
                 &published_at,
                 draft.reply_to.as_deref(),
+                draft.object_type,
+                draft.title.as_deref(),
+                draft.summary.as_deref(),
             )
             .await?;
 
@@ -172,6 +193,9 @@ pub async fn publish_post(
                 encrypted_message: None,
                 in_reply_to: draft.reply_to.as_deref(),
                 recipients: &draft.to,
+                object_type: draft.object_type,
+                title: draft.title.as_deref(),
+                summary: draft.summary.as_deref(),
             })?;
             let delivery_ids =
                 create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -197,6 +221,9 @@ pub async fn publish_post(
                 &draft.visibility.to_string(),
                 &published_at,
                 draft.reply_to.as_deref(),
+                draft.object_type,
+                draft.title.as_deref(),
+                draft.summary.as_deref(),
             )
             .await?;
 
@@ -209,6 +236,9 @@ pub async fn publish_post(
                 encrypted_message: None,
                 in_reply_to: draft.reply_to.as_deref(),
                 recipients: &draft.to,
+                object_type: draft.object_type,
+                title: draft.title.as_deref(),
+                summary: draft.summary.as_deref(),
             })?;
             let delivery_ids =
                 create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -247,7 +277,7 @@ fn build_create_activity_json(input: CreateActivityInput<'_>) -> Result<String> 
 
     let mut note = serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
-        "type": "Note",
+        "type": input.object_type.to_string(),
         "id": input.post_id,
         "attributedTo": input.actor_id,
         "content": input.content,
@@ -257,6 +287,14 @@ fn build_create_activity_json(input: CreateActivityInput<'_>) -> Result<String> 
 
     if !cc.is_empty() {
         note["cc"] = serde_json::json!(cc);
+    }
+
+    if let Some(title) = input.title {
+        note["name"] = serde_json::json!(title);
+    }
+
+    if let Some(summary) = input.summary {
+        note["summary"] = serde_json::json!(summary);
     }
 
     if let Some(in_reply_to) = input.in_reply_to {

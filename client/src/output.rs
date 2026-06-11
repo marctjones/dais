@@ -85,15 +85,22 @@ pub fn print_posts(posts: &[D1Post]) {
 
     for post in posts {
         println!(
-            "{} [{} / {}{}]",
+            "{} [{} / {} / {}{}]",
             post.published_at.as_deref().unwrap_or("unknown time"),
             post.visibility.as_deref().unwrap_or("unknown"),
+            post.object_type.as_deref().unwrap_or("Note"),
             post.protocol.as_deref().unwrap_or("activitypub"),
             post.encrypted_message
                 .as_ref()
                 .map(|_| " / encrypted")
                 .unwrap_or("")
         );
+        if let Some(name) = post.name.as_deref().filter(|value| !value.is_empty()) {
+            println!("# {name}");
+        }
+        if let Some(summary) = post.summary.as_deref().filter(|value| !value.is_empty()) {
+            println!("{summary}");
+        }
         println!("{}", post.content);
         println!("id={}", post.id);
         if let Some(reply_to) = post
@@ -221,7 +228,11 @@ pub fn print_notifications(notifications: &[D1Notification]) {
         );
         println!("actor={}", notification.actor_id);
         println!("id={}", notification.id);
-        if let Some(post_id) = notification.post_id.as_deref().filter(|value| !value.is_empty()) {
+        if let Some(post_id) = notification
+            .post_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
             println!("post={post_id}");
         }
         if let Some(activity_id) = notification
@@ -231,7 +242,11 @@ pub fn print_notifications(notifications: &[D1Notification]) {
         {
             println!("activity={activity_id}");
         }
-        if let Some(content) = notification.content.as_deref().filter(|value| !value.is_empty()) {
+        if let Some(content) = notification
+            .content
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
             println!("{content}");
         }
         println!();

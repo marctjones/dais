@@ -283,7 +283,8 @@ impl AtprotoClient {
     }
 
     pub async fn unrepost(&mut self, uri: &str) -> Result<()> {
-        self.delete_subject_record("app.bsky.feed.repost", uri).await
+        self.delete_subject_record("app.bsky.feed.repost", uri)
+            .await
     }
 
     pub async fn get_profile(&mut self, actor: &str) -> Result<Profile> {

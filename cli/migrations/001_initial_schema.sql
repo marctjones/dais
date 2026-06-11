@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS posts (
     actor_id TEXT NOT NULL,
     content TEXT NOT NULL,
     content_html TEXT,  -- Rendered HTML version
+    object_type TEXT NOT NULL DEFAULT 'Note',  -- ActivityStreams object type
+    name TEXT,          -- ActivityStreams name/title for Article, Document, Event, etc.
+    summary TEXT,       -- ActivityStreams summary/content warning/abstract
     visibility TEXT NOT NULL DEFAULT 'public',  -- 'public', 'unlisted', 'followers', 'direct'
     in_reply_to TEXT,   -- URL of post this is replying to
     media_attachments TEXT,  -- JSON array of media attachment URLs
