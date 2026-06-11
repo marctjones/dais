@@ -5,6 +5,23 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] - 2026-06-11
+
+### Added
+- Added v0.21 public source integration framework:
+  - Rust `SourceIntegration` trait covering discover, extract, normalize, and
+    enrichment boundaries.
+  - Explicit public-source policies for auth, no paywall bypass,
+    private-reader-only storage, excerpt-only storage, attribution, link
+    preservation, and polling cadence.
+  - Sitemap, official HTML page, PDF metadata, SCOTUS/legal opinion,
+    institutional report, and award announcement adapter foundations.
+  - Optional enrichment provider boundary that stores generated summaries/topics
+    as derived private metadata with source provenance.
+  - Fixture tests for sitemap discovery, public-page/PDF extraction, SCOTUS
+    metadata, institutional reports, award announcements, enrichment provenance,
+    and no-paywall policy defaults.
+
 ## [1.22.0] - 2026-06-11
 
 ### Added

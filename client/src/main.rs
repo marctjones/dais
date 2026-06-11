@@ -5,6 +5,7 @@ mod d1;
 mod delivery;
 mod doctor;
 mod e2ee;
+mod integrations;
 mod output;
 mod posting;
 mod routing;
