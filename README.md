@@ -31,10 +31,11 @@ client and the core-based Cloudflare worker tree.
   locked-profile signaling, public post dereference, private/E2EE anonymous
   denial, follower-only reads, replies/likes/boost metadata, and delivery queue
   processing.
-- Mastodon API compatibility has a read-oriented floor: instance metadata, app
-  registration/token compatibility stubs, account reads, public/home timelines,
-  individual public status reads, notifications reads, and private/public
-  gating.
+- Mastodon API compatibility has a growing compatibility floor: instance
+  metadata, app registration/token compatibility stubs, account reads,
+  followers/following, public/home timelines, individual public status reads,
+  status context, notifications reads, authenticated status creation, and
+  private/public gating.
 - AT Protocol support includes PDS/AppView-style public read endpoints and Rust
   client Bluesky public operations.
 - E2EE support includes a dais `encryptedMessage` envelope, Rust CLI
@@ -50,7 +51,8 @@ client and the core-based Cloudflare worker tree.
   the Rust CLI.
 - Rust owner tooling includes media upload/attachment helpers, moderation and
   closed-network allowlist controls, delivery/follower review, expanded reports,
-  and a TUI for day-to-day operation.
+  and a TUI for day-to-day operation. The HTTPS owner API exposes token-gated
+  owner reads and compose for GUI/mobile clients.
 - Public source subscriptions can ingest standards-based RSS/Atom feeds into a
   private reader item model with rights-policy metadata; scheduled Cloudflare
   refresh stores metadata/excerpts only and never reposts automatically.
@@ -103,15 +105,19 @@ Private/followers visibility is the default. Public posting is explicit.
 
 ## Owner App
 
-The first-party desktop owner app shell lives in `apps/owner-tauri` and reuses
-Rust models from `client-core`. It is currently an adaptive Tauri v2 shell for
-the owner workflows while the scoped HTTPS owner API is still being built.
+The first-party desktop owner app lives in `apps/owner-tauri` and reuses Rust
+models plus HTTP owner API calls from `client-core`. It is an adaptive Tauri v2
+owner workspace with live snapshot and private-by-default compose wiring.
 
 ```bash
 cd apps/owner-tauri
 npm install
 npm run build
 ```
+
+Production owner API access requires the router worker secret
+`OWNER_API_TOKEN`. The local Tauri settings file stores the instance URL and
+owner token in the platform app-config directory.
 
 ## Development
 

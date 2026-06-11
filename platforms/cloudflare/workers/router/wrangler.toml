@@ -35,6 +35,7 @@ database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 crons = ["*/30 * * * *"]
 
 [env.production.vars]
+ENVIRONMENT = "production"
 WEBFINGER_URL = "https://webfinger-production.marc-t-jones.workers.dev"
 ACTOR_URL = "https://actor-production.marc-t-jones.workers.dev"
 INBOX_URL = "https://inbox-production.marc-t-jones.workers.dev"

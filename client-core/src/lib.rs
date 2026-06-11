@@ -1,5 +1,72 @@
 use serde::{Deserialize, Serialize};
 
+pub type ClientResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+#[derive(Clone, Debug)]
+pub struct OwnerApiClient {
+    base_url: String,
+    owner_token: String,
+    http: reqwest::Client,
+}
+
+impl OwnerApiClient {
+    pub fn new(base_url: impl Into<String>, owner_token: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            owner_token: owner_token.into(),
+            http: reqwest::Client::new(),
+        }
+    }
+
+    pub async fn snapshot(&self) -> ClientResult<OwnerSnapshot> {
+        self.get("/api/dais/owner/snapshot").await
+    }
+
+    pub async fn create_post(&self, draft: &ComposeDraft) -> ClientResult<OwnerCreatedPost> {
+        self.post("/api/dais/owner/posts", draft).await
+    }
+
+    async fn get<T>(&self, path: &str) -> ClientResult<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let response = self
+            .http
+            .get(format!("{}{}", self.base_url, path))
+            .bearer_auth(&self.owner_token)
+            .send()
+            .await?;
+        decode_response(response).await
+    }
+
+    async fn post<T, B>(&self, path: &str, body: &B) -> ClientResult<T>
+    where
+        T: for<'de> Deserialize<'de>,
+        B: Serialize + ?Sized,
+    {
+        let response = self
+            .http
+            .post(format!("{}{}", self.base_url, path))
+            .bearer_auth(&self.owner_token)
+            .json(body)
+            .send()
+            .await?;
+        decode_response(response).await
+    }
+}
+
+async fn decode_response<T>(response: reqwest::Response) -> ClientResult<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("owner API returned {status}: {body}").into());
+    }
+    Ok(response.json::<T>().await?)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum OwnerSection {
     Home,
@@ -56,6 +123,18 @@ pub struct OwnerPost {
     pub protocol: ProtocolRoute,
     pub encrypted: bool,
     pub published_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerCreatedPost {
+    pub id: String,
+    pub actor_id: String,
+    pub content: String,
+    pub content_html: String,
+    pub visibility: String,
+    pub protocol: String,
+    pub published_at: String,
+    pub delivery_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

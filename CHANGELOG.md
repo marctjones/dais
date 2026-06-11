@@ -5,6 +5,53 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.0] - 2026-06-11
+
+### Added
+- Added the first secure owner HTTPS API surface in the router worker:
+  - `GET /api/dais/owner/snapshot`
+  - `GET /api/dais/owner/posts`
+  - `GET /api/dais/owner/timeline/home`
+  - `GET /api/dais/owner/followers`
+  - `GET /api/dais/owner/following`
+  - `GET /api/dais/owner/notifications`
+  - `POST /api/dais/owner/notifications/read`
+  - `GET /api/dais/owner/deliveries`
+  - `GET /api/dais/owner/sources`
+  - `GET /api/dais/owner/moderation`
+  - `GET /api/dais/owner/diagnostics`
+  - `POST /api/dais/owner/posts`
+- Added production `OWNER_API_TOKEN` enforcement for owner API endpoints. Missing
+  production token configuration fails closed; anonymous requests return `401`.
+- Added reusable `OwnerApiClient` in `client-core` for Tauri, CLI, TUI, and
+  future mobile clients.
+- Wired the Tauri owner app to load live owner snapshots and publish posts
+  through `client-core` when a token is configured.
+- Redesigned the Tauri owner app shell with denser cross-platform navigation,
+  safer escaped rendering, clearer compose controls, dark-mode support, narrow
+  viewport behavior, and task-oriented Home/Compose/Posts/Sources/Moderation/
+  Settings/Diagnostics views.
+- Expanded the Mastodon client API floor with v2 instance metadata,
+  preferences, custom emojis, account followers/following, status context,
+  authenticated status creation, and compatibility responses for favourite/
+  reblog toggles.
+
+### Changed
+- Tauri local settings can now store a real owner API token instead of only a
+  placeholder shell token.
+- Mastodon API status visibility now maps followers-only dais posts to
+  Mastodon `private` visibility.
+
+### Known Gaps
+- Owner API tokens are currently a single production secret. Scoped token
+  issuance, token rotation UI, per-scope enforcement, and revocation lists are
+  still tracked in the owner API milestone.
+- Tauri has live snapshot and compose wiring, but Followers, Notifications,
+  Deliveries, Profile, and destructive moderation controls still need full live
+  workflow wiring.
+- Mastodon client API support remains a compatibility floor, not full Mastodon
+  feature parity.
+
 ## [1.24.0] - 2026-06-11
 
 ### Added
