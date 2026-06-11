@@ -689,7 +689,7 @@ impl DaisCore {
 
 ❌ **Bad**: Business logic in worker shim
 ```rust
-// workers/inbox/src/lib.rs
+// platforms/cloudflare/workers/inbox/src/lib.rs
 async fn main(req: Request, env: Env) -> Result<Response> {
     // DON'T put business logic here
     let activity = parse_activity(req)?;
@@ -794,4 +794,4 @@ Adding a new platform requires:
 **Next Steps**:
 - Read `TESTING_v1.1.md` for testing procedures
 - Read `MIGRATION_GUIDE_v1.0_to_v1.1.md` for upgrade instructions
-- Check `DEPLOYMENT.md` for platform-specific deployment guides
+- Check `../DEPLOYMENT.md` for platform-specific deployment guides

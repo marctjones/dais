@@ -30,7 +30,7 @@ cd dais
 
 ```bash
 cd cli
-pip install -e .
+cargo run --manifest-path client/Cargo.toml -- --help
 ```
 
 Verify installation:
@@ -278,15 +278,15 @@ wrangler tail actor
 ### Remove Workers
 
 ```bash
-cd workers/webfinger && wrangler delete --env production
-cd workers/actor && wrangler delete --env production
-cd workers/inbox && wrangler delete --env production
-cd workers/outbox && wrangler delete --env production
-cd workers/auth && wrangler delete --env production
-cd workers/pds && wrangler delete --env production
-cd workers/delivery-queue && wrangler delete --env production
-cd workers/router && wrangler delete --env production
-cd workers/landing && wrangler delete --env production
+cd platforms/cloudflare/workers/webfinger && wrangler delete --env production
+cd platforms/cloudflare/workers/actor && wrangler delete --env production
+cd platforms/cloudflare/workers/inbox && wrangler delete --env production
+cd platforms/cloudflare/workers/outbox && wrangler delete --env production
+cd platforms/cloudflare/workers/auth && wrangler delete --env production
+cd platforms/cloudflare/workers/pds && wrangler delete --env production
+cd platforms/cloudflare/workers/delivery-queue && wrangler delete --env production
+cd platforms/cloudflare/workers/router && wrangler delete --env production
+cd platforms/cloudflare/workers/landing && wrangler delete --env production
 ```
 
 ### Delete Database & Storage
@@ -313,5 +313,5 @@ rm -rf ~/.dais
 
 After installation, see:
 - [USER_GUIDE.md](USER_GUIDE.md) - How to use dais
-- [DEPLOYMENT.md](DEPLOYMENT.md) - Production deployment best practices
+- [DEPLOYMENT.md](../DEPLOYMENT.md) - Production deployment best practices
 - [BACKUP_RESTORE.md](BACKUP_RESTORE.md) - Backup procedures

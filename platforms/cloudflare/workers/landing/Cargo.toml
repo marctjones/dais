@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-worker = "0.7.2"
+worker = "0.8"
 console_error_panic_hook = "0.1"
 
 [profile.release]

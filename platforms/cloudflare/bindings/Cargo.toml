@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 dais-core = { path = "../../../core" }
 
 # Cloudflare Workers runtime
-worker = { version = "0.7.2", features = ["d1", "queue", "http"] }
+worker = { version = "0.8", features = ["d1", "queue", "http"] }
 
 # WASM bindings
 wasm-bindgen = "0.2"

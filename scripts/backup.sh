@@ -20,7 +20,7 @@ echo
 
 # 1. Backup D1 Database
 echo "[1/5] Backing up D1 database..."
-cd workers/actor
+cd platforms/cloudflare/workers/actor
 wrangler d1 backup create DB --remote > "${TEMP_DIR}/db_backup_id.txt" 2>&1 || true
 if [ -f "${TEMP_DIR}/db_backup_id.txt" ]; then
     BACKUP_ID=$(cat "${TEMP_DIR}/db_backup_id.txt" | grep -oP 'Backup ID: \K[a-f0-9-]+' || echo "")
@@ -35,7 +35,7 @@ else
     echo "  ⚠ Backup command failed, using direct export"
     wrangler d1 export DB --remote --output="${TEMP_DIR}/database.sql"
 fi
-cd ../..
+cd ../../../..
 
 # 2. Backup Keys
 echo "[2/5] Backing up cryptographic keys..."

@@ -13,7 +13,7 @@ only your friends can read what you post.
 dais today is a single-user ActivityPub **publishing node**. Its job is to emit
 your posts to the open fediverse and receive interactions (follows, replies,
 likes, DMs) into an inbox. It is deliberately *not* a place you go to read a feed
-of the people you follow — `VISION.md:67` lists "custom timelines" as a non-goal,
+of the people you follow — `docs/archive/VISION.md:67` lists "custom timelines" as a non-goal,
 and the only consumption path that exists (`cli/dais_cli/commands/timeline.py`)
 polls each followed user's **public** `/outbox` over HTTP.
 
@@ -228,7 +228,7 @@ loop at `timeline.py:46-86`).
   local store; TUI gets a home-feed pane.
 - **Optional authenticated web reader** (later): a single worker route behind
   Cloudflare Access that renders the home timeline for the owner only. This is
-  the one place a "rich web UI" is justified despite `VISION.md:66`, because the
+  the one place a "rich web UI" is justified despite `docs/archive/VISION.md:66`, because the
   product is now consumption-oriented. Keep it owner-only; do not expose it
   unauthenticated.
 
@@ -285,7 +285,7 @@ makes "only my followers see my posts" actually true on the pull side.
 ## 10. Testing strategy
 
 The repo currently has **no Rust integration tests** — only inline `#[cfg(test)]`
-units in core and Python CLI tests. Private mode changes security-critical read
+units in core and Rust client tests. Private mode changes security-critical read
 paths, so this gap must close. See the companion testing plan; in summary:
 
 - **Core unit tests** (already the pattern): `authorize_read` scope resolution,

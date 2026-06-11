@@ -16,7 +16,7 @@ fi
 
 # Run seed commands in the CLI container
 docker-compose exec cli bash -c '
-    cd /app/workers/actor
+    cd /app/platforms/cloudflare/workers/actor
 
     # Read test keys
     PUBLIC_KEY=$(cat /app/cli/test_keys/public.pem)

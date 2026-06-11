@@ -20,6 +20,10 @@ struct FakeDbState {
     friends_rows: Vec<Row>,
     home_rows: Vec<Row>,
     timeline_posts: HashMap<String, Row>,
+    conversations: HashMap<String, Row>,
+    direct_messages: HashMap<String, Row>,
+    participants: HashSet<(String, String)>,
+    notifications: Vec<Row>,
 }
 
 impl FakeDb {
@@ -46,6 +50,28 @@ impl FakeDb {
             .timeline_posts
             .get(object_id)
             .cloned()
+    }
+
+    fn direct_message(&self, message_id: &str) -> Option<Row> {
+        self.state
+            .lock()
+            .unwrap()
+            .direct_messages
+            .get(message_id)
+            .cloned()
+    }
+
+    fn conversation(&self, conversation_id: &str) -> Option<Row> {
+        self.state
+            .lock()
+            .unwrap()
+            .conversations
+            .get(conversation_id)
+            .cloned()
+    }
+
+    fn participant_count(&self) -> usize {
+        self.state.lock().unwrap().participants.len()
     }
 }
 
@@ -133,6 +159,57 @@ impl DatabaseProvider for FakeDb {
             if let Some(row) = state.timeline_posts.get_mut(object_id) {
                 row.insert("deleted_at".to_string(), deleted_at);
             }
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("INSERT OR IGNORE INTO conversations") {
+            let conversation_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            let mut row = Row::new();
+            insert_row_value(&mut row, "id", params.first());
+            insert_row_value(&mut row, "participants", params.get(1));
+            insert_row_value(&mut row, "last_message_at", params.get(2));
+            state.conversations.insert(conversation_id.to_string(), row);
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("UPDATE conversations SET last_message_at") {
+            let last_message_at = params.first().cloned().unwrap_or(Value::Null);
+            let conversation_id = params.get(1).and_then(Value::as_str).unwrap_or_default();
+            if let Some(row) = state.conversations.get_mut(conversation_id) {
+                row.insert("last_message_at".to_string(), last_message_at);
+            }
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("INSERT OR IGNORE INTO conversation_participants") {
+            let conversation_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            let actor_id = params.get(1).and_then(Value::as_str).unwrap_or_default();
+            state
+                .participants
+                .insert((conversation_id.to_string(), actor_id.to_string()));
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("INSERT OR IGNORE INTO direct_messages") {
+            let message_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            let mut row = Row::new();
+            insert_row_value(&mut row, "id", params.first());
+            insert_row_value(&mut row, "conversation_id", params.get(1));
+            insert_row_value(&mut row, "sender_id", params.get(2));
+            insert_row_value(&mut row, "content", params.get(3));
+            insert_row_value(&mut row, "published_at", params.get(4));
+            state.direct_messages.insert(message_id.to_string(), row);
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("INSERT INTO notifications") {
+            let mut row = Row::new();
+            insert_row_value(&mut row, "id", params.first());
+            insert_row_value(&mut row, "type", params.get(1));
+            insert_row_value(&mut row, "actor_id", params.get(2));
+            insert_row_value(&mut row, "activity_id", params.get(7));
+            insert_row_value(&mut row, "content", params.get(8));
+            state.notifications.push(row);
             return Ok(Vec::new());
         }
 
@@ -401,6 +478,68 @@ async fn home_timeline_and_friends_views_map_rows() {
         friends[0].accepted_at.as_deref(),
         Some("2026-06-03T00:00:00Z")
     );
+}
+
+#[tokio::test]
+async fn inbox_direct_message_uses_conversation_schema() {
+    let db = FakeDb::default();
+    let http = FakeHttp {
+        actor_json: json!({
+            "preferredUsername": "alice",
+            "name": "Alice",
+            "icon": { "url": "https://remote.example/avatar.png" }
+        })
+        .to_string(),
+    };
+
+    let local_actor = "https://social.dais.social/users/social";
+    let remote_actor = "https://remote.example/users/alice";
+    let activity = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Create".to_string(),
+        id: "https://remote.example/activities/dm-1".to_string(),
+        actor: remote_actor.to_string(),
+        object: Some(json!({
+            "type": "Note",
+            "id": "https://remote.example/users/alice/statuses/dm-1",
+            "content": "private hello",
+            "published": "2026-06-10T12:00:00Z",
+            "to": [local_actor]
+        })),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T12:00:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::process_inbox_activity(&db, &http, activity, local_actor, None)
+        .await
+        .expect("direct message should ingest");
+
+    let message = db
+        .direct_message("https://remote.example/users/alice/statuses/dm-1")
+        .expect("direct message row should be stored");
+    let conversation_id = message
+        .get_string("conversation_id")
+        .expect("message should reference conversation");
+    let conversation = db
+        .conversation(&conversation_id)
+        .expect("conversation row should be stored");
+
+    assert_eq!(
+        message.get_string("sender_id").as_deref(),
+        Some(remote_actor)
+    );
+    assert_eq!(
+        message.get_string("content").as_deref(),
+        Some("private hello")
+    );
+    assert_eq!(db.participant_count(), 2);
+    assert!(conversation
+        .get_string("participants")
+        .expect("participants json should be stored")
+        .contains(local_actor));
 }
 
 fn count_row(count: u64) -> Row {

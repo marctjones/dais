@@ -16,8 +16,8 @@ dais uses a multi-layered testing approach:
 
 ```bash
 # Install dependencies
-cd cli && pip install -e .
-cd workers/shared && cargo build
+cargo run --manifest-path client/Cargo.toml -- --help
+cd platforms/cloudflare/workers/shared && cargo build
 
 # Ensure wrangler is installed
 wrangler --version
@@ -276,7 +276,7 @@ run_test "New feature works" "test_new_feature"
 
 ## Unit Tests
 
-### Python CLI Tests
+### Rust client Tests
 
 ```bash
 cd cli
@@ -297,7 +297,7 @@ pytest tests/test_post.py::test_create_post
 ### Rust Worker Tests
 
 ```bash
-cd workers/shared
+cd platforms/cloudflare/workers/shared
 
 # Run tests
 cargo test
@@ -405,11 +405,11 @@ jobs:
       run: npm install -g wrangler
 
     - name: Install CLI dependencies
-      run: cd cli && pip install -e .
+      run: cargo run --manifest-path client/Cargo.toml -- --help
 
     - name: Build workers
       run: |
-        cd workers/shared && cargo build
+        cd platforms/cloudflare/workers/shared && cargo build
         cd ../webfinger && cargo build
         cd ../actor && cargo build
 
@@ -424,7 +424,7 @@ jobs:
     - name: Run unit tests
       run: |
         cd cli && pytest
-        cd workers/shared && cargo test
+        cd platforms/cloudflare/workers/shared && cargo test
 ```
 
 ## Troubleshooting
@@ -459,7 +459,7 @@ kill $(lsof -t -i :8787)
 ./scripts/seed-local-db.sh
 
 # Or manually seed
-cd workers/actor
+cd platforms/cloudflare/workers/actor
 wrangler d1 execute DB --local --file=../../cli/migrations/001_initial_schema.sql
 ```
 
@@ -495,10 +495,10 @@ tmux select-pane -t 0
 tmux split-window -v
 
 # Run workers in panes
-tmux send-keys -t 0 "cd workers/webfinger && wrangler dev --port 8787" C-m
-tmux send-keys -t 1 "cd workers/actor && wrangler dev --port 8788" C-m
-tmux send-keys -t 2 "cd workers/inbox && wrangler dev --port 8789" C-m
-tmux send-keys -t 3 "cd workers/outbox && wrangler dev --port 8790" C-m
+tmux send-keys -t 0 "cd platforms/cloudflare/workers/webfinger && wrangler dev --port 8787" C-m
+tmux send-keys -t 1 "cd platforms/cloudflare/workers/actor && wrangler dev --port 8788" C-m
+tmux send-keys -t 2 "cd platforms/cloudflare/workers/inbox && wrangler dev --port 8789" C-m
+tmux send-keys -t 3 "cd platforms/cloudflare/workers/outbox && wrangler dev --port 8790" C-m
 ```
 
 ## Test Coverage

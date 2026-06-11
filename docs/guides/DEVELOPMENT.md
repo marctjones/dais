@@ -126,7 +126,7 @@ make test-clean
 
 All workers share the same D1 database via a Docker volume:
 - Volume: `d1-data`
-- Mounted to: `/app/workers/actor/.wrangler` in each container
+- Mounted to: `/app/platforms/cloudflare/workers/actor/.wrangler` in each container
 - Ensures consistent state across all workers
 
 ---
@@ -136,18 +136,18 @@ All workers share the same D1 database via a Docker volume:
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) 1.70+
-- [wrangler](https://developers.cloudflare.com/workers/wrangler/) 3.0+
+- [wrangler](https://developers.cloudflare.com/platforms/cloudflare/workers/wrangler/) 3.0+
 - [Python](https://www.python.org/) 3.10+
 - [tmux](https://github.com/tmux/tmux/wiki) (for running multiple workers)
 - [curl](https://curl.se/) (for testing)
 
 ## Quick Start
 
-### 1. Install Python CLI
+### 1. Install Rust client
 
 ```bash
 cd cli
-pip install -e .
+cargo run --manifest-path client/Cargo.toml -- --help
 ```
 
 ### 2. Start Local Environment
@@ -227,7 +227,7 @@ Each worker has its own `.wrangler/` directory with a local SQLite database.
 ### Running Migrations
 
 ```bash
-cd workers/actor
+cd platforms/cloudflare/workers/actor
 wrangler d1 execute DB --local --file="../../cli/migrations/001_initial_schema.sql"
 ```
 
@@ -239,7 +239,7 @@ Or use the seed script which runs migrations automatically:
 ### Querying Local Database
 
 ```bash
-cd workers/actor
+cd platforms/cloudflare/workers/actor
 wrangler d1 execute DB --local --command="SELECT * FROM actors;"
 wrangler d1 execute DB --local --command="SELECT * FROM followers;"
 wrangler d1 execute DB --local --command="SELECT * FROM posts;"
@@ -249,10 +249,10 @@ wrangler d1 execute DB --local --command="SELECT * FROM posts;"
 
 ```bash
 # Delete the local database
-rm -rf workers/actor/.wrangler/state/
-rm -rf workers/inbox/.wrangler/state/
-rm -rf workers/outbox/.wrangler/state/
-rm -rf workers/webfinger/.wrangler/state/
+rm -rf platforms/cloudflare/workers/actor/.wrangler/state/
+rm -rf platforms/cloudflare/workers/inbox/.wrangler/state/
+rm -rf platforms/cloudflare/workers/outbox/.wrangler/state/
+rm -rf platforms/cloudflare/workers/webfinger/.wrangler/state/
 
 # Re-seed
 ./scripts/seed-local-db.sh
@@ -379,18 +379,18 @@ curl -H "Accept: application/activity+json" "http://localhost:8790/users/marc/po
 ### Unit Tests
 
 ```bash
-# Python CLI tests
+# Rust client tests
 cd cli
 pytest -v
 
 # Rust worker tests
-cd workers/shared
+cd platforms/cloudflare/workers/shared
 cargo test
 
-cd workers/inbox
+cd platforms/cloudflare/workers/inbox
 cargo test
 
-cd workers/outbox
+cd platforms/cloudflare/workers/outbox
 cargo test
 ```
 
@@ -448,7 +448,7 @@ dais followers list --remote         # Query production D1
 Workers are automatically rebuilt by `wrangler dev`, but you can manually build:
 
 ```bash
-cd workers/webfinger
+cd platforms/cloudflare/workers/webfinger
 cargo build --target wasm32-unknown-unknown
 
 # Or let wrangler handle it
@@ -458,7 +458,7 @@ wrangler dev --local
 ### Adding Dependencies
 
 ```bash
-cd workers/shared
+cd platforms/cloudflare/workers/shared
 cargo add serde_json
 
 # Update all workers that depend on shared
@@ -491,13 +491,13 @@ tmux attach -t dais-dev
 ### Database errors
 
 - **Re-run migrations**: `./scripts/seed-local-db.sh`
-- **Check D1 database exists**: `ls workers/actor/.wrangler/state/v3/d1/`
-- **Query database directly**: `cd workers/actor && wrangler d1 execute DB --local --command="SELECT * FROM actors;"`
+- **Check D1 database exists**: `ls platforms/cloudflare/workers/actor/.wrangler/state/v3/d1/`
+- **Query database directly**: `cd platforms/cloudflare/workers/actor && wrangler d1 execute DB --local --command="SELECT * FROM actors;"`
 
 ### Signature verification failures
 
 - **Check test keys exist**: `ls cli/test_keys/`
-- **Verify keys in database**: `cd workers/actor && wrangler d1 execute DB --local --command="SELECT username, substr(public_key, 1, 50) FROM actors;"`
+- **Verify keys in database**: `cd platforms/cloudflare/workers/actor && wrangler d1 execute DB --local --command="SELECT username, substr(public_key, 1, 50) FROM actors;"`
 - **Re-seed database**: `./scripts/seed-local-db.sh`
 
 ### Tmux session issues
@@ -557,7 +557,7 @@ Once you've verified Phase 1 and Phase 2 work locally:
 ## Resources
 
 - [Cloudflare Workers Docs](https://developers.cloudflare.com/workers/)
-- [Wrangler CLI Reference](https://developers.cloudflare.com/workers/wrangler/commands/)
+- [Wrangler CLI Reference](https://developers.cloudflare.com/platforms/cloudflare/workers/wrangler/commands/)
 - [D1 Database Docs](https://developers.cloudflare.com/d1/)
 - [ActivityPub Spec](https://www.w3.org/TR/activitypub/)
 - [WebFinger RFC](https://tools.ietf.org/html/rfc7033)

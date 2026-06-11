@@ -1,8 +1,8 @@
 # dais — Positioning
 
 **Status:** Source of truth for *why dais exists and who it's for.*
-**Supersedes:** the creator/influencer framing in `STRATEGY_NON_TECHNICAL_USERS.md`,
-the public-broadcast emphasis in older `VISION.md`, and any "100% complete" /
+**Supersedes:** the creator/influencer framing in `docs/archive/STRATEGY_NON_TECHNICAL_USERS.md`,
+the public-broadcast emphasis in older `docs/archive/VISION.md`, and any "100% complete" /
 "encrypted DMs ✅" claims in `README.md` that don't match §5.
 
 This document states, once and coherently: **purpose → persona → protocols →
@@ -194,8 +194,8 @@ alone.
 
 ## 7. What this supersedes / next cleanups
 
-- Rewrite or retire `STRATEGY_NON_TECHNICAL_USERS.md` (creator framing) — #59.
-- Update `VISION.md` so purpose and posture are stated once (this doc is the
+- Rewrite or retire `docs/archive/STRATEGY_NON_TECHNICAL_USERS.md` (creator framing) — #59.
+- Update `docs/archive/VISION.md` so purpose and posture are stated once (this doc is the
   reference) — #59.
 - Fix `README.md` overclaims to match §5 (esp. "encrypted messaging") — #58/#59.
 - Keep this doc and `docs/design/PRIVATE_MODE.md` in sync with epic #70.

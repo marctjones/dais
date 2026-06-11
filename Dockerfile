@@ -24,8 +24,9 @@ RUN rustup target add wasm32-unknown-unknown
 # Set working directory
 WORKDIR /app
 
-# Copy shared library first (for caching)
-COPY workers/shared /app/workers/shared
+# Copy shared Rust crates first (for caching)
+COPY core /app/core
+COPY platforms/cloudflare /app/platforms/cloudflare
 
 # Note: Don't pre-build - wrangler will compile when starting dev server
 # This avoids edition2024 issues and keeps container build fast
@@ -34,7 +35,8 @@ COPY workers/shared /app/workers/shared
 FROM base as worker
 
 # Copy project files
-COPY workers /app/workers
+COPY core /app/core
+COPY platforms /app/platforms
 COPY cli/migrations /app/cli/migrations
 
 # Expose ports for workers

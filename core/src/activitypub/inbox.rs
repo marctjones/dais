@@ -6,7 +6,9 @@ use crate::error::{CoreError, CoreResult};
 /// Handles incoming activities from remote servers
 use crate::traits::{DatabaseProvider, HttpProvider};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fmt::Write;
 
 /// Content moderation result
 #[derive(Debug, Clone)]
@@ -506,23 +508,59 @@ async fn handle_direct_message(
             .await
             .unwrap_or_else(|_| ("unknown".to_string(), "Unknown".to_string(), "".to_string()));
 
-    // Store the DM
-    let query = r#"
-        INSERT OR IGNORE INTO direct_messages (
-            id, from_actor_id, to_actor_id, from_username, from_display_name,
-            from_avatar_url, content, published_at, read
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)
-    "#;
+    let participants = sorted_participants(&activity.actor, our_actor_url);
+    let conversation_id = conversation_id_for(&participants);
+    let participants_json = serde_json::to_string(&participants)
+        .map_err(|error| CoreError::Internal(error.to_string()))?;
 
     db.execute(
-        query,
+        r#"
+        INSERT OR IGNORE INTO conversations (
+            id, participants, last_message_at
+        ) VALUES (?1, ?2, ?3)
+    "#,
+        &[
+            Value::String(conversation_id.clone()),
+            Value::String(participants_json),
+            Value::String(published_at.to_string()),
+        ],
+    )
+    .await?;
+
+    db.execute(
+        "UPDATE conversations SET last_message_at = ?1 WHERE id = ?2",
+        &[
+            Value::String(published_at.to_string()),
+            Value::String(conversation_id.clone()),
+        ],
+    )
+    .await?;
+
+    for participant in &participants {
+        db.execute(
+            r#"
+            INSERT OR IGNORE INTO conversation_participants (
+                conversation_id, actor_id
+            ) VALUES (?1, ?2)
+        "#,
+            &[
+                Value::String(conversation_id.clone()),
+                Value::String(participant.clone()),
+            ],
+        )
+        .await?;
+    }
+
+    db.execute(
+        r#"
+        INSERT OR IGNORE INTO direct_messages (
+            id, conversation_id, sender_id, content, published_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5)
+    "#,
         &[
             Value::String(dm_id.to_string()),
+            Value::String(conversation_id),
             Value::String(activity.actor.clone()),
-            Value::String(our_actor_url.to_string()),
-            Value::String(actor_username.clone()),
-            Value::String(actor_display_name.clone()),
-            Value::String(actor_avatar_url.clone()),
             Value::String(content.to_string()),
             Value::String(published_at.to_string()),
         ],
@@ -532,7 +570,7 @@ async fn handle_direct_message(
     // Create notification
     create_notification(
         db,
-        "dm",
+        "mention",
         &activity.actor,
         &actor_username,
         &actor_display_name,
@@ -544,6 +582,27 @@ async fn handle_direct_message(
     .await?;
 
     Ok(())
+}
+
+fn sorted_participants(actor: &str, local_actor: &str) -> Vec<String> {
+    let mut participants = vec![actor.to_string(), local_actor.to_string()];
+    participants.sort();
+    participants.dedup();
+    participants
+}
+
+fn conversation_id_for(participants: &[String]) -> String {
+    let mut hasher = Sha256::new();
+    for participant in participants {
+        hasher.update(participant.as_bytes());
+        hasher.update([0]);
+    }
+    let digest = hasher.finalize();
+    let mut id = String::from("ap-dm-");
+    for byte in digest {
+        let _ = write!(&mut id, "{byte:02x}");
+    }
+    id
 }
 
 /// Handle reply to our post

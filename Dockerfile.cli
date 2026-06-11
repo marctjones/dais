@@ -1,5 +1,5 @@
-# Python CLI for dais management
-FROM python:3.12-slim
+# Rust client shell for dais management
+FROM rust:1.83-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -17,11 +17,13 @@ RUN npm install -g wrangler@latest
 # Set working directory
 WORKDIR /app
 
-# Copy CLI and install
+# Copy Rust client and shared crates
 COPY cli /app/cli
-COPY workers /app/workers
+COPY client /app/client
+COPY core /app/core
+COPY platforms /app/platforms
 
-RUN cd cli && pip install -e .
+RUN rustup target add wasm32-unknown-unknown
 
 # Default command
 CMD ["/bin/bash"]

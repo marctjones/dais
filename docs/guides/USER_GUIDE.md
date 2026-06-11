@@ -45,7 +45,7 @@
 
 ```bash
 # Install dais CLI
-pip install -e cli/
+cargo run --manifest-path client/Cargo.toml -- --help
 
 # Initialize configuration
 dais setup init
@@ -435,7 +435,7 @@ dais deploy database
 
 ### Custom Domains
 
-Edit worker routes in `workers/*/wrangler.toml`:
+Edit worker routes in `platforms/cloudflare/workers/*/wrangler.toml`:
 ```toml
 [[env.production.routes]]
 pattern = "social.yourdomain.com/*"
@@ -459,7 +459,7 @@ pattern = "social.yourdomain.com/*"
 
 **GitHub:** [anthropics/dais](https://github.com/yourusername/dais)
 **Issues:** Report bugs via GitHub Issues
-**Docs:** Full documentation in `DEPLOYMENT.md`, `CONTRIBUTING.md`
+**Docs:** Full documentation in `../DEPLOYMENT.md`, `CONTRIBUTING.md`
 
 ---
 

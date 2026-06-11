@@ -21,6 +21,3 @@ Avoid file-based trackers (`TODO.md`, `NOTES.md`, `BACKLOG.md`, …) and inline
 - `docs/POSITIONING.md` — purpose, persona, three-mode product, business model
 - `docs/design/PRIVATE_MODE.md` — private-by-default build plan
 - `docs/design/PROTOCOL_ADAPTERS.md` — modular protocol-adapter architecture
-
-> IdlerGear was retired in commit 92ab1c3; any remaining `idlergear` hooks or
-> `.mcp.json` entries are dead and being removed.

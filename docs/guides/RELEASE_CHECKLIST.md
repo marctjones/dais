@@ -62,7 +62,7 @@ Run your own single-user ActivityPub + Bluesky server on Cloudflare (free tier).
 🔒 Cloudflare Access auth
 💰 $0/month hosting
 
-Install: pip install -e ./cli
+Install: cargo run --manifest-path client/Cargo.toml -- --help
 Deploy: dais deploy all
 
 https://github.com/yourusername/dais/releases/tag/v1.0.0

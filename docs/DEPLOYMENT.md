@@ -573,7 +573,7 @@ git pull origin release/v1.1
 
 ## Resources
 
-- **Architecture Guide**: `ARCHITECTURE_v1.1.md`
+- **Architecture Guide**: `../ARCHITECTURE.md`
 - **Testing Guide**: `TESTING_v1.1.md`
 - **Migration Guide**: `MIGRATION_GUIDE_v1.0_to_v1.1.md`
 - **GitHub**: https://github.com/daisocial/dais

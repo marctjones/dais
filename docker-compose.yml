@@ -5,10 +5,10 @@ services:
       context: .
       dockerfile: Dockerfile.cli
     volumes:
-      - d1-data:/app/workers/actor/.wrangler
+      - d1-data:/app/platforms/cloudflare/workers/actor/.wrangler
       - ./cli/migrations:/app/cli/migrations
-      - ./workers:/app/workers
-    working_dir: /app/workers/actor
+      - ./platforms:/app/platforms
+    working_dir: /app/platforms/cloudflare/workers/actor
     command: >
       sh -c "
         wrangler d1 execute DB --local --file=/app/cli/migrations/001_initial_schema.sql &&
@@ -25,10 +25,10 @@ services:
     ports:
       - "8787:8787"
     volumes:
-      - d1-data:/app/workers/webfinger/.wrangler
-      - ./workers/webfinger:/app/workers/webfinger
-      - ./workers/shared:/app/workers/shared
-    working_dir: /app/workers/webfinger
+      - d1-data:/app/platforms/cloudflare/workers/webfinger/.wrangler
+      - ./platforms:/app/platforms
+      - ./core:/app/core
+    working_dir: /app/platforms/cloudflare/workers/webfinger
     command: wrangler dev --local --port 8787 --ip 0.0.0.0
     environment:
       - DOMAIN=localhost
@@ -51,10 +51,10 @@ services:
     ports:
       - "8788:8788"
     volumes:
-      - d1-data:/app/workers/actor/.wrangler
-      - ./workers/actor:/app/workers/actor
-      - ./workers/shared:/app/workers/shared
-    working_dir: /app/workers/actor
+      - d1-data:/app/platforms/cloudflare/workers/actor/.wrangler
+      - ./platforms:/app/platforms
+      - ./core:/app/core
+    working_dir: /app/platforms/cloudflare/workers/actor
     command: wrangler dev --local --port 8788 --ip 0.0.0.0
     depends_on:
       db-init:
@@ -75,10 +75,10 @@ services:
     ports:
       - "8789:8789"
     volumes:
-      - d1-data:/app/workers/inbox/.wrangler
-      - ./workers/inbox:/app/workers/inbox
-      - ./workers/shared:/app/workers/shared
-    working_dir: /app/workers/inbox
+      - d1-data:/app/platforms/cloudflare/workers/inbox/.wrangler
+      - ./platforms:/app/platforms
+      - ./core:/app/core
+    working_dir: /app/platforms/cloudflare/workers/inbox
     command: wrangler dev --local --port 8789 --ip 0.0.0.0
     depends_on:
       db-init:
@@ -99,10 +99,10 @@ services:
     ports:
       - "8790:8790"
     volumes:
-      - d1-data:/app/workers/outbox/.wrangler
-      - ./workers/outbox:/app/workers/outbox
-      - ./workers/shared:/app/workers/shared
-    working_dir: /app/workers/outbox
+      - d1-data:/app/platforms/cloudflare/workers/outbox/.wrangler
+      - ./platforms:/app/platforms
+      - ./core:/app/core
+    working_dir: /app/platforms/cloudflare/workers/outbox
     command: wrangler dev --local --port 8790 --ip 0.0.0.0
     depends_on:
       db-init:
@@ -121,9 +121,11 @@ services:
       context: .
       dockerfile: Dockerfile.cli
     volumes:
-      - d1-data:/app/workers/actor/.wrangler
+      - d1-data:/app/platforms/cloudflare/workers/actor/.wrangler
       - ./cli:/app/cli
-      - ./workers:/app/workers
+      - ./client:/app/client
+      - ./core:/app/core
+      - ./platforms:/app/platforms
       - ./scripts:/app/scripts
       - ./cli/test_keys:/root/.dais/keys
     working_dir: /app

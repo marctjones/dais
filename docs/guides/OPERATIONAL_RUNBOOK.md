@@ -301,7 +301,7 @@ dig +short dais.social
 **Solution C: Check wrangler.toml**
 ```bash
 # Verify routes are correct
-cat workers/webfinger/wrangler.toml
+cat platforms/cloudflare/workers/webfinger/wrangler.toml
 
 # Should include:
 # [[env.production.routes]]
@@ -412,7 +412,7 @@ dais deploy secrets
 wrangler deployments list --name=delivery-queue --env=production
 
 # Redeploy delivery queue
-cd workers/delivery-queue
+cd platforms/cloudflare/workers/delivery-queue
 wrangler deploy --env=production
 ```
 
@@ -519,7 +519,7 @@ pip list | grep textual
 **Solution A: Reinstall dependencies**
 ```bash
 cd cli
-pip install -e . --force-reinstall
+cargo run --manifest-path client/Cargo.toml -- --help
 ```
 
 **Solution B: Clear Textual cache**

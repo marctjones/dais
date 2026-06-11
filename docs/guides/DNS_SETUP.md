@@ -43,7 +43,7 @@ Or check in Cloudflare dashboard: Workers & Pages → Select worker → Settings
 Alternatively, add custom domains directly via wrangler (already configured in `wrangler.toml`):
 
 ```bash
-cd workers/webfinger
+cd platforms/cloudflare/workers/webfinger
 wrangler domains add dais.social --env production
 
 cd ../actor

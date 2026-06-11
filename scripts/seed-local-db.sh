@@ -12,7 +12,8 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 
-WORKER_DIR="$PROJECT_ROOT/workers/actor"
+WORKERS_ROOT="$PROJECT_ROOT/platforms/cloudflare/workers"
+WORKER_DIR="$WORKERS_ROOT/actor"
 MIGRATION_FILE="$PROJECT_ROOT/cli/migrations/001_initial_schema.sql"
 TEST_KEYS_DIR="$PROJECT_ROOT/cli/test_keys"
 
@@ -35,15 +36,15 @@ cd "$WORKER_DIR"
 # Create symlinks so all workers share the same database
 echo -e "${GREEN}Step 0: Setting up shared database...${NC}"
 for worker in webfinger inbox outbox; do
-    if [ -L "$PROJECT_ROOT/workers/$worker/.wrangler" ]; then
+    if [ -L "$WORKERS_ROOT/$worker/.wrangler" ]; then
         echo "  Symlink already exists for $worker"
-    elif [ -d "$PROJECT_ROOT/workers/$worker/.wrangler" ]; then
+    elif [ -d "$WORKERS_ROOT/$worker/.wrangler" ]; then
         echo "  Removing existing .wrangler for $worker"
-        rm -rf "$PROJECT_ROOT/workers/$worker/.wrangler"
-        ln -s "$PROJECT_ROOT/workers/actor/.wrangler" "$PROJECT_ROOT/workers/$worker/.wrangler"
+        rm -rf "$WORKERS_ROOT/$worker/.wrangler"
+        ln -s "$WORKERS_ROOT/actor/.wrangler" "$WORKERS_ROOT/$worker/.wrangler"
         echo "  Created symlink for $worker"
     else
-        ln -s "$PROJECT_ROOT/workers/actor/.wrangler" "$PROJECT_ROOT/workers/$worker/.wrangler"
+        ln -s "$WORKERS_ROOT/actor/.wrangler" "$WORKERS_ROOT/$worker/.wrangler"
         echo "  Created symlink for $worker"
     fi
 done

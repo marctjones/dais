@@ -14,7 +14,7 @@ dais-core = { path = "../../../../core" }
 dais-cloudflare = { path = "../../bindings" }
 
 # Cloudflare Workers runtime
-worker = { version = "0.7.2", features = ["d1"] }
+worker = { version = "0.8", features = ["d1"] }
 
 # Async runtime
 async-trait = "0.1"

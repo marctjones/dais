@@ -26,7 +26,9 @@ echo ""
 
 # Check D1 database access
 echo "3. Testing D1 database:"
-cd /home/marc/Projects/dais/workers/pds
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+cd "$PROJECT_ROOT/platforms/cloudflare/workers/pds"
 OUTPUT=$(wrangler d1 execute dais-social --command "SELECT COUNT(*) as count FROM posts" 2>&1)
 if echo "$OUTPUT" | grep -q "count"; then
     echo "   ✓ D1 OK"

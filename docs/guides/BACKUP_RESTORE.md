@@ -72,7 +72,7 @@ echo
 
 # 1. Backup D1 Database
 echo "[1/5] Backing up D1 database..."
-cd workers/actor
+cd platforms/cloudflare/workers/actor
 wrangler d1 backup create DB --remote > "${TEMP_DIR}/db_backup_id.txt"
 BACKUP_ID=$(cat "${TEMP_DIR}/db_backup_id.txt" | grep -oP 'Backup ID: \K[a-f0-9-]+')
 wrangler d1 backup download DB "${BACKUP_ID}" --remote --output "${TEMP_DIR}/database.sql"
@@ -155,7 +155,7 @@ crontab -e
 
 ```bash
 # Create backup
-cd workers/actor
+cd platforms/cloudflare/workers/actor
 wrangler d1 backup create DB --remote
 
 # List backups
@@ -250,7 +250,7 @@ wrangler r2 object list dais-media --remote
    ```bash
    git clone https://github.com/yourusername/dais.git
    cd dais
-   pip install -e cli/
+   cargo run --manifest-path client/Cargo.toml -- --help
    ```
 
 2. **Restore Configuration**
@@ -295,7 +295,7 @@ wrangler r2 object list dais-media --remote
 6. **Restore Database Data**
    ```bash
    # Import SQL backup to new D1 database
-   cd workers/actor
+   cd platforms/cloudflare/workers/actor
    wrangler d1 execute DB --remote --file=/tmp/database.sql
 
    # Verify import
@@ -336,7 +336,7 @@ wrangler r2 object list dais-media --remote
 wrangler d1 backup download DB <backup-id> --remote --output restore.sql
 
 # Import to existing database
-cd workers/actor
+cd platforms/cloudflare/workers/actor
 wrangler d1 execute DB --remote --file=restore.sql
 ```
 
