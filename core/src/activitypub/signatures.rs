@@ -437,4 +437,12 @@ mod tests {
 
         assert!(err.contains("outside allowed replay window"));
     }
+
+    #[test]
+    fn digest_verification_rejects_tampered_body() {
+        let digest = "SHA-256=LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=";
+
+        assert!(verify_digest("hello", digest).unwrap());
+        assert!(!verify_digest("hello!", digest).unwrap());
+    }
 }
