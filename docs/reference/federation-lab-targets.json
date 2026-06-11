@@ -1,0 +1,190 @@
+{
+  "name": "dais v0.15 Mastodon-family federation lab",
+  "updated": "2026-06-11",
+  "targets": [
+    {
+      "server": "mastodon",
+      "name": "Mastodon / mastodon.social live account",
+      "capabilities": {
+        "webfinger": {
+          "status": "pass",
+          "detail": "Covered by activitypub-conformance and federation-matrix."
+        },
+        "actor": {
+          "status": "pass",
+          "detail": "Actor shape, locked posture, and publicKey covered by conformance."
+        },
+        "follow": {
+          "status": "pass",
+          "detail": "Live Mastodon follow flow covered by toot smoke path."
+        },
+        "accept": {
+          "status": "pass",
+          "detail": "Approved followers receive signed Accept delivery."
+        },
+        "create": {
+          "status": "pass",
+          "detail": "Followers-only and public Create delivery covered by live smoke path."
+        },
+        "reply": {
+          "status": "manual",
+          "detail": "Use toot reply against a known dais status until a dedicated test account is wired into CI."
+        },
+        "like": {
+          "status": "manual",
+          "detail": "Use toot favourite against a known dais status until a dedicated test account is wired into CI."
+        },
+        "announce": {
+          "status": "manual",
+          "detail": "Use toot reblog against a known dais status until a dedicated test account is wired into CI."
+        },
+        "authorized_fetch": {
+          "status": "pass",
+          "detail": "Anonymous private object denial and signed-fetch helper covered by conformance."
+        },
+        "private_visibility": {
+          "status": "pass",
+          "detail": "Anonymous outbox/object checks prevent private and E2EE leakage."
+        }
+      }
+    },
+    {
+      "server": "pleroma",
+      "name": "Pleroma/Akkoma local or tunnel target",
+      "capabilities": {
+        "webfinger": {
+          "status": "manual",
+          "detail": "Run federation-matrix with DAIS_FEDERATION_TARGETS containing a Pleroma/Akkoma account."
+        },
+        "actor": {
+          "status": "manual",
+          "detail": "Remote actor shape is probed when actor URL is configured."
+        },
+        "follow": {
+          "status": "manual",
+          "detail": "Run from a local/tunnel Pleroma account and verify pending follower row."
+        },
+        "accept": {
+          "status": "manual",
+          "detail": "Approve from dais CLI/TUI and verify remote follow state."
+        },
+        "create": {
+          "status": "manual",
+          "detail": "Deliver public and followers-only Create to approved Pleroma follower."
+        },
+        "reply": {
+          "status": "manual",
+          "detail": "Reply from Pleroma and verify inbox ingestion."
+        },
+        "like": {
+          "status": "manual",
+          "detail": "Favourite from Pleroma and verify Like ingestion."
+        },
+        "announce": {
+          "status": "manual",
+          "detail": "Repeat from Pleroma and verify Announce ingestion."
+        },
+        "authorized_fetch": {
+          "status": "manual",
+          "detail": "Verify followers-only dereference from approved actor and anonymous denial."
+        },
+        "private_visibility": {
+          "status": "pass",
+          "detail": "Dais-side anonymous privacy gate is server-independent."
+        }
+      }
+    },
+    {
+      "server": "misskey",
+      "name": "Misskey/Firefish local or tunnel target",
+      "capabilities": {
+        "webfinger": {
+          "status": "manual",
+          "detail": "Run federation-matrix with DAIS_FEDERATION_TARGETS containing a Misskey account."
+        },
+        "actor": {
+          "status": "manual",
+          "detail": "Remote actor shape is probed when actor URL is configured."
+        },
+        "follow": {
+          "status": "manual",
+          "detail": "Follow from Misskey and verify dais pending follower row."
+        },
+        "accept": {
+          "status": "manual",
+          "detail": "Approve from dais and verify Misskey follow state."
+        },
+        "create": {
+          "status": "manual",
+          "detail": "Deliver Create and inspect Misskey timeline rendering."
+        },
+        "reply": {
+          "status": "manual",
+          "detail": "Reply from Misskey and verify inbox ingestion."
+        },
+        "like": {
+          "status": "manual",
+          "detail": "React/like from Misskey and verify compatible ActivityPub ingestion."
+        },
+        "announce": {
+          "status": "manual",
+          "detail": "Renote from Misskey and verify Announce-compatible ingestion."
+        },
+        "authorized_fetch": {
+          "status": "manual",
+          "detail": "Verify followers-only object access with signed fetch where Misskey supports it."
+        },
+        "private_visibility": {
+          "status": "pass",
+          "detail": "Dais-side anonymous privacy gate is server-independent."
+        }
+      }
+    },
+    {
+      "server": "pixelfed",
+      "name": "Pixelfed local or tunnel target",
+      "capabilities": {
+        "webfinger": {
+          "status": "manual",
+          "detail": "Run federation-matrix with DAIS_FEDERATION_TARGETS containing a Pixelfed account."
+        },
+        "actor": {
+          "status": "manual",
+          "detail": "Remote actor shape is probed when actor URL is configured."
+        },
+        "follow": {
+          "status": "manual",
+          "detail": "Follow from Pixelfed and verify dais pending follower row."
+        },
+        "accept": {
+          "status": "manual",
+          "detail": "Approve from dais and verify Pixelfed follow state."
+        },
+        "create": {
+          "status": "manual",
+          "detail": "Deliver Note fallback; media-specific rendering belongs to later media work."
+        },
+        "reply": {
+          "status": "manual",
+          "detail": "Reply/comment from Pixelfed and verify inbox ingestion."
+        },
+        "like": {
+          "status": "manual",
+          "detail": "Like from Pixelfed and verify Like ingestion."
+        },
+        "announce": {
+          "status": "manual",
+          "detail": "Pixelfed boost/share behavior varies; record observed behavior as compatibility data."
+        },
+        "authorized_fetch": {
+          "status": "manual",
+          "detail": "Verify followers-only object access where Pixelfed supports signed fetch."
+        },
+        "private_visibility": {
+          "status": "pass",
+          "detail": "Dais-side anonymous privacy gate is server-independent."
+        }
+      }
+    }
+  ]
+}

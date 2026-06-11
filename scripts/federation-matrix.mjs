@@ -13,6 +13,19 @@ const config = {
   remoteTargets: parseRemoteTargets(process.env.DAIS_FEDERATION_TARGETS || ""),
 };
 
+const remoteCapabilities = [
+  "webfinger",
+  "actor",
+  "follow",
+  "accept",
+  "create",
+  "reply",
+  "like",
+  "announce",
+  "authorized_fetch",
+  "private_visibility",
+];
+
 const actorPath = `/users/${config.username}`;
 const actorUrl = `${config.socialBaseUrl}${actorPath}`;
 const publicCollection = "https://www.w3.org/ns/activitystreams#Public";
@@ -112,6 +125,21 @@ async function record(area, target, capability, fn) {
 
 function info(area, target, capability, detail) {
   row(area, target, capability, "INFO", detail);
+}
+
+function targetCapability(target, name) {
+  const capabilities = target.capabilities || {};
+  const value = capabilities[name];
+  if (value === true) return { status: "PASS", detail: "configured as passing" };
+  if (value === false) return { status: "FAIL", detail: "configured as failing" };
+  if (typeof value === "string") return { status: value.toUpperCase(), detail: "" };
+  if (isObject(value)) {
+    return {
+      status: String(value.status || "INFO").toUpperCase(),
+      detail: value.detail || "",
+    };
+  }
+  return { status: "INFO", detail: "not configured for this target" };
 }
 
 async function daisBaseline() {
@@ -350,6 +378,18 @@ async function remoteTargets() {
       });
     } else {
       info("remote", name, "Remote actor has inbox/outbox/publicKey shape", "target has no actor URL");
+    }
+
+    for (const capability of remoteCapabilities) {
+      if (capability === "webfinger" || capability === "actor") continue;
+      const result = targetCapability(target, capability);
+      row(
+        "remote",
+        name,
+        `Lab ${capability.replaceAll("_", " ")}`,
+        result.status === "PASS" || result.status === "FAIL" ? result.status : "INFO",
+        result.detail,
+      );
     }
   }
 }

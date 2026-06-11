@@ -1,7 +1,8 @@
 {
   "scripts": {
     "test:activitypub-conformance": "node scripts/activitypub-conformance.mjs",
-    "test:federation-matrix": "node scripts/federation-matrix.mjs"
+    "test:federation-matrix": "node scripts/federation-matrix.mjs",
+    "test:federation-lab": "node scripts/federation-lab.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.99.0"

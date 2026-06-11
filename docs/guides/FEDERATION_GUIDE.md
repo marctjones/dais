@@ -133,6 +133,50 @@ Same as Mastodon - ActivityPub is standardized:
 
 **Standard ActivityPub implementation** - works with any compliant server.
 
+### Compatibility Lab
+
+The v0.15 federation lab tracks server-to-server behavior against the
+Mastodon-family servers dais cares about first:
+
+| Server family | Current gate | Notes |
+| --- | --- | --- |
+| Mastodon | Automated plus live `toot` smoke path | Primary compatibility target. |
+| Pleroma/Akkoma | Profiled manual/local run | Use `DAIS_FEDERATION_TARGETS` with a local or tunnel account. |
+| Misskey/Firefish | Profiled manual/local run | Verify reactions/renotes as compatibility variants. |
+| Pixelfed | Profiled manual/local run | Note fallback status rendering until richer media support lands. |
+
+Run the deterministic coverage gate:
+
+```bash
+npm run test:federation-lab
+```
+
+Run live endpoint probes against configured remote accounts:
+
+```bash
+DAIS_FEDERATION_TARGETS='[
+  {
+    "name": "mastodon.social",
+    "acct": "somebody@mastodon.social",
+    "actor": "https://mastodon.social/users/somebody",
+    "capabilities": {
+      "follow": {"status": "pass", "detail": "verified with toot"},
+      "reply": {"status": "manual", "detail": "requires live account action"}
+    }
+  }
+]' npm run test:federation-matrix
+```
+
+For local federation tests that need an internet-reachable URL, start the local
+worker/router and expose the selected port:
+
+```bash
+DAIS_TUNNEL_PORT=8787 ./scripts/tunnel-start.sh
+```
+
+Only use temporary tunnel URLs for active tests. Do not commit those URLs or use
+them as production endpoints.
+
 ---
 
 ## Following Dais Users

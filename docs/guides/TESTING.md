@@ -90,7 +90,7 @@ release gates.
 #### `scripts/federation-matrix.mjs`
 
 Runs a compatibility matrix for the current dais deployment and optional remote
-fediverse targets. This is the v0.16 federation-lab gate: it checks discovery,
+fediverse targets. This is the v0.15 federation-lab gate: it checks discovery,
 actor shape, public outbox safety, anonymous private/E2EE denial, unsigned inbox
 rejection, the read-only Mastodon API floor, and the AT Protocol PDS
 `describeServer` endpoint.
@@ -116,6 +116,43 @@ node scripts/federation-matrix.mjs --json
 
 `FAIL` exits non-zero. `INFO` rows mean a live lab target, token, or credential
 is not configured and do not block release by themselves.
+
+#### `scripts/federation-lab.mjs`
+
+Validates the checked-in Mastodon-family compatibility profile. This is the
+offline v0.15 gate for making sure Mastodon, Pleroma/Akkoma, Misskey/Firefish,
+and Pixelfed all have explicit coverage rows before live target credentials are
+available.
+
+**Usage:**
+```bash
+npm run test:federation-lab
+node scripts/federation-lab.mjs --json
+node scripts/federation-lab.mjs --profile docs/reference/federation-lab-targets.json
+```
+
+Statuses:
+- `PASS`: automated or already live-validated.
+- `MANUAL`: a repeatable live/local run is documented but requires an external
+  account or local server.
+- `BLOCKED`: an external dependency prevents a meaningful run.
+- `MISSING`: coverage is not defined and the script exits non-zero.
+
+The default profile is `docs/reference/federation-lab-targets.json`.
+
+#### Temporary federation tunnels
+
+Use `scripts/tunnel-start.sh` when a real remote server needs to reach a local
+worker/router:
+
+```bash
+DAIS_TUNNEL_PORT=8787 ./scripts/tunnel-start.sh
+```
+
+The script starts `cloudflared tunnel --url http://127.0.0.1:$DAIS_TUNNEL_PORT`
+and prints the public trycloudflare URL. Treat that URL as ephemeral test
+infrastructure: do not commit it, do not use it for production, and stop the
+process when the test is complete.
 
 #### Mastodon-side testing with `toot`
 
