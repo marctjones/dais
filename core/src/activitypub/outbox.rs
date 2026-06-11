@@ -17,6 +17,9 @@ pub struct Post {
     pub object_type: String,
     pub name: Option<String>,
     pub summary: Option<String>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub location: Option<String>,
     pub visibility: String,
     pub published_at: String,
     pub in_reply_to: Option<String>,
@@ -76,7 +79,7 @@ pub async fn get_outbox_posts(db: &dyn DatabaseProvider, username: &str) -> Core
     let posts_query = format!(
         r#"
         SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
-               name, summary, visibility, published_at, in_reply_to,
+               name, summary, start_time, end_time, location, visibility, published_at, in_reply_to,
                media_attachments, atproto_uri, encrypted_message
         FROM posts
         WHERE actor_id = ?1
@@ -122,6 +125,18 @@ pub async fn get_outbox_posts(db: &dyn DatabaseProvider, username: &str) -> Core
                 .get("summary")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
+            start_time: row
+                .get("start_time")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            end_time: row
+                .get("end_time")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            location: row
+                .get("location")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             visibility: row
                 .get("visibility")
                 .and_then(|v| v.as_str())
@@ -165,7 +180,7 @@ pub async fn get_post(
 
     let post_query = r#"
         SELECT p.id, p.actor_id, p.content, p.content_html, COALESCE(p.object_type, 'Note') AS object_type,
-               p.name, p.summary, p.visibility,
+               p.name, p.summary, p.start_time, p.end_time, p.location, p.visibility,
                p.published_at, p.in_reply_to, p.media_attachments, p.atproto_uri,
                p.encrypted_message
         FROM posts p
@@ -223,6 +238,18 @@ pub async fn get_post(
             .map(|s| s.to_string()),
         summary: row
             .get("summary")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        start_time: row
+            .get("start_time")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        end_time: row
+            .get("end_time")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        location: row
+            .get("location")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         visibility: row
@@ -433,6 +460,21 @@ pub fn build_note_object(post: &Post, interactions: Option<&PostInteractions>) -
         note["summary"] = json!(summary);
     }
 
+    if let Some(ref start_time) = post.start_time {
+        note["startTime"] = json!(start_time);
+    }
+
+    if let Some(ref end_time) = post.end_time {
+        note["endTime"] = json!(end_time);
+    }
+
+    if let Some(ref location) = post.location {
+        note["location"] = json!({
+            "type": "Place",
+            "name": location
+        });
+    }
+
     if let Some(ref in_reply_to) = post.in_reply_to {
         note["inReplyTo"] = json!(in_reply_to);
     }
@@ -480,6 +522,9 @@ mod tests {
             object_type: "Note".to_string(),
             name: None,
             summary: None,
+            start_time: None,
+            end_time: None,
+            location: None,
             visibility: visibility.to_string(),
             published_at: "2026-06-11T00:00:00Z".to_string(),
             in_reply_to: None,
@@ -548,5 +593,29 @@ mod tests {
         assert_eq!(article["name"], "A long-form title");
         assert_eq!(article["summary"], "Short abstract");
         assert_eq!(article["content"], "hello");
+    }
+
+    #[test]
+    fn note_builder_preserves_event_metadata() {
+        let mut post = post_with_visibility("followers");
+        post.object_type = "Event".to_string();
+        post.name = Some("Dinner".to_string());
+        post.summary = Some("Small private dinner".to_string());
+        post.start_time = Some("2026-06-12T18:00:00Z".to_string());
+        post.end_time = Some("2026-06-12T20:00:00Z".to_string());
+        post.location = Some("Kitchen table".to_string());
+
+        let event = build_note_object(&post, None);
+
+        assert_eq!(event["type"], "Event");
+        assert_eq!(event["name"], "Dinner");
+        assert_eq!(event["startTime"], "2026-06-12T18:00:00Z");
+        assert_eq!(event["endTime"], "2026-06-12T20:00:00Z");
+        assert_eq!(event["location"]["type"], "Place");
+        assert_eq!(event["location"]["name"], "Kitchen table");
+        assert_eq!(
+            event["to"],
+            serde_json::json!(["https://social.example/users/social/followers"])
+        );
     }
 }

@@ -14,12 +14,25 @@ pub struct D1Post {
     pub object_type: Option<String>,
     pub name: Option<String>,
     pub summary: Option<String>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub location: Option<String>,
     pub visibility: Option<String>,
     pub protocol: Option<String>,
     pub published_at: Option<String>,
     pub in_reply_to: Option<String>,
     pub atproto_uri: Option<String>,
     pub encrypted_message: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct D1Actor {
+    pub id: String,
+    pub username: String,
+    pub actor_type: Option<String>,
+    pub display_name: Option<String>,
+    pub summary: Option<String>,
 }
 
 pub struct EncryptedPostInsert<'a> {
@@ -190,6 +203,7 @@ impl D1Client {
         let sql = format!(
             r#"
             SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
+                   start_time, end_time, location,
                    visibility, COALESCE(protocol, 'activitypub') AS protocol,
                    published_at, atproto_uri, encrypted_message, in_reply_to
             FROM posts
@@ -211,6 +225,9 @@ impl D1Client {
         object_type: crate::cli::ActivityObjectType,
         name: Option<&str>,
         summary: Option<&str>,
+        starts_at: Option<&str>,
+        ends_at: Option<&str>,
+        location: Option<&str>,
     ) -> Result<()> {
         let content_html = escape_html(content);
         let in_reply_to = in_reply_to
@@ -220,14 +237,24 @@ impl D1Client {
         let summary = summary
             .map(sql_literal)
             .unwrap_or_else(|| "NULL".to_string());
+        let starts_at = starts_at
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let ends_at = ends_at
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
+        let location = location
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
         let sql = format!(
             r#"
             INSERT INTO posts (
                 id, actor_id, content, content_html, object_type, name, summary, visibility,
-                published_at, protocol, in_reply_to
+                published_at, protocol, in_reply_to, start_time, end_time, location
             ) VALUES (
                 {id}, {actor_id}, {content}, {content_html}, {object_type}, {name}, {summary},
-                {visibility}, {published_at}, 'activitypub', {in_reply_to}
+                {visibility}, {published_at}, 'activitypub', {in_reply_to}, {starts_at}, {ends_at},
+                {location}
             )
             "#,
             id = sql_literal(id),
@@ -240,6 +267,9 @@ impl D1Client {
             visibility = sql_literal(visibility),
             published_at = sql_literal(published_at),
             in_reply_to = in_reply_to,
+            starts_at = starts_at,
+            ends_at = ends_at,
+            location = location,
         );
         self.execute(&sql)
     }
@@ -276,6 +306,7 @@ impl D1Client {
         let sql = format!(
             r#"
             SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
+                   start_time, end_time, location,
                    visibility, COALESCE(protocol, 'activitypub') AS protocol,
                    published_at, atproto_uri, encrypted_message, in_reply_to
             FROM posts
@@ -701,6 +732,56 @@ impl D1Client {
             FROM friends
             WHERE local_actor_id = {actor}
             ORDER BY COALESCE(accepted_at, following_since, follower_since) DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
+    pub async fn get_actor(&self, username: &str) -> Result<Option<D1Actor>> {
+        let sql = format!(
+            r#"
+            SELECT id, username, COALESCE(actor_type, 'Person') AS actor_type,
+                   display_name, summary
+            FROM actors
+            WHERE username = {username}
+            "#,
+            username = sql_literal(username),
+        );
+        self.query_one(&sql)?
+            .map(serde_json::from_value)
+            .transpose()
+            .context("could not decode actor row")
+    }
+
+    pub async fn set_actor_type(
+        &self,
+        username: &str,
+        actor_type: crate::cli::ActorType,
+    ) -> Result<()> {
+        let sql = format!(
+            r#"
+            UPDATE actors
+            SET actor_type = {actor_type}
+            WHERE username = {username}
+            "#,
+            actor_type = sql_literal(&actor_type.to_string()),
+            username = sql_literal(username),
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn list_events(&self, limit: u16) -> Result<Vec<D1Post>> {
+        let limit = clamp_limit(limit);
+        let sql = format!(
+            r#"
+            SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
+                   start_time, end_time, location, visibility,
+                   COALESCE(protocol, 'activitypub') AS protocol, published_at, atproto_uri,
+                   encrypted_message, in_reply_to
+            FROM posts
+            WHERE COALESCE(object_type, 'Note') = 'Event'
+            ORDER BY COALESCE(start_time, published_at) DESC
             LIMIT {limit}
             "#
         );

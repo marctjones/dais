@@ -13,6 +13,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Manage local ActivityPub actor mode.
+    #[command(subcommand)]
+    Actors(ActorsCommand),
     /// Bluesky / AT Protocol operations.
     #[command(subcommand)]
     Bluesky(BlueskyCommand),
@@ -42,6 +45,9 @@ pub enum Command {
     /// End-to-end encryption helpers for dais encryptedMessage v1.
     #[command(subcommand)]
     E2ee(E2eeCommand),
+    /// Create and coordinate ActivityPub Event objects.
+    #[command(subcommand)]
+    Events(EventsCommand),
     /// Run instance diagnostics and conformance smoke checks.
     Doctor(DoctorArgs),
     /// Generate shell completions.
@@ -184,6 +190,42 @@ pub enum TopLevelPostCommand {
     Unboost(ActivityPubObjectArgs),
 }
 
+#[derive(Subcommand)]
+pub enum ActorsCommand {
+    /// Show the configured local actor.
+    Show {
+        #[arg(long)]
+        remote: bool,
+        #[arg(long, default_value = "social")]
+        username: String,
+    },
+    /// Set the local actor ActivityStreams type.
+    SetType {
+        actor_type: ActorType,
+        #[arg(long)]
+        remote: bool,
+        #[arg(long, default_value = "social")]
+        username: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ActorType {
+    Person,
+    Group,
+    Organization,
+}
+
+impl std::fmt::Display for ActorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActorType::Person => f.write_str("Person"),
+            ActorType::Group => f.write_str("Group"),
+            ActorType::Organization => f.write_str("Organization"),
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct CreatePostArgs {
     pub text: String,
@@ -215,6 +257,15 @@ pub struct CreatePostArgs {
     /// ActivityStreams summary for rich objects.
     #[arg(long)]
     pub summary: Option<String>,
+    /// ActivityStreams Event start time, preferably RFC3339.
+    #[arg(long)]
+    pub starts_at: Option<String>,
+    /// ActivityStreams Event end time, preferably RFC3339.
+    #[arg(long)]
+    pub ends_at: Option<String>,
+    /// ActivityStreams Event location label.
+    #[arg(long)]
+    pub location: Option<String>,
     /// Direct ActivityPub recipient actor URL. Repeat for multiple recipients.
     #[arg(long = "to")]
     pub to: Vec<String>,
@@ -228,6 +279,7 @@ pub enum ActivityObjectType {
     Note,
     Article,
     Document,
+    Event,
 }
 
 impl std::fmt::Display for ActivityObjectType {
@@ -236,6 +288,89 @@ impl std::fmt::Display for ActivityObjectType {
             ActivityObjectType::Note => f.write_str("Note"),
             ActivityObjectType::Article => f.write_str("Article"),
             ActivityObjectType::Document => f.write_str("Document"),
+            ActivityObjectType::Event => f.write_str("Event"),
+        }
+    }
+}
+
+#[derive(Subcommand)]
+pub enum EventsCommand {
+    /// Create a private-by-default ActivityPub Event.
+    Create(CreateEventArgs),
+    /// Invite a remote actor to an Event.
+    Invite(EventInviteArgs),
+    /// Send an RSVP or participation activity for an Event.
+    Rsvp(EventRsvpArgs),
+    /// List local Event objects.
+    List {
+        #[arg(long, default_value_t = 20)]
+        limit: u16,
+        #[arg(long)]
+        remote: bool,
+    },
+}
+
+#[derive(Args)]
+pub struct CreateEventArgs {
+    pub title: String,
+    #[arg(long)]
+    pub description: Option<String>,
+    #[arg(long)]
+    pub starts_at: String,
+    #[arg(long)]
+    pub ends_at: Option<String>,
+    #[arg(long)]
+    pub location: Option<String>,
+    #[arg(long, value_enum, default_value_t = Visibility::Followers)]
+    pub visibility: Visibility,
+    #[arg(long)]
+    pub public: bool,
+    #[arg(long = "to")]
+    pub to: Vec<String>,
+    #[arg(long)]
+    pub remote: bool,
+}
+
+#[derive(Args)]
+pub struct EventInviteArgs {
+    pub event_id: String,
+    pub actor: String,
+    #[arg(long)]
+    pub inbox: String,
+    #[arg(long)]
+    pub remote: bool,
+    #[arg(long, default_value = "https://social.dais.social/users/social")]
+    pub local_actor: String,
+}
+
+#[derive(Args)]
+pub struct EventRsvpArgs {
+    pub event_id: String,
+    #[arg(value_enum)]
+    pub response: EventRsvp,
+    #[arg(long)]
+    pub inbox: Option<String>,
+    #[arg(long)]
+    pub remote: bool,
+    #[arg(long, default_value = "https://social.dais.social/users/social")]
+    pub actor: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum EventRsvp {
+    Accept,
+    Reject,
+    Join,
+    Leave,
+}
+
+impl std::fmt::Display for EventRsvp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EventRsvp::Accept => f.write_str("Accept"),
+            EventRsvp::Reject => f.write_str("Reject"),
+            EventRsvp::Join => f.write_str("Join"),
+            EventRsvp::Leave => f.write_str("Leave"),
         }
     }
 }

@@ -5,6 +5,24 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.0] - 2026-06-11
+
+### Added
+- Added v0.17 rich ActivityPub support:
+  - ActivityStreams `Event` object creation with start/end time and location
+    metadata.
+  - CLI `events create`, `events invite`, `events rsvp`, and `events list`.
+  - CLI `actors show` and `actors set-type` for `Person`, `Group`, and
+    `Organization` actor modes.
+  - D1 migration `016_rich_activitypub_v2.sql` for actor type and event
+    metadata.
+- Added automated core coverage for Event JSON generation and followers-only
+  visibility on rich objects.
+
+### Changed
+- Updated README and positioning docs for personal, group/community, and
+  small-business deployment patterns.
+
 ## [1.18.0] - 2026-06-11
 
 ### Added

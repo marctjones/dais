@@ -83,6 +83,24 @@ creator segments (e.g. adult content → moderation/DMCA/GDPR burden). That's
 sequencing of outreach, not an exclusion — creators are part of a healthy
 ecosystem, hosted on the same rails.
 
+### Also supported — families, communities, and small businesses
+
+The same single-user server can represent more than one social posture:
+
+- **Personal presence**: `@yourname@yourdomain.com`, matching the pattern people
+  already understand from email and personal homepages.
+- **Small-group/community presence**: a managed `Group` actor for a family,
+  close community, club, or project where one operator maintains the server.
+- **Business presence**: `@social@businessdomain.com`, a managed `Organization`
+  actor that gives a business a Fediverse identity without replacing its main
+  website.
+
+These are not a move toward a general multi-tenant platform. They are
+deployment modes for the same owner-operated dais instance: one operator, clear
+posting identity, private-by-default visibility rules, and Mastodon-safe
+fallbacks when richer ActivityStreams semantics are not understood by a remote
+server.
+
 ---
 
 ## 3. Protocols
@@ -144,15 +162,16 @@ default-open federation.
 |---|---|
 | ActivityPub core (follow/inbox/outbox/webfinger/delivery), outbound signing | **Mature / production** (Cloudflare) |
 | CLI / TUI management | **Mature** |
-| Inbound HTTP-signature **enforcement** | **Missing** (#60) |
-| Authorized-fetch read gating | **Not built** (#61) |
-| ATProto / Bluesky / PDS | **~50%, experimental**; sync + repo export TODO |
-| Bluesky **reading** (AppView) | **Not built** (#50 → #63) |
-| Private mode (home timeline, default-private, friends) | **Not built** (#62–#64) |
-| **E2EE DMs** | **Not built** — spike only (#71). *README's "encrypted messaging ✅" is currently false.* |
+| Inbound HTTP-signature enforcement | **Implemented for inbox POSTs** |
+| Authorized-fetch read gating | **Implemented for non-public and encrypted post pulls** |
+| ATProto / Bluesky / PDS | **Public-read compatibility floor; AppView work remains** |
+| Bluesky **reading** (AppView) | **Partial via PDS read floor; personal AppView is v0.16** |
+| Private mode (home timeline, default-private, friends) | **Implemented foundation; still hardening UX and lifecycle coverage** |
+| **E2EE DMs** | **Envelope/fallback lifecycle implemented; MLS decentralized DMs remain spike/prototype work (#71)** |
+| Rich ActivityPub objects | **v0.17 foundation: Article, Document, Event, Group, Organization with Mastodon-safe fallbacks** |
 | Media / R2 | **Basic**; metadata/presigned TODO |
 | Managed hosting (dais.cloud) | **Concept only** |
-| Rust integration tests | **None** (#67) |
+| Rust integration tests | **Core and client suites exist; broader live federation remains scripted/manual** |
 
 **Reality:** the *public single-user ActivityPub publisher* is largely built. The
 *private personal network* this document describes is mostly green-field on top of

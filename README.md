@@ -38,9 +38,13 @@ client and the core-based Cloudflare worker tree.
 - E2EE support includes a dais `encryptedMessage` envelope, Rust CLI
   encrypt/decrypt helpers, and keyless/split/trusted fallback modes for
   Mastodon-style recipients.
-- Rich ActivityPub object foundation supports creating ActivityStreams `Note`,
-  `Article`, and `Document` objects from the Rust CLI with title/summary
-  metadata while preserving Mastodon fallback status text.
+- Rich ActivityPub object support includes ActivityStreams `Note`, `Article`,
+  `Document`, and `Event` objects from the Rust CLI, including title/summary,
+  event time, and location metadata while preserving Mastodon fallback status
+  text.
+- Managed actor mode can publish the local ActivityPub actor as `Person`,
+  `Group`, or `Organization` for personal, community, and small-business
+  deployment patterns.
 
 Mastodon parity is not complete. Dais is currently best described as
 Mastodon-readable with a growing compatibility API, not a full Mastodon server
@@ -71,6 +75,8 @@ Common commands:
 cargo run --manifest-path client/Cargo.toml -- post create "private by default"
 cargo run --manifest-path client/Cargo.toml -- post create "public broadcast" --public --protocol both
 cargo run --manifest-path client/Cargo.toml -- post create "long-form private note" --object-type article --title "Long-form title" --summary "Short abstract" --protocol activitypub --remote
+cargo run --manifest-path client/Cargo.toml -- events create "Dinner" --starts-at 2026-06-12T18:00:00Z --location "Home" --remote
+cargo run --manifest-path client/Cargo.toml -- actors set-type organization --remote
 cargo run --manifest-path client/Cargo.toml -- timeline home --remote
 cargo run --manifest-path client/Cargo.toml -- friends list --remote
 cargo run --manifest-path client/Cargo.toml -- tui --remote

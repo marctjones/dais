@@ -46,6 +46,9 @@ pub struct PostDraft {
     pub object_type: ActivityObjectType,
     pub title: Option<String>,
     pub summary: Option<String>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+    pub location: Option<String>,
 }
 
 pub async fn update_activitypub_post(
@@ -262,6 +265,9 @@ struct CreateActivityInput<'a> {
     object_type: ActivityObjectType,
     title: Option<&'a str>,
     summary: Option<&'a str>,
+    starts_at: Option<&'a str>,
+    ends_at: Option<&'a str>,
+    location: Option<&'a str>,
 }
 
 impl PostDraft {
@@ -290,6 +296,9 @@ impl PostDraft {
             object_type: args.object_type,
             title: args.title,
             summary: args.summary,
+            starts_at: args.starts_at,
+            ends_at: args.ends_at,
+            location: args.location,
         })
     }
 }
@@ -304,7 +313,7 @@ pub async fn publish_post(
         anyhow::bail!("direct posts require at least one --to actor URL");
     }
     if draft.object_type != ActivityObjectType::Note && effective != Protocol::ActivityPub {
-        anyhow::bail!("Article and Document posts can only be sent to ActivityPub");
+        anyhow::bail!("rich ActivityPub objects can only be sent to ActivityPub");
     }
     if draft.encrypt && draft.object_type != ActivityObjectType::Note {
         anyhow::bail!("encrypted posts currently use Note fallback objects");
@@ -354,6 +363,9 @@ pub async fn publish_post(
             object_type: ActivityObjectType::Note,
             title: None,
             summary: None,
+            starts_at: None,
+            ends_at: None,
+            location: None,
         })?;
         let delivery_ids =
             create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -388,6 +400,9 @@ pub async fn publish_post(
                 draft.object_type,
                 draft.title.as_deref(),
                 draft.summary.as_deref(),
+                draft.starts_at.as_deref(),
+                draft.ends_at.as_deref(),
+                draft.location.as_deref(),
             )
             .await?;
 
@@ -403,6 +418,9 @@ pub async fn publish_post(
                 object_type: draft.object_type,
                 title: draft.title.as_deref(),
                 summary: draft.summary.as_deref(),
+                starts_at: draft.starts_at.as_deref(),
+                ends_at: draft.ends_at.as_deref(),
+                location: draft.location.as_deref(),
             })?;
             let delivery_ids =
                 create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -431,6 +449,9 @@ pub async fn publish_post(
                 draft.object_type,
                 draft.title.as_deref(),
                 draft.summary.as_deref(),
+                draft.starts_at.as_deref(),
+                draft.ends_at.as_deref(),
+                draft.location.as_deref(),
             )
             .await?;
 
@@ -446,6 +467,9 @@ pub async fn publish_post(
                 object_type: draft.object_type,
                 title: draft.title.as_deref(),
                 summary: draft.summary.as_deref(),
+                starts_at: draft.starts_at.as_deref(),
+                ends_at: draft.ends_at.as_deref(),
+                location: draft.location.as_deref(),
             })?;
             let delivery_ids =
                 create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -502,6 +526,21 @@ fn build_create_activity_json(input: CreateActivityInput<'_>) -> Result<String> 
 
     if let Some(summary) = input.summary {
         note["summary"] = serde_json::json!(summary);
+    }
+
+    if let Some(starts_at) = input.starts_at {
+        note["startTime"] = serde_json::json!(starts_at);
+    }
+
+    if let Some(ends_at) = input.ends_at {
+        note["endTime"] = serde_json::json!(ends_at);
+    }
+
+    if let Some(location) = input.location {
+        note["location"] = serde_json::json!({
+            "type": "Place",
+            "name": location
+        });
     }
 
     if let Some(in_reply_to) = input.in_reply_to {

@@ -13,8 +13,9 @@ mod tui;
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use cli::{
-    BlueskyCommand, Cli, Command, DeliveriesCommand, E2eeCommand, FollowCommand, FollowersCommand,
-    FriendsCommand, NotificationsCommand, PostCommand, SearchCommand, TimelineCommand,
+    ActorsCommand, BlueskyCommand, Cli, Command, DeliveriesCommand, E2eeCommand, EventsCommand,
+    FollowCommand, FollowersCommand, FriendsCommand, NotificationsCommand, PostCommand,
+    SearchCommand, TimelineCommand,
 };
 use config::ConfigStore;
 use d1::D1Client;
@@ -33,6 +34,7 @@ async fn main() -> Result<()> {
     let store = ConfigStore::default()?;
 
     match cli.command {
+        Command::Actors(command) => handle_actors(command).await?,
         Command::Bluesky(command) => handle_bluesky(command, &store).await?,
         Command::Post(command) => handle_post(command, &store).await?,
         Command::Search(command) => handle_search(command).await?,
@@ -43,6 +45,7 @@ async fn main() -> Result<()> {
         Command::Notifications(command) => handle_notifications(command).await?,
         Command::Deliveries(command) => handle_deliveries(command).await?,
         Command::E2ee(command) => handle_e2ee(command).await?,
+        Command::Events(command) => handle_events(command, &store).await?,
         Command::Doctor(args) => handle_doctor(args).await?,
         Command::Completions { shell } => {
             let mut command = Cli::command();
@@ -66,6 +69,41 @@ async fn handle_doctor(args: cli::DoctorArgs) -> Result<()> {
     if report.has_failures() {
         std::process::exit(1);
     }
+    Ok(())
+}
+
+async fn handle_actors(command: ActorsCommand) -> Result<()> {
+    match command {
+        ActorsCommand::Show { remote, username } => {
+            let db = D1Client::new(remote)?;
+            let actor = db
+                .get_actor(&username)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("actor not found: {username}"))?;
+            println!("Actor: {}", actor.id);
+            println!("Username: {}", actor.username);
+            println!(
+                "Type: {}",
+                actor.actor_type.unwrap_or_else(|| "Person".to_string())
+            );
+            if let Some(display_name) = actor.display_name {
+                println!("Name: {display_name}");
+            }
+            if let Some(summary) = actor.summary {
+                println!("Summary: {summary}");
+            }
+        }
+        ActorsCommand::SetType {
+            actor_type,
+            remote,
+            username,
+        } => {
+            let db = D1Client::new(remote)?;
+            db.set_actor_type(&username, actor_type).await?;
+            println!("@{username} actor type set to {actor_type}");
+        }
+    }
+
     Ok(())
 }
 
@@ -247,6 +285,9 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
                 object_type: args.object_type,
                 title: args.title,
                 summary: args.summary,
+                starts_at: args.starts_at,
+                ends_at: args.ends_at,
+                location: args.location,
                 to: args.to,
                 remote: args.remote,
             })?;
@@ -384,6 +425,124 @@ fn print_activity_outcome(label: &str, outcome: &ActivityOutcome) {
             println!("  {delivery_id}");
         }
     }
+}
+
+async fn handle_events(command: EventsCommand, store: &ConfigStore) -> Result<()> {
+    match command {
+        EventsCommand::Create(args) => {
+            let db = D1Client::new(args.remote)?;
+            let text = args.description.unwrap_or_else(|| args.title.clone());
+            let draft = PostDraft {
+                text,
+                visibility: if args.public {
+                    routing::Visibility::Public
+                } else {
+                    args.visibility
+                },
+                protocol: Protocol::ActivityPub,
+                encrypt: false,
+                recipients: BTreeMap::new(),
+                reply_to: None,
+                to: args.to,
+                e2ee_fallback: cli::E2eeFallbackMode::Strict,
+                object_type: cli::ActivityObjectType::Event,
+                title: Some(args.title),
+                summary: None,
+                starts_at: Some(args.starts_at),
+                ends_at: args.ends_at,
+                location: args.location,
+            };
+            match publish_post(draft, store, &db).await? {
+                PostOutcome::ActivityPub {
+                    post_id,
+                    delivery_ids,
+                    ..
+                } => {
+                    println!("Event stored");
+                    println!("Post: {post_id}");
+                    println!("Deliveries: {}", delivery_ids.len());
+                    for id in delivery_ids {
+                        println!("  {id}");
+                    }
+                }
+                _ => anyhow::bail!("events publish only through ActivityPub"),
+            }
+        }
+        EventsCommand::Invite(args) => {
+            let db = D1Client::new(args.remote)?;
+            let now = chrono::Utc::now().to_rfc3339();
+            let activity_id = format!("{}#invites/{}", args.event_id, new_local_post_id());
+            let activity_json = serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": activity_id,
+                "type": "Invite",
+                "actor": args.local_actor,
+                "published": now,
+                "to": [args.actor],
+                "object": args.event_id
+            })
+            .to_string();
+            let delivery_ids = db
+                .create_activity_deliveries(d1::ActivityDeliveryInsert {
+                    post_id: &args.event_id,
+                    actor_id: &args.local_actor,
+                    activity_type: "Invite",
+                    activity_json: &activity_json,
+                    target_inboxes: &[args.inbox],
+                })
+                .await?;
+            println!("Invite queued: {activity_id}");
+            println!("Deliveries: {}", delivery_ids.len());
+        }
+        EventsCommand::Rsvp(args) => {
+            let db = D1Client::new(args.remote)?;
+            let now = chrono::Utc::now().to_rfc3339();
+            let response = args.response.to_string();
+            let activity_id = format!(
+                "{}#event-{}s/{}",
+                args.actor,
+                response.to_ascii_lowercase(),
+                new_local_post_id()
+            );
+            let activity_json = serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": activity_id,
+                "type": response,
+                "actor": args.actor,
+                "published": now,
+                "object": args.event_id
+            })
+            .to_string();
+            let target_inboxes: Vec<String> = args.inbox.into_iter().collect();
+            let delivery_ids = db
+                .create_activity_deliveries(d1::ActivityDeliveryInsert {
+                    post_id: &args.event_id,
+                    actor_id: &args.actor,
+                    activity_type: &response,
+                    activity_json: &activity_json,
+                    target_inboxes: &target_inboxes,
+                })
+                .await?;
+            println!("{response} queued: {activity_id}");
+            println!("Deliveries: {}", delivery_ids.len());
+        }
+        EventsCommand::List { limit, remote } => {
+            let db = D1Client::new(remote)?;
+            let events = db.list_events(limit).await?;
+            for event in events {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    event.start_time.unwrap_or_else(|| "-".to_string()),
+                    event.name.unwrap_or_else(|| "(untitled event)".to_string()),
+                    event.visibility.unwrap_or_else(|| "followers".to_string()),
+                    event.location.unwrap_or_else(|| "-".to_string()),
+                    event.id
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn new_local_post_id() -> String {

@@ -37,7 +37,7 @@ pub async fn get_actor(
     domain: &str,
 ) -> CoreResult<Person> {
     // Query for actor
-    let query = "SELECT id, username, display_name, summary, public_key, icon, image FROM actors WHERE username = ?1";
+    let query = "SELECT id, username, COALESCE(actor_type, 'Person') AS actor_type, display_name, summary, public_key, icon, image FROM actors WHERE username = ?1";
     let rows = db
         .execute(query, &[Value::String(username.to_string())])
         .await?;
@@ -75,6 +75,12 @@ pub async fn get_actor(
         domain.to_string(),
         public_key_pem,
     );
+
+    if let Some(Value::String(actor_type)) = row.get("actor_type") {
+        if matches!(actor_type.as_str(), "Person" | "Group" | "Organization") {
+            person.actor_type = actor_type.clone();
+        }
+    }
 
     // Add optional fields
     if let Some(Value::String(name)) = row.get("display_name") {

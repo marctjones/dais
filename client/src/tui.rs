@@ -695,6 +695,9 @@ impl App {
             object_type: crate::cli::ActivityObjectType::Note,
             title: None,
             summary: None,
+            starts_at: None,
+            ends_at: None,
+            location: None,
         };
 
         let tx = self.tx.clone();
