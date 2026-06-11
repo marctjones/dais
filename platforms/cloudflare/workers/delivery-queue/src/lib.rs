@@ -395,6 +395,7 @@ async fn process_delivery(
             d.target_url,
             d.post_id,
             d.retry_count,
+            d.activity_json,
             p.actor_id,
             p.content,
             p.content_html,
@@ -414,7 +415,7 @@ async fn process_delivery(
                 LIMIT 1
             ) AS delivery_recipient
         FROM deliveries d
-        JOIN posts p ON p.id = d.post_id
+        LEFT JOIN posts p ON p.id = d.post_id
         WHERE d.id = ?1 AND d.status IN ('queued', 'retry')
     "#;
 
@@ -440,7 +441,19 @@ async fn process_delivery(
 
     let row = &rows[0];
     let target_url = row.get("target_url").and_then(|v| v.as_str()).unwrap_or("");
-    let actor_id = row.get("actor_id").and_then(|v| v.as_str()).unwrap_or("");
+    let stored_activity_json = row.get("activity_json").and_then(|v| v.as_str());
+    let stored_activity = stored_activity_json
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+    let actor_id = row
+        .get("actor_id")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            stored_activity
+                .as_ref()
+                .and_then(|activity| activity.get("actor"))
+                .and_then(|value| value.as_str())
+        })
+        .unwrap_or("");
     let post_id = row.get("post_id").and_then(|v| v.as_str()).unwrap_or("");
     let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
     let content_html = row
@@ -471,21 +484,24 @@ async fn process_delivery(
 
     console_log!("Delivering to: {}", target_url);
 
-    let activity_json = build_create_activity_json(
-        actor_id,
-        post_id,
-        content,
-        content_html,
-        object_type,
-        name,
-        summary,
-        visibility,
-        published_at,
-        encrypted_message,
-        in_reply_to,
-        delivery_recipient,
-    )
-    .map_err(worker::Error::RustError)?;
+    let activity_json = match stored_activity_json {
+        Some(value) if !value.trim().is_empty() => value.to_string(),
+        _ => build_create_activity_json(
+            actor_id,
+            post_id,
+            content,
+            content_html,
+            object_type,
+            name,
+            summary,
+            visibility,
+            published_at,
+            encrypted_message,
+            in_reply_to,
+            delivery_recipient,
+        )
+        .map_err(worker::Error::RustError)?,
+    };
 
     let result = core
         .deliver_to_inbox(

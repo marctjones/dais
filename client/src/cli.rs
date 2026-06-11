@@ -170,6 +170,18 @@ pub enum TopLevelPostCommand {
     Create(CreatePostArgs),
     /// List recent posts from D1.
     List(ListPostsArgs),
+    /// Update a local ActivityPub post and queue an Update for followers.
+    Update(UpdatePostArgs),
+    /// Delete a local ActivityPub post and queue a Delete for followers.
+    Delete(ActivityPubObjectArgs),
+    /// Like a remote ActivityPub object.
+    Like(ActivityPubObjectArgs),
+    /// Undo a local Like activity for a remote ActivityPub object.
+    Unlike(ActivityPubObjectArgs),
+    /// Boost/reblog a remote ActivityPub object.
+    Boost(ActivityPubObjectArgs),
+    /// Undo a local Announce activity for a remote ActivityPub object.
+    Unboost(ActivityPubObjectArgs),
 }
 
 #[derive(Args)]
@@ -276,6 +288,30 @@ pub struct ListPostsArgs {
     pub limit: u16,
     #[arg(long)]
     pub remote: bool,
+}
+
+#[derive(Args)]
+pub struct UpdatePostArgs {
+    pub post_id: String,
+    pub text: String,
+    #[arg(long)]
+    pub remote: bool,
+    /// Local actor URL.
+    #[arg(long, default_value = "https://social.dais.social/users/social")]
+    pub actor: String,
+}
+
+#[derive(Args)]
+pub struct ActivityPubObjectArgs {
+    pub object_id: String,
+    #[arg(long)]
+    pub remote: bool,
+    /// Local actor URL.
+    #[arg(long, default_value = "https://social.dais.social/users/social")]
+    pub actor: String,
+    /// Target inbox override. If omitted, dais fetches the object actor.
+    #[arg(long)]
+    pub inbox: Option<String>,
 }
 
 #[derive(Subcommand)]

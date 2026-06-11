@@ -5,6 +5,19 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.4] - 2026-06-11
+
+### Added
+- Added Rust CLI ActivityPub outbound actions for server-to-server Mastodon
+  interop:
+  - `dais post update`
+  - `dais post delete`
+  - `dais post like` / `dais post unlike`
+  - `dais post boost` / `dais post unboost`
+- Added generic queued ActivityPub delivery payloads so the delivery worker can
+  sign and send non-Create activities (`Update`, `Delete`, `Like`, `Announce`,
+  and `Undo`) through the same production delivery path.
+
 ## [1.17.3] - 2026-06-11
 
 ### Fixed

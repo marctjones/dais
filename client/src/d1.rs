@@ -32,6 +32,14 @@ pub struct EncryptedPostInsert<'a> {
     pub in_reply_to: Option<&'a str>,
 }
 
+pub struct ActivityDeliveryInsert<'a> {
+    pub post_id: &'a str,
+    pub actor_id: &'a str,
+    pub activity_type: &'a str,
+    pub activity_json: &'a str,
+    pub target_inboxes: &'a [String],
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct D1User {
@@ -434,6 +442,115 @@ impl D1Client {
         }
 
         Ok(delivery_ids)
+    }
+
+    pub async fn create_activity_deliveries(
+        &self,
+        input: ActivityDeliveryInsert<'_>,
+    ) -> Result<Vec<String>> {
+        let mut targets: Vec<String> = input
+            .target_inboxes
+            .iter()
+            .filter(|value| !value.trim().is_empty())
+            .cloned()
+            .collect();
+
+        if targets.is_empty() {
+            targets = self
+                .list_followers(500)
+                .await?
+                .into_iter()
+                .filter(|row| row.status == "approved")
+                .map(|row| {
+                    row.follower_shared_inbox
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or(row.follower_inbox)
+                })
+                .collect();
+        }
+
+        targets.sort();
+        targets.dedup();
+
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let mut delivery_ids = Vec::new();
+        for target_url in targets {
+            let delivery_id = format!("delivery-{}", uuid_like());
+            let sql = format!(
+                r#"
+                INSERT INTO deliveries (
+                    id, post_id, target_type, target_url, protocol,
+                    status, retry_count, created_at, activity_type, activity_json
+                ) VALUES (
+                    {id}, {post_id}, 'inbox', {target_url}, 'activitypub',
+                    'queued', 0, {created_at}, {activity_type}, {activity_json}
+                )
+                "#,
+                id = sql_literal(&delivery_id),
+                post_id = sql_literal(input.post_id),
+                target_url = sql_literal(&target_url),
+                created_at = sql_literal(&created_at),
+                activity_type = sql_literal(input.activity_type),
+                activity_json = sql_literal(input.activity_json),
+            );
+            self.execute(&sql)?;
+            delivery_ids.push(delivery_id);
+        }
+
+        let _ = input.actor_id;
+        Ok(delivery_ids)
+    }
+
+    pub async fn update_post_content(&self, post_id: &str, content: &str) -> Result<()> {
+        let content_html = escape_html(content);
+        let sql = format!(
+            r#"
+            UPDATE posts
+            SET content = {content}, content_html = {content_html}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = {post_id}
+            "#,
+            content = sql_literal(content),
+            content_html = sql_literal(&content_html),
+            post_id = sql_literal(post_id),
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn delete_post(&self, post_id: &str) -> Result<()> {
+        let sql = format!("DELETE FROM posts WHERE id = {}", sql_literal(post_id));
+        self.execute(&sql)
+    }
+
+    pub async fn record_interaction(
+        &self,
+        activity_id: &str,
+        interaction_type: &str,
+        actor_id: &str,
+        object_id: &str,
+    ) -> Result<()> {
+        let sql = format!(
+            r#"
+            INSERT OR REPLACE INTO interactions (
+                id, type, actor_id, object_url, created_at
+            ) VALUES (
+                {id}, {interaction_type}, {actor_id}, {object_id}, {created_at}
+            )
+            "#,
+            id = sql_literal(activity_id),
+            interaction_type = sql_literal(interaction_type),
+            actor_id = sql_literal(actor_id),
+            object_id = sql_literal(object_id),
+            created_at = sql_literal(&chrono::Utc::now().to_rfc3339()),
+        );
+        self.execute(&sql)
+    }
+
+    pub async fn remove_interaction(&self, activity_id: &str) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM interactions WHERE id = {}",
+            sql_literal(activity_id)
+        );
+        self.execute(&sql)
     }
 
     pub async fn list_following(&self, limit: u16) -> Result<Vec<D1FollowingRow>> {

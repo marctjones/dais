@@ -18,7 +18,10 @@ use cli::{
 };
 use config::ConfigStore;
 use d1::D1Client;
-use posting::{publish_post, PostDraft, PostOutcome};
+use posting::{
+    delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
+    ActivityOutcome, PostDraft, PostOutcome,
+};
 use rand::RngCore;
 use routing::Protocol;
 use std::collections::BTreeMap;
@@ -321,9 +324,60 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
             let posts = db.list_posts(args.limit).await?;
             output::print_posts(&posts);
         }
+        cli::TopLevelPostCommand::Update(args) => {
+            let db = D1Client::new(args.remote)?;
+            let outcome =
+                update_activitypub_post(&db, &args.actor, &args.post_id, &args.text).await?;
+            print_activity_outcome("Queued ActivityPub Update", &outcome);
+        }
+        cli::TopLevelPostCommand::Delete(args) => {
+            let db = D1Client::new(args.remote)?;
+            let outcome = delete_activitypub_post(&db, &args.actor, &args.object_id).await?;
+            print_activity_outcome("Queued ActivityPub Delete", &outcome);
+        }
+        cli::TopLevelPostCommand::Like(args) => {
+            let db = D1Client::new(args.remote)?;
+            let outcome =
+                publish_interaction(&db, &args.actor, &args.object_id, "like", false, args.inbox)
+                    .await?;
+            print_activity_outcome("Queued ActivityPub Like", &outcome);
+        }
+        cli::TopLevelPostCommand::Unlike(args) => {
+            let db = D1Client::new(args.remote)?;
+            let outcome =
+                publish_interaction(&db, &args.actor, &args.object_id, "like", true, args.inbox)
+                    .await?;
+            print_activity_outcome("Queued ActivityPub Undo Like", &outcome);
+        }
+        cli::TopLevelPostCommand::Boost(args) => {
+            let db = D1Client::new(args.remote)?;
+            let outcome =
+                publish_interaction(&db, &args.actor, &args.object_id, "boost", false, args.inbox)
+                    .await?;
+            print_activity_outcome("Queued ActivityPub Announce", &outcome);
+        }
+        cli::TopLevelPostCommand::Unboost(args) => {
+            let db = D1Client::new(args.remote)?;
+            let outcome =
+                publish_interaction(&db, &args.actor, &args.object_id, "boost", true, args.inbox)
+                    .await?;
+            print_activity_outcome("Queued ActivityPub Undo Announce", &outcome);
+        }
     }
 
     Ok(())
+}
+
+fn print_activity_outcome(label: &str, outcome: &ActivityOutcome) {
+    println!("{label}");
+    println!("Activity: {}", outcome.activity_id);
+    println!("Deliveries queued: {}", outcome.delivery_ids.len());
+    if !outcome.delivery_ids.is_empty() {
+        println!("Delivery IDs:");
+        for delivery_id in &outcome.delivery_ids {
+            println!("  {delivery_id}");
+        }
+    }
 }
 
 pub(crate) fn new_local_post_id() -> String {

@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use crate::atproto::AtprotoClient;
 use crate::cli::{ActivityObjectType, CreatePostArgs, E2eeFallbackMode};
 use crate::config::ConfigStore;
-use crate::d1::{D1Client, EncryptedPostInsert};
+use crate::d1::{ActivityDeliveryInsert, D1Client, EncryptedPostInsert};
 use crate::e2ee;
 use crate::new_local_post_id;
 use crate::routing::{effective_protocol, Protocol, Visibility};
@@ -29,6 +29,11 @@ pub enum PostOutcome {
     },
 }
 
+pub struct ActivityOutcome {
+    pub activity_id: String,
+    pub delivery_ids: Vec<String>,
+}
+
 pub struct PostDraft {
     pub text: String,
     pub visibility: Visibility,
@@ -41,6 +46,211 @@ pub struct PostDraft {
     pub object_type: ActivityObjectType,
     pub title: Option<String>,
     pub summary: Option<String>,
+}
+
+pub async fn update_activitypub_post(
+    db: &D1Client,
+    actor_id: &str,
+    post_id: &str,
+    content: &str,
+) -> Result<ActivityOutcome> {
+    db.update_post_content(post_id, content).await?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let activity_id = format!("{post_id}#updates/{}", activity_suffix(&now));
+    let followers = format!("{actor_id}/followers");
+    let activity_json = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": activity_id,
+        "type": "Update",
+        "actor": actor_id,
+        "published": now,
+        "to": ["https://www.w3.org/ns/activitystreams#Public"],
+        "cc": [followers],
+        "object": {
+            "id": post_id,
+            "type": "Note",
+            "attributedTo": actor_id,
+            "content": content,
+            "updated": chrono::Utc::now().to_rfc3339(),
+            "to": ["https://www.w3.org/ns/activitystreams#Public"],
+            "cc": [format!("{actor_id}/followers")]
+        }
+    })
+    .to_string();
+
+    let delivery_ids = db
+        .create_activity_deliveries(ActivityDeliveryInsert {
+            post_id,
+            actor_id,
+            activity_type: "Update",
+            activity_json: &activity_json,
+            target_inboxes: &[],
+        })
+        .await?;
+
+    Ok(ActivityOutcome {
+        activity_id,
+        delivery_ids,
+    })
+}
+
+pub async fn delete_activitypub_post(
+    db: &D1Client,
+    actor_id: &str,
+    post_id: &str,
+) -> Result<ActivityOutcome> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let activity_id = format!("{post_id}#delete/{}", activity_suffix(&now));
+    let activity_json = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": activity_id,
+        "type": "Delete",
+        "actor": actor_id,
+        "published": now,
+        "to": ["https://www.w3.org/ns/activitystreams#Public"],
+        "cc": [format!("{actor_id}/followers")],
+        "object": post_id
+    })
+    .to_string();
+
+    let delivery_ids = db
+        .create_activity_deliveries(ActivityDeliveryInsert {
+            post_id,
+            actor_id,
+            activity_type: "Delete",
+            activity_json: &activity_json,
+            target_inboxes: &[],
+        })
+        .await?;
+    db.delete_post(post_id).await?;
+
+    Ok(ActivityOutcome {
+        activity_id,
+        delivery_ids,
+    })
+}
+
+pub async fn publish_interaction(
+    db: &D1Client,
+    actor_id: &str,
+    object_id: &str,
+    interaction: &str,
+    undo: bool,
+    target_inbox: Option<String>,
+) -> Result<ActivityOutcome> {
+    let target_inbox = match target_inbox {
+        Some(inbox) => inbox,
+        None => resolve_object_inbox(object_id).await?,
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let activity_type = match interaction {
+        "like" => "Like",
+        "boost" => "Announce",
+        other => anyhow::bail!("unsupported interaction type {other}"),
+    };
+    let interaction_activity_id = format!(
+        "{actor_id}#{}s/{}",
+        interaction,
+        activity_suffix(object_id)
+    );
+
+    let (activity_id, delivery_type, activity_json) = if undo {
+        let undo_id = format!(
+            "{actor_id}#undos/{}/{}",
+            interaction,
+            activity_suffix(object_id)
+        );
+        (
+            undo_id.clone(),
+            "Undo",
+            serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": undo_id,
+                "type": "Undo",
+                "actor": actor_id,
+                "published": now,
+                "to": ["https://www.w3.org/ns/activitystreams#Public"],
+                "cc": [format!("{actor_id}/followers")],
+                "object": {
+                    "id": interaction_activity_id,
+                    "type": activity_type,
+                    "actor": actor_id,
+                    "object": object_id
+                }
+            })
+            .to_string(),
+        )
+    } else {
+        (
+            interaction_activity_id.clone(),
+            activity_type,
+            serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": interaction_activity_id,
+                "type": activity_type,
+                "actor": actor_id,
+                "published": now,
+                "to": ["https://www.w3.org/ns/activitystreams#Public"],
+                "cc": [format!("{actor_id}/followers")],
+                "object": object_id
+            })
+            .to_string(),
+        )
+    };
+
+    let delivery_ids = db
+        .create_activity_deliveries(ActivityDeliveryInsert {
+            post_id: object_id,
+            actor_id,
+            activity_type: delivery_type,
+            activity_json: &activity_json,
+            target_inboxes: &[target_inbox],
+        })
+        .await?;
+
+    if undo {
+        db.remove_interaction(&interaction_activity_id).await?;
+    } else {
+        db.record_interaction(&interaction_activity_id, interaction, actor_id, object_id)
+            .await?;
+    }
+
+    Ok(ActivityOutcome {
+        activity_id,
+        delivery_ids,
+    })
+}
+
+async fn resolve_object_inbox(object_id: &str) -> Result<String> {
+    let client = reqwest::Client::new();
+    let object: serde_json::Value = client
+        .get(object_id)
+        .header("Accept", "application/activity+json, application/ld+json")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let actor = object
+        .get("attributedTo")
+        .or_else(|| object.get("actor"))
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow!("could not resolve actor from remote object"))?;
+    let actor_doc: serde_json::Value = client
+        .get(actor)
+        .header("Accept", "application/activity+json, application/ld+json")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    actor_doc
+        .get("endpoints")
+        .and_then(|value| value.get("sharedInbox"))
+        .and_then(|value| value.as_str())
+        .or_else(|| actor_doc.get("inbox").and_then(|value| value.as_str()))
+        .map(ToString::to_string)
+        .ok_or_else(|| anyhow!("could not resolve inbox for remote actor {actor}"))
 }
 
 struct CreateActivityInput<'a> {
@@ -332,4 +542,14 @@ fn activity_cc(visibility: &str, followers_collection: &str) -> Vec<String> {
         "public" | "unlisted" => vec![followers_collection.to_string()],
         _ => Vec::new(),
     }
+}
+
+fn activity_suffix(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    Sha256::digest(value.as_bytes())
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
