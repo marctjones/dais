@@ -1,10 +1,11 @@
-use crate::error::{CoreError, CoreResult};
 /// ActivityPub outbox - retrieve and format posts for federation
 ///
 /// Handles queries for actor's outbox and individual posts
+use crate::activitypub::ANONYMOUS_PUBLIC_POST_SQL_PREDICATE;
+use crate::error::{CoreError, CoreResult};
 use crate::traits::DatabaseProvider;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// A post with all its data
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,18 +70,18 @@ pub async fn get_outbox_posts(db: &dyn DatabaseProvider, username: &str) -> Core
 
     // Public outbox is an anonymous read surface. Do not list unlisted,
     // followers/direct, or encrypted fallback records here.
-    let posts_query = r#"
+    let posts_query = format!(
+        r#"
         SELECT id, actor_id, content, content_html, visibility, published_at, in_reply_to,
                media_attachments, atproto_uri, encrypted_message
         FROM posts
         WHERE actor_id = ?1
-          AND visibility = 'public'
-          AND encrypted_message IS NULL
-          AND content NOT LIKE '%End-to-end encrypted message%'
+          AND {ANONYMOUS_PUBLIC_POST_SQL_PREDICATE}
         ORDER BY published_at DESC
-    "#;
+    "#
+    );
 
-    let rows = db.execute(posts_query, &[Value::String(actor_id)]).await?;
+    let rows = db.execute(&posts_query, &[Value::String(actor_id)]).await?;
 
     let mut posts = Vec::new();
     for row in rows {
@@ -346,4 +347,149 @@ pub async fn get_post_interactions(
         likes,
         boosts,
     })
+}
+
+/// Build a Mastodon-compatible ActivityPub Note object from a core post.
+pub fn build_note_object(post: &Post, interactions: Option<&PostInteractions>) -> Value {
+    let followers_collection = format!("{}/followers", post.actor_id);
+    let (to, cc) = note_audience(&post.visibility, &followers_collection);
+    let (reply_count, like_count, boost_count) = interactions
+        .map(|interactions| {
+            (
+                interactions.replies.len(),
+                interactions.likes.len(),
+                interactions.boosts.len(),
+            )
+        })
+        .unwrap_or((0, 0, 0));
+
+    let mut note = json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "type": "Note",
+        "id": post.id,
+        "url": post.id,
+        "attributedTo": post.actor_id,
+        "content": post.content,
+        "published": post.published_at,
+        "to": to,
+        "cc": cc,
+        "replies": {
+            "type": "Collection",
+            "id": format!("{}/replies", post.id),
+            "totalItems": reply_count
+        },
+        "likes": {
+            "type": "Collection",
+            "id": format!("{}/likes", post.id),
+            "totalItems": like_count
+        },
+        "shares": {
+            "type": "Collection",
+            "id": format!("{}/shares", post.id),
+            "totalItems": boost_count
+        }
+    });
+
+    if let Some(ref content_html) = post.content_html {
+        note["contentMap"] = json!({ "en": content_html });
+    }
+
+    if let Some(ref in_reply_to) = post.in_reply_to {
+        note["inReplyTo"] = json!(in_reply_to);
+    }
+
+    if let Some(ref attachments_json) = post.media_attachments {
+        if let Ok(attachments) = serde_json::from_str::<Value>(attachments_json) {
+            note["attachment"] = attachments;
+        }
+    }
+
+    if let Some(ref encrypted_message) = post.encrypted_message {
+        if let Ok(encrypted) = serde_json::from_str::<Value>(encrypted_message) {
+            note["encryptedMessage"] = encrypted;
+        }
+    }
+
+    note
+}
+
+fn note_audience(visibility: &str, followers_collection: &str) -> (Vec<String>, Vec<String>) {
+    match visibility {
+        "public" => (
+            vec!["https://www.w3.org/ns/activitystreams#Public".to_string()],
+            vec![followers_collection.to_string()],
+        ),
+        "unlisted" => (
+            vec![followers_collection.to_string()],
+            vec!["https://www.w3.org/ns/activitystreams#Public".to_string()],
+        ),
+        "direct" => (Vec::new(), Vec::new()),
+        _ => (vec![followers_collection.to_string()], Vec::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_note_object, Interaction, Post, PostInteractions, Reply};
+
+    fn post_with_visibility(visibility: &str) -> Post {
+        Post {
+            id: "https://social.example/users/social/posts/1".to_string(),
+            actor_id: "https://social.example/users/social".to_string(),
+            content: "hello".to_string(),
+            content_html: None,
+            visibility: visibility.to_string(),
+            published_at: "2026-06-11T00:00:00Z".to_string(),
+            in_reply_to: None,
+            media_attachments: None,
+            atproto_uri: None,
+            encrypted_message: None,
+        }
+    }
+
+    #[test]
+    fn note_builder_exposes_mastodon_interaction_collections() {
+        let post = post_with_visibility("public");
+        let interactions = PostInteractions {
+            replies: vec![Reply {
+                actor_username: "alice".to_string(),
+                actor_display_name: "Alice".to_string(),
+                actor_avatar_url: String::new(),
+                content: "reply".to_string(),
+                published_at: "2026-06-11T00:01:00Z".to_string(),
+            }],
+            likes: vec![Interaction {
+                actor_username: "bob".to_string(),
+                actor_display_name: "Bob".to_string(),
+                actor_avatar_url: String::new(),
+                created_at: None,
+            }],
+            boosts: vec![Interaction {
+                actor_username: "carol".to_string(),
+                actor_display_name: "Carol".to_string(),
+                actor_avatar_url: String::new(),
+                created_at: None,
+            }],
+        };
+
+        let note = build_note_object(&post, Some(&interactions));
+
+        assert_eq!(note["type"], "Note");
+        assert_eq!(note["url"], post.id);
+        assert_eq!(note["replies"]["totalItems"], 1);
+        assert_eq!(note["likes"]["totalItems"], 1);
+        assert_eq!(note["shares"]["totalItems"], 1);
+    }
+
+    #[test]
+    fn note_builder_keeps_followers_only_out_of_public_to() {
+        let post = post_with_visibility("followers");
+        let note = build_note_object(&post, None);
+
+        assert_eq!(
+            note["to"],
+            serde_json::json!(["https://social.example/users/social/followers"])
+        );
+        assert_eq!(note["cc"], serde_json::json!([]));
+    }
 }

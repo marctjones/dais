@@ -1,4 +1,5 @@
 use crate::activitypub::types::Person;
+use crate::activitypub::ANONYMOUS_PUBLIC_POST_SQL_PREDICATE;
 use crate::error::{CoreError, CoreResult};
 /// Platform-agnostic actor logic for ActivityPub
 ///
@@ -109,16 +110,16 @@ pub async fn get_actor_counts(
     actor_id: &str,
 ) -> CoreResult<ActorCounts> {
     // Public profile counts must match the anonymous public outbox surface.
-    let post_count_query = r#"
+    let post_count_query = format!(
+        r#"
         SELECT COUNT(*) as count
         FROM posts
         WHERE actor_id = ?1
-          AND visibility = 'public'
-          AND encrypted_message IS NULL
-          AND content NOT LIKE '%End-to-end encrypted message%'
-    "#;
+          AND {ANONYMOUS_PUBLIC_POST_SQL_PREDICATE}
+    "#
+    );
     let post_rows = db
-        .execute(post_count_query, &[Value::String(actor_id.to_string())])
+        .execute(&post_count_query, &[Value::String(actor_id.to_string())])
         .await?;
 
     let post_count = if !post_rows.is_empty() {

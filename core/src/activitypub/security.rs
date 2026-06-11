@@ -10,6 +10,11 @@ pub enum ReadPolicy {
     Private,
 }
 
+pub const E2EE_FALLBACK_MARKER: &str = "End-to-end encrypted message";
+
+pub const ANONYMOUS_PUBLIC_POST_SQL_PREDICATE: &str =
+    "visibility = 'public' AND encrypted_message IS NULL AND content NOT LIKE '%End-to-end encrypted message%'";
+
 pub fn read_policy_from_visibility(visibility: &str) -> ReadPolicy {
     match visibility {
         "public" | "unlisted" => ReadPolicy::Public,
@@ -24,6 +29,24 @@ pub fn requires_authorized_fetch(visibility: &str) -> bool {
         read_policy_from_visibility(visibility),
         ReadPolicy::FollowersOnly | ReadPolicy::Private
     )
+}
+
+pub fn is_anonymous_public_post(
+    visibility: &str,
+    encrypted_message: Option<&str>,
+    content: &str,
+) -> bool {
+    visibility == "public" && encrypted_message.is_none() && !content.contains(E2EE_FALLBACK_MARKER)
+}
+
+pub fn requires_authorized_post_fetch(
+    visibility: &str,
+    encrypted_message: Option<&str>,
+    content: &str,
+) -> bool {
+    requires_authorized_fetch(visibility)
+        || encrypted_message.is_some()
+        || content.contains(E2EE_FALLBACK_MARKER)
 }
 
 pub async fn is_blocked_actor(db: &dyn DatabaseProvider, actor_url: &str) -> CoreResult<bool> {
@@ -98,8 +121,8 @@ fn blocked_domain_matches_actor(blocked_domain: &str, actor_url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        blocked_domain_matches_actor, read_policy_from_visibility, requires_authorized_fetch,
-        ReadPolicy,
+        blocked_domain_matches_actor, is_anonymous_public_post, read_policy_from_visibility,
+        requires_authorized_fetch, requires_authorized_post_fetch, ReadPolicy,
     };
 
     #[test]
@@ -119,6 +142,41 @@ mod tests {
         assert_eq!(read_policy_from_visibility("direct"), ReadPolicy::Private);
         assert!(requires_authorized_fetch("followers"));
         assert!(requires_authorized_fetch("direct"));
+    }
+
+    #[test]
+    fn anonymous_public_posts_exclude_private_and_encrypted_fallbacks() {
+        assert!(is_anonymous_public_post("public", None, "hello"));
+        assert!(!is_anonymous_public_post("unlisted", None, "hello"));
+        assert!(!is_anonymous_public_post("followers", None, "hello"));
+        assert!(!is_anonymous_public_post("direct", None, "hello"));
+        assert!(!is_anonymous_public_post(
+            "public",
+            Some(r#"{"v":1}"#),
+            "hello"
+        ));
+        assert!(!is_anonymous_public_post(
+            "public",
+            None,
+            "End-to-end encrypted message"
+        ));
+    }
+
+    #[test]
+    fn authorized_post_fetch_includes_visibility_and_legacy_encrypted_rows() {
+        assert!(!requires_authorized_post_fetch("public", None, "hello"));
+        assert!(requires_authorized_post_fetch("followers", None, "hello"));
+        assert!(requires_authorized_post_fetch("direct", None, "hello"));
+        assert!(requires_authorized_post_fetch(
+            "public",
+            Some(r#"{"v":1}"#),
+            "hello"
+        ));
+        assert!(requires_authorized_post_fetch(
+            "public",
+            None,
+            "End-to-end encrypted message"
+        ));
     }
 
     #[test]

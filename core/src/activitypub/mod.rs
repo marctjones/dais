@@ -22,11 +22,13 @@ pub use delivery::{
 pub use friends::{get_friends, Friend};
 pub use inbox::{create_notification, process_inbox_activity, ContentModerator, ModerationResult};
 pub use outbox::{
-    get_outbox_posts, get_post, get_post_interactions, Interaction, Post, PostInteractions, Reply,
+    build_note_object, get_outbox_posts, get_post, get_post_interactions, Interaction, Post,
+    PostInteractions, Reply,
 };
 pub use security::{
-    is_approved_follower, is_blocked_actor, read_policy_from_visibility, requires_authorized_fetch,
-    ReadPolicy,
+    is_anonymous_public_post, is_approved_follower, is_blocked_actor, read_policy_from_visibility,
+    requires_authorized_fetch, requires_authorized_post_fetch, ReadPolicy,
+    ANONYMOUS_PUBLIC_POST_SQL_PREDICATE, E2EE_FALLBACK_MARKER,
 };
 pub use signatures::{
     build_signing_string, fetch_actor_public_key, sign_request, verify_digest, verify_request,

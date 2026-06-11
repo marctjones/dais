@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use dais_cloudflare::{D1Provider, WorkerHttpProvider};
-use dais_core::activitypub::requires_authorized_fetch;
+use dais_core::activitypub::{build_note_object, requires_authorized_post_fetch};
 use dais_core::activitypub::{HttpSignature, Post};
 use dais_core::{CoreConfig, CoreError, DaisCore};
 /// Refactored Outbox worker using dais-core
@@ -206,7 +206,7 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Authorized-fetch (#61): non-public and encrypted posts are only served to
     // an approved follower who signs the GET. Anonymous / non-follower requests
     // get 404, so the post's existence is not revealed on the pull side.
-    if requires_authorized_post_fetch(&post) {
+    if post_requires_authorized_fetch(&post) {
         if !is_authorized_follower(&req, &core, &activitypub_domain).await {
             worker::console_log!("Authorized-fetch denied for {}-only post", post.visibility);
             return Response::error("Not Found", 404);
@@ -221,8 +221,16 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         resp.headers_mut().set("Access-Control-Allow-Origin", "*")?;
         Ok(resp)
     } else {
+        let interactions = match core.get_post_interactions(post.id.clone()).await {
+            Ok(interactions) => interactions,
+            Err(e) => {
+                worker::console_log!("Error fetching post interactions: {}", e);
+                return Response::error(format!("Internal error: {}", e), 500);
+            }
+        };
+
         // Return ActivityPub JSON
-        let note_json = build_note_object(&post);
+        let note_json = build_note_object(&post, Some(&interactions));
 
         let mut resp = Response::from_json(&note_json)?;
         resp.headers_mut()
@@ -289,10 +297,12 @@ async fn is_authorized_follower(req: &Request, core: &DaisCore, ap_domain: &str)
         .unwrap_or(false)
 }
 
-fn requires_authorized_post_fetch(post: &Post) -> bool {
-    requires_authorized_fetch(&post.visibility)
-        || post.encrypted_message.is_some()
-        || post.content.contains("End-to-end encrypted message")
+fn post_requires_authorized_fetch(post: &Post) -> bool {
+    requires_authorized_post_fetch(
+        &post.visibility,
+        post.encrypted_message.as_deref(),
+        &post.content,
+    )
 }
 
 /// Build ActivityPub OrderedCollection for outbox
@@ -310,7 +320,7 @@ fn build_outbox_collection(domain: &str, username: &str, posts: &[Post]) -> serd
                 "published": post.published_at,
                 "to": ["https://www.w3.org/ns/activitystreams#Public"],
                 "cc": [format!("https://{}/users/{}/followers", domain, username)],
-                "object": build_note_object(post)
+                "object": build_note_object(post, None)
             })
         })
         .collect();
@@ -322,46 +332,6 @@ fn build_outbox_collection(domain: &str, username: &str, posts: &[Post]) -> serd
         "totalItems": items.len(),
         "orderedItems": items
     })
-}
-
-/// Build ActivityPub Note object from Post
-fn build_note_object(post: &Post) -> serde_json::Value {
-    let mut note = serde_json::json!({
-        "@context": "https://www.w3.org/ns/activitystreams",
-        "type": "Note",
-        "id": post.id,
-        "attributedTo": post.actor_id,
-        "content": post.content,
-        "published": post.published_at,
-        "to": if post.visibility == "public" {
-            vec!["https://www.w3.org/ns/activitystreams#Public"]
-        } else {
-            vec![]
-        }
-    });
-
-    // Add optional fields
-    if let Some(ref content_html) = post.content_html {
-        note["contentMap"] = serde_json::json!({ "en": content_html });
-    }
-
-    if let Some(ref in_reply_to) = post.in_reply_to {
-        note["inReplyTo"] = serde_json::json!(in_reply_to);
-    }
-
-    if let Some(ref attachments_json) = post.media_attachments {
-        if let Ok(attachments) = serde_json::from_str::<serde_json::Value>(attachments_json) {
-            note["attachment"] = attachments;
-        }
-    }
-
-    if let Some(ref encrypted_message) = post.encrypted_message {
-        if let Ok(encrypted) = serde_json::from_str::<serde_json::Value>(encrypted_message) {
-            note["encryptedMessage"] = encrypted;
-        }
-    }
-
-    note
 }
 
 fn render_outbox_html(domain: &str, username: &str, posts: &[Post]) -> String {
