@@ -38,10 +38,18 @@ pub struct EncryptedNotePayload {
     pub encrypted_message: EncryptedMessage,
 }
 
+#[allow(dead_code)]
 pub fn encrypt_message(
     plaintext: &str,
     recipients: &BTreeMap<String, String>,
 ) -> Result<EncryptedMessage> {
+    encrypt_message_with_content_key(plaintext, recipients).map(|(encrypted, _cek)| encrypted)
+}
+
+pub fn encrypt_message_with_content_key(
+    plaintext: &str,
+    recipients: &BTreeMap<String, String>,
+) -> Result<(EncryptedMessage, String)> {
     if recipients.is_empty() {
         bail!("at least one recipient public key is required");
     }
@@ -71,14 +79,17 @@ pub fn encrypt_message(
         });
     }
 
-    Ok(EncryptedMessage {
+    let content_key = STANDARD.encode(cek);
+    let encrypted = EncryptedMessage {
         v: 1,
         alg: "AES-256-GCM".to_string(),
         key_wrap: "RSA-OAEP-256".to_string(),
         iv: STANDARD.encode(nonce_bytes),
         ciphertext: STANDARD.encode(ciphertext),
         recipients: wrapped,
-    })
+    };
+
+    Ok((encrypted, content_key))
 }
 
 pub fn decrypt_message(
@@ -118,10 +129,22 @@ pub fn encrypted_note_payload(
     recipients: &BTreeMap<String, String>,
     view_url: Option<&str>,
 ) -> Result<EncryptedNotePayload> {
-    Ok(EncryptedNotePayload {
+    encrypted_note_payload_with_content_key(plaintext, recipients, view_url)
+        .map(|(payload, _cek)| payload)
+}
+
+pub fn encrypted_note_payload_with_content_key(
+    plaintext: &str,
+    recipients: &BTreeMap<String, String>,
+    view_url: Option<&str>,
+) -> Result<(EncryptedNotePayload, String)> {
+    let (encrypted_message, content_key) = encrypt_message_with_content_key(plaintext, recipients)?;
+    let payload = EncryptedNotePayload {
         content: fallback_content(view_url),
-        encrypted_message: encrypt_message(plaintext, recipients)?,
-    })
+        encrypted_message,
+    };
+
+    Ok((payload, content_key))
 }
 
 pub fn fallback_content(view_url: Option<&str>) -> String {
@@ -233,5 +256,43 @@ mod tests {
 
         assert!(fallback.contains("End-to-end encrypted message"));
         assert!(fallback.contains("https://dais.social/messages/1"));
+    }
+
+    #[test]
+    fn content_key_can_decrypt_hosted_read_fragment_payload() {
+        let (_private_pem, public_pem) = test_keypair();
+        let recipients = BTreeMap::from([(
+            "https://alice.example/actor#main-key".to_string(),
+            public_pem,
+        )]);
+        let (encrypted, content_key) =
+            encrypt_message_with_content_key("link key decrypts", &recipients).unwrap();
+        let cek = STANDARD.decode(content_key).unwrap();
+        let iv = STANDARD.decode(encrypted.iv).unwrap();
+        let ciphertext = STANDARD.decode(encrypted.ciphertext).unwrap();
+        let cipher = Aes256Gcm::new_from_slice(&cek).unwrap();
+        let plaintext = cipher
+            .decrypt(Nonce::from_slice(&iv), ciphertext.as_ref())
+            .unwrap();
+
+        assert_eq!(String::from_utf8(plaintext).unwrap(), "link key decrypts");
+    }
+
+    #[test]
+    fn keyless_fallback_does_not_contain_content_key() {
+        let (_private_pem, public_pem) = test_keypair();
+        let recipients = BTreeMap::from([(
+            "https://alice.example/actor#main-key".to_string(),
+            public_pem,
+        )]);
+        let (payload, content_key) = encrypted_note_payload_with_content_key(
+            "strict fallback",
+            &recipients,
+            Some("https://dais.social/messages/1"),
+        )
+        .unwrap();
+
+        assert!(!payload.content.contains(&content_key));
+        assert!(!payload.content.contains("#cek="));
     }
 }

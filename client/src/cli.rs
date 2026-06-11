@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::routing::{Protocol, Visibility};
 
@@ -133,6 +133,9 @@ pub struct CreatePostArgs {
     /// End-to-end encrypt the ActivityPub post.
     #[arg(long, alias = "e2ee")]
     pub encrypt: bool,
+    /// Encrypted fallback behavior for Mastodon/non-dais recipients.
+    #[arg(long, value_enum, default_value_t = E2eeFallbackMode::Strict)]
+    pub e2ee_fallback: E2eeFallbackMode,
     /// Recipient in key_id=public_key_pem_file form. Repeat for multiple recipients.
     #[arg(long = "recipient")]
     pub recipients: Vec<String>,
@@ -145,6 +148,16 @@ pub struct CreatePostArgs {
     /// Store/read against production D1 for ActivityPub encrypted posts.
     #[arg(long)]
     pub remote: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum E2eeFallbackMode {
+    /// Keyless fallback link. Most secure; key must arrive out of band.
+    Strict,
+    /// Include the decrypt key in the federated fallback link fragment.
+    TrustedServer,
+    /// Keep fallback keyless and print a separate decrypt link/key locally.
+    SplitChannel,
 }
 
 #[derive(Args)]

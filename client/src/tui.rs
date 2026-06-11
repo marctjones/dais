@@ -646,6 +646,7 @@ impl App {
             recipients: recipients.into_iter().collect(),
             reply_to: None,
             to: Vec::new(),
+            e2ee_fallback: crate::cli::E2eeFallbackMode::Strict,
         };
 
         let tx = self.tx.clone();
@@ -674,6 +675,7 @@ impl App {
                             post_id,
                             read_url,
                             delivery_ids,
+                            ..
                         } => {
                             let mut status = format!("Published ActivityPub post {post_id}");
                             if let Some(read_url) = read_url {
@@ -690,6 +692,7 @@ impl App {
                             uri,
                             read_url,
                             delivery_ids,
+                            ..
                         } => {
                             let mut status = format!(
                                 "Published ActivityPub post {post_id} and Bluesky post {uri}"

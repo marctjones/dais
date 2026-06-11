@@ -4,7 +4,7 @@ use std::fs;
 use anyhow::{anyhow, Result};
 
 use crate::atproto::AtprotoClient;
-use crate::cli::CreatePostArgs;
+use crate::cli::{CreatePostArgs, E2eeFallbackMode};
 use crate::config::ConfigStore;
 use crate::d1::D1Client;
 use crate::e2ee;
@@ -15,6 +15,7 @@ pub enum PostOutcome {
     ActivityPub {
         post_id: String,
         read_url: Option<String>,
+        split_key_url: Option<String>,
         delivery_ids: Vec<String>,
     },
     Bluesky {
@@ -36,6 +37,7 @@ pub struct PostDraft {
     pub recipients: BTreeMap<String, String>,
     pub reply_to: Option<String>,
     pub to: Vec<String>,
+    pub e2ee_fallback: E2eeFallbackMode,
 }
 
 impl PostDraft {
@@ -60,6 +62,7 @@ impl PostDraft {
             recipients,
             reply_to: args.reply_to,
             to: args.to,
+            e2ee_fallback: args.e2ee_fallback,
         })
     }
 }
@@ -82,14 +85,22 @@ pub async fn publish_post(
         let post_id = format!("https://social.dais.social/users/social/posts/{local_post_id}");
         let actor_id = "https://social.dais.social/users/social";
         let read_url = format!("https://social.dais.social/messages/{local_post_id}");
-        let payload =
-            e2ee::encrypted_note_payload(&draft.text, &draft.recipients, Some(&read_url))?;
+        let (payload, content_key) = e2ee::encrypted_note_payload_with_content_key(
+            &draft.text,
+            &draft.recipients,
+            Some(&read_url),
+        )?;
+        let split_key_url = format!("{read_url}#cek={content_key}");
+        let fallback_content = match draft.e2ee_fallback {
+            E2eeFallbackMode::Strict | E2eeFallbackMode::SplitChannel => payload.content.clone(),
+            E2eeFallbackMode::TrustedServer => e2ee::fallback_content(Some(&split_key_url)),
+        };
         let encrypted_json = serde_json::to_string(&payload.encrypted_message)?;
         let published_at = chrono::Utc::now().to_rfc3339();
         db.create_encrypted_post(
             &post_id,
             actor_id,
-            &payload.content,
+            &fallback_content,
             &draft.visibility.to_string(),
             &published_at,
             &encrypted_json,
@@ -100,7 +111,7 @@ pub async fn publish_post(
         let activity_json = build_create_activity_json(
             actor_id,
             &post_id,
-            &payload.content,
+            &fallback_content,
             &draft.visibility.to_string(),
             &published_at,
             Some(serde_json::to_value(&payload.encrypted_message)?),
@@ -113,6 +124,8 @@ pub async fn publish_post(
         return Ok(PostOutcome::ActivityPub {
             post_id,
             read_url: Some(read_url),
+            split_key_url: (draft.e2ee_fallback == E2eeFallbackMode::SplitChannel)
+                .then_some(split_key_url),
             delivery_ids,
         });
     }
@@ -191,6 +204,7 @@ pub async fn publish_post(
             Ok(PostOutcome::ActivityPub {
                 post_id,
                 read_url: None,
+                split_key_url: None,
                 delivery_ids,
             })
         }

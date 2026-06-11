@@ -105,6 +105,22 @@ but that fragment must be delivered out-of-band or typed/pasted locally. The saf
 default fallback link is keyless: it identifies the ciphertext and lets a
 dais-compatible client/device decrypt locally.
 
+The Rust CLI exposes this as an explicit fallback policy:
+
+- `strict` (default): sends only the keyless hosted read URL through federation.
+  This preserves confidentiality from the recipient's ActivityPub server, but the
+  recipient needs a dais client, private key, or a separate key channel.
+- `split-channel`: sends the same keyless hosted read URL through federation and
+  prints a local `#cek=...` unlock URL for the sender to share through another
+  channel.
+- `trusted-server`: puts the `#cek=...` unlock URL in the federated fallback
+  content. This is one-click for a Mastodon recipient, but it explicitly trusts
+  the recipient's Mastodon server with the message key.
+
+`strict` remains the default. `trusted-server` must stay opt-in because it
+changes the threat model from "recipient only" to "recipient and recipient
+server".
+
 ---
 
 ## 5. Conformance vectors
@@ -118,5 +134,7 @@ The Rust port should reproduce these behaviours (verified against `e2ee.py`):
    return plaintext).
 4. **Fallback rendering:** a client with no E2EE support renders the §4 notice from
    `Note.content` (this is what a Mastodon recipient sees).
+5. **Keyless default:** the default fallback content never contains `#cek=` or the
+   generated content key.
 
-A direct port of these four checks belongs in the Rust client's test suite.
+A direct port of these checks belongs in the Rust client's test suite.

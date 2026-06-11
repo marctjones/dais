@@ -165,6 +165,7 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
     match command {
         cli::TopLevelPostCommand::Create(args) => {
             let encrypt = args.encrypt;
+            let e2ee_fallback = args.e2ee_fallback;
             let db = D1Client::new(args.remote)?;
             let draft = PostDraft::from_create_args(cli::CreatePostArgs {
                 text: args.text,
@@ -172,6 +173,7 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
                 public: args.public,
                 protocol: args.protocol,
                 encrypt: args.encrypt,
+                e2ee_fallback,
                 recipients: args.recipients,
                 reply_to: args.reply_to,
                 to: args.to,
@@ -183,6 +185,7 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
                 PostOutcome::ActivityPub {
                     post_id,
                     read_url,
+                    split_key_url,
                     delivery_ids,
                 } => {
                     if encrypt {
@@ -191,7 +194,24 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
                         if let Some(read_url) = read_url {
                             println!("Read URL: {read_url}");
                         }
-                        println!("No decryption key was included in the fallback link.");
+                        match e2ee_fallback {
+                            cli::E2eeFallbackMode::Strict => {
+                                println!("No decryption key was included in the fallback link.");
+                            }
+                            cli::E2eeFallbackMode::TrustedServer => {
+                                println!(
+                                    "Trusted-server fallback selected: the federated fallback link includes the decrypt key fragment."
+                                );
+                            }
+                            cli::E2eeFallbackMode::SplitChannel => {
+                                if let Some(split_key_url) = split_key_url {
+                                    println!("Split-channel unlock URL: {split_key_url}");
+                                }
+                                println!(
+                                    "The fallback link sent through federation remains keyless."
+                                );
+                            }
+                        }
                         println!("Deliveries queued: {}", delivery_ids.len());
                     } else {
                         println!("Posted to ActivityPub");
