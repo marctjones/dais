@@ -5,6 +5,18 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.1] - 2026-06-11
+
+### Fixed
+- WebFinger now advertises only the apex Fediverse handle for the dais project
+  instance: `@social@dais.social`. The ActivityPub actor URL remains on
+  `https://social.dais.social/users/social`, but `acct:social@social.dais.social`
+  is no longer listed as an alias.
+- Deployment/testing docs now clarify that `DOMAIN` is the public handle domain
+  and `ACTIVITYPUB_DOMAIN` is the actor/inbox/outbox endpoint host. For example:
+  `@social@skpt.cl` can use actor URLs on `social.skpt.cl`, and
+  `@marc@joneslaw.io` can use actor URLs on that instance's ActivityPub host.
+
 ## [1.23.0] - 2026-06-11
 
 ### Added

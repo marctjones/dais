@@ -215,6 +215,13 @@ queue = "delivery"
 binding = "DELIVERY_QUEUE"
 ```
 
+`DOMAIN` is the public handle domain. `ACTIVITYPUB_DOMAIN` is the endpoint host
+for actor/inbox/outbox URLs. With the example above the Fediverse handle is
+`@yourusername@dais.example.com`, not `@yourusername@social.dais.example.com`.
+For Skeptical Engineering this means `@social@skpt.cl` with actor URLs on
+`social.skpt.cl`; for a personal Jones Law instance this means
+`@marc@joneslaw.io` with actor URLs on the configured ActivityPub host.
+
 **Repeat for all 9 workers**:
 - `actor`
 - `inbox`
@@ -445,13 +452,13 @@ All endpoints verified successfully!
 
 **1. Test WebFinger**:
 ```bash
-curl "https://social.dais.example.com/.well-known/webfinger?resource=acct:yourusername@social.dais.example.com"
+curl "https://dais.example.com/.well-known/webfinger?resource=acct:yourusername@dais.example.com"
 ```
 
 Expected response:
 ```json
 {
-  "subject": "acct:yourusername@social.dais.example.com",
+  "subject": "acct:yourusername@dais.example.com",
   "links": [
     {
       "rel": "self",

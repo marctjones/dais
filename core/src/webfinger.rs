@@ -82,10 +82,7 @@ pub async fn handle_webfinger(
     // the apex handle, or it treats the apex as a mismatch and rejects it.
     let response = WebFingerResponse {
         subject: format!("acct:{}@{}", username, configured_domain),
-        aliases: vec![
-            format!("https://{}/users/{}", activitypub_domain, username),
-            format!("acct:{}@{}", username, activitypub_domain),
-        ],
+        aliases: vec![format!("https://{}/users/{}", activitypub_domain, username)],
         links: vec![
             WebFingerLink {
                 rel: "self".to_string(),
@@ -105,6 +102,34 @@ pub async fn handle_webfinger(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::traits::{DatabaseDialect, PlatformResult, Row, Statement};
+    use async_trait::async_trait;
+    use serde_json::Value;
+
+    struct WebfingerDb;
+
+    #[async_trait(?Send)]
+    impl DatabaseProvider for WebfingerDb {
+        async fn execute(&self, _sql: &str, params: &[Value]) -> PlatformResult<Vec<Row>> {
+            if params.first().and_then(Value::as_str) == Some("social") {
+                let mut row = Row::new();
+                row.insert("username".to_string(), Value::String("social".to_string()));
+                Ok(vec![row])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        async fn batch(&self, _statements: Vec<Statement>) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        fn dialect(&self) -> DatabaseDialect {
+            DatabaseDialect::SQLite
+        }
+    }
+
     #[test]
     fn test_parse_resource() {
         let resource = "acct:user@example.com";
@@ -115,5 +140,24 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], "user");
         assert_eq!(parts[1], "example.com");
+    }
+
+    #[tokio::test]
+    async fn apex_handle_is_canonical_and_subdomain_acct_is_not_advertised() {
+        let response = handle_webfinger(
+            &WebfingerDb,
+            "acct:social@dais.social",
+            "dais.social",
+            "social.dais.social",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.subject, "acct:social@dais.social");
+        assert!(response
+            .aliases
+            .contains(&"https://social.dais.social/users/social".to_string()));
+        assert!(!response
+            .aliases
+            .contains(&"acct:social@social.dais.social".to_string()));
     }
 }
