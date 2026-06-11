@@ -234,7 +234,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
     <main>
         <section class="instance">
             <h2>The live dais project instance</h2>
-            <p>This is the project account for dais by <a href="https://skpt.cl">Skeptical Engineering</a>, not a personal account. Skeptical Engineering will later have its own dais presence at <code>social.skpt.cl</code>; this instance remains the live project/demo presence for dais itself.</p>
+            <p>This is the project account for dais by <a href="https://skpt.cl">Skeptical Engineering</a>, not a personal account. Skeptical Engineering will later have its own dais presence at <code>@social@skpt.cl</code>; this instance remains the live project/demo presence for dais itself.</p>
             <p><strong>ActivityPub handle:</strong> <code>@{username}@{activitypub_domain}</code></p>
             <p><strong>ActivityPub profile:</strong> <a href="{actor_url}">{actor_url}</a></p>
             <p><strong>ActivityPub origin:</strong> <a href="https://{activitypub_domain}">https://{activitypub_domain}</a></p>

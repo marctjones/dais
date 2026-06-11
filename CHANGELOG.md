@@ -5,6 +5,16 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.1] - 2026-06-11
+
+### Changed
+- Updated the public `dais.social` landing page to describe dais as an open
+  source Skeptical Engineering project, link to `skpt.cl`, show accurate
+  implementation status, and distinguish the live dais project/demo instance
+  from the future Skeptical Engineering presence at `@social@skpt.cl`.
+- Added roadmap issues and milestones for standards-first public source
+  subscriptions and custom public-source integrations.
+
 ## [1.20.0] - 2026-06-11
 
 ### Added
