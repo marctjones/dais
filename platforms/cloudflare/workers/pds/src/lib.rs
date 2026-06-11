@@ -15,6 +15,11 @@ use serde_json::Value;
 /// - GET /xrpc/com.atproto.repo.describeRepo
 /// - GET /xrpc/com.atproto.repo.getRecord
 /// - GET /xrpc/app.bsky.feed.getAuthorFeed
+/// - GET /xrpc/app.bsky.feed.getTimeline
+/// - GET /xrpc/app.bsky.notification.listNotifications
+/// - GET /xrpc/app.bsky.feed.getLikes
+/// - GET /xrpc/app.bsky.graph.getFollowers
+/// - GET /xrpc/app.bsky.graph.getFollows
 /// - WebSocket /xrpc/com.atproto.sync.subscribeRepos
 use worker::*;
 
@@ -92,11 +97,22 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         )
         .get_async("/.well-known/did.json", handle_did_document)
         .get_async("/xrpc/com.atproto.sync.getRepo", handle_get_repo)
-        .get_async("/xrpc/com.atproto.sync.getRepoStatus", handle_get_repo_status)
+        .get_async(
+            "/xrpc/com.atproto.sync.getRepoStatus",
+            handle_get_repo_status,
+        )
         .get_async("/xrpc/com.atproto.sync.listRepos", handle_list_repos)
         .get_async("/xrpc/com.atproto.repo.describeRepo", handle_describe_repo)
         .get_async("/xrpc/com.atproto.repo.getRecord", handle_get_record)
         .get_async("/xrpc/app.bsky.feed.getAuthorFeed", handle_get_author_feed)
+        .get_async("/xrpc/app.bsky.feed.getTimeline", handle_get_timeline)
+        .get_async(
+            "/xrpc/app.bsky.notification.listNotifications",
+            handle_list_notifications,
+        )
+        .get_async("/xrpc/app.bsky.feed.getLikes", handle_get_likes)
+        .get_async("/xrpc/app.bsky.graph.getFollowers", handle_get_followers)
+        .get_async("/xrpc/app.bsky.graph.getFollows", handle_get_follows)
         .get("/health", |_req, _ctx| Response::ok("PDS OK"))
         .run(req, env)
         .await
@@ -234,6 +250,121 @@ async fn handle_get_author_feed(req: Request, ctx: RouteContext<()>) -> Result<R
     json_response(serde_json::json!({ "feed": feed }))
 }
 
+async fn handle_get_timeline(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let identity = identity(&ctx.env);
+    let rows = public_posts(&ctx.env, query_limit(&url)).await?;
+    let feed: Vec<Value> = rows
+        .into_iter()
+        .map(|row| serde_json::json!({ "post": post_view(&identity, row) }))
+        .collect();
+    json_response(serde_json::json!({ "feed": feed }))
+}
+
+async fn handle_list_notifications(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let identity = identity(&ctx.env);
+    let rows = notification_rows(&ctx.env, query_limit(&url)).await?;
+    let notifications: Vec<Value> = rows
+        .into_iter()
+        .map(|row| {
+            let actor_id = string_field(&row, "actor_id");
+            let indexed_at = string_field(&row, "created_at");
+            let activity_id = string_field(&row, "activity_id");
+            let uri = if activity_id.is_empty() {
+                string_field(&row, "id")
+            } else {
+                activity_id
+            };
+            serde_json::json!({
+                "uri": uri,
+                "cid": stable_cid(&format!("{}{}", actor_id, indexed_at)),
+                "author": profile_view(
+                    &identity,
+                    &actor_id,
+                    &string_field(&row, "actor_username"),
+                    &string_field(&row, "actor_display_name"),
+                ),
+                "reason": string_field(&row, "kind"),
+                "reasonSubject": string_field(&row, "post_id"),
+                "record": {
+                    "$type": "app.bsky.notification.listNotifications#notification",
+                    "text": string_field(&row, "content"),
+                    "createdAt": indexed_at
+                },
+                "isRead": bool_field(&row, "read"),
+                "indexedAt": indexed_at
+            })
+        })
+        .collect();
+    json_response(serde_json::json!({ "notifications": notifications }))
+}
+
+async fn handle_get_likes(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let uri = required_query(&url, "uri")?;
+    let identity = identity(&ctx.env);
+    let rows = like_rows(&ctx.env, &uri, query_limit(&url)).await?;
+    let likes: Vec<Value> = rows
+        .into_iter()
+        .map(|row| {
+            let actor_id = string_field(&row, "actor_id");
+            let created_at = string_field(&row, "created_at");
+            serde_json::json!({
+                "actor": profile_view(
+                    &identity,
+                    &actor_id,
+                    &string_field(&row, "actor_username"),
+                    &string_field(&row, "actor_display_name"),
+                ),
+                "createdAt": created_at,
+                "indexedAt": created_at
+            })
+        })
+        .collect();
+    json_response(serde_json::json!({
+        "uri": uri,
+        "cid": stable_cid(&uri),
+        "likes": likes
+    }))
+}
+
+async fn handle_get_followers(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let actor = required_query(&url, "actor")?;
+    let identity = identity(&ctx.env);
+    if actor != identity.did && actor != identity.handle {
+        return json_response(serde_json::json!({ "followers": [] }));
+    }
+    let followers: Vec<Value> = follower_rows(&ctx.env, query_limit(&url))
+        .await?
+        .into_iter()
+        .map(|row| {
+            let actor_id = string_field(&row, "actor_id");
+            profile_view(&identity, &actor_id, "", "")
+        })
+        .collect();
+    json_response(serde_json::json!({ "followers": followers }))
+}
+
+async fn handle_get_follows(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let actor = required_query(&url, "actor")?;
+    let identity = identity(&ctx.env);
+    if actor != identity.did && actor != identity.handle {
+        return json_response(serde_json::json!({ "follows": [] }));
+    }
+    let follows: Vec<Value> = follows_rows(&ctx.env, query_limit(&url))
+        .await?
+        .into_iter()
+        .map(|row| {
+            let actor_id = string_field(&row, "actor_id");
+            profile_view(&identity, &actor_id, "", "")
+        })
+        .collect();
+    json_response(serde_json::json!({ "follows": follows }))
+}
+
 async fn handle_subscribe_repos(_req: Request, env: Env) -> Result<Response> {
     console_log!("WebSocket upgrade requested for subscribeRepos");
 
@@ -360,10 +491,81 @@ async fn public_posts(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<Strin
     .results::<serde_json::Map<String, Value>>()
 }
 
-async fn find_public_post(
+async fn notification_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT id, type AS kind, actor_id, actor_username, actor_display_name,
+               actor_avatar_url, post_id, activity_id, content, read, created_at
+        FROM notifications
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind(&[limit.into()])?
+    .all()
+    .await?
+    .results::<serde_json::Map<String, Value>>()
+}
+
+async fn like_rows(
     env: &Env,
-    rkey: &str,
-) -> Result<Option<serde_json::Map<String, Value>>> {
+    uri: &str,
+    limit: u32,
+) -> Result<Vec<serde_json::Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT id, actor_id, actor_username, actor_display_name,
+               actor_avatar_url, object_url, created_at
+        FROM interactions
+        WHERE type = 'like'
+          AND object_url = ?1
+        ORDER BY created_at DESC
+        LIMIT ?2
+        "#,
+    )
+    .bind(&[uri.into(), limit.into()])?
+    .all()
+    .await?
+    .results::<serde_json::Map<String, Value>>()
+}
+
+async fn follower_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT follower_actor_id AS actor_id, created_at
+        FROM followers
+        WHERE status = 'approved'
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind(&[limit.into()])?
+    .all()
+    .await?
+    .results::<serde_json::Map<String, Value>>()
+}
+
+async fn follows_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT target_actor_id AS actor_id, created_at
+        FROM following
+        WHERE status = 'accepted'
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind(&[limit.into()])?
+    .all()
+    .await?
+    .results::<serde_json::Map<String, Value>>()
+}
+
+async fn find_public_post(env: &Env, rkey: &str) -> Result<Option<serde_json::Map<String, Value>>> {
     let db = env.d1("DB")?;
     let uri_suffix = format!("/{rkey}");
     db.prepare(
@@ -426,6 +628,50 @@ fn post_view(identity: &Identity, row: serde_json::Map<String, Value>) -> Value 
     })
 }
 
+fn profile_view(identity: &Identity, actor_id: &str, handle: &str, display_name: &str) -> Value {
+    if actor_id == identity.did || actor_id == identity.handle || actor_id.is_empty() {
+        return serde_json::json!({
+            "did": identity.did,
+            "handle": identity.handle,
+            "displayName": "dais"
+        });
+    }
+
+    let handle = if handle.is_empty() {
+        actor_handle(actor_id)
+    } else {
+        handle.to_string()
+    };
+    let display_name = if display_name.is_empty() {
+        handle.clone()
+    } else {
+        display_name.to_string()
+    };
+
+    serde_json::json!({
+        "did": actor_id,
+        "handle": handle,
+        "displayName": display_name
+    })
+}
+
+fn actor_handle(actor_id: &str) -> String {
+    if let Ok(url) = Url::parse(actor_id) {
+        let username = url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .unwrap_or("")
+            .trim_start_matches('@');
+        if let Some(host) = url.host_str() {
+            if !username.is_empty() {
+                return format!("{username}.{host}");
+            }
+            return host.to_string();
+        }
+    }
+    actor_id.to_string()
+}
+
 fn record_value(row: serde_json::Map<String, Value>) -> Value {
     serde_json::json!({
         "$type": "app.bsky.feed.post",
@@ -455,6 +701,24 @@ fn stable_cid(value: &str) -> String {
 
 fn json_response(value: Value) -> Result<Response> {
     let mut response = Response::from_json(&value)?;
-    response.headers_mut().set("Content-Type", "application/json")?;
+    response
+        .headers_mut()
+        .set("Content-Type", "application/json")?;
     Ok(response)
+}
+
+fn string_field(row: &serde_json::Map<String, Value>, key: &str) -> String {
+    row.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn bool_field(row: &serde_json::Map<String, Value>, key: &str) -> bool {
+    row.get(key).and_then(Value::as_bool).unwrap_or_else(|| {
+        row.get(key)
+            .and_then(Value::as_u64)
+            .map(|value| value != 0)
+            .unwrap_or(false)
+    })
 }

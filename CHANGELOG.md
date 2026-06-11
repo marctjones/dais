@@ -5,6 +5,20 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-06-11
+
+### Added
+- Added the v0.16 personal AppView compatibility floor for the PDS worker:
+  - `app.bsky.feed.getTimeline`
+  - `app.bsky.notification.listNotifications`
+  - `app.bsky.feed.getLikes`
+  - `app.bsky.graph.getFollowers`
+  - `app.bsky.graph.getFollows`
+- Added D1 indexes for AppView-backed public posts, notifications,
+  interactions, followers, and follows.
+- Extended the federation matrix with automated coverage for the personal
+  AppView read floor.
+
 ## [1.19.0] - 2026-06-11
 
 ### Added

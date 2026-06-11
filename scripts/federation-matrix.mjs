@@ -325,6 +325,41 @@ async function atprotoFloor() {
     return rkey;
   });
 
+  await record("atproto", config.pdsBaseUrl, "PDS personal AppView read floor", async () => {
+    const did = `did:web:${config.acctDomain}`;
+    const timeline = await request(`${config.pdsBaseUrl}/xrpc/app.bsky.feed.getTimeline?limit=2`, {
+      headers: { Accept: "application/json" },
+    });
+    const notifications = await request(
+      `${config.pdsBaseUrl}/xrpc/app.bsky.notification.listNotifications?limit=2`,
+      { headers: { Accept: "application/json" } },
+    );
+    const followers = await request(
+      `${config.pdsBaseUrl}/xrpc/app.bsky.graph.getFollowers?actor=${encodeURIComponent(did)}&limit=2`,
+      { headers: { Accept: "application/json" } },
+    );
+    const follows = await request(
+      `${config.pdsBaseUrl}/xrpc/app.bsky.graph.getFollows?actor=${encodeURIComponent(did)}&limit=2`,
+      { headers: { Accept: "application/json" } },
+    );
+    const likes = await request(
+      `${config.pdsBaseUrl}/xrpc/app.bsky.feed.getLikes?uri=${encodeURIComponent(`at://${did}/app.bsky.feed.post/placeholder`)}&limit=2`,
+      { headers: { Accept: "application/json" } },
+    );
+    const statuses = [timeline, notifications, followers, follows, likes].map((res) => res.status);
+    if (!statuses.every((status) => status === 200)) {
+      throw new Error(`expected 200s, got ${statuses.join("/")}`);
+    }
+    if (!Array.isArray(timeline.json?.feed)) throw new Error("timeline feed is not an array");
+    if (!Array.isArray(notifications.json?.notifications)) {
+      throw new Error("notifications is not an array");
+    }
+    if (!Array.isArray(followers.json?.followers)) throw new Error("followers is not an array");
+    if (!Array.isArray(follows.json?.follows)) throw new Error("follows is not an array");
+    if (!Array.isArray(likes.json?.likes)) throw new Error("likes is not an array");
+    return `timeline=${timeline.json.feed.length} notifications=${notifications.json.notifications.length}`;
+  });
+
   await record("atproto", config.pdsBaseUrl, "PDS subscribeRepos status", async () => {
     const res = await request(`${config.pdsBaseUrl}/xrpc/com.atproto.sync.subscribeRepos`, {
       headers: { Accept: "application/json" },
