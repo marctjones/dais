@@ -17,9 +17,11 @@ testability and clean module boundaries, not for alternate hosting targets.
 
 ## Overview
 
-dais runs on **Cloudflare Workers, D1, R2, Queues, and Cloudflare Access**. The
-core Rust library keeps platform traits so protocol logic can be tested without
-Cloudflare, but Cloudflare is the only supported deployment target.
+dais runs on **Cloudflare Workers, D1, R2, and Queues**. The core Rust library
+keeps platform traits so protocol logic can be tested without Cloudflare, but
+Cloudflare is the only supported deployment target. Owner/operator workflows are
+currently handled by the Rust CLI and TUI using local credentials and secrets;
+there is no privileged owner web login in the active product.
 
 **Key Benefits**:
 - Shared Rust core for ActivityPub, AT Protocol, security policy, and tests.

@@ -32,6 +32,32 @@ supports a wasm32 build target. That matches the current Rust-first direction an
 Cloudflare deployment model better than libsignal bindings or adopting Matrix as
 a second social stack.
 
+## Rust Implementation Survey
+
+Do not implement MLS or mature E2EE primitives by hand. Use audited, native Rust
+libraries and keep protocol glue inside dais.
+
+Checked with `cargo search` / `cargo info` on 2026-06-11:
+
+| Area | Rust crate | License | Fit |
+| --- | --- | --- | --- |
+| MLS / RFC 9420 | `openmls = 0.8.1` | MIT | Primary choice. Native Rust MLS implementation, official OpenMLS project, supports `js`/wasm feature. |
+| OpenMLS crypto backend | `openmls_rust_crypto = 0.5.1` | MIT | Primary crypto provider for prototype; RustCrypto-based and cleanly matches a pure-Rust architecture. |
+| Matrix E2EE | `matrix-sdk-crypto = 0.18.0` | Apache-2.0 | Good Rust library, but it brings Matrix room/account semantics. Use only if dais chooses Matrix interop later, not for the core dais DM backbone. |
+| Nostr encryption / gift wrap | `nostr = 0.45.0-alpha.1` | MIT | Useful if Nostr becomes an adapter. Supports `nip44` and `nip59`, but it introduces a separate relay network and is alpha at this version. |
+| Signal-style protocol | `libsignal-rust = 0.1.0` | MIT | Third-party, early crate. Not the official Signal implementation; do not choose without deeper audit. |
+| Official Signal Rust | `libsignal` upstream | AGPLv3 | Native Rust, but license is not permissive for dais. Avoid unless licensing strategy changes. |
+
+Architecture decision:
+
+- Depend on `openmls` plus `openmls_rust_crypto` for the MLS prototype.
+- Write only the dais-specific binding: actor key-package publication, D1
+  storage, ActivityPub message carriage, trust prompts, and CLI/TUI UX.
+- Keep the crate boundary narrow behind `core/src/e2ee_mls/` so the rest of the
+  server does not depend on OpenMLS types directly.
+- Do not shell out, bind to non-Rust implementations, or pull in Matrix/Signal as
+  hidden transport stacks.
+
 ## Why Not ActivityPub DMs Alone
 
 ActivityPub and Mastodon private/direct posts are audience-scoped delivery, not

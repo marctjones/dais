@@ -1,6 +1,10 @@
-
-
 # Authentication API - Cloudflare Access Integration
+
+> **Status: deferred / not routed.** The active dais product does not expose a
+> privileged owner web login. Owner/operator workflows are handled by the Rust
+> CLI and TUI using local credentials and secrets. This document is retained as
+> reference material for a possible future external-client or service-token auth
+> model, but `/api/auth/*` is not part of the current production surface.
 
 This document describes how to use **Cloudflare Access** for authentication with your dais instance. Cloudflare Access is a built-in authentication product that handles all authentication logic, supports multiple identity providers, and provides enterprise-grade security.
 

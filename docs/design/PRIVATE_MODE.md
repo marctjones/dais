@@ -226,11 +226,9 @@ loop at `timeline.py:46-86`).
 ### 6.2 Surfaces
 - **CLI/TUI first** (consistent with current product): `dais timeline` reads the
   local store; TUI gets a home-feed pane.
-- **Optional authenticated web reader** (later): a single worker route behind
-  Cloudflare Access that renders the home timeline for the owner only. This is
-  the one place a "rich web UI" is justified despite `docs/archive/VISION.md:66`, because the
-  product is now consumption-oriented. Keep it owner-only; do not expose it
-  unauthenticated.
+- **No privileged owner web UI for now**: owner/operator workflows belong in the
+  CLI and TUI. Hosted web routes remain public protocol surfaces or recipient
+  read/fallback pages, not owner administration or home-timeline surfaces.
 
 ---
 
@@ -254,7 +252,8 @@ This design assumes the platform cleanup (separate doc/PR) has landed:
 - Delete `platforms/vercel/` (27 files) and the legacy `workers/` tree.
 - Remove `vercel`/`netlify` Cargo features from `core/Cargo.toml:51-53`.
 - Single backend: **D1 (SQLite)** for data, **R2** for media, **CF Queues** for
-  delivery, **Cloudflare Access** for owner auth.
+  delivery. Owner/operator access is through CLI/TUI credentials and local
+  secrets; Cloudflare Access is not part of the current owner UI.
 
 Keeping the provider traits (`DatabaseProvider`, etc.) is fine and cheap — they
 give clean seams for tests — but only the Cloudflare implementations ship.
@@ -271,7 +270,9 @@ give clean seams for tests — but only the Cloudflare implementations ship.
    migration + `get_home_timeline` + rewrite `timeline.py` to read locally (§6.1).
 3. **M3 — Friends.** `friends` view + mutual-follow helpers; surface "friends"
    vs "followers" in CLI/TUI; optional friends-only visibility tier.
-4. **M4 — Web reader (optional).** Owner-only authenticated home-feed route.
+4. **M4 — CLI/TUI owner polish.** Keep the owner surface in Rust CLI/TUI:
+   timeline, inbox/follower moderation, visibility selection, delivery status,
+   and diagnostics. Do not add a privileged web login.
 5. **M5 — E2EE for DMs (MLS over open federation, #71).** Confidentiality from
    intermediary servers with no walled garden — encryption at the content layer,
    not network restriction. Optional user-driven peer block controls (§5.5) ride
@@ -313,5 +314,6 @@ paths, so this gap must close. See the companion testing plan; in summary:
    now; optional one-time public backfill.
 3. **Default for replies/DMs ingestion vs timeline** — keep DMs in
    `direct_messages` (migration 007) separate from `timeline_posts`. Confirmed.
-4. **Web reader auth** — rely solely on Cloudflare Access, or add a dais-native
-   session? Recommendation: Access only, to avoid building auth.
+4. **External owner clients** — if a future mobile or desktop client needs
+   remote owner API access, define a narrow service-token model instead of
+   introducing a privileged browser login by default.

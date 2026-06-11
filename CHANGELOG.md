@@ -5,6 +5,17 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.9] - 2026-06-11
+
+### Changed
+- Clarified the private-mode roadmap: the only owner/operator interfaces are the
+  Rust CLI and TUI for now. Privileged web login and owner-only web reader work
+  is deferred/not current.
+- Updated the architecture and auth reference docs to reflect that Cloudflare
+  Access is not routed as an owner UI surface in the active product.
+- Expanded the E2EE DM spike with a Rust implementation survey recommending
+  `openmls` plus `openmls_rust_crypto` behind a local `core` module boundary.
+
 ## [1.17.8] - 2026-06-11
 
 ### Added
