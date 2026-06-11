@@ -67,12 +67,16 @@ pub async fn get_outbox_posts(db: &dyn DatabaseProvider, username: &str) -> Core
         .ok_or_else(|| CoreError::Internal("Missing actor id".to_string()))?
         .to_string();
 
-    // Query for posts by this actor (public visibility only for outbox)
+    // Public outbox is an anonymous read surface. Do not list unlisted,
+    // followers/direct, or encrypted fallback records here.
     let posts_query = r#"
         SELECT id, actor_id, content, content_html, visibility, published_at, in_reply_to,
                media_attachments, atproto_uri, encrypted_message
         FROM posts
-        WHERE actor_id = ?1 AND visibility IN ('public', 'unlisted')
+        WHERE actor_id = ?1
+          AND visibility = 'public'
+          AND encrypted_message IS NULL
+          AND content NOT LIKE '%End-to-end encrypted message%'
         ORDER BY published_at DESC
     "#;
 

@@ -15,6 +15,8 @@ struct FakeDb {
 
 #[derive(Default)]
 struct FakeDbState {
+    actors: HashMap<String, Row>,
+    posts: Vec<Row>,
     approved_following: HashSet<String>,
     approved_followers: HashSet<String>,
     friends_rows: Vec<Row>,
@@ -33,6 +35,53 @@ impl FakeDb {
             .unwrap()
             .approved_following
             .insert(actor_id.to_string());
+    }
+
+    fn insert_actor(&self, username: &str, actor_id: &str) {
+        let mut row = Row::new();
+        row.insert("id".to_string(), Value::String(actor_id.to_string()));
+        row.insert("username".to_string(), Value::String(username.to_string()));
+        self.state
+            .lock()
+            .unwrap()
+            .actors
+            .insert(username.to_string(), row);
+    }
+
+    fn insert_post(
+        &self,
+        actor_id: &str,
+        post_id: &str,
+        content: &str,
+        visibility: &str,
+        encrypted_message: Option<&str>,
+    ) {
+        let mut row = Row::new();
+        row.insert("id".to_string(), Value::String(post_id.to_string()));
+        row.insert("actor_id".to_string(), Value::String(actor_id.to_string()));
+        row.insert("content".to_string(), Value::String(content.to_string()));
+        row.insert(
+            "content_html".to_string(),
+            Value::String(content.to_string()),
+        );
+        row.insert(
+            "visibility".to_string(),
+            Value::String(visibility.to_string()),
+        );
+        row.insert(
+            "published_at".to_string(),
+            Value::String("2026-06-11T00:00:00Z".to_string()),
+        );
+        row.insert("in_reply_to".to_string(), Value::Null);
+        row.insert("media_attachments".to_string(), Value::Null);
+        row.insert("atproto_uri".to_string(), Value::Null);
+        row.insert(
+            "encrypted_message".to_string(),
+            encrypted_message
+                .map(|value| Value::String(value.to_string()))
+                .unwrap_or(Value::Null),
+        );
+        self.state.lock().unwrap().posts.push(row);
     }
 
     fn set_friends_rows(&self, rows: Vec<Row>) {
@@ -79,6 +128,77 @@ impl FakeDb {
 impl DatabaseProvider for FakeDb {
     async fn execute(&self, sql: &str, params: &[Value]) -> PlatformResult<Vec<Row>> {
         let mut state = self.state.lock().unwrap();
+
+        if sql.contains("SELECT id FROM actors WHERE username = ?1") {
+            let username = params.first().and_then(Value::as_str).unwrap_or_default();
+            return Ok(state
+                .actors
+                .get(username)
+                .cloned()
+                .map(|row| vec![row])
+                .unwrap_or_default());
+        }
+
+        if sql.contains("COUNT(*) as count") && sql.contains("FROM posts") {
+            let actor_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            let requires_public = sql.contains("visibility = 'public'");
+            let excludes_encrypted = sql.contains("encrypted_message IS NULL");
+            let excludes_fallback = sql.contains("End-to-end encrypted message");
+            let count = state
+                .posts
+                .iter()
+                .filter(|row| row.get_string("actor_id").as_deref() == Some(actor_id))
+                .filter(|row| {
+                    !requires_public || row.get_string("visibility").as_deref() == Some("public")
+                })
+                .filter(|row| {
+                    !excludes_encrypted
+                        || row
+                            .get("encrypted_message")
+                            .map(|value| value.is_null())
+                            .unwrap_or(true)
+                })
+                .filter(|row| {
+                    !excludes_fallback
+                        || !row
+                            .get_string("content")
+                            .unwrap_or_default()
+                            .contains("End-to-end encrypted message")
+                })
+                .count() as u64;
+            return Ok(vec![count_row(count)]);
+        }
+
+        if sql.contains("FROM posts") && sql.contains("ORDER BY published_at DESC") {
+            let actor_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            let requires_public = sql.contains("visibility = 'public'");
+            let excludes_encrypted = sql.contains("encrypted_message IS NULL");
+            let excludes_fallback = sql.contains("End-to-end encrypted message");
+            let rows = state
+                .posts
+                .iter()
+                .filter(|row| row.get_string("actor_id").as_deref() == Some(actor_id))
+                .filter(|row| {
+                    !requires_public || row.get_string("visibility").as_deref() == Some("public")
+                })
+                .filter(|row| {
+                    !excludes_encrypted
+                        || row
+                            .get("encrypted_message")
+                            .map(|value| value.is_null())
+                            .unwrap_or(true)
+                })
+                .filter(|row| {
+                    !excludes_fallback
+                        || !row
+                            .get_string("content")
+                            .unwrap_or_default()
+                            .contains("End-to-end encrypted message")
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            return Ok(rows);
+        }
 
         if sql.contains("SELECT COUNT(*) AS count FROM following") {
             let actor_id = params.first().and_then(Value::as_str).unwrap_or_default();
@@ -239,6 +359,101 @@ impl HttpProvider for FakeHttp {
             url: request.url,
         })
     }
+}
+
+#[tokio::test]
+async fn public_outbox_excludes_unlisted_private_and_encrypted_posts() {
+    let db = FakeDb::default();
+    let actor_id = "https://social.dais.social/users/social";
+    db.insert_actor("social", actor_id);
+    db.insert_post(
+        actor_id,
+        "https://social.dais.social/users/social/posts/public",
+        "public cleartext",
+        "public",
+        None,
+    );
+    db.insert_post(
+        actor_id,
+        "https://social.dais.social/users/social/posts/unlisted",
+        "unlisted cleartext",
+        "unlisted",
+        None,
+    );
+    db.insert_post(
+        actor_id,
+        "https://social.dais.social/users/social/posts/followers",
+        "followers cleartext",
+        "followers",
+        None,
+    );
+    db.insert_post(
+        actor_id,
+        "https://social.dais.social/users/social/posts/encrypted",
+        "encrypted fallback",
+        "public",
+        Some(r#"{"v":1}"#),
+    );
+    db.insert_post(
+        actor_id,
+        "https://social.dais.social/users/social/posts/legacy-encrypted",
+        "End-to-end encrypted message",
+        "public",
+        None,
+    );
+
+    let posts = activitypub::get_outbox_posts(&db, "social")
+        .await
+        .expect("outbox query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(
+        posts[0].id,
+        "https://social.dais.social/users/social/posts/public"
+    );
+    assert_eq!(posts[0].content, "public cleartext");
+    assert!(posts[0].encrypted_message.is_none());
+}
+
+#[tokio::test]
+async fn public_actor_count_excludes_private_and_encrypted_posts() {
+    let db = FakeDb::default();
+    let actor_id = "https://social.dais.social/users/social";
+    db.insert_actor("social", actor_id);
+    db.insert_post(
+        actor_id,
+        "https://social.dais.social/users/social/posts/public",
+        "public cleartext",
+        "public",
+        None,
+    );
+    db.insert_post(
+        actor_id,
+        "https://social.dais.social/users/social/posts/direct",
+        "direct cleartext",
+        "direct",
+        None,
+    );
+    db.insert_post(
+        actor_id,
+        "https://social.dais.social/users/social/posts/encrypted",
+        "encrypted fallback",
+        "public",
+        Some(r#"{"v":1}"#),
+    );
+    db.insert_post(
+        actor_id,
+        "https://social.dais.social/users/social/posts/legacy-encrypted",
+        "End-to-end encrypted message",
+        "public",
+        None,
+    );
+
+    let counts = activitypub::get_actor_counts(&db, actor_id)
+        .await
+        .expect("count query should succeed");
+
+    assert_eq!(counts.post_count, 1);
 }
 
 #[tokio::test]

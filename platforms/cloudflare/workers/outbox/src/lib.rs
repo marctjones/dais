@@ -203,10 +203,10 @@ async fn handle_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         }
     };
 
-    // Authorized-fetch (#61): non-public posts are only served to an approved
-    // follower who signs the GET. Anonymous / non-follower requests get 404 — so
-    // the post's existence isn't even revealed on the pull side.
-    if requires_authorized_fetch(&post.visibility) {
+    // Authorized-fetch (#61): non-public and encrypted posts are only served to
+    // an approved follower who signs the GET. Anonymous / non-follower requests
+    // get 404, so the post's existence is not revealed on the pull side.
+    if requires_authorized_post_fetch(&post) {
         if !is_authorized_follower(&req, &core, &activitypub_domain).await {
             worker::console_log!("Authorized-fetch denied for {}-only post", post.visibility);
             return Response::error("Not Found", 404);
@@ -287,6 +287,12 @@ async fn is_authorized_follower(req: &Request, core: &DaisCore, ap_domain: &str)
     dais_core::activitypub::is_approved_follower(&*core.db(), &actor_id)
         .await
         .unwrap_or(false)
+}
+
+fn requires_authorized_post_fetch(post: &Post) -> bool {
+    requires_authorized_fetch(&post.visibility)
+        || post.encrypted_message.is_some()
+        || post.content.contains("End-to-end encrypted message")
 }
 
 /// Build ActivityPub OrderedCollection for outbox

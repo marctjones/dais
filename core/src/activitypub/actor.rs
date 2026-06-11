@@ -108,8 +108,15 @@ pub async fn get_actor_counts(
     db: &dyn DatabaseProvider,
     actor_id: &str,
 ) -> CoreResult<ActorCounts> {
-    // Query for post count
-    let post_count_query = "SELECT COUNT(*) as count FROM posts WHERE actor_id = ?1";
+    // Public profile counts must match the anonymous public outbox surface.
+    let post_count_query = r#"
+        SELECT COUNT(*) as count
+        FROM posts
+        WHERE actor_id = ?1
+          AND visibility = 'public'
+          AND encrypted_message IS NULL
+          AND content NOT LIKE '%End-to-end encrypted message%'
+    "#;
     let post_rows = db
         .execute(post_count_query, &[Value::String(actor_id.to_string())])
         .await?;
