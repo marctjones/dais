@@ -17,6 +17,7 @@ DIRECT_RECIPIENT="${DIRECT_RECIPIENT:-}"
 SMOKE_POST_TEXT="${SMOKE_POST_TEXT:-dais federation smoke $(date +%s)}"
 SMOKE_REPLY_TEXT="${SMOKE_REPLY_TEXT:-dais federation reply smoke $(date +%s)}"
 SMOKE_DIRECT_TEXT="${SMOKE_DIRECT_TEXT:-dais federation direct smoke $(date +%s)}"
+RUN_LIVE_DELIVERY="${RUN_LIVE_DELIVERY:-}"
 
 tmpdir="$(mktemp -d /tmp/dais-federation-smoke.XXXXXX)"
 trap 'rm -rf "$tmpdir"' EXIT
@@ -36,6 +37,17 @@ if ! command -v "$TOOT_BIN" >/dev/null 2>&1; then
   echo "toot not found at $TOOT_BIN"
   exit 1
 fi
+
+dispatch_delivery() {
+  local delivery_id="$1"
+  if [[ -n "$DELIVERY_ADMIN_TOKEN" ]]; then
+    "${DAIS_CLI[@]}" deliveries process "$delivery_id" \
+      --base-url "$DAIS_BASE_URL" >/dev/null
+  else
+    "${DAIS_CLI[@]}" deliveries enqueue "$delivery_id" \
+      --base-url "$DAIS_BASE_URL" >/dev/null
+  fi
+}
 
 echo "Checking dais actor endpoint..."
 curl -fsS -H "Accept: application/activity+json" \
@@ -79,7 +91,15 @@ openssl rsa -pubout -in "$tmpdir/private.pem" -out "$tmpdir/public.pem" >/dev/nu
 
 grep -q "federation smoke test" "$tmpdir/decrypted.txt"
 
-if [[ -n "$DELIVERY_ADMIN_TOKEN" ]]; then
+if [[ -z "$RUN_LIVE_DELIVERY" ]]; then
+  if [[ -n "$DELIVERY_ADMIN_TOKEN" || "$DAIS_BASE_URL" == https://* || "$REMOTE_TIMELINE_ASSERT" == "1" ]]; then
+    RUN_LIVE_DELIVERY=1
+  else
+    RUN_LIVE_DELIVERY=0
+  fi
+fi
+
+if [[ "$RUN_LIVE_DELIVERY" == "1" ]]; then
   echo "Creating a live ActivityPub delivery test post..."
   post_output="$(
     "${DAIS_CLI[@]}" post create "$SMOKE_POST_TEXT" \
@@ -109,12 +129,12 @@ if [[ -n "$DELIVERY_ADMIN_TOKEN" ]]; then
   fi
 
   for delivery_id in "${delivery_ids[@]}"; do
-    echo "Processing delivery $delivery_id..."
-    curl -fsS -X POST \
-      -H "Content-Type: application/json" \
-      -H "X-Dais-Admin-Token: $DELIVERY_ADMIN_TOKEN" \
-      -d "{\"delivery_id\":\"$delivery_id\"}" \
-      "$DAIS_BASE_URL/admin/deliveries/process" >/dev/null
+    if [[ -n "$DELIVERY_ADMIN_TOKEN" ]]; then
+      echo "Processing delivery $delivery_id..."
+    else
+      echo "Enqueueing delivery $delivery_id..."
+    fi
+    dispatch_delivery "$delivery_id"
   done
 
   echo "Waiting for Mastodon home timeline to reflect the delivered post..."
@@ -149,12 +169,12 @@ if [[ -n "$DELIVERY_ADMIN_TOKEN" ]]; then
 
     while IFS= read -r delivery_id; do
       if [[ -n "$delivery_id" ]]; then
-        echo "Processing reply delivery $delivery_id..."
-        curl -fsS -X POST \
-          -H "Content-Type: application/json" \
-          -H "X-Dais-Admin-Token: $DELIVERY_ADMIN_TOKEN" \
-          -d "{\"delivery_id\":\"$delivery_id\"}" \
-          "$DAIS_BASE_URL/admin/deliveries/process" >/dev/null
+        if [[ -n "$DELIVERY_ADMIN_TOKEN" ]]; then
+          echo "Processing reply delivery $delivery_id..."
+        else
+          echo "Enqueueing reply delivery $delivery_id..."
+        fi
+        dispatch_delivery "$delivery_id"
       fi
     done < <(
       printf '%s\n' "$reply_output" | awk '
@@ -178,12 +198,12 @@ if [[ -n "$DELIVERY_ADMIN_TOKEN" ]]; then
 
     while IFS= read -r delivery_id; do
       if [[ -n "$delivery_id" ]]; then
-        echo "Processing direct delivery $delivery_id..."
-        curl -fsS -X POST \
-          -H "Content-Type: application/json" \
-          -H "X-Dais-Admin-Token: $DELIVERY_ADMIN_TOKEN" \
-          -d "{\"delivery_id\":\"$delivery_id\"}" \
-          "$DAIS_BASE_URL/admin/deliveries/process" >/dev/null
+        if [[ -n "$DELIVERY_ADMIN_TOKEN" ]]; then
+          echo "Processing direct delivery $delivery_id..."
+        else
+          echo "Enqueueing direct delivery $delivery_id..."
+        fi
+        dispatch_delivery "$delivery_id"
       fi
     done < <(
       printf '%s\n' "$direct_output" | awk '
@@ -196,7 +216,7 @@ if [[ -n "$DELIVERY_ADMIN_TOKEN" ]]; then
     echo "DIRECT_RECIPIENT is not set; direct/private live delivery is skipped."
   fi
 else
-  echo "DELIVERY_ADMIN_TOKEN is not set; live delivery processing is skipped."
+  echo "Live delivery is skipped. Set RUN_LIVE_DELIVERY=1 with DAIS_BASE_URL=https://social.dais.social to enqueue without DELIVERY_ADMIN_TOKEN."
 fi
 
 if [[ -n "$TOOT_ACCOUNT" ]]; then

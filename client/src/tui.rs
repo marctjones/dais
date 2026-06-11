@@ -20,8 +20,8 @@ use ratatui::{
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
 use crate::d1::{
-    D1Block, D1Client, D1DirectMessage, D1FollowerRow, D1FollowingRow, D1Friend, D1Notification,
-    D1Post, D1TimelinePost, D1User, ServerStats,
+    D1Block, D1Client, D1Delivery, D1DirectMessage, D1FollowerRow, D1FollowingRow, D1Friend,
+    D1Notification, D1Post, D1TimelinePost, D1User, ServerStats,
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
@@ -34,6 +34,7 @@ enum Tab {
     Followers,
     Following,
     Notifications,
+    Deliveries,
     DMs,
     Search,
     Bluesky,
@@ -42,7 +43,7 @@ enum Tab {
 }
 
 impl Tab {
-    fn all() -> [Tab; 11] {
+    fn all() -> [Tab; 12] {
         [
             Tab::Home,
             Tab::Posts,
@@ -50,6 +51,7 @@ impl Tab {
             Tab::Followers,
             Tab::Following,
             Tab::Notifications,
+            Tab::Deliveries,
             Tab::DMs,
             Tab::Search,
             Tab::Bluesky,
@@ -66,6 +68,7 @@ impl Tab {
             Tab::Followers => "Followers",
             Tab::Following => "Following",
             Tab::Notifications => "Notifications",
+            Tab::Deliveries => "Deliveries",
             Tab::DMs => "DMs",
             Tab::Search => "Search",
             Tab::Bluesky => "Bluesky",
@@ -261,6 +264,7 @@ enum TabData {
     Followers(Vec<D1FollowerRow>),
     Following(Vec<D1FollowingRow>),
     Notifications(Vec<D1Notification>),
+    Deliveries(Vec<D1Delivery>),
     DMs(Vec<D1DirectMessage>),
     Search {
         posts: Vec<D1Post>,
@@ -343,6 +347,7 @@ struct App {
     followers: Vec<D1FollowerRow>,
     following: Vec<D1FollowingRow>,
     notifications: Vec<D1Notification>,
+    deliveries: Vec<D1Delivery>,
     direct_messages: Vec<D1DirectMessage>,
     search_posts: Vec<D1Post>,
     search_users: Vec<D1User>,
@@ -380,6 +385,7 @@ impl App {
             followers: Vec::new(),
             following: Vec::new(),
             notifications: Vec::new(),
+            deliveries: Vec::new(),
             direct_messages: Vec::new(),
             search_posts: Vec::new(),
             search_users: Vec::new(),
@@ -886,6 +892,7 @@ impl App {
                     TabData::Followers(value) => self.followers = value,
                     TabData::Following(value) => self.following = value,
                     TabData::Notifications(value) => self.notifications = value,
+                    TabData::Deliveries(value) => self.deliveries = value,
                     TabData::DMs(value) => self.direct_messages = value,
                     TabData::Search {
                         posts,
@@ -1291,6 +1298,20 @@ impl App {
                     ),
                 })
                 .collect(),
+            Tab::Deliveries => self
+                .deliveries
+                .iter()
+                .map(|row| Entry {
+                    title: row.id.clone(),
+                    subtitle: format!(
+                        "{} · retry={} · {}",
+                        row.status,
+                        row.retry_count.unwrap_or(0),
+                        row.created_at.as_deref().unwrap_or("")
+                    ),
+                    details: delivery_detail(row),
+                })
+                .collect(),
             Tab::DMs => self
                 .direct_messages
                 .iter()
@@ -1456,6 +1477,10 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             let db = D1Client::new(remote)?;
             Ok(TabData::Notifications(db.list_notifications(50).await?))
         }
+        Tab::Deliveries => {
+            let db = D1Client::new(remote)?;
+            Ok(TabData::Deliveries(db.list_deliveries(50, None).await?))
+        }
         Tab::DMs => {
             let db = D1Client::new(remote)?;
             Ok(TabData::DMs(db.list_direct_messages(50).await?))
@@ -1530,6 +1555,22 @@ fn post_detail(post: &D1Post) -> String {
         post.atproto_uri.as_deref().unwrap_or(""),
         encryption_state(post.encrypted_message.is_some()),
         post.content
+    )
+}
+
+fn delivery_detail(delivery: &D1Delivery) -> String {
+    format!(
+        "id: {}\npost: {}\ntarget: {}\nprotocol: {}\nstatus: {}\nretry count: {}\ncreated: {}\nlast attempt: {}\ndelivered: {}\nerror: {}",
+        delivery.id,
+        delivery.post_id,
+        delivery.target_url,
+        delivery.protocol,
+        delivery.status,
+        delivery.retry_count.unwrap_or(0),
+        delivery.created_at.as_deref().unwrap_or(""),
+        delivery.last_attempt_at.as_deref().unwrap_or(""),
+        delivery.delivered_at.as_deref().unwrap_or(""),
+        delivery.error_message.as_deref().unwrap_or("")
     )
 }
 

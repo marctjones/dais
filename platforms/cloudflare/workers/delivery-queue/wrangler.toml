@@ -19,6 +19,10 @@ bucket_name = "dais-media"
 [env.production]
 name = "delivery-queue-production"
 
+[[env.production.queues.producers]]
+binding = "DELIVERY_QUEUE"
+queue = "delivery-queue"
+
 [[env.production.queues.consumers]]
 queue = "delivery-queue"
 max_batch_size = 10

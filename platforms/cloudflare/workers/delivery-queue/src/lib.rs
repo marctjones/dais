@@ -14,13 +14,18 @@ use serde_json::Value;
 /// now in dais-core, making it reusable across platforms.
 use worker::*;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct DeliveryMessage {
     delivery_id: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct DeliveryProcessRequest {
+    delivery_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeliveryEnqueueRequest {
     delivery_id: String,
 }
 
@@ -32,6 +37,13 @@ struct DeliveryProcessReport {
     retry_count: u32,
 }
 
+#[derive(Debug, Serialize)]
+struct DeliveryEnqueueReport {
+    delivery_id: String,
+    enqueued: bool,
+    status: Option<String>,
+}
+
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
@@ -39,6 +51,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let router = Router::new();
 
     router
+        .post_async("/deliveries/enqueue", handle_enqueue_delivery)
         .post_async("/deliveries/process", handle_process_delivery)
         .run(req, env)
         .await
@@ -207,6 +220,57 @@ async fn handle_process_delivery(mut req: Request, ctx: RouteContext<()>) -> Res
     Ok(resp)
 }
 
+async fn handle_enqueue_delivery(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let body = req.text().await?;
+    let request: DeliveryEnqueueRequest = serde_json::from_str(&body)
+        .map_err(|_| worker::Error::RustError("Invalid JSON body".to_string()))?;
+    if !is_delivery_id(&request.delivery_id) {
+        return Response::error("Invalid delivery id", 400);
+    }
+
+    let db = ctx.env.d1("DB")?;
+    let rows = db
+        .prepare("SELECT status FROM deliveries WHERE id = ?1 LIMIT 1")
+        .bind(&[request.delivery_id.clone().into()])?
+        .all()
+        .await?
+        .results::<serde_json::Map<String, Value>>()?;
+
+    let Some(row) = rows.into_iter().next() else {
+        return Response::error("Delivery not found", 404);
+    };
+    let status = row
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if status != "queued" && status != "retry" {
+        let mut resp = Response::from_json(&DeliveryEnqueueReport {
+            delivery_id: request.delivery_id,
+            enqueued: false,
+            status: Some(status),
+        })?;
+        resp.headers_mut().set("Content-Type", "application/json")?;
+        return Ok(resp);
+    }
+
+    let queue = ctx.env.queue("DELIVERY_QUEUE")?;
+    queue
+        .send(DeliveryMessage {
+            delivery_id: request.delivery_id.clone(),
+        })
+        .await?;
+
+    let mut resp = Response::from_json(&DeliveryEnqueueReport {
+        delivery_id: request.delivery_id,
+        enqueued: true,
+        status: Some(status),
+    })?;
+    resp.headers_mut().set("Content-Type", "application/json")?;
+    Ok(resp)
+}
+
 async fn process_delivery(
     core: &DaisCore,
     delivery_id: &str,
@@ -353,6 +417,12 @@ async fn process_delivery(
             })
         }
     }
+}
+
+fn is_delivery_id(value: &str) -> bool {
+    value
+        .strip_prefix("delivery-")
+        .is_some_and(|suffix| suffix.len() >= 12 && suffix.chars().all(|ch| ch.is_ascii_hexdigit()))
 }
 
 fn build_create_activity_json(

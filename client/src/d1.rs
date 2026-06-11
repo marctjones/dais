@@ -120,6 +120,21 @@ pub struct D1Block {
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
+pub struct D1Delivery {
+    pub id: String,
+    pub post_id: String,
+    pub target_url: String,
+    pub protocol: String,
+    pub status: String,
+    pub retry_count: Option<u64>,
+    pub error_message: Option<String>,
+    pub created_at: Option<String>,
+    pub last_attempt_at: Option<String>,
+    pub delivered_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct D1Friend {
     pub friend_actor_id: String,
     pub friend_inbox: Option<String>,
@@ -475,6 +490,32 @@ impl D1Client {
         self.query(&sql)
     }
 
+    pub async fn list_deliveries(
+        &self,
+        limit: u16,
+        status: Option<&str>,
+    ) -> Result<Vec<D1Delivery>> {
+        let limit = clamp_limit(limit);
+        let status_filter = match status {
+            Some(value) => {
+                let value = normalized_delivery_status(value)?;
+                format!("WHERE status = {}", sql_literal(value))
+            }
+            None => String::new(),
+        };
+        let sql = format!(
+            r#"
+            SELECT id, post_id, target_url, protocol, status, retry_count,
+                   error_message, created_at, last_attempt_at, delivered_at
+            FROM deliveries
+            {status_filter}
+            ORDER BY COALESCE(last_attempt_at, created_at) DESC
+            LIMIT {limit}
+            "#
+        );
+        self.query(&sql)
+    }
+
     pub async fn approve_follower(&self, actor_id: &str, follower_actor_id: &str) -> Result<()> {
         let sql = format!(
             "UPDATE followers SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE actor_id = {actor_id} AND follower_actor_id = {follower_actor_id}",
@@ -662,6 +703,18 @@ fn sql_like_escape(value: &str) -> String {
 
 fn sql_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+fn normalized_delivery_status(value: &str) -> Result<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "queued" => Ok("queued"),
+        "retry" => Ok("retry"),
+        "failed" => Ok("failed"),
+        "delivered" => Ok("delivered"),
+        other => Err(anyhow!(
+            "unsupported delivery status {other}; expected queued, retry, failed, or delivered"
+        )),
+    }
 }
 
 fn uuid_like() -> String {

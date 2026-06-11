@@ -2,6 +2,7 @@ mod atproto;
 mod cli;
 mod config;
 mod d1;
+mod delivery;
 mod doctor;
 mod e2ee;
 mod output;
@@ -12,8 +13,8 @@ mod tui;
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use cli::{
-    BlueskyCommand, Cli, Command, E2eeCommand, FollowCommand, FollowersCommand, FriendsCommand,
-    NotificationsCommand, PostCommand, SearchCommand, TimelineCommand,
+    BlueskyCommand, Cli, Command, DeliveriesCommand, E2eeCommand, FollowCommand, FollowersCommand,
+    FriendsCommand, NotificationsCommand, PostCommand, SearchCommand, TimelineCommand,
 };
 use config::ConfigStore;
 use d1::D1Client;
@@ -37,6 +38,7 @@ async fn main() -> Result<()> {
         Command::Friends(command) => handle_friends(command).await?,
         Command::Followers(command) => handle_followers(command).await?,
         Command::Notifications(command) => handle_notifications(command).await?,
+        Command::Deliveries(command) => handle_deliveries(command).await?,
         Command::E2ee(command) => handle_e2ee(command).await?,
         Command::Doctor(args) => handle_doctor(args).await?,
         Command::Completions { shell } => {
@@ -444,6 +446,53 @@ async fn handle_notifications(command: NotificationsCommand) -> Result<()> {
             let db = D1Client::new(remote)?;
             db.mark_notification_read(&id).await?;
             println!("Marked notification {id} read");
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_deliveries(command: DeliveriesCommand) -> Result<()> {
+    match command {
+        DeliveriesCommand::List(args) => {
+            let db = D1Client::new(args.remote)?;
+            let deliveries = db
+                .list_deliveries(args.limit, args.status.as_deref())
+                .await?;
+            output::print_deliveries(&deliveries);
+        }
+        DeliveriesCommand::Enqueue(args) => {
+            let report = delivery::enqueue_delivery(&args.base_url, &args.id).await?;
+            output::print_delivery_enqueue_report(&report);
+        }
+        DeliveriesCommand::Process(args) => {
+            let report =
+                delivery::process_delivery(&args.base_url, args.admin_token.as_deref(), &args.id)
+                    .await?;
+            output::print_delivery_process_report(&report);
+        }
+        DeliveriesCommand::ProcessQueued(args) => {
+            let status = args.status.trim().to_ascii_lowercase();
+            if status != "queued" && status != "retry" {
+                anyhow::bail!("process-queued only supports --status queued or retry");
+            }
+
+            let db = D1Client::new(args.remote)?;
+            let deliveries = db.list_deliveries(args.limit, Some(&status)).await?;
+            if deliveries.is_empty() {
+                println!("No {status} deliveries found");
+                return Ok(());
+            }
+
+            for delivery in deliveries {
+                let report = delivery::process_delivery(
+                    &args.base_url,
+                    args.admin_token.as_deref(),
+                    &delivery.id,
+                )
+                .await?;
+                output::print_delivery_process_report(&report);
+            }
         }
     }
 

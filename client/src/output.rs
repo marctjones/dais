@@ -1,5 +1,8 @@
 use crate::atproto::{FeedItem, Profile};
-use crate::d1::{D1Friend, D1Notification, D1Post, D1TimelinePost, D1User, ServerStats};
+use crate::d1::{
+    D1Delivery, D1Friend, D1Notification, D1Post, D1TimelinePost, D1User, ServerStats,
+};
+use crate::delivery::{DeliveryEnqueueReport, DeliveryProcessReport};
 
 pub fn print_profile(profile: &Profile) {
     println!("@{}", profile.handle);
@@ -251,6 +254,64 @@ pub fn print_notifications(notifications: &[D1Notification]) {
         }
         println!();
     }
+}
+
+pub fn print_deliveries(deliveries: &[D1Delivery]) {
+    if deliveries.is_empty() {
+        println!("No deliveries found");
+        return;
+    }
+
+    for delivery in deliveries {
+        println!(
+            "{} [{} / {} / retry={}] {}",
+            delivery.created_at.as_deref().unwrap_or("unknown time"),
+            delivery.status,
+            delivery.protocol,
+            delivery.retry_count.unwrap_or(0),
+            delivery.target_url
+        );
+        println!("id={}", delivery.id);
+        println!("post={}", delivery.post_id);
+        if let Some(last_attempt_at) = delivery
+            .last_attempt_at
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("last_attempt={last_attempt_at}");
+        }
+        if let Some(delivered_at) = delivery
+            .delivered_at
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("delivered={delivered_at}");
+        }
+        if let Some(error) = delivery
+            .error_message
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            println!("error={error}");
+        }
+        println!();
+    }
+}
+
+pub fn print_delivery_process_report(report: &DeliveryProcessReport) {
+    println!(
+        "{} success={} retryable={} retry_count={}",
+        report.delivery_id, report.success, report.retryable, report.retry_count
+    );
+}
+
+pub fn print_delivery_enqueue_report(report: &DeliveryEnqueueReport) {
+    println!(
+        "{} enqueued={} status={}",
+        report.delivery_id,
+        report.enqueued,
+        report.status.as_deref().unwrap_or("")
+    );
 }
 
 pub fn print_server_stats(stats: &ServerStats, remote: bool) {

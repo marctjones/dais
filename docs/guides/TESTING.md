@@ -206,11 +206,21 @@ REMOTE_TIMELINE_ASSERT=1 \
 ./scripts/test-federation-smoke.sh
 ```
 
-The smoke harness creates a followers-only dais post, processes delivery through
-the production delivery worker when `DELIVERY_ADMIN_TOKEN` is set, then polls the
-Mastodon home timeline through `toot`. If `DELIVERY_ADMIN_TOKEN` is not set, the
-script can still run local endpoint, roster, and E2EE checks, but it will skip
-the live delivery-processing step.
+The smoke harness creates a followers-only dais post, sends each delivery through
+`dais deliveries process` when `DELIVERY_ADMIN_TOKEN` is set, and otherwise uses
+`dais deliveries enqueue` to hand the existing delivery row to the normal
+Cloudflare Queue consumer. It then polls the Mastodon home timeline through
+`toot`. Local/default runs skip the live delivery step unless
+`RUN_LIVE_DELIVERY=1` is set or `DAIS_BASE_URL` is an HTTPS deployment URL.
+
+Useful delivery inspection commands:
+
+```bash
+cargo run --manifest-path client/Cargo.toml -- deliveries list --remote --status queued
+cargo run --manifest-path client/Cargo.toml -- deliveries enqueue <delivery-id>
+cargo run --manifest-path client/Cargo.toml -- deliveries process <delivery-id>
+cargo run --manifest-path client/Cargo.toml -- deliveries process-queued --remote --limit 10
+```
 
 Operational notes:
 - `toot auth` shows which account is active. Use `toot activate <account>` or

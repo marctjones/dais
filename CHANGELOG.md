@@ -5,6 +5,25 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.2] - 2026-06-11
+
+### Added
+- Added Rust CLI delivery operations:
+  - `dais deliveries list`
+  - `dais deliveries enqueue <delivery-id>`
+  - `dais deliveries process <delivery-id>`
+  - `dais deliveries process-queued`
+- Added a TUI Deliveries tab for inspecting ActivityPub delivery status,
+  targets, retry counts, timestamps, and worker errors.
+- Added a delivery-worker enqueue endpoint that pushes existing queued/retryable
+  delivery rows into Cloudflare Queues without requiring the stronger process
+  admin token.
+
+### Changed
+- `scripts/test-federation-smoke.sh` now processes live Mastodon smoke
+  deliveries through the Rust CLI instead of hand-written curl calls, and can
+  use normal queue enqueueing when `DELIVERY_ADMIN_TOKEN` is not present.
+
 ## [1.17.1] - 2026-06-11
 
 ### Fixed

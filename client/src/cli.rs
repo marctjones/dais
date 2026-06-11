@@ -36,6 +36,9 @@ pub enum Command {
     /// Inspect ActivityPub notifications.
     #[command(subcommand)]
     Notifications(NotificationsCommand),
+    /// Inspect and process ActivityPub delivery jobs.
+    #[command(subcommand)]
+    Deliveries(DeliveriesCommand),
     /// End-to-end encryption helpers for dais encryptedMessage v1.
     #[command(subcommand)]
     E2ee(E2eeCommand),
@@ -341,6 +344,65 @@ pub enum NotificationsCommand {
         #[arg(long)]
         remote: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum DeliveriesCommand {
+    /// List ActivityPub delivery jobs from D1.
+    List(ListDeliveriesArgs),
+    /// Enqueue one existing queued/retryable delivery for normal worker processing.
+    Enqueue(EnqueueDeliveryArgs),
+    /// Process one queued or retryable delivery through the deployed delivery worker.
+    Process(ProcessDeliveryArgs),
+    /// Process queued or retryable deliveries in batch.
+    ProcessQueued(ProcessQueuedDeliveriesArgs),
+}
+
+#[derive(Args)]
+pub struct ListDeliveriesArgs {
+    #[arg(long, default_value_t = 20)]
+    pub limit: u16,
+    /// Filter by status: queued, retry, failed, delivered.
+    #[arg(long)]
+    pub status: Option<String>,
+    #[arg(long)]
+    pub remote: bool,
+}
+
+#[derive(Args)]
+pub struct ProcessDeliveryArgs {
+    pub id: String,
+    /// Social/ActivityPub base URL that routes /admin/deliveries/process.
+    #[arg(long, default_value = "https://social.dais.social")]
+    pub base_url: String,
+    /// Delivery admin token for the deployed worker.
+    #[arg(long, env = "DELIVERY_ADMIN_TOKEN")]
+    pub admin_token: Option<String>,
+}
+
+#[derive(Args)]
+pub struct EnqueueDeliveryArgs {
+    pub id: String,
+    /// Social/ActivityPub base URL that routes /admin/deliveries/enqueue.
+    #[arg(long, default_value = "https://social.dais.social")]
+    pub base_url: String,
+}
+
+#[derive(Args)]
+pub struct ProcessQueuedDeliveriesArgs {
+    #[arg(long, default_value_t = 20)]
+    pub limit: u16,
+    /// Delivery status to process: queued or retry.
+    #[arg(long, default_value = "queued")]
+    pub status: String,
+    /// Social/ActivityPub base URL that routes /admin/deliveries/process.
+    #[arg(long, default_value = "https://social.dais.social")]
+    pub base_url: String,
+    /// Delivery admin token for the deployed worker.
+    #[arg(long, env = "DELIVERY_ADMIN_TOKEN")]
+    pub admin_token: Option<String>,
+    #[arg(long)]
+    pub remote: bool,
 }
 
 #[derive(Subcommand)]
