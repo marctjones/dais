@@ -4,9 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "tauri:dev": "tauri dev",
+    "tauri:run": "npm run build && cargo run --manifest-path src-tauri/Cargo.toml",
     "tauri:build": "tauri build"
   },
   "devDependencies": {

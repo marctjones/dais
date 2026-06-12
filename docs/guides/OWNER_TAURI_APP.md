@@ -24,11 +24,11 @@ npm install
 npm run build
 ```
 
-Run the Tauri app in development:
+Run the Tauri app locally without starting a frontend dev server:
 
 ```bash
 cd apps/owner-tauri
-npm run tauri:dev
+npm run tauri:run
 ```
 
 Build the desktop bundle:
