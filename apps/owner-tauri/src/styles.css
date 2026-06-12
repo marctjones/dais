@@ -297,12 +297,77 @@ select {
 }
 
 .compose-actions button,
-.settings button {
+.settings button,
+.follower button {
   min-width: 96px;
   border-color: #0f766e;
   background: #0f766e;
   color: #ffffff;
   font-weight: 700;
+}
+
+.follower button {
+  min-width: auto;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 0.82rem;
+}
+
+.follower button[data-follower-status="pending"] {
+  border-color: #839088;
+  background: #eef1ec;
+  color: #27312b;
+}
+
+.follower button[data-follower-status="rejected"] {
+  border-color: #8a2a1f;
+  background: #8a2a1f;
+}
+
+.section-label {
+  margin: 0 0 8px;
+  color: #5b665e;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+}
+
+.followers .section-label:not(:first-child) {
+  margin-top: 14px;
+}
+
+.recipient-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #d9ded7;
+  border-radius: 8px;
+}
+
+.recipient-picker legend {
+  padding: 0 5px;
+  color: #5b665e;
+  font-weight: 700;
+}
+
+.recipient-picker p {
+  color: #5b665e;
+}
+
+.recipient-option {
+  display: inline-flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #e8ede7;
+}
+
+.recipient-option input {
+  min-height: auto;
 }
 
 .settings {
@@ -374,9 +439,20 @@ select {
   .nav button span,
   .pill,
   .item footer span,
-  .item footer a {
+  .item footer a,
+  .recipient-option {
     background: #2b342e;
     color: #c8d2ca;
+  }
+
+  .recipient-picker {
+    border-color: #303832;
+  }
+
+  .follower button[data-follower-status="pending"] {
+    border-color: #3a433c;
+    background: #2b342e;
+    color: #e7ece8;
   }
 
   input,

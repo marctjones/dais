@@ -10,9 +10,13 @@ Current status:
   Followers, Profile, Moderation, Deliveries, Settings, and Diagnostics.
 - Local settings storage for instance URL and owner token.
 - Shared Rust `dais-client-core` models and `OwnerApiClient` HTTP calls for
-  snapshots and compose.
+  snapshots, compose, profile updates, and follower status updates.
 - Live owner snapshot loading and private-by-default post creation when an owner
   token is configured.
+- Live follower management for pending, approved, and rejected follower rows.
+- Live public account/profile configuration for the ActivityPub actor, HTML
+  profile, and Mastodon account API output.
+- Approved-follower selection in compose for direct ActivityPub posts.
 - Local preview data when no token is configured or the owner API is
   unreachable.
 
@@ -36,6 +40,12 @@ Build the desktop bundle:
 ```bash
 cd apps/owner-tauri
 npm run tauri:build
+```
+
+On macOS this creates:
+
+```text
+apps/owner-tauri/src-tauri/target/release/bundle/macos/dais owner.app
 ```
 
 Configure production owner API access:

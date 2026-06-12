@@ -107,12 +107,15 @@ Private/followers visibility is the default. Public posting is explicit.
 
 The first-party desktop owner app lives in `apps/owner-tauri` and reuses Rust
 models plus HTTP owner API calls from `client-core`. It is an adaptive Tauri v2
-owner workspace with live snapshot and private-by-default compose wiring.
+owner workspace with live snapshots, private-by-default compose, follower
+management, public profile configuration, and approved-follower selection for
+direct posts.
 
 ```bash
 cd apps/owner-tauri
 npm install
 npm run build
+npm run tauri:build
 ```
 
 Production owner API access requires the router worker secret

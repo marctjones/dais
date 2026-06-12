@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 pub type ClientResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -14,7 +15,10 @@ impl OwnerApiClient {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             owner_token: owner_token.into(),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(8))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 
@@ -24,6 +28,25 @@ impl OwnerApiClient {
 
     pub async fn create_post(&self, draft: &ComposeDraft) -> ClientResult<OwnerCreatedPost> {
         self.post("/api/dais/owner/posts", draft).await
+    }
+
+    pub async fn set_follower_status(
+        &self,
+        follower_actor_id: &str,
+        status: &str,
+    ) -> ClientResult<OwnerActionResult> {
+        self.post(
+            "/api/dais/owner/followers/status",
+            &FollowerStatusUpdate {
+                follower_actor_id,
+                status,
+            },
+        )
+        .await
+    }
+
+    pub async fn update_profile(&self, profile: &OwnerProfileUpdate) -> ClientResult<OwnerProfile> {
+        self.post("/api/dais/owner/profile", profile).await
     }
 
     async fn get<T>(&self, path: &str) -> ClientResult<T>
@@ -138,6 +161,53 @@ pub struct OwnerCreatedPost {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerActionResult {
+    pub ok: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct FollowerStatusUpdate<'a> {
+    follower_actor_id: &'a str,
+    status: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerFollower {
+    pub id: String,
+    pub actor_id: String,
+    pub follower_actor_id: String,
+    pub follower_inbox: String,
+    pub follower_shared_inbox: Option<String>,
+    pub status: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerProfile {
+    pub id: String,
+    pub username: String,
+    pub actor_type: String,
+    pub display_name: Option<String>,
+    pub summary: Option<String>,
+    pub icon: Option<String>,
+    pub image: Option<String>,
+    pub avatar_url: Option<String>,
+    pub header_url: Option<String>,
+    pub public_handle: String,
+    pub actor_url: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerProfileUpdate {
+    pub actor_type: Option<String>,
+    pub display_name: Option<String>,
+    pub summary: Option<String>,
+    pub icon: Option<String>,
+    pub image: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceItem {
     pub id: String,
     pub title: String,
@@ -166,7 +236,9 @@ pub struct DiagnosticStatus {
 pub struct OwnerSnapshot {
     pub settings: OwnerSettings,
     pub active_section: OwnerSection,
+    pub profile: OwnerProfile,
     pub posts: Vec<OwnerPost>,
+    pub followers: Vec<OwnerFollower>,
     pub sources: Vec<SourceItem>,
     pub moderation: ModerationState,
     pub diagnostics: Vec<DiagnosticStatus>,
@@ -251,7 +323,21 @@ mod tests {
                 default_protocol: ProtocolRoute::Both,
             },
             active_section: OwnerSection::Home,
+            profile: OwnerProfile {
+                id: "https://social.dais.social/users/social".to_string(),
+                username: "social".to_string(),
+                actor_type: "Person".to_string(),
+                display_name: Some("dais".to_string()),
+                summary: Some("Private-by-default social server.".to_string()),
+                icon: None,
+                image: None,
+                avatar_url: None,
+                header_url: None,
+                public_handle: "@social@dais.social".to_string(),
+                actor_url: "https://social.dais.social/users/social".to_string(),
+            },
             posts: Vec::new(),
+            followers: Vec::new(),
             sources: Vec::new(),
             moderation: ModerationState {
                 closed_network: false,

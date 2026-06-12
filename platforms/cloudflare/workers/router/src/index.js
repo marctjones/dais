@@ -566,6 +566,21 @@ async function handleOwnerApi(request, env, url) {
     return apiJson(await ownerSnapshot(env));
   }
 
+  if (request.method === 'GET' && path === '/profile') {
+    return apiJson(await ownerProfile(env));
+  }
+
+  if (request.method === 'POST' && path === '/profile') {
+    const body = await readJson(request);
+    let profile;
+    try {
+      profile = await ownerUpdateProfile(env, body);
+    } catch (error) {
+      return apiJson({ error: error.message || 'profile update failed' }, 400);
+    }
+    return apiJson(profile);
+  }
+
   if (request.method === 'GET' && path === '/posts') {
     return apiJson({
       items: await ownerPosts(env, clampLimit(url.searchParams.get('limit'))),
@@ -582,6 +597,22 @@ async function handleOwnerApi(request, env, url) {
     return apiJson({
       items: await ownerFollowers(env, clampLimit(url.searchParams.get('limit'))),
     });
+  }
+
+  if (request.method === 'POST' && path === '/followers/status') {
+    const body = await readJson(request);
+    const followerActorId = String(body.follower_actor_id || '').trim();
+    const status = String(body.status || '').trim().toLowerCase();
+    if (!followerActorId) return apiJson({ error: 'follower_actor_id is required' }, 400);
+    if (!['approved', 'pending', 'rejected'].includes(status)) {
+      return apiJson({ error: 'status must be approved, pending, or rejected' }, 400);
+    }
+    await env.DB.prepare(
+      `UPDATE followers
+       SET status = ?1, updated_at = CURRENT_TIMESTAMP
+       WHERE follower_actor_id = ?2`,
+    ).bind(status, followerActorId).run();
+    return apiJson({ ok: true });
   }
 
   if (request.method === 'GET' && path === '/following') {
@@ -639,7 +670,19 @@ async function handleOwnerApi(request, env, url) {
       return apiJson({ error: 'private posts cannot route only to atproto' }, 400);
     }
 
-    const created = await ownerCreatePost(env, { text, visibility, protocol });
+    const recipients = Array.isArray(body.recipients)
+      ? body.recipients.map((value) => String(value).trim()).filter(Boolean)
+      : [];
+    if (visibility === 'direct' && recipients.length === 0) {
+      return apiJson({ error: 'direct posts require at least one recipient' }, 400);
+    }
+
+    let created;
+    try {
+      created = await ownerCreatePost(env, { text, visibility, protocol, recipients });
+    } catch (error) {
+      return apiJson({ error: error.message || 'post creation failed' }, 400);
+    }
     return apiJson(created, 201);
   }
 
@@ -647,8 +690,10 @@ async function handleOwnerApi(request, env, url) {
 }
 
 async function ownerSnapshot(env) {
-  const [posts, sources, moderation, diagnostics] = await Promise.all([
+  const [profile, posts, followers, sources, moderation, diagnostics] = await Promise.all([
+    ownerProfile(env),
     ownerPosts(env, 20),
+    ownerFollowers(env, 100),
     ownerSourceItems(env, 20),
     ownerModeration(env),
     ownerDiagnostics(env),
@@ -662,6 +707,7 @@ async function ownerSnapshot(env) {
       default_protocol: 'Both',
     },
     active_section: 'Home',
+    profile,
     posts: posts.map((post) => ({
       id: post.id,
       title: post.name || null,
@@ -671,10 +717,79 @@ async function ownerSnapshot(env) {
       encrypted: Boolean(post.encrypted_message),
       published_at: post.published_at || null,
     })),
+    followers,
     sources,
     moderation,
     diagnostics,
   };
+}
+
+async function ownerProfile(env) {
+  const row = await env.DB.prepare(
+    `SELECT id, username, COALESCE(actor_type, 'Person') AS actor_type,
+            display_name, summary, icon, image, avatar_url, header_url
+     FROM actors
+     WHERE username = 'social'
+     LIMIT 1`,
+  ).first();
+  const username = row?.username || 'social';
+  const actorUrl = row?.id || 'https://social.dais.social/users/social';
+  const handleDomain = env.DOMAIN || 'dais.social';
+  return {
+    id: actorUrl,
+    username,
+    actor_type: row?.actor_type || 'Person',
+    display_name: row?.display_name || null,
+    summary: row?.summary || null,
+    icon: row?.icon || null,
+    image: row?.image || null,
+    avatar_url: row?.avatar_url || row?.icon || null,
+    header_url: row?.header_url || row?.image || null,
+    public_handle: `@${username}@${handleDomain}`,
+    actor_url: actorUrl,
+  };
+}
+
+async function ownerUpdateProfile(env, body) {
+  const assignments = ['updated_at = CURRENT_TIMESTAMP'];
+  const values = [];
+  const actorType = optionalString(body.actor_type);
+  if (actorType) {
+    if (!['Person', 'Group', 'Organization'].includes(actorType)) {
+      throw new Error('actor_type must be Person, Group, or Organization');
+    }
+    values.push(actorType);
+    assignments.push(`actor_type = ?${values.length}`);
+  }
+  for (const [column, value] of [
+    ['display_name', optionalString(body.display_name)],
+    ['summary', optionalString(body.summary)],
+    ['icon', optionalUrl(body.icon, 'icon')],
+    ['image', optionalUrl(body.image, 'image')],
+  ]) {
+    if (value !== null) {
+      values.push(value);
+      assignments.push(`${column} = ?${values.length}`);
+      if (column === 'icon') {
+        values.push(value);
+        assignments.push(`avatar_url = ?${values.length}`);
+      }
+      if (column === 'image') {
+        values.push(value);
+        assignments.push(`header_url = ?${values.length}`);
+      }
+    }
+  }
+  if (assignments.length === 1) {
+    throw new Error('no profile fields provided');
+  }
+  values.push('social');
+  await env.DB.prepare(
+    `UPDATE actors
+     SET ${assignments.join(', ')}
+     WHERE username = ?${values.length}`,
+  ).bind(...values).run();
+  return ownerProfile(env);
 }
 
 async function ownerSettings(env) {
@@ -721,7 +836,9 @@ async function ownerFollowers(env, limit) {
     `SELECT id, actor_id, follower_actor_id, follower_inbox, follower_shared_inbox,
             status, created_at, updated_at
      FROM followers
-     ORDER BY updated_at DESC
+     ORDER BY
+       CASE status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+       updated_at DESC
      LIMIT ?1`,
   ).bind(limit).all();
   return rows.results || [];
@@ -842,11 +959,14 @@ async function ownerDiagnostics(env) {
   ];
 }
 
-async function ownerCreatePost(env, { text, visibility, protocol }) {
+async function ownerCreatePost(env, { text, visibility, protocol, recipients = [] }) {
   const actor = await env.DB.prepare(
     "SELECT id FROM actors WHERE username = 'social' LIMIT 1",
   ).first();
   const actorId = actor?.id || 'https://social.dais.social/users/social';
+  const directTargets = visibility === 'direct'
+    ? await ownerDirectDeliveryTargets(env, recipients)
+    : [];
   const now = new Date().toISOString();
   const localId = `${now.replace(/[-:TZ.]/g, '').slice(0, 14)}-${stableId(`${now}\n${text}`).slice(0, 8)}`;
   const postId = `${actorId}/posts/${localId}`;
@@ -856,6 +976,10 @@ async function ownerCreatePost(env, { text, visibility, protocol }) {
       id, actor_id, content, content_html, object_type, visibility, protocol, published_at, created_at, updated_at
     ) VALUES (?1, ?2, ?3, ?4, 'Note', ?5, ?6, ?7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
   ).bind(postId, actorId, text, contentHtml, visibility, protocol, now).run();
+  const deliveryIds =
+    protocol === 'activitypub' || protocol === 'both'
+      ? await ownerCreatePostDeliveries(env, { postId, visibility, directTargets })
+      : [];
   return {
     id: postId,
     actor_id: actorId,
@@ -864,8 +988,88 @@ async function ownerCreatePost(env, { text, visibility, protocol }) {
     visibility,
     protocol,
     published_at: now,
-    delivery_ids: [],
+    recipients,
+    delivery_ids: deliveryIds,
   };
+}
+
+async function ownerCreatePostDeliveries(env, { postId, visibility, directTargets }) {
+  if (visibility === 'direct') {
+    return insertDeliveryRows(env, postId, directTargets);
+  }
+
+  return ownerCreateFollowerDeliveries(env, postId);
+}
+
+async function ownerDirectDeliveryTargets(env, recipients) {
+  const placeholders = recipients.map((_, index) => `?${index + 1}`).join(', ');
+  const rows = await env.DB.prepare(
+    `SELECT follower_actor_id, follower_inbox
+     FROM followers
+     WHERE status = 'approved'
+       AND follower_actor_id IN (${placeholders})`,
+  ).bind(...recipients).all();
+  const followers = rows.results || [];
+  const knownRecipients = new Set(followers.map((row) => row.follower_actor_id));
+  const missing = recipients.filter((recipient) => !knownRecipients.has(recipient));
+  if (missing.length > 0) {
+    throw new Error(`direct recipients must be approved followers with known inboxes: ${missing.join(', ')}`);
+  }
+
+  return followers.map((row) => row.follower_inbox);
+}
+
+async function ownerCreateFollowerDeliveries(env, postId) {
+  const rows = await env.DB.prepare(
+    `SELECT COALESCE(NULLIF(follower_shared_inbox, ''), follower_inbox) AS inbox
+     FROM followers
+     WHERE status = 'approved'`,
+  ).all();
+  return insertDeliveryRows(env, postId, (rows.results || []).map((row) => row.inbox));
+}
+
+async function insertDeliveryRows(env, postId, inboxes) {
+  const allowedInboxes = [];
+  for (const inbox of inboxes) {
+    if (await ownerFederationTargetAllowed(env, inbox)) {
+      allowedInboxes.push(inbox);
+    }
+  }
+  const uniqueInboxes = [...new Set(allowedInboxes.map((value) => String(value || '').trim()).filter(Boolean))];
+  const deliveryIds = [];
+  const createdAt = new Date().toISOString();
+  for (const inbox of uniqueInboxes) {
+    const deliveryId = `delivery-${stableId(`${postId}\n${inbox}\n${createdAt}`).slice(0, 24)}`;
+    await env.DB.prepare(
+      `INSERT INTO deliveries (
+        id, post_id, target_type, target_url, protocol,
+        status, retry_count, created_at, activity_type
+      ) VALUES (
+        ?1, ?2, 'inbox', ?3, 'activitypub',
+        'queued', 0, ?4, 'Create'
+      )`,
+    ).bind(deliveryId, postId, inbox, createdAt).run();
+    deliveryIds.push(deliveryId);
+  }
+  return deliveryIds;
+}
+
+async function ownerFederationTargetAllowed(env, targetUrl) {
+  const settings = await ownerSettings(env);
+  if (!settings.closed_network) return true;
+  let host = '';
+  try {
+    host = new URL(targetUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  const row = await env.DB.prepare(
+    `SELECT 1
+     FROM federation_allowlist
+     WHERE host = ?1 AND enabled = 1
+     LIMIT 1`,
+  ).bind(host).first();
+  return Boolean(row);
 }
 
 function requireOwnerBearer(request, env) {
@@ -902,6 +1106,26 @@ function normalizeProtocol(value) {
   if (normalized === 'atproto') return 'atproto';
   if (normalized === 'both') return 'both';
   return null;
+}
+
+function optionalString(value) {
+  const trimmed = String(value || '').trim();
+  return trimmed ? trimmed : null;
+}
+
+function optionalUrl(value, field) {
+  const trimmed = optionalString(value);
+  if (!trimmed) return null;
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(`${field} must be an absolute https URL`);
+  }
+  if (url.protocol !== 'https:') {
+    throw new Error(`${field} must be an absolute https URL`);
+  }
+  return trimmed;
 }
 
 function titleVisibility(value) {

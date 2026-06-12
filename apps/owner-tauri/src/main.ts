@@ -11,6 +11,19 @@ type OwnerSnapshot = {
     default_visibility: Visibility;
     default_protocol: ProtocolRoute;
   };
+  profile: {
+    id: string;
+    username: string;
+    actor_type: string;
+    display_name?: string | null;
+    summary?: string | null;
+    icon?: string | null;
+    image?: string | null;
+    avatar_url?: string | null;
+    header_url?: string | null;
+    public_handle: string;
+    actor_url: string;
+  };
   active_section: string;
   posts: Array<{
     id: string;
@@ -20,6 +33,16 @@ type OwnerSnapshot = {
     protocol: ProtocolRoute | string;
     encrypted: boolean;
     published_at?: string | null;
+  }>;
+  followers: Array<{
+    id: string;
+    actor_id: string;
+    follower_actor_id: string;
+    follower_inbox: string;
+    follower_shared_inbox?: string | null;
+    status: string;
+    created_at?: string | null;
+    updated_at?: string | null;
   }>;
   sources: Array<{
     id: string;
@@ -63,6 +86,7 @@ let active = "Home";
 let notice = "";
 
 async function load() {
+  render();
   snapshot = await invoke<OwnerSnapshot>("owner_snapshot");
   active = active || snapshot.active_section || "Home";
   render();
@@ -117,7 +141,15 @@ function render() {
     });
   });
   app.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", saveSettings);
+  app.querySelector<HTMLFormElement>("#profile-form")?.addEventListener("submit", saveProfile);
   app.querySelector<HTMLFormElement>("#compose-form")?.addEventListener("submit", publishPost);
+  app.querySelectorAll<HTMLButtonElement>("[data-follower-status]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const follower = button.dataset.follower || "";
+      const status = button.dataset.followerStatus || "";
+      void setFollowerStatus(follower, status);
+    });
+  });
 }
 
 function navButton(section: string) {
@@ -142,9 +174,11 @@ function view(section: string, data: OwnerSnapshot): string {
       return settingsView(data);
     case "Diagnostics":
       return list(data.diagnostics.map(diagnosticCard), "No diagnostics returned.");
-    case "Notifications":
     case "Followers":
+      return followersView(data);
     case "Profile":
+      return profileView(data);
+    case "Notifications":
     case "Deliveries":
       return pendingLiveView(section);
     default:
@@ -156,8 +190,8 @@ function dashboardView(data: OwnerSnapshot) {
   return `
     <section class="metrics">
       <article><span>Posts</span><strong>${data.posts.length}</strong></article>
+      <article><span>Followers</span><strong>${data.followers.filter((row) => row.status === "approved").length}</strong></article>
       <article><span>Sources</span><strong>${data.sources.length}</strong></article>
-      <article><span>Blocks</span><strong>${data.moderation.block_count}</strong></article>
       <article><span>Allowlist</span><strong>${data.moderation.allowlist_count}</strong></article>
     </section>
     ${composeView(data)}
@@ -168,6 +202,7 @@ function dashboardView(data: OwnerSnapshot) {
 }
 
 function composeView(data: OwnerSnapshot) {
+  const approvedFollowers = data.followers.filter((row) => row.status === "approved");
   return `<form id="compose-form" class="panel compose">
     <div class="compose-head">
       <h2>New post</h2>
@@ -194,11 +229,37 @@ function composeView(data: OwnerSnapshot) {
     <label>Recipients
       <input name="recipients" placeholder="Direct/E2EE actor URLs, comma separated" />
     </label>
+    <fieldset class="recipient-picker">
+      <legend>Approved followers</legend>
+      ${
+        approvedFollowers.length
+          ? approvedFollowers.map(recipientOption).join("")
+          : `<p>No approved followers are available for direct selection.</p>`
+      }
+    </fieldset>
     <div class="compose-actions">
       <label class="check"><input name="encrypt" type="checkbox" /> E2EE</label>
       <button type="submit">Publish</button>
     </div>
   </form>`;
+}
+
+function followersView(data: OwnerSnapshot) {
+  const pending = data.followers.filter((row) => row.status === "pending");
+  const approved = data.followers.filter((row) => row.status === "approved");
+  const rejected = data.followers.filter((row) => row.status === "rejected");
+  return `<section class="split followers">
+    <div>
+      <h2 class="section-label">Pending</h2>
+      ${list(pending.map(followerCard), "No pending follow requests.")}
+    </div>
+    <div>
+      <h2 class="section-label">Approved</h2>
+      ${list(approved.map(followerCard), "No approved followers yet.")}
+      <h2 class="section-label">Rejected</h2>
+      ${list(rejected.map(followerCard), "No rejected followers.")}
+    </div>
+  </section>`;
 }
 
 function moderationView(data: OwnerSnapshot) {
@@ -227,6 +288,34 @@ function settingsView(data: OwnerSnapshot) {
     <label>Instance URL<input name="instance" value="${escapeAttr(data.settings.instance_url)}" /></label>
     <label>Owner token<input name="token" type="password" placeholder="${data.settings.owner_token_present ? "stored" : "required"}" /></label>
     <button>Save settings</button>
+  </form>`;
+}
+
+function profileView(data: OwnerSnapshot) {
+  const profile = data.profile;
+  return `<form id="profile-form" class="panel settings">
+    <div>
+      <h2>Public account</h2>
+      <p>${escapeHtml(profile.public_handle)} · ${escapeHtml(profile.actor_url)}</p>
+    </div>
+    <label>Display name
+      <input name="display_name" value="${escapeAttr(profile.display_name || "")}" />
+    </label>
+    <label>Actor type
+      <select name="actor_type">
+        ${["Person", "Group", "Organization"].map((value) => option(value, profile.actor_type === value)).join("")}
+      </select>
+    </label>
+    <label>Summary
+      <textarea name="summary" rows="5">${escapeHtml(profile.summary || "")}</textarea>
+    </label>
+    <label>Avatar/icon URL
+      <input name="icon" value="${escapeAttr(profile.icon || profile.avatar_url || "")}" placeholder="https://..." />
+    </label>
+    <label>Header image URL
+      <input name="image" value="${escapeAttr(profile.image || profile.header_url || "")}" placeholder="https://..." />
+    </label>
+    <button>Save profile</button>
   </form>`;
 }
 
@@ -259,6 +348,30 @@ function sourceCard(source: OwnerSnapshot["sources"][number]) {
   </article>`;
 }
 
+function followerCard(row: OwnerSnapshot["followers"][number]) {
+  return `<article class="panel item follower">
+    <div>
+      <h2>${escapeHtml(actorLabel(row.follower_actor_id))}</h2>
+      <p>${escapeHtml(row.follower_actor_id)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(row.status)}</span>
+      ${row.updated_at ? `<time>${escapeHtml(formatTime(row.updated_at))}</time>` : ""}
+      <button type="button" data-follower-status="approved" data-follower="${escapeAttr(row.follower_actor_id)}">Approve</button>
+      <button type="button" data-follower-status="pending" data-follower="${escapeAttr(row.follower_actor_id)}">Pending</button>
+      <button type="button" data-follower-status="rejected" data-follower="${escapeAttr(row.follower_actor_id)}">Reject</button>
+    </footer>
+  </article>`;
+}
+
+function recipientOption(row: OwnerSnapshot["followers"][number]) {
+  const value = row.follower_actor_id;
+  return `<label class="recipient-option">
+    <input type="checkbox" name="follower_recipient" value="${escapeAttr(value)}" />
+    <span>${escapeHtml(actorLabel(value))}</span>
+  </label>`;
+}
+
 function diagnosticCard(row: OwnerSnapshot["diagnostics"][number]) {
   return `<article class="panel item">
     <div>
@@ -284,6 +397,20 @@ async function saveSettings(event: SubmitEvent) {
   await load();
 }
 
+async function saveProfile(event: SubmitEvent) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  const updated = await invoke<OwnerSnapshot["profile"]>("update_owner_profile", {
+    actorType: String(form.get("actor_type") || "Person"),
+    displayName: String(form.get("display_name") || ""),
+    summary: String(form.get("summary") || ""),
+    icon: String(form.get("icon") || ""),
+    image: String(form.get("image") || "")
+  });
+  notice = `${updated.public_handle} profile saved.`;
+  await load();
+}
+
 async function publishPost(event: SubmitEvent) {
   event.preventDefault();
   const form = new FormData(event.target as HTMLFormElement);
@@ -298,13 +425,26 @@ async function publishPost(event: SubmitEvent) {
     visibility: String(form.get("visibility") || "Followers"),
     protocol: String(form.get("protocol") || "ActivityPub"),
     encrypt: form.get("encrypt") === "on",
-    recipients: String(form.get("recipients") || "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean)
+    recipients: [
+      ...form.getAll("follower_recipient").map((value) => String(value)),
+      ...String(form.get("recipients") || "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    ]
   });
   notice = `Published ${created.visibility} post.`;
   active = "Posts";
+  await load();
+}
+
+async function setFollowerStatus(followerActorId: string, status: string) {
+  if (!followerActorId || !status) return;
+  await invoke("set_follower_status", {
+    followerActorId,
+    status
+  });
+  notice = `${actorLabel(followerActorId)} marked ${status}.`;
   await load();
 }
 
@@ -331,6 +471,16 @@ function shortHost(value: string) {
   }
 }
 
+function actorLabel(value: string) {
+  try {
+    const url = new URL(value);
+    const username = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || url.hostname);
+    return `@${username}@${url.hostname}`;
+  } catch {
+    return value;
+  }
+}
+
 function formatTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
@@ -351,5 +501,10 @@ function escapeAttr(value: string) {
 
 load().catch((error) => {
   const app = document.querySelector("#app");
-  if (app) app.innerHTML = `<main class="loading error">${escapeHtml(String(error))}</main>`;
+  if (app) {
+    app.innerHTML = `<main class="loading error">
+      <strong>Owner app could not load.</strong>
+      <span>${escapeHtml(String(error))}</span>
+    </main>`;
+  }
 });

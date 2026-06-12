@@ -5,6 +5,39 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.0] - 2026-06-12
+
+### Added
+- Added live follower management to the Tauri owner app. The app can now show
+  pending, approved, and rejected follower rows from the owner API and mark
+  followers approved, pending, or rejected.
+- Added live public-profile configuration to the Tauri owner app and owner API
+  for display name, actor type, summary, avatar/icon URL, and header image URL.
+- Added an approved-follower recipient picker to Tauri compose so direct posts
+  can target followers from a list instead of requiring manual actor URL entry.
+- Added `POST /api/dais/owner/followers/status` to the owner API for
+  token-gated follower status changes.
+- Added `GET`/`POST /api/dais/owner/profile` for first-party owner clients.
+- Owner API snapshots now include follower rows for GUI/mobile clients.
+- Owner API compose now queues ActivityPub deliveries for followers-only posts
+  and for approved selected direct-message recipients.
+- Enabled macOS `.app` bundling for the Tauri owner app with packaged static
+  assets and a real app icon.
+- Fixed the ActivityPub HTML profile page to display the configured public
+  handle domain, not the actor endpoint host.
+
+### Changed
+- Direct owner API posts now require at least one recipient.
+- Tauri packaged assets now use relative Vite paths so the app renders from the
+  bundled `tauri://localhost` origin without a frontend dev server.
+
+### Known Gaps
+- Owner API compose covers plain text `Note` creation and delivery queueing.
+  Rich objects, media attachments, source actions, notification workflows, and
+  E2EE composition still need dedicated GUI workflows.
+- Owner API tokens are still a single Worker secret rather than scoped,
+  revocable owner-client tokens.
+
 ## [1.25.0] - 2026-06-11
 
 ### Added

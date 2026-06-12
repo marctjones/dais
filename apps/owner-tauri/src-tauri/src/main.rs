@@ -1,6 +1,7 @@
 use dais_client_core::{
-    ComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient, OwnerCreatedPost, OwnerPost,
-    OwnerSection, OwnerSettings, OwnerSnapshot, ProtocolRoute, SourceItem, Visibility,
+    ComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient, OwnerCreatedPost,
+    OwnerPost, OwnerProfile, OwnerProfileUpdate, OwnerSection, OwnerSettings, OwnerSnapshot,
+    ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -80,6 +81,19 @@ fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> Own
             default_protocol: ProtocolRoute::Both,
         },
         active_section: OwnerSection::Home,
+        profile: OwnerProfile {
+            id: "https://social.dais.social/users/social".to_string(),
+            username: "social".to_string(),
+            actor_type: "Person".to_string(),
+            display_name: Some("dais".to_string()),
+            summary: Some("Private-by-default social server.".to_string()),
+            icon: None,
+            image: None,
+            avatar_url: None,
+            header_url: None,
+            public_handle: "@social@dais.social".to_string(),
+            actor_url: "https://social.dais.social/users/social".to_string(),
+        },
         posts: vec![OwnerPost {
             id: "draft-local-preview".to_string(),
             title: Some("Owner app shell".to_string()),
@@ -89,6 +103,7 @@ fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> Own
             encrypted: false,
             published_at: None,
         }],
+        followers: Vec::new(),
         sources: vec![SourceItem {
             id: "sources-ready".to_string(),
             title: "Public source reader".to_string(),
@@ -140,6 +155,63 @@ fn save_owner_settings(
     fs::write(path, json).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn update_owner_profile(
+    app: tauri::AppHandle,
+    actor_type: String,
+    display_name: String,
+    summary: String,
+    icon: String,
+    image: String,
+) -> Result<OwnerProfile, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .update_profile(&OwnerProfileUpdate {
+            actor_type: optional_trimmed(actor_type),
+            display_name: optional_trimmed(display_name),
+            summary: optional_trimmed(summary),
+            icon: optional_trimmed(icon),
+            image: optional_trimmed(image),
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn set_follower_status(
+    app: tauri::AppHandle,
+    follower_actor_id: String,
+    status: String,
+) -> Result<(), String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .set_follower_status(&follower_actor_id, &status)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn optional_trimmed(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 fn load_settings(app: &tauri::AppHandle) -> Result<StoredOwnerSettings, String> {
     let path = settings_path(app)?;
     if !path.exists() {
@@ -162,7 +234,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             owner_snapshot,
             save_owner_settings,
-            create_owner_post
+            create_owner_post,
+            update_owner_profile,
+            set_follower_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running dais owner app");

@@ -194,12 +194,21 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
             .var("THEME")
             .map(|v| v.to_string())
             .unwrap_or_else(|_| "dais".to_string());
+        let handle_domain = ctx
+            .env
+            .var("DOMAIN")
+            .map(|v| v.to_string())
+            .unwrap_or_else(|_| actor_domain_from_id(&person.id).unwrap_or("social.dais.social").to_string());
         let theme = Theme::from_name(&theme_name);
 
         let post_count = counts.as_ref().map(|c| c.post_count as usize).unwrap_or(0);
         let follower_count = counts
             .as_ref()
             .map(|c| c.follower_count as usize)
+            .unwrap_or(0);
+        let following_count = counts
+            .as_ref()
+            .map(|c| c.following_count as usize)
             .unwrap_or(0);
 
         let icon_url = person.icon.as_ref().map(|i| i.url.clone());
@@ -208,8 +217,10 @@ async fn handle_actor(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         let html = render_profile_html(
             &person,
             &username,
+            &handle_domain,
             post_count,
             follower_count,
+            following_count,
             &theme,
             icon_url,
             image_url,
@@ -491,15 +502,16 @@ document.getElementById("decrypt").addEventListener("click", async () => {{
 fn render_profile_html(
     person: &dais_core::activitypub::Person,
     username: &str,
+    handle_domain: &str,
     post_count: usize,
     follower_count: usize,
+    following_count: usize,
     theme: &Theme,
     icon_url: Option<String>,
     image_url: Option<String>,
 ) -> String {
     let display_name = person.name.as_ref().unwrap_or(&person.preferred_username);
     let summary = person.summary.as_deref().unwrap_or("");
-    let actor_domain = actor_domain_from_id(&person.id).unwrap_or("social.dais.social");
 
     let light = &theme.light;
     let dark = &theme.dark;
@@ -510,7 +522,7 @@ fn render_profile_html(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{display_name} (@{username}@{actor_domain})</title>
+    <title>{display_name} (@{username}@{handle_domain})</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -731,7 +743,7 @@ fn render_profile_html(
             <div class="header">
                 {avatar_html}
                 <h1>{display_name}</h1>
-                <div class="handle">@{handle_username}@{actor_domain}</div>
+                <div class="handle">@{handle_username}@{handle_domain}</div>
             </div>
 
             {bio_html}
@@ -742,7 +754,7 @@ fn render_profile_html(
                     <div class="stat-label">Posts</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value">0</div>
+                    <div class="stat-value">{following_count}</div>
                     <div class="stat-label">Following</div>
                 </div>
                 <div class="stat">
@@ -801,14 +813,15 @@ fn render_profile_html(
         },
         display_name = display_name,
         handle_username = username,
-        actor_domain = actor_domain,
+        handle_domain = handle_domain,
         bio_html = if !summary.is_empty() {
-            format!(r#"<div class="bio">{}</div>"#, summary)
+            format!(r#"<div class="bio">{}</div>"#, escape_html(summary))
         } else {
             String::new()
         },
         post_count = post_count,
         follower_count = follower_count,
+        following_count = following_count,
         outbox_username = username,
         person_id = person.id
     )
