@@ -25,6 +25,20 @@ type OwnerSnapshot = {
     actor_url: string;
   };
   active_section: string;
+  home_timeline: Array<{
+    id: string;
+    object_id: string;
+    actor_id: string;
+    actor_username?: string | null;
+    actor_display_name?: string | null;
+    actor_avatar_url?: string | null;
+    content: string;
+    content_html?: string | null;
+    visibility: string;
+    in_reply_to?: string | null;
+    published_at?: string | null;
+    protocol?: string | null;
+  }>;
   posts: Array<{
     id: string;
     title?: string | null;
@@ -32,6 +46,7 @@ type OwnerSnapshot = {
     visibility: Visibility | string;
     protocol: ProtocolRoute | string;
     encrypted: boolean;
+    attachments?: Array<{ url?: string; mediaType?: string; name?: string }>;
     published_at?: string | null;
   }>;
   followers: Array<{
@@ -43,6 +58,15 @@ type OwnerSnapshot = {
     status: string;
     created_at?: string | null;
     updated_at?: string | null;
+  }>;
+  following: Array<{
+    id: string;
+    actor_id: string;
+    target_actor_id: string;
+    target_inbox: string;
+    status: string;
+    created_at?: string | null;
+    accepted_at?: string | null;
   }>;
   sources: Array<{
     id: string;
@@ -67,8 +91,21 @@ type CreatedPost = {
   published_at: string;
 };
 
+type FollowResult = {
+  ok: boolean;
+  following: OwnerSnapshot["following"][number];
+  delivery_ids: string[];
+};
+
+type UploadedMedia = {
+  url: string;
+  media_type?: string | null;
+  attachment: unknown;
+};
+
 const sections = [
   "Home",
+  "Following",
   "Compose",
   "Posts",
   "Sources",
@@ -84,6 +121,7 @@ const sections = [
 let snapshot: OwnerSnapshot | null = null;
 let active = "Home";
 let notice = "";
+let draftAttachments: string[] = [];
 
 async function load() {
   render();
@@ -143,11 +181,24 @@ function render() {
   app.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", saveSettings);
   app.querySelector<HTMLFormElement>("#profile-form")?.addEventListener("submit", saveProfile);
   app.querySelector<HTMLFormElement>("#compose-form")?.addEventListener("submit", publishPost);
+  app.querySelector<HTMLButtonElement>("#media-upload")?.addEventListener("click", uploadSelectedMedia);
+  app.querySelectorAll<HTMLButtonElement>("[data-remove-attachment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      draftAttachments = draftAttachments.filter((url) => url !== button.dataset.removeAttachment);
+      render();
+    });
+  });
+  app.querySelector<HTMLFormElement>("#follow-form")?.addEventListener("submit", followActor);
   app.querySelectorAll<HTMLButtonElement>("[data-follower-status]").forEach((button) => {
     button.addEventListener("click", () => {
       const follower = button.dataset.follower || "";
       const status = button.dataset.followerStatus || "";
       void setFollowerStatus(follower, status);
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-unfollow]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void unfollowActor(button.dataset.unfollow || "");
     });
   });
 }
@@ -162,6 +213,8 @@ function view(section: string, data: OwnerSnapshot): string {
   switch (section) {
     case "Home":
       return dashboardView(data);
+    case "Following":
+      return followingView(data);
     case "Compose":
       return composeView(data);
     case "Posts":
@@ -191,14 +244,38 @@ function dashboardView(data: OwnerSnapshot) {
     <section class="metrics">
       <article><span>Posts</span><strong>${data.posts.length}</strong></article>
       <article><span>Followers</span><strong>${data.followers.filter((row) => row.status === "approved").length}</strong></article>
+      <article><span>Following</span><strong>${data.following.length}</strong></article>
       <article><span>Sources</span><strong>${data.sources.length}</strong></article>
-      <article><span>Allowlist</span><strong>${data.moderation.allowlist_count}</strong></article>
     </section>
     ${composeView(data)}
+    <section class="split">
+      <article class="panel">
+        <h2>Following feed</h2>
+        ${list(data.home_timeline.slice(0, 6).map(timelineCard), "No followed posts yet. Follow people or sources to build this feed.")}
+      </article>
+    </section>
     <section class="split">
       <div>${list(data.posts.slice(0, 6).map(postCard), "No recent posts.")}</div>
       <div>${list(data.diagnostics.map(diagnosticCard), "No diagnostics.")}</div>
     </section>`;
+}
+
+function followingView(data: OwnerSnapshot) {
+  return `<section class="split">
+    <article class="panel">
+      <h2>Following feed</h2>
+      ${list(data.home_timeline.map(timelineCard), "No followed posts yet. Follow an ActivityPub actor to build this feed.")}
+    </article>
+    <article class="panel">
+      <h2>Follow actor</h2>
+      <form id="follow-form" class="inline-form">
+        <input name="target" placeholder="@user@example.social or https://..." />
+        <button type="submit">Follow</button>
+      </form>
+      <h2 class="section-label">Following</h2>
+      ${list(data.following.map(followingCard), "No followed actors yet.")}
+    </article>
+  </section>`;
 }
 
 function composeView(data: OwnerSnapshot) {
@@ -229,6 +306,19 @@ function composeView(data: OwnerSnapshot) {
     <label>Recipients
       <input name="recipients" placeholder="Direct/E2EE actor URLs, comma separated" />
     </label>
+    <section class="media-box">
+      <div class="media-row">
+        <input id="media-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm" />
+        <button id="media-upload" type="button">Upload</button>
+      </div>
+      ${list(
+        draftAttachments.map((url) => `<article class="attachment-chip">
+          <span>${escapeHtml(shortUrl(url))}</span>
+          <button type="button" data-remove-attachment="${escapeAttr(url)}">Remove</button>
+        </article>`),
+        "No media attached."
+      )}
+    </section>
     <fieldset class="recipient-picker">
       <legend>Approved followers</legend>
       ${
@@ -329,6 +419,23 @@ function postCard(post: OwnerSnapshot["posts"][number]) {
       <span>${escapeHtml(String(post.visibility))}</span>
       <span>${escapeHtml(String(post.protocol))}</span>
       ${post.encrypted ? "<span>E2EE</span>" : ""}
+      ${post.attachments?.length ? `<span>${post.attachments.length} media</span>` : ""}
+      ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
+    </footer>
+  </article>`;
+}
+
+function timelineCard(post: OwnerSnapshot["home_timeline"][number]) {
+  const author = post.actor_display_name || post.actor_username || actorLabel(post.actor_id);
+  return `<article class="item timeline">
+    <div>
+      <h2>${escapeHtml(author)}</h2>
+      <p>${escapeHtml(post.content)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(post.visibility)}</span>
+      ${post.protocol ? `<span>${escapeHtml(post.protocol)}</span>` : ""}
+      ${post.in_reply_to ? "<span>reply</span>" : ""}
       ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
     </footer>
   </article>`;
@@ -360,6 +467,20 @@ function followerCard(row: OwnerSnapshot["followers"][number]) {
       <button type="button" data-follower-status="approved" data-follower="${escapeAttr(row.follower_actor_id)}">Approve</button>
       <button type="button" data-follower-status="pending" data-follower="${escapeAttr(row.follower_actor_id)}">Pending</button>
       <button type="button" data-follower-status="rejected" data-follower="${escapeAttr(row.follower_actor_id)}">Reject</button>
+    </footer>
+  </article>`;
+}
+
+function followingCard(row: OwnerSnapshot["following"][number]) {
+  return `<article class="panel item follower">
+    <div>
+      <h2>${escapeHtml(actorLabel(row.target_actor_id))}</h2>
+      <p>${escapeHtml(row.target_actor_id)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(row.status)}</span>
+      ${row.accepted_at ? `<time>${escapeHtml(formatTime(row.accepted_at))}</time>` : ""}
+      <button type="button" data-unfollow="${escapeAttr(row.target_actor_id)}">Unfollow</button>
     </footer>
   </article>`;
 }
@@ -420,10 +541,22 @@ async function publishPost(event: SubmitEvent) {
     render();
     return;
   }
+  const visibility = String(form.get("visibility") || "Followers");
+  if (draftAttachments.length > 0 && visibility !== "Public" && visibility !== "Unlisted") {
+    notice = "Media attachments currently require Public or Unlisted visibility.";
+    render();
+    return;
+  }
+  const protocol = String(form.get("protocol") || "ActivityPub");
+  if (draftAttachments.length > 0 && protocol !== "ActivityPub") {
+    notice = "Media attachments currently require ActivityPub routing.";
+    render();
+    return;
+  }
   const created = await invoke<CreatedPost>("create_owner_post", {
     text,
-    visibility: String(form.get("visibility") || "Followers"),
-    protocol: String(form.get("protocol") || "ActivityPub"),
+    visibility,
+    protocol,
     encrypt: form.get("encrypt") === "on",
     recipients: [
       ...form.getAll("follower_recipient").map((value) => String(value)),
@@ -431,11 +564,32 @@ async function publishPost(event: SubmitEvent) {
         .split(",")
         .map((value) => value.trim())
         .filter(Boolean)
-    ]
+    ],
+    attachments: draftAttachments
   });
+  draftAttachments = [];
   notice = `Published ${created.visibility} post.`;
   active = "Posts";
   await load();
+}
+
+async function uploadSelectedMedia() {
+  const input = document.querySelector<HTMLInputElement>("#media-file");
+  const file = input?.files?.item(0);
+  if (!file) {
+    notice = "Choose a media file first.";
+    render();
+    return;
+  }
+  const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
+  const uploaded = await invoke<UploadedMedia>("upload_owner_media", {
+    filename: file.name,
+    mediaType: file.type || null,
+    dataBase64
+  });
+  draftAttachments = [...draftAttachments, JSON.stringify(uploaded.attachment)];
+  notice = `Attached ${file.name}.`;
+  render();
 }
 
 async function setFollowerStatus(followerActorId: string, status: string) {
@@ -445,6 +599,27 @@ async function setFollowerStatus(followerActorId: string, status: string) {
     status
   });
   notice = `${actorLabel(followerActorId)} marked ${status}.`;
+  await load();
+}
+
+async function followActor(event: SubmitEvent) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  const target = String(form.get("target") || "").trim();
+  if (!target) {
+    notice = "Enter an ActivityPub actor URL or handle.";
+    render();
+    return;
+  }
+  const result = await invoke<FollowResult>("follow_actor", { target });
+  notice = `Follow requested for ${actorLabel(result.following.target_actor_id)}.`;
+  await load();
+}
+
+async function unfollowActor(target: string) {
+  if (!target) return;
+  const result = await invoke<FollowResult>("unfollow_actor", { target });
+  notice = `Unfollow requested for ${actorLabel(result.following.target_actor_id)}.`;
   await load();
 }
 
@@ -469,6 +644,22 @@ function shortHost(value: string) {
   } catch {
     return value;
   }
+}
+
+function shortUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return `${url.host}${url.pathname}`;
+  } catch {
+    return value;
+  }
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 function actorLabel(value: string) {

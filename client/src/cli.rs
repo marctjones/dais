@@ -34,6 +34,9 @@ pub enum Command {
     /// Manage private-mode friend relationships.
     #[command(subcommand)]
     Friends(FriendsCommand),
+    /// Use the secure owner API for live instance reader and account workflows.
+    #[command(subcommand)]
+    Owner(OwnerCommand),
     /// Inspect local ActivityPub followers.
     #[command(subcommand)]
     Followers(FollowersCommand),
@@ -748,6 +751,49 @@ pub enum FollowersCommand {
         #[arg(long, default_value = "https://social.dais.social/users/social")]
         actor: String,
     },
+}
+
+#[derive(Subcommand)]
+pub enum OwnerCommand {
+    /// Show live owner API counts.
+    Snapshot(OwnerApiArgs),
+    /// Read the live owner API home timeline.
+    Timeline(OwnerTimelineArgs),
+    /// List actors followed by the live instance.
+    Following(OwnerApiArgs),
+    /// Follow an ActivityPub actor by URL or @user@domain handle.
+    Follow(OwnerFollowArgs),
+    /// Unfollow an ActivityPub actor by URL or @user@domain handle.
+    Unfollow(OwnerFollowArgs),
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerApiArgs {
+    /// Dais instance base URL.
+    #[arg(
+        long,
+        env = "DAIS_OWNER_INSTANCE_URL",
+        default_value = "https://social.dais.social"
+    )]
+    pub instance_url: String,
+    /// Owner API bearer token.
+    #[arg(long, env = "DAIS_OWNER_TOKEN")]
+    pub owner_token: String,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerTimelineArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerFollowArgs {
+    pub target: String,
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
 }
 
 #[derive(Subcommand)]

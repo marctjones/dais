@@ -30,6 +30,10 @@ impl OwnerApiClient {
         self.post("/api/dais/owner/posts", draft).await
     }
 
+    pub async fn upload_media(&self, media: &OwnerMediaUpload) -> ClientResult<OwnerMedia> {
+        self.post("/api/dais/owner/media", media).await
+    }
+
     pub async fn set_follower_status(
         &self,
         follower_actor_id: &str,
@@ -47,6 +51,19 @@ impl OwnerApiClient {
 
     pub async fn update_profile(&self, profile: &OwnerProfileUpdate) -> ClientResult<OwnerProfile> {
         self.post("/api/dais/owner/profile", profile).await
+    }
+
+    pub async fn follow_actor(&self, target: &str) -> ClientResult<OwnerFollowResult> {
+        self.post("/api/dais/owner/following/follow", &FollowTarget { target })
+            .await
+    }
+
+    pub async fn unfollow_actor(&self, target: &str) -> ClientResult<OwnerFollowResult> {
+        self.post(
+            "/api/dais/owner/following/unfollow",
+            &FollowTarget { target },
+        )
+        .await
     }
 
     async fn get<T>(&self, path: &str) -> ClientResult<T>
@@ -145,7 +162,25 @@ pub struct OwnerPost {
     pub visibility: Visibility,
     pub protocol: ProtocolRoute,
     pub encrypted: bool,
+    #[serde(default)]
+    pub attachments: Vec<serde_json::Value>,
     pub published_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerTimelinePost {
+    pub id: String,
+    pub object_id: String,
+    pub actor_id: String,
+    pub actor_username: Option<String>,
+    pub actor_display_name: Option<String>,
+    pub actor_avatar_url: Option<String>,
+    pub content: String,
+    pub content_html: Option<String>,
+    pub visibility: String,
+    pub in_reply_to: Option<String>,
+    pub published_at: Option<String>,
+    pub protocol: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -161,6 +196,20 @@ pub struct OwnerCreatedPost {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerMediaUpload {
+    pub filename: String,
+    pub media_type: Option<String>,
+    pub data_base64: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerMedia {
+    pub url: String,
+    pub media_type: Option<String>,
+    pub attachment: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerActionResult {
     pub ok: bool,
 }
@@ -169,6 +218,11 @@ pub struct OwnerActionResult {
 struct FollowerStatusUpdate<'a> {
     follower_actor_id: &'a str,
     status: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct FollowTarget<'a> {
+    target: &'a str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -181,6 +235,24 @@ pub struct OwnerFollower {
     pub status: String,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerFollowing {
+    pub id: String,
+    pub actor_id: String,
+    pub target_actor_id: String,
+    pub target_inbox: String,
+    pub status: String,
+    pub created_at: Option<String>,
+    pub accepted_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerFollowResult {
+    pub ok: bool,
+    pub following: OwnerFollowing,
+    pub delivery_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -237,8 +309,10 @@ pub struct OwnerSnapshot {
     pub settings: OwnerSettings,
     pub active_section: OwnerSection,
     pub profile: OwnerProfile,
+    pub home_timeline: Vec<OwnerTimelinePost>,
     pub posts: Vec<OwnerPost>,
     pub followers: Vec<OwnerFollower>,
+    pub following: Vec<OwnerFollowing>,
     pub sources: Vec<SourceItem>,
     pub moderation: ModerationState,
     pub diagnostics: Vec<DiagnosticStatus>,
@@ -271,9 +345,10 @@ pub fn route_warning(draft: &ComposeDraft) -> Option<&'static str> {
         (Visibility::Direct, ProtocolRoute::AtProto | ProtocolRoute::Both) => {
             Some("Direct posts cannot be represented on Bluesky; route ActivityPub only.")
         }
-        (Visibility::Followers | Visibility::Unlisted, ProtocolRoute::AtProto | ProtocolRoute::Both) => {
-            Some("Private ActivityPub visibility is not representable on Bluesky.")
-        }
+        (
+            Visibility::Followers | Visibility::Unlisted,
+            ProtocolRoute::AtProto | ProtocolRoute::Both,
+        ) => Some("Private ActivityPub visibility is not representable on Bluesky."),
         _ => None,
     }
 }
@@ -336,8 +411,10 @@ mod tests {
                 public_handle: "@social@dais.social".to_string(),
                 actor_url: "https://social.dais.social/users/social".to_string(),
             },
+            home_timeline: Vec::new(),
             posts: Vec::new(),
             followers: Vec::new(),
+            following: Vec::new(),
             sources: Vec::new(),
             moderation: ModerationState {
                 closed_network: false,

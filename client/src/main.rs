@@ -17,10 +17,12 @@ use clap::{CommandFactory, Parser};
 use cli::{
     ActorsCommand, BlueskyCommand, Cli, Command, DeliveriesCommand, E2eeCommand, EventsCommand,
     FollowCommand, FollowersCommand, FriendsCommand, MediaCommand, ModerationCommand,
-    NotificationsCommand, PostCommand, ReportsCommand, SearchCommand, TimelineCommand,
+    NotificationsCommand, OwnerCommand, PostCommand, ReportsCommand, SearchCommand,
+    TimelineCommand,
 };
 use config::ConfigStore;
 use d1::D1Client;
+use dais_client_core::{OwnerApiClient, OwnerSnapshot};
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
     ActivityOutcome, PostDraft, PostOutcome,
@@ -43,6 +45,7 @@ async fn main() -> Result<()> {
         Command::Stats(args) => handle_stats(args).await?,
         Command::Timeline(command) => handle_timeline(command, &store).await?,
         Command::Friends(command) => handle_friends(command).await?,
+        Command::Owner(command) => handle_owner(command).await?,
         Command::Followers(command) => handle_followers(command).await?,
         Command::Notifications(command) => handle_notifications(command).await?,
         Command::Deliveries(command) => handle_deliveries(command).await?,
@@ -948,6 +951,107 @@ async fn handle_followers(command: FollowersCommand) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn handle_owner(command: OwnerCommand) -> Result<()> {
+    match command {
+        OwnerCommand::Snapshot(args) => {
+            let snapshot = owner_api(&args)
+                .snapshot()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_snapshot(&snapshot);
+        }
+        OwnerCommand::Timeline(args) => {
+            let snapshot = owner_api(&args.api)
+                .snapshot()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let limit = args.limit.min(snapshot.home_timeline.len());
+            for post in snapshot.home_timeline.iter().take(limit) {
+                let author = post
+                    .actor_display_name
+                    .as_deref()
+                    .or(post.actor_username.as_deref())
+                    .unwrap_or(&post.actor_id);
+                println!(
+                    "{} [{}] {}",
+                    author,
+                    post.visibility,
+                    post.published_at.as_deref().unwrap_or("")
+                );
+                println!("{}", post.content);
+                println!();
+            }
+            if limit == 0 {
+                println!("No followed posts found");
+            }
+        }
+        OwnerCommand::Following(args) => {
+            let snapshot = owner_api(&args)
+                .snapshot()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            for row in snapshot.following {
+                println!(
+                    "{} [{}] inbox={} accepted_at={}",
+                    row.target_actor_id,
+                    row.status,
+                    row.target_inbox,
+                    row.accepted_at.as_deref().unwrap_or("")
+                );
+            }
+        }
+        OwnerCommand::Follow(args) => {
+            let result = owner_api(&args.api)
+                .follow_actor(&args.target)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!(
+                "Follow requested: {} [{}]",
+                result.following.target_actor_id, result.following.status
+            );
+            if !result.delivery_ids.is_empty() {
+                println!("deliveries={}", result.delivery_ids.join(","));
+            }
+        }
+        OwnerCommand::Unfollow(args) => {
+            let result = owner_api(&args.api)
+                .unfollow_actor(&args.target)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!(
+                "Unfollow requested: {} [{}]",
+                result.following.target_actor_id, result.following.status
+            );
+            if !result.delivery_ids.is_empty() {
+                println!("deliveries={}", result.delivery_ids.join(","));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn owner_api(args: &cli::OwnerApiArgs) -> OwnerApiClient {
+    OwnerApiClient::new(&args.instance_url, &args.owner_token)
+}
+
+fn print_owner_snapshot(snapshot: &OwnerSnapshot) {
+    println!("profile={}", snapshot.profile.public_handle);
+    println!("posts={}", snapshot.posts.len());
+    println!("timeline={}", snapshot.home_timeline.len());
+    println!("followers={}", snapshot.followers.len());
+    println!("following={}", snapshot.following.len());
+    println!("sources={}", snapshot.sources.len());
+    for diagnostic in &snapshot.diagnostics {
+        println!(
+            "diagnostic {}={} {}",
+            diagnostic.key,
+            if diagnostic.ok { "ok" } else { "warn" },
+            diagnostic.detail
+        );
+    }
 }
 
 async fn handle_notifications(command: NotificationsCommand) -> Result<()> {

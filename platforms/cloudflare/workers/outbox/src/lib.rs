@@ -391,12 +391,14 @@ fn render_post_html(
 <article class="post post-full">
     {reply_html}
     <div class="content">{content}</div>
+    {attachments}
     <footer>{visibility} · {reply_count} replies · {like_count} likes · {boost_count} boosts</footer>
 </article>"#,
             domain = escape_html(domain),
             published = escape_html(&post.published_at),
             post_url = public_post_path(domain, username, post),
             content = escape_html(&post.content),
+            attachments = render_attachments(post),
             visibility = escape_html(&post.visibility),
             reply_count = interactions.replies.len(),
             like_count = interactions.likes.len(),
@@ -411,12 +413,64 @@ fn render_post_card(post: &Post) -> String {
     <a class="post-link" href="{href}">
         <time>{published}</time>
         <div class="content">{content}</div>
+        {attachments}
     </a>
 </article>"#,
         href = escape_attr(&post_path(post)),
         published = escape_html(&post.published_at),
         content = escape_html(&post.content),
+        attachments = render_attachments(post),
     )
+}
+
+fn render_attachments(post: &Post) -> String {
+    let Some(ref attachments_json) = post.media_attachments else {
+        return String::new();
+    };
+    let Ok(attachments) = serde_json::from_str::<serde_json::Value>(attachments_json) else {
+        return String::new();
+    };
+    let Some(items) = attachments.as_array() else {
+        return String::new();
+    };
+    let rendered = items
+        .iter()
+        .filter_map(|item| {
+            let url = item.get("url").and_then(|value| value.as_str())?;
+            let media_type = item
+                .get("mediaType")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let name = item
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Attached media");
+            if media_type.starts_with("image/") {
+                Some(format!(
+                    r#"<figure class="attachment"><img src="{url}" alt="{alt}" loading="lazy"></figure>"#,
+                    url = escape_attr(url),
+                    alt = escape_attr(name)
+                ))
+            } else if media_type.starts_with("video/") {
+                Some(format!(
+                    r#"<figure class="attachment"><video controls src="{url}"></video></figure>"#,
+                    url = escape_attr(url)
+                ))
+            } else {
+                Some(format!(
+                    r#"<p class="attachment"><a href="{url}">{label}</a></p>"#,
+                    url = escape_attr(url),
+                    label = escape_html(name)
+                ))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if rendered.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<div class="attachments">{rendered}</div>"#)
+    }
 }
 
 fn render_page(title: &str, body: &str) -> String {
@@ -486,6 +540,21 @@ fn render_page(title: &str, body: &str) -> String {
         }}
         .post-full .content {{
             font-size: 18px;
+        }}
+        .attachments {{
+            display: grid;
+            gap: 10px;
+            margin-top: 12px;
+        }}
+        .attachment {{
+            margin: 0;
+        }}
+        .attachment img,
+        .attachment video {{
+            display: block;
+            max-width: 100%;
+            max-height: 520px;
+            border-radius: 7px;
         }}
         .empty {{
             background: #ffffff;

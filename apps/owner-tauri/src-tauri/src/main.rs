@@ -1,7 +1,7 @@
 use dais_client_core::{
     ComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient, OwnerCreatedPost,
-    OwnerPost, OwnerProfile, OwnerProfileUpdate, OwnerSection, OwnerSettings, OwnerSnapshot,
-    ProtocolRoute, SourceItem, Visibility,
+    OwnerFollowResult, OwnerMedia, OwnerMediaUpload, OwnerPost, OwnerProfile, OwnerProfileUpdate,
+    OwnerSection, OwnerSettings, OwnerSnapshot, ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -26,7 +26,11 @@ impl Default for StoredOwnerSettings {
 #[tauri::command]
 async fn owner_snapshot(app: tauri::AppHandle) -> Result<OwnerSnapshot, String> {
     let stored = load_settings(&app)?;
-    if let Some(token) = stored.owner_token.as_deref().filter(|value| !value.is_empty()) {
+    if let Some(token) = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
         let client = OwnerApiClient::new(&stored.instance_url, token);
         match client.snapshot().await {
             Ok(snapshot) => return Ok(snapshot),
@@ -44,6 +48,7 @@ async fn create_owner_post(
     protocol: ProtocolRoute,
     encrypt: bool,
     recipients: Vec<String>,
+    attachments: Vec<String>,
 ) -> Result<OwnerCreatedPost, String> {
     let stored = load_settings(&app)?;
     let token = stored
@@ -59,7 +64,31 @@ async fn create_owner_post(
             protocol,
             encrypt,
             recipients,
-            attachments: Vec::new(),
+            attachments,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn upload_owner_media(
+    app: tauri::AppHandle,
+    filename: String,
+    media_type: Option<String>,
+    data_base64: String,
+) -> Result<OwnerMedia, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .upload_media(&OwnerMediaUpload {
+            filename,
+            media_type,
+            data_base64,
         })
         .await
         .map_err(|error| error.to_string())
@@ -71,8 +100,7 @@ fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> Own
         .owner_token
         .as_deref()
         .is_some_and(|value| !value.is_empty());
-    let owner_api_ok =
-        api_error.is_none() && owner_token_present;
+    let owner_api_ok = api_error.is_none() && owner_token_present;
     OwnerSnapshot {
         settings: OwnerSettings {
             instance_url,
@@ -94,6 +122,7 @@ fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> Own
             public_handle: "@social@dais.social".to_string(),
             actor_url: "https://social.dais.social/users/social".to_string(),
         },
+        home_timeline: Vec::new(),
         posts: vec![OwnerPost {
             id: "draft-local-preview".to_string(),
             title: Some("Owner app shell".to_string()),
@@ -101,9 +130,11 @@ fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> Own
             visibility: Visibility::Followers,
             protocol: ProtocolRoute::ActivityPub,
             encrypted: false,
+            attachments: Vec::new(),
             published_at: None,
         }],
         followers: Vec::new(),
+        following: Vec::new(),
         sources: vec![SourceItem {
             id: "sources-ready".to_string(),
             title: "Public source reader".to_string(),
@@ -184,6 +215,39 @@ async fn update_owner_profile(
 }
 
 #[tauri::command]
+async fn follow_actor(app: tauri::AppHandle, target: String) -> Result<OwnerFollowResult, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .follow_actor(&target)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn unfollow_actor(
+    app: tauri::AppHandle,
+    target: String,
+) -> Result<OwnerFollowResult, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .unfollow_actor(&target)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn set_follower_status(
     app: tauri::AppHandle,
     follower_actor_id: String,
@@ -235,7 +299,10 @@ fn main() {
             owner_snapshot,
             save_owner_settings,
             create_owner_post,
+            upload_owner_media,
             update_owner_profile,
+            follow_actor,
+            unfollow_actor,
             set_follower_status
         ])
         .run(tauri::generate_context!())

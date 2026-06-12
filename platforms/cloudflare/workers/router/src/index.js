@@ -581,6 +581,15 @@ async function handleOwnerApi(request, env, url) {
     return apiJson(profile);
   }
 
+  if (request.method === 'POST' && path === '/media') {
+    const body = await readJson(request);
+    try {
+      return apiJson(await ownerUploadMedia(env, body), 201);
+    } catch (error) {
+      return apiJson({ error: error.message || 'media upload failed' }, 400);
+    }
+  }
+
   if (request.method === 'GET' && path === '/posts') {
     return apiJson({
       items: await ownerPosts(env, clampLimit(url.searchParams.get('limit'))),
@@ -619,6 +628,24 @@ async function handleOwnerApi(request, env, url) {
     return apiJson({
       items: await ownerFollowing(env, clampLimit(url.searchParams.get('limit'))),
     });
+  }
+
+  if (request.method === 'POST' && path === '/following/follow') {
+    const body = await readJson(request);
+    try {
+      return apiJson(await ownerFollowActor(env, String(body.target || '').trim()), 201);
+    } catch (error) {
+      return apiJson({ error: error.message || 'follow failed' }, 400);
+    }
+  }
+
+  if (request.method === 'POST' && path === '/following/unfollow') {
+    const body = await readJson(request);
+    try {
+      return apiJson(await ownerUnfollowActor(env, String(body.target || '').trim()));
+    } catch (error) {
+      return apiJson({ error: error.message || 'unfollow failed' }, 400);
+    }
   }
 
   if (request.method === 'GET' && path === '/notifications') {
@@ -673,13 +700,14 @@ async function handleOwnerApi(request, env, url) {
     const recipients = Array.isArray(body.recipients)
       ? body.recipients.map((value) => String(value).trim()).filter(Boolean)
       : [];
+    const attachments = Array.isArray(body.attachments) ? body.attachments : [];
     if (visibility === 'direct' && recipients.length === 0) {
       return apiJson({ error: 'direct posts require at least one recipient' }, 400);
     }
 
     let created;
     try {
-      created = await ownerCreatePost(env, { text, visibility, protocol, recipients });
+      created = await ownerCreatePost(env, { text, visibility, protocol, recipients, attachments });
     } catch (error) {
       return apiJson({ error: error.message || 'post creation failed' }, 400);
     }
@@ -690,10 +718,12 @@ async function handleOwnerApi(request, env, url) {
 }
 
 async function ownerSnapshot(env) {
-  const [profile, posts, followers, sources, moderation, diagnostics] = await Promise.all([
+  const [profile, homeTimeline, posts, followers, following, sources, moderation, diagnostics] = await Promise.all([
     ownerProfile(env),
+    ownerHomeTimeline(env, 20),
     ownerPosts(env, 20),
     ownerFollowers(env, 100),
+    ownerFollowing(env, 100),
     ownerSourceItems(env, 20),
     ownerModeration(env),
     ownerDiagnostics(env),
@@ -708,6 +738,20 @@ async function ownerSnapshot(env) {
     },
     active_section: 'Home',
     profile,
+    home_timeline: homeTimeline.map((post) => ({
+      id: post.id,
+      object_id: post.object_id,
+      actor_id: post.actor_id,
+      actor_username: post.actor_username || null,
+      actor_display_name: post.actor_display_name || null,
+      actor_avatar_url: post.actor_avatar_url || null,
+      content: post.content || '',
+      content_html: post.content_html || null,
+      visibility: post.visibility || 'public',
+      in_reply_to: post.in_reply_to || null,
+      published_at: post.published_at || null,
+      protocol: post.protocol || 'activitypub',
+    })),
     posts: posts.map((post) => ({
       id: post.id,
       title: post.name || null,
@@ -715,9 +759,11 @@ async function ownerSnapshot(env) {
       visibility: titleVisibility(post.visibility),
       protocol: titleProtocol(post.protocol),
       encrypted: Boolean(post.encrypted_message),
+      attachments: parseAttachmentArray(post.media_attachments),
       published_at: post.published_at || null,
     })),
     followers,
+    following,
     sources,
     moderation,
     diagnostics,
@@ -810,7 +856,8 @@ async function ownerPosts(env, limit) {
   const rows = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
             name, summary, visibility, COALESCE(protocol, 'activitypub') AS protocol,
-            atproto_uri, atproto_cid, encrypted_message, published_at, created_at, updated_at
+            atproto_uri, atproto_cid, encrypted_message, media_attachments,
+            published_at, created_at, updated_at
      FROM posts
      ORDER BY published_at DESC
      LIMIT ?1`,
@@ -844,6 +891,73 @@ async function ownerFollowers(env, limit) {
   return rows.results || [];
 }
 
+async function ownerUploadMedia(env, body) {
+  const filename = optionalString(body.filename);
+  const dataBase64 = optionalString(body.data_base64);
+  const mediaType = optionalString(body.media_type) || mediaTypeForFilename(filename || '');
+  if (!filename) throw new Error('filename is required');
+  if (!dataBase64) throw new Error('data_base64 is required');
+  if (!allowedMediaType(mediaType)) throw new Error('unsupported media type');
+
+  const bytes = base64ToBytes(dataBase64);
+  if (bytes.byteLength > 8 * 1024 * 1024) {
+    throw new Error('media file is larger than 8 MB');
+  }
+
+  const safeName = safeMediaFilename(filename);
+  const key = `uploads/${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}-${stableId(`${safeName}\n${dataBase64}`).slice(0, 12)}-${safeName}`;
+  await env.MEDIA_BUCKET.put(key, bytes, {
+    httpMetadata: { contentType: mediaType },
+  });
+  const url = `https://social.dais.social/media/${key}`;
+  const attachment = {
+    type: mediaType.startsWith('image/') ? 'Image' : 'Document',
+    mediaType,
+    url,
+    name: safeName,
+  };
+  return { url, media_type: mediaType, attachment };
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function safeMediaFilename(value) {
+  const safe = String(value || '')
+    .split(/[\\/]/)
+    .pop()
+    .replace(/[^A-Za-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^\.+/, '')
+    .slice(0, 96);
+  if (!safe) throw new Error('filename is invalid');
+  return safe;
+}
+
+function mediaTypeForFilename(filename) {
+  const ext = String(filename || '').split('.').pop().toLowerCase();
+  const types = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+  };
+  return types[ext] || 'application/octet-stream';
+}
+
+function allowedMediaType(value) {
+  return ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm'].includes(value);
+}
+
 async function ownerFollowing(env, limit) {
   const rows = await env.DB.prepare(
     `SELECT id, actor_id, target_actor_id, target_inbox, status, created_at, accepted_at
@@ -852,6 +966,174 @@ async function ownerFollowing(env, limit) {
      LIMIT ?1`,
   ).bind(limit).all();
   return rows.results || [];
+}
+
+async function ownerFollowActor(env, target) {
+  if (!target) throw new Error('target is required');
+  const localActor = await ownerLocalActor(env);
+  const remote = await resolveActivityPubActor(target);
+  if (!remote.id || !remote.inbox) {
+    throw new Error('target actor must expose id and inbox');
+  }
+  if (remote.id === localActor.id) {
+    throw new Error('cannot follow the local actor');
+  }
+  const now = new Date().toISOString();
+  const followId = `${localActor.id}#follows/${stableId(`${remote.id}\n${now}`).slice(0, 16)}`;
+  const activity = {
+    '@context': 'https://www.w3.org/ns/activitystreams',
+    type: 'Follow',
+    id: followId,
+    actor: localActor.id,
+    object: remote.id,
+    to: [remote.id],
+    published: now,
+  };
+  await env.DB.prepare(
+    `INSERT INTO following (
+       id, actor_id, target_actor_id, target_inbox, status, created_at, accepted_at
+     ) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, NULL)
+     ON CONFLICT(actor_id, target_actor_id) DO UPDATE SET
+       id = excluded.id,
+       target_inbox = excluded.target_inbox,
+       status = 'pending',
+       created_at = excluded.created_at,
+       accepted_at = NULL`,
+  ).bind(followId, localActor.id, remote.id, remote.inbox, now).run();
+  const deliveryIds = await insertDeliveryRows(env, followId, [remote.inbox], 'Follow', JSON.stringify(activity));
+  return {
+    ok: true,
+    following: await ownerFollowingRow(env, localActor.id, remote.id),
+    delivery_ids: deliveryIds,
+  };
+}
+
+async function ownerUnfollowActor(env, target) {
+  if (!target) throw new Error('target is required');
+  const localActor = await ownerLocalActor(env);
+  const remote = await resolveActivityPubActor(target);
+  const existing = await ownerFollowingRow(env, localActor.id, remote.id);
+  if (!existing) throw new Error('not currently following target');
+  const now = new Date().toISOString();
+  const undoId = `${localActor.id}#undos/${stableId(`${remote.id}\n${now}`).slice(0, 16)}`;
+  const followActivity = {
+    type: 'Follow',
+    id: existing.id,
+    actor: localActor.id,
+    object: remote.id,
+  };
+  const activity = {
+    '@context': 'https://www.w3.org/ns/activitystreams',
+    type: 'Undo',
+    id: undoId,
+    actor: localActor.id,
+    object: followActivity,
+    to: [remote.id],
+    published: now,
+  };
+  await env.DB.prepare(
+    `UPDATE following
+     SET status = 'rejected', accepted_at = NULL
+     WHERE actor_id = ?1 AND target_actor_id = ?2`,
+  ).bind(localActor.id, remote.id).run();
+  const deliveryIds = await insertDeliveryRows(env, undoId, [existing.target_inbox || remote.inbox], 'Undo', JSON.stringify(activity));
+  return {
+    ok: true,
+    following: await ownerFollowingRow(env, localActor.id, remote.id),
+    delivery_ids: deliveryIds,
+  };
+}
+
+async function ownerFollowingRow(env, actorId, targetActorId) {
+  return await env.DB.prepare(
+    `SELECT id, actor_id, target_actor_id, target_inbox, status, created_at, accepted_at
+     FROM following
+     WHERE actor_id = ?1 AND target_actor_id = ?2
+     LIMIT 1`,
+  ).bind(actorId, targetActorId).first();
+}
+
+async function ownerLocalActor(env) {
+  const row = await env.DB.prepare(
+    "SELECT id, username FROM actors WHERE username = 'social' LIMIT 1",
+  ).first();
+  return {
+    id: row?.id || 'https://social.dais.social/users/social',
+    username: row?.username || 'social',
+  };
+}
+
+async function resolveActivityPubActor(target) {
+  const actorUrl = target.startsWith('http://') || target.startsWith('https://')
+    ? publicHttpsUrl(target, 'target').toString()
+    : await resolveWebfingerActor(target);
+  const response = await fetch(actorUrl, {
+    headers: {
+      Accept: 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams"',
+      'User-Agent': 'dais-owner-api/1.0',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`could not fetch actor ${actorUrl}: HTTP ${response.status}`);
+  }
+  const actor = await response.json();
+  const inbox = String(actor.inbox || '').trim();
+  return {
+    id: String(actor.id || actorUrl).trim(),
+    inbox,
+    shared_inbox: actor.endpoints?.sharedInbox || null,
+    preferred_username: actor.preferredUsername || null,
+    name: actor.name || null,
+    url: actor.url || actorUrl,
+  };
+}
+
+async function resolveWebfingerActor(target) {
+  const handle = target.trim().replace(/^@/, '');
+  if (!handle.includes('@')) {
+    throw new Error('target must be an actor URL or @user@domain handle');
+  }
+  const domain = handle.split('@').pop();
+  publicHttpsUrl(`https://${domain}/`, 'target domain');
+  const resource = `acct:${handle}`;
+  const response = await fetch(`https://${domain}/.well-known/webfinger?resource=${encodeURIComponent(resource)}`, {
+    headers: { Accept: 'application/jrd+json, application/json', 'User-Agent': 'dais-owner-api/1.0' },
+  });
+  if (!response.ok) {
+    throw new Error(`could not resolve ${target}: HTTP ${response.status}`);
+  }
+  const jrd = await response.json();
+  const link = (jrd.links || []).find((item) =>
+    item.rel === 'self' && String(item.type || '').includes('activity+json') && item.href
+  );
+  if (!link) throw new Error(`no ActivityPub self link found for ${target}`);
+  return publicHttpsUrl(link.href, 'actor link').toString();
+}
+
+function publicHttpsUrl(value, field) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${field} must be a valid URL`);
+  }
+  if (url.protocol !== 'https:') {
+    throw new Error(`${field} must use https`);
+  }
+  const host = url.hostname.toLowerCase();
+  if (
+    host === 'localhost' ||
+    host.endsWith('.local') ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host.startsWith('10.') ||
+    host.startsWith('192.168.') ||
+    host.startsWith('169.254.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+  ) {
+    throw new Error(`${field} host is not allowed`);
+  }
+  return url;
 }
 
 async function ownerNotifications(env, limit) {
@@ -959,7 +1241,7 @@ async function ownerDiagnostics(env) {
   ];
 }
 
-async function ownerCreatePost(env, { text, visibility, protocol, recipients = [] }) {
+async function ownerCreatePost(env, { text, visibility, protocol, recipients = [], attachments = [] }) {
   const actor = await env.DB.prepare(
     "SELECT id FROM actors WHERE username = 'social' LIMIT 1",
   ).first();
@@ -971,11 +1253,20 @@ async function ownerCreatePost(env, { text, visibility, protocol, recipients = [
   const localId = `${now.replace(/[-:TZ.]/g, '').slice(0, 14)}-${stableId(`${now}\n${text}`).slice(0, 8)}`;
   const postId = `${actorId}/posts/${localId}`;
   const contentHtml = `<p>${escapeHtml(text).replaceAll('\n', '<br>')}</p>`;
+  const mediaAttachments = normalizeAttachments(attachments);
+  if (mediaAttachments.length > 0 && !['public', 'unlisted'].includes(visibility)) {
+    throw new Error('media attachments currently require public or unlisted visibility; private media access is not implemented yet');
+  }
+  if (mediaAttachments.length > 0 && protocol !== 'activitypub') {
+    throw new Error('media attachments currently require ActivityPub routing; AT Protocol media upload is not implemented yet');
+  }
+  const mediaAttachmentsJson = mediaAttachments.length ? JSON.stringify(mediaAttachments) : null;
   await env.DB.prepare(
     `INSERT INTO posts (
-      id, actor_id, content, content_html, object_type, visibility, protocol, published_at, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, 'Note', ?5, ?6, ?7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-  ).bind(postId, actorId, text, contentHtml, visibility, protocol, now).run();
+      id, actor_id, content, content_html, object_type, visibility, protocol,
+      published_at, media_attachments, created_at, updated_at
+    ) VALUES (?1, ?2, ?3, ?4, 'Note', ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  ).bind(postId, actorId, text, contentHtml, visibility, protocol, now, mediaAttachmentsJson).run();
   const deliveryIds =
     protocol === 'activitypub' || protocol === 'both'
       ? await ownerCreatePostDeliveries(env, { postId, visibility, directTargets })
@@ -989,8 +1280,42 @@ async function ownerCreatePost(env, { text, visibility, protocol, recipients = [
     protocol,
     published_at: now,
     recipients,
+    attachments: mediaAttachments,
     delivery_ids: deliveryIds,
   };
+}
+
+function normalizeAttachments(values) {
+  const attachments = [];
+  for (const value of values || []) {
+    let attachment = value;
+    if (typeof value === 'string' && value.trim().startsWith('{')) {
+      try {
+        attachment = JSON.parse(value);
+      } catch {
+        throw new Error('attachment JSON is invalid');
+      }
+    } else if (typeof value === 'string') {
+      attachment = { type: 'Document', url: value.trim() };
+    }
+    if (!attachment || typeof attachment !== 'object') {
+      throw new Error('attachment must be a URL or object');
+    }
+    const url = optionalUrl(attachment.url, 'attachment url');
+    const mediaType = optionalString(attachment.mediaType);
+    if (mediaType && !allowedMediaType(mediaType)) {
+      throw new Error('unsupported attachment media type');
+    }
+    const normalized = {
+      type: optionalString(attachment.type) || (mediaType && mediaType.startsWith('image/') ? 'Image' : 'Document'),
+      url,
+    };
+    if (mediaType) normalized.mediaType = mediaType;
+    const name = optionalString(attachment.name);
+    if (name) normalized.name = name;
+    attachments.push(normalized);
+  }
+  return attachments;
 }
 
 async function ownerCreatePostDeliveries(env, { postId, visibility, directTargets }) {
@@ -1028,7 +1353,7 @@ async function ownerCreateFollowerDeliveries(env, postId) {
   return insertDeliveryRows(env, postId, (rows.results || []).map((row) => row.inbox));
 }
 
-async function insertDeliveryRows(env, postId, inboxes) {
+async function insertDeliveryRows(env, postId, inboxes, activityType = 'Create', activityJson = null) {
   const allowedInboxes = [];
   for (const inbox of inboxes) {
     if (await ownerFederationTargetAllowed(env, inbox)) {
@@ -1043,12 +1368,12 @@ async function insertDeliveryRows(env, postId, inboxes) {
     await env.DB.prepare(
       `INSERT INTO deliveries (
         id, post_id, target_type, target_url, protocol,
-        status, retry_count, created_at, activity_type
+        status, retry_count, created_at, activity_type, activity_json
       ) VALUES (
         ?1, ?2, 'inbox', ?3, 'activitypub',
-        'queued', 0, ?4, 'Create'
+        'queued', 0, ?4, ?5, ?6
       )`,
-    ).bind(deliveryId, postId, inbox, createdAt).run();
+    ).bind(deliveryId, postId, inbox, createdAt, activityType, activityJson).run();
     deliveryIds.push(deliveryId);
   }
   return deliveryIds;
@@ -1186,7 +1511,7 @@ async function mastodonAccount(env) {
 async function mastodonStatuses(env, limit) {
   const rows = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
-            name, summary, visibility, published_at, in_reply_to
+            name, summary, visibility, published_at, in_reply_to, media_attachments
      FROM posts
      WHERE visibility = 'public'
        AND encrypted_message IS NULL
@@ -1201,7 +1526,7 @@ async function mastodonStatuses(env, limit) {
 async function mastodonStatus(env, id) {
   const row = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
-            name, summary, visibility, published_at, in_reply_to
+            name, summary, visibility, published_at, in_reply_to, media_attachments
      FROM posts
      WHERE id = ?1
        AND visibility = 'public'
@@ -1236,12 +1561,42 @@ function statusJson(row, account) {
     sensitive: false,
     spoiler_text: '',
     visibility: mastodonVisibility(row.visibility),
-    media_attachments: [],
+    media_attachments: mastodonMediaAttachments(row),
     mentions: [],
     tags: [],
     card: null,
     poll: null,
   };
+}
+
+function mastodonMediaAttachments(row) {
+  const attachments = parseAttachmentArray(row.media_attachments);
+  return attachments.map((attachment, index) => {
+    const url = String(attachment.url || '');
+    const mediaType = String(attachment.mediaType || '');
+    return {
+      id: `${row.id}#media-${index + 1}`,
+      type: mediaType.startsWith('image/') ? 'image' : mediaType.startsWith('video/') ? 'video' : 'unknown',
+      url,
+      preview_url: url,
+      remote_url: null,
+      preview_remote_url: null,
+      text_url: null,
+      meta: {},
+      description: attachment.name || null,
+      blurhash: null,
+    };
+  });
+}
+
+function parseAttachmentArray(value) {
+  if (!value) return [];
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed.filter((item) => item && item.url) : [];
+  } catch {
+    return [];
+  }
 }
 
 function mastodonPlainText(row) {

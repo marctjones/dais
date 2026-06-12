@@ -312,6 +312,18 @@ pub async fn publish_post(
     db: &D1Client,
 ) -> Result<PostOutcome> {
     let effective = effective_protocol(draft.protocol, draft.visibility);
+    if !draft.attachments.is_empty()
+        && !matches!(draft.visibility, Visibility::Public | Visibility::Unlisted)
+    {
+        anyhow::bail!(
+            "media attachments currently require public or unlisted visibility; private media access is not implemented yet"
+        );
+    }
+    if !draft.attachments.is_empty() && effective != Protocol::ActivityPub {
+        anyhow::bail!(
+            "media attachments currently require ActivityPub routing; AT Protocol media upload is not implemented yet"
+        );
+    }
     if draft.visibility == Visibility::Direct && draft.to.is_empty() {
         anyhow::bail!("direct posts require at least one --to actor URL");
     }

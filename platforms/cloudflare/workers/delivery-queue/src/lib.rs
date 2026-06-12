@@ -406,6 +406,7 @@ async fn process_delivery(
             p.published_at,
             p.encrypted_message,
             p.in_reply_to,
+            p.media_attachments,
             (
                 SELECT follower_actor_id
                 FROM followers f
@@ -479,6 +480,7 @@ async fn process_delivery(
         .and_then(|v| v.as_str())
         .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok());
     let in_reply_to = row.get("in_reply_to").and_then(|v| v.as_str());
+    let media_attachments = row.get("media_attachments").and_then(|v| v.as_str());
     let delivery_recipient = row.get("delivery_recipient").and_then(|v| v.as_str());
     let retry_count = row.get("retry_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
@@ -520,6 +522,7 @@ async fn process_delivery(
             published_at,
             encrypted_message,
             in_reply_to,
+            media_attachments,
             delivery_recipient,
         )
         .map_err(worker::Error::RustError)?,
@@ -604,6 +607,7 @@ fn build_create_activity_json(
     published_at: &str,
     encrypted_message: Option<serde_json::Value>,
     in_reply_to: Option<&str>,
+    media_attachments: Option<&str>,
     delivery_recipient: Option<&str>,
 ) -> Result<String, String> {
     let followers_collection = format!("{actor_id}/followers");
@@ -638,6 +642,12 @@ fn build_create_activity_json(
 
     if let Some(in_reply_to) = in_reply_to {
         note["inReplyTo"] = serde_json::json!(in_reply_to);
+    }
+
+    if let Some(media_attachments) = media_attachments {
+        if let Ok(attachments) = serde_json::from_str::<serde_json::Value>(media_attachments) {
+            note["attachment"] = attachments;
+        }
     }
 
     if let Some(encrypted_message) = encrypted_message {

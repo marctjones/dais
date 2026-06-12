@@ -12,6 +12,8 @@ name = "dais"
 path = "src/main.rs"
 
 [dependencies]
+dais-client-core = { path = "../client-core" }
+
 # CLI (noun-verb command tree, P5)
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
