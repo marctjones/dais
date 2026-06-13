@@ -199,6 +199,7 @@ pub struct OwnerCreatedPost {
 pub struct OwnerMediaUpload {
     pub filename: String,
     pub media_type: Option<String>,
+    pub access: Option<String>,
     pub data_base64: String,
 }
 

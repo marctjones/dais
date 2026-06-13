@@ -75,6 +75,7 @@ async fn upload_owner_media(
     app: tauri::AppHandle,
     filename: String,
     media_type: Option<String>,
+    access: Option<String>,
     data_base64: String,
 ) -> Result<OwnerMedia, String> {
     let stored = load_settings(&app)?;
@@ -88,6 +89,7 @@ async fn upload_owner_media(
         .upload_media(&OwnerMediaUpload {
             filename,
             media_type,
+            access,
             data_base64,
         })
         .await

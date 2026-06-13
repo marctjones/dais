@@ -100,6 +100,7 @@ type FollowResult = {
 type UploadedMedia = {
   url: string;
   media_type?: string | null;
+  access?: string | null;
   attachment: unknown;
 };
 
@@ -542,14 +543,23 @@ async function publishPost(event: SubmitEvent) {
     return;
   }
   const visibility = String(form.get("visibility") || "Followers");
-  if (draftAttachments.length > 0 && visibility !== "Public" && visibility !== "Unlisted") {
-    notice = "Media attachments currently require Public or Unlisted visibility.";
-    render();
-    return;
-  }
   const protocol = String(form.get("protocol") || "ActivityPub");
   if (draftAttachments.length > 0 && protocol !== "ActivityPub") {
     notice = "Media attachments currently require ActivityPub routing.";
+    render();
+    return;
+  }
+  if (draftAttachments.length > 0 && form.get("encrypt") === "on") {
+    notice = "E2EE media attachments are not implemented yet.";
+    render();
+    return;
+  }
+  if (
+    draftAttachments.length > 0 &&
+    (visibility === "Followers" || visibility === "Direct") &&
+    !draftAttachments.every(isPrivateAttachment)
+  ) {
+    notice = "Private and direct posts need media uploaded while that visibility is selected.";
     render();
     return;
   }
@@ -581,14 +591,31 @@ async function uploadSelectedMedia() {
     render();
     return;
   }
+  const form = document.querySelector<HTMLFormElement>("#compose-form");
+  const data = form ? new FormData(form) : new FormData();
+  const visibility = String(data.get("visibility") || "Followers");
+  const protocol = String(data.get("protocol") || "ActivityPub");
+  const encrypt = data.get("encrypt") === "on";
+  if (protocol !== "ActivityPub") {
+    notice = "Media attachments currently require ActivityPub routing.";
+    render();
+    return;
+  }
+  if (encrypt) {
+    notice = "E2EE media attachments are not implemented yet.";
+    render();
+    return;
+  }
+  const access = visibility === "Followers" || visibility === "Direct" ? "private" : "public";
   const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
   const uploaded = await invoke<UploadedMedia>("upload_owner_media", {
     filename: file.name,
     mediaType: file.type || null,
+    access,
     dataBase64
   });
   draftAttachments = [...draftAttachments, JSON.stringify(uploaded.attachment)];
-  notice = `Attached ${file.name}.`;
+  notice = `Attached ${file.name} as ${uploaded.access || access} media.`;
   render();
 }
 
@@ -660,6 +687,15 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
+}
+
+function isPrivateAttachment(value: string) {
+  try {
+    const attachment = JSON.parse(value);
+    return typeof attachment.url === "string" && new URL(attachment.url).pathname.startsWith("/media/_private/");
+  } catch {
+    return false;
+  }
 }
 
 function actorLabel(value: string) {

@@ -315,12 +315,16 @@ function escapeRegex(value) {
 }
 
 async function handleMedia(request, env, path) {
-  // Extract filename from /media/filename.ext
-  const filename = path.substring(7); // Remove '/media/'
+  const mediaPath = decodeURIComponent(path.substring(7));
 
-  if (!filename) {
+  if (!mediaPath) {
     return new Response('Missing filename', { status: 400 });
   }
+  const privateMedia = mediaPath.startsWith('_private/');
+  if (mediaPath.startsWith('private/')) {
+    return new Response('Not Found', { status: 404 });
+  }
+  const filename = privateMedia ? `private/${mediaPath.slice('_private/'.length)}` : mediaPath;
 
   try {
     // Fetch from R2 bucket
@@ -346,7 +350,7 @@ async function handleMedia(request, env, path) {
     // Return with proper headers and caching
     const headers = new Headers();
     headers.set('Content-Type', contentType);
-    headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+    headers.set('Cache-Control', privateMedia ? 'private, no-store' : 'public, max-age=31536000, immutable');
     headers.set('Access-Control-Allow-Origin', '*');
 
     return new Response(object.body, { headers });
@@ -701,13 +705,14 @@ async function handleOwnerApi(request, env, url) {
       ? body.recipients.map((value) => String(value).trim()).filter(Boolean)
       : [];
     const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+    const encrypt = Boolean(body.encrypt);
     if (visibility === 'direct' && recipients.length === 0) {
       return apiJson({ error: 'direct posts require at least one recipient' }, 400);
     }
 
     let created;
     try {
-      created = await ownerCreatePost(env, { text, visibility, protocol, recipients, attachments });
+      created = await ownerCreatePost(env, { text, visibility, protocol, recipients, attachments, encrypt });
     } catch (error) {
       return apiJson({ error: error.message || 'post creation failed' }, 400);
     }
@@ -895,9 +900,11 @@ async function ownerUploadMedia(env, body) {
   const filename = optionalString(body.filename);
   const dataBase64 = optionalString(body.data_base64);
   const mediaType = optionalString(body.media_type) || mediaTypeForFilename(filename || '');
+  const access = optionalString(body.access) || 'public';
   if (!filename) throw new Error('filename is required');
   if (!dataBase64) throw new Error('data_base64 is required');
   if (!allowedMediaType(mediaType)) throw new Error('unsupported media type');
+  if (!['public', 'private'].includes(access)) throw new Error('access must be public or private');
 
   const bytes = base64ToBytes(dataBase64);
   if (bytes.byteLength > 8 * 1024 * 1024) {
@@ -905,18 +912,29 @@ async function ownerUploadMedia(env, body) {
   }
 
   const safeName = safeMediaFilename(filename);
-  const key = `uploads/${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}-${stableId(`${safeName}\n${dataBase64}`).slice(0, 12)}-${safeName}`;
+  const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+  const token = randomToken();
+  const publicName = `${timestamp}-${stableId(`${safeName}\n${dataBase64}`).slice(0, 12)}-${safeName}`;
+  const key = access === 'private' ? `private/${token}/${safeName}` : `uploads/${publicName}`;
   await env.MEDIA_BUCKET.put(key, bytes, {
     httpMetadata: { contentType: mediaType },
   });
-  const url = `https://social.dais.social/media/${key}`;
+  const url = access === 'private'
+    ? `https://social.dais.social/media/_private/${token}/${safeName}`
+    : `https://social.dais.social/media/${key}`;
   const attachment = {
     type: mediaType.startsWith('image/') ? 'Image' : 'Document',
     mediaType,
     url,
     name: safeName,
   };
-  return { url, media_type: mediaType, attachment };
+  return { url, media_type: mediaType, access, attachment };
+}
+
+function randomToken() {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function base64ToBytes(value) {
@@ -1241,7 +1259,7 @@ async function ownerDiagnostics(env) {
   ];
 }
 
-async function ownerCreatePost(env, { text, visibility, protocol, recipients = [], attachments = [] }) {
+async function ownerCreatePost(env, { text, visibility, protocol, recipients = [], attachments = [], encrypt = false }) {
   const actor = await env.DB.prepare(
     "SELECT id FROM actors WHERE username = 'social' LIMIT 1",
   ).first();
@@ -1254,11 +1272,14 @@ async function ownerCreatePost(env, { text, visibility, protocol, recipients = [
   const postId = `${actorId}/posts/${localId}`;
   const contentHtml = `<p>${escapeHtml(text).replaceAll('\n', '<br>')}</p>`;
   const mediaAttachments = normalizeAttachments(attachments);
-  if (mediaAttachments.length > 0 && !['public', 'unlisted'].includes(visibility)) {
-    throw new Error('media attachments currently require public or unlisted visibility; private media access is not implemented yet');
-  }
   if (mediaAttachments.length > 0 && protocol !== 'activitypub') {
     throw new Error('media attachments currently require ActivityPub routing; AT Protocol media upload is not implemented yet');
+  }
+  if (mediaAttachments.length > 0 && encrypt) {
+    throw new Error('E2EE media attachments require encrypted media support and are not implemented yet');
+  }
+  if (mediaAttachments.length > 0 && ['followers', 'direct'].includes(visibility) && !mediaAttachments.every(isPrivateMediaAttachment)) {
+    throw new Error('private and direct media attachments must use private media upload URLs');
   }
   const mediaAttachmentsJson = mediaAttachments.length ? JSON.stringify(mediaAttachments) : null;
   await env.DB.prepare(
@@ -1316,6 +1337,15 @@ function normalizeAttachments(values) {
     attachments.push(normalized);
   }
   return attachments;
+}
+
+function isPrivateMediaAttachment(attachment) {
+  try {
+    const url = new URL(attachment.url);
+    return url.hostname === 'social.dais.social' && url.pathname.startsWith('/media/_private/');
+  } catch {
+    return false;
+  }
 }
 
 async function ownerCreatePostDeliveries(env, { postId, visibility, directTargets }) {
