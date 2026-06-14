@@ -303,6 +303,18 @@ select {
   justify-content: space-between;
 }
 
+.reply-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #d9ded7;
+  border-radius: 7px;
+  background: #f7f8f5;
+  color: #354039;
+}
+
 .media-box {
   display: grid;
   gap: 8px;
@@ -334,6 +346,8 @@ select {
 .inline-form button,
 .media-row button,
 .attachment-chip button,
+.reply-target button,
+.timeline button,
 .follower button {
   min-width: 96px;
   border-color: #0f766e;
@@ -342,6 +356,7 @@ select {
   font-weight: 700;
 }
 
+.timeline button,
 .follower button {
   min-width: auto;
   min-height: 28px;
@@ -486,7 +501,8 @@ select {
   }
 
   .media-box,
-  .attachment-chip {
+  .attachment-chip,
+  .reply-target {
     border-color: #303832;
     background: #1c221e;
   }

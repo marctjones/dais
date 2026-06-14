@@ -1,7 +1,8 @@
 use dais_client_core::{
     ComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient, OwnerCreatedPost,
-    OwnerFollowResult, OwnerMedia, OwnerMediaUpload, OwnerPost, OwnerProfile, OwnerProfileUpdate,
-    OwnerSection, OwnerSettings, OwnerSnapshot, ProtocolRoute, SourceItem, Visibility,
+    OwnerFollowResult, OwnerInteraction, OwnerInteractionResult, OwnerMedia, OwnerMediaUpload,
+    OwnerPost, OwnerProfile, OwnerProfileUpdate, OwnerSection, OwnerSettings, OwnerSnapshot,
+    ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -47,6 +48,7 @@ async fn create_owner_post(
     visibility: Visibility,
     protocol: ProtocolRoute,
     encrypt: bool,
+    in_reply_to: Option<String>,
     recipients: Vec<String>,
     attachments: Vec<String>,
 ) -> Result<OwnerCreatedPost, String> {
@@ -63,8 +65,31 @@ async fn create_owner_post(
             visibility,
             protocol,
             encrypt,
+            in_reply_to: optional_trimmed(in_reply_to.unwrap_or_default()),
             recipients,
             attachments,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn owner_interaction(
+    app: tauri::AppHandle,
+    object_id: String,
+    interaction: String,
+) -> Result<OwnerInteractionResult, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .interact(&OwnerInteraction {
+            object_id,
+            interaction,
         })
         .await
         .map_err(|error| error.to_string())
@@ -302,6 +327,7 @@ fn main() {
             save_owner_settings,
             create_owner_post,
             upload_owner_media,
+            owner_interaction,
             update_owner_profile,
             follow_actor,
             unfollow_actor,

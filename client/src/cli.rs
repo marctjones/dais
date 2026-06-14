@@ -765,6 +765,14 @@ pub enum OwnerCommand {
     Follow(OwnerFollowArgs),
     /// Unfollow an ActivityPub actor by URL or @user@domain handle.
     Unfollow(OwnerFollowArgs),
+    /// Like a remote ActivityPub object through the live owner API.
+    Like(OwnerObjectArgs),
+    /// Undo a live owner API Like.
+    Unlike(OwnerObjectArgs),
+    /// Boost/reblog a remote ActivityPub object through the live owner API.
+    Boost(OwnerObjectArgs),
+    /// Undo a live owner API boost.
+    Unboost(OwnerObjectArgs),
 }
 
 #[derive(Args, Clone, Debug)]
@@ -792,6 +800,13 @@ pub struct OwnerTimelineArgs {
 #[derive(Args, Clone, Debug)]
 pub struct OwnerFollowArgs {
     pub target: String,
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerObjectArgs {
+    pub object_id: String,
     #[command(flatten)]
     pub api: OwnerApiArgs,
 }

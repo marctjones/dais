@@ -706,17 +706,30 @@ async function handleOwnerApi(request, env, url) {
       : [];
     const attachments = Array.isArray(body.attachments) ? body.attachments : [];
     const encrypt = Boolean(body.encrypt);
+    const inReplyTo = optionalString(body.in_reply_to || body.inReplyTo || body.in_reply_to_id);
     if (visibility === 'direct' && recipients.length === 0) {
       return apiJson({ error: 'direct posts require at least one recipient' }, 400);
     }
 
     let created;
     try {
-      created = await ownerCreatePost(env, { text, visibility, protocol, recipients, attachments, encrypt });
+      created = await ownerCreatePost(env, { text, visibility, protocol, recipients, attachments, encrypt, inReplyTo });
     } catch (error) {
       return apiJson({ error: error.message || 'post creation failed' }, 400);
     }
     return apiJson(created, 201);
+  }
+
+  if (request.method === 'POST' && path === '/interactions') {
+    const body = await readJson(request);
+    try {
+      return apiJson(await ownerPublishInteraction(env, {
+        objectId: String(body.object_id || body.objectId || '').trim(),
+        interaction: String(body.interaction || body.action || '').trim().toLowerCase(),
+      }), 201);
+    } catch (error) {
+      return apiJson({ error: error.message || 'interaction failed' }, 400);
+    }
   }
 
   return apiJson({ error: 'Not implemented in dais owner API' }, 404);
@@ -1062,6 +1075,71 @@ async function ownerUnfollowActor(env, target) {
   };
 }
 
+async function ownerPublishInteraction(env, { objectId, interaction }) {
+  if (!objectId) throw new Error('object_id is required');
+  publicHttpsUrl(objectId, 'object_id');
+  const undo = interaction === 'unlike' || interaction === 'unboost';
+  const normalized = interaction === 'unlike'
+    ? 'like'
+    : interaction === 'unboost'
+      ? 'boost'
+      : interaction;
+  if (!['like', 'boost'].includes(normalized)) {
+    throw new Error('interaction must be like, unlike, boost, or unboost');
+  }
+  const localActor = await ownerLocalActor(env);
+  const targetInbox = await resolveActivityPubObjectInbox(objectId);
+  const now = new Date().toISOString();
+  const activityType = normalized === 'like' ? 'Like' : 'Announce';
+  const activityId = `${localActor.id}#${normalized}s/${stableId(objectId).slice(0, 16)}`;
+  const outgoingId = undo
+    ? `${localActor.id}#undos/${normalized}/${stableId(`${objectId}\n${now}`).slice(0, 16)}`
+    : activityId;
+  const activity = undo
+    ? {
+        '@context': 'https://www.w3.org/ns/activitystreams',
+        id: outgoingId,
+        type: 'Undo',
+        actor: localActor.id,
+        published: now,
+        to: ['https://www.w3.org/ns/activitystreams#Public'],
+        cc: [`${localActor.id}/followers`],
+        object: {
+          id: activityId,
+          type: activityType,
+          actor: localActor.id,
+          object: objectId,
+        },
+      }
+    : {
+        '@context': 'https://www.w3.org/ns/activitystreams',
+        id: outgoingId,
+        type: activityType,
+        actor: localActor.id,
+        published: now,
+        to: ['https://www.w3.org/ns/activitystreams#Public'],
+        cc: [`${localActor.id}/followers`],
+        object: objectId,
+      };
+  const deliveryIds = await insertDeliveryRows(env, objectId, [targetInbox], undo ? 'Undo' : activityType, JSON.stringify(activity));
+  if (undo) {
+    await env.DB.prepare("DELETE FROM interactions WHERE id = ?1").bind(activityId).run();
+  } else {
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO interactions (
+         id, type, actor_id, object_url, created_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5)`,
+    ).bind(activityId, normalized, localActor.id, objectId, now).run();
+  }
+  return {
+    ok: true,
+    activity_id: outgoingId,
+    interaction: undo ? `undo-${normalized}` : normalized,
+    object_id: objectId,
+    delivery_ids: deliveryIds,
+  };
+}
+
 async function ownerFollowingRow(env, actorId, targetActorId) {
   return await env.DB.prepare(
     `SELECT id, actor_id, target_actor_id, target_inbox, status, created_at, accepted_at
@@ -1104,6 +1182,25 @@ async function resolveActivityPubActor(target) {
     name: actor.name || null,
     url: actor.url || actorUrl,
   };
+}
+
+async function resolveActivityPubObjectInbox(objectId) {
+  const objectUrl = publicHttpsUrl(objectId, 'object_id').toString();
+  const response = await fetch(objectUrl, {
+    headers: {
+      Accept: 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams", application/json',
+      'User-Agent': 'dais-owner-api/1.0',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`could not fetch object ${objectUrl}: HTTP ${response.status}`);
+  }
+  const object = await response.json();
+  const actorId = String(object.attributedTo || object.actor || '').trim();
+  if (!actorId) throw new Error('object does not expose attributedTo or actor');
+  const actor = await resolveActivityPubActor(actorId);
+  if (!actor.inbox) throw new Error('object actor does not expose inbox');
+  return actor.shared_inbox || actor.inbox;
 }
 
 async function resolveWebfingerActor(target) {
@@ -1259,7 +1356,7 @@ async function ownerDiagnostics(env) {
   ];
 }
 
-async function ownerCreatePost(env, { text, visibility, protocol, recipients = [], attachments = [], encrypt = false }) {
+async function ownerCreatePost(env, { text, visibility, protocol, recipients = [], attachments = [], encrypt = false, inReplyTo = null }) {
   const actor = await env.DB.prepare(
     "SELECT id FROM actors WHERE username = 'social' LIMIT 1",
   ).first();
@@ -1281,16 +1378,21 @@ async function ownerCreatePost(env, { text, visibility, protocol, recipients = [
   if (mediaAttachments.length > 0 && ['followers', 'direct'].includes(visibility) && !mediaAttachments.every(isPrivateMediaAttachment)) {
     throw new Error('private and direct media attachments must use private media upload URLs');
   }
+  let replyTargetInbox = null;
+  if (inReplyTo) {
+    publicHttpsUrl(inReplyTo, 'in_reply_to');
+    replyTargetInbox = await resolveActivityPubObjectInbox(inReplyTo);
+  }
   const mediaAttachmentsJson = mediaAttachments.length ? JSON.stringify(mediaAttachments) : null;
   await env.DB.prepare(
     `INSERT INTO posts (
       id, actor_id, content, content_html, object_type, visibility, protocol,
-      published_at, media_attachments, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, 'Note', ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-  ).bind(postId, actorId, text, contentHtml, visibility, protocol, now, mediaAttachmentsJson).run();
+      published_at, media_attachments, in_reply_to, created_at, updated_at
+    ) VALUES (?1, ?2, ?3, ?4, 'Note', ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  ).bind(postId, actorId, text, contentHtml, visibility, protocol, now, mediaAttachmentsJson, inReplyTo).run();
   const deliveryIds =
     protocol === 'activitypub' || protocol === 'both'
-      ? await ownerCreatePostDeliveries(env, { postId, visibility, directTargets })
+      ? await ownerCreatePostDeliveries(env, { postId, visibility, directTargets, extraTargets: replyTargetInbox ? [replyTargetInbox] : [] })
       : [];
   return {
     id: postId,
@@ -1300,6 +1402,7 @@ async function ownerCreatePost(env, { text, visibility, protocol, recipients = [
     visibility,
     protocol,
     published_at: now,
+    in_reply_to: inReplyTo,
     recipients,
     attachments: mediaAttachments,
     delivery_ids: deliveryIds,
@@ -1348,12 +1451,14 @@ function isPrivateMediaAttachment(attachment) {
   }
 }
 
-async function ownerCreatePostDeliveries(env, { postId, visibility, directTargets }) {
+async function ownerCreatePostDeliveries(env, { postId, visibility, directTargets, extraTargets = [] }) {
   if (visibility === 'direct') {
-    return insertDeliveryRows(env, postId, directTargets);
+    return insertDeliveryRows(env, postId, [...directTargets, ...extraTargets]);
   }
 
-  return ownerCreateFollowerDeliveries(env, postId);
+  const followerDeliveries = await ownerCreateFollowerDeliveries(env, postId);
+  const extraDeliveries = await insertDeliveryRows(env, postId, extraTargets);
+  return [...followerDeliveries, ...extraDeliveries];
 }
 
 async function ownerDirectDeliveryTargets(env, recipients) {

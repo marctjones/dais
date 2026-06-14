@@ -88,12 +88,21 @@ type CreatedPost = {
   id: string;
   visibility: string;
   protocol: string;
+  in_reply_to?: string | null;
   published_at: string;
 };
 
 type FollowResult = {
   ok: boolean;
   following: OwnerSnapshot["following"][number];
+  delivery_ids: string[];
+};
+
+type InteractionResult = {
+  ok: boolean;
+  activity_id: string;
+  interaction: string;
+  object_id: string;
   delivery_ids: string[];
 };
 
@@ -123,6 +132,7 @@ let snapshot: OwnerSnapshot | null = null;
 let active = "Home";
 let notice = "";
 let draftAttachments: string[] = [];
+let draftReplyTo = "";
 
 async function load() {
   render();
@@ -182,6 +192,10 @@ function render() {
   app.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", saveSettings);
   app.querySelector<HTMLFormElement>("#profile-form")?.addEventListener("submit", saveProfile);
   app.querySelector<HTMLFormElement>("#compose-form")?.addEventListener("submit", publishPost);
+  app.querySelector<HTMLButtonElement>("[data-clear-reply]")?.addEventListener("click", () => {
+    draftReplyTo = "";
+    render();
+  });
   app.querySelector<HTMLButtonElement>("#media-upload")?.addEventListener("click", uploadSelectedMedia);
   app.querySelectorAll<HTMLButtonElement>("[data-remove-attachment]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -200,6 +214,20 @@ function render() {
   app.querySelectorAll<HTMLButtonElement>("[data-unfollow]").forEach((button) => {
     button.addEventListener("click", () => {
       void unfollowActor(button.dataset.unfollow || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-timeline-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const objectId = button.dataset.object || "";
+      const action = button.dataset.timelineAction || "";
+      if (action === "reply") {
+        draftReplyTo = objectId;
+        active = "Compose";
+        notice = `Replying to ${shortUrl(objectId)}.`;
+        render();
+      } else {
+        void ownerInteraction(objectId, action);
+      }
     });
   });
 }
@@ -287,6 +315,14 @@ function composeView(data: OwnerSnapshot) {
       <span class="pill ok">Private default</span>
     </div>
     <textarea name="text" placeholder="Write to approved followers by default"></textarea>
+    ${
+      draftReplyTo
+        ? `<div class="reply-target">
+            <span>Replying to ${escapeHtml(shortUrl(draftReplyTo))}</span>
+            <button type="button" data-clear-reply="1">Clear</button>
+          </div>`
+        : ""
+    }
     <div class="form-grid">
       <label>Visibility
         <select name="visibility">
@@ -438,6 +474,9 @@ function timelineCard(post: OwnerSnapshot["home_timeline"][number]) {
       ${post.protocol ? `<span>${escapeHtml(post.protocol)}</span>` : ""}
       ${post.in_reply_to ? "<span>reply</span>" : ""}
       ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
+      <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.object_id)}">Reply</button>
+      <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.object_id)}">Like</button>
+      <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost</button>
     </footer>
   </article>`;
 }
@@ -568,6 +607,7 @@ async function publishPost(event: SubmitEvent) {
     visibility,
     protocol,
     encrypt: form.get("encrypt") === "on",
+    inReplyTo: draftReplyTo || null,
     recipients: [
       ...form.getAll("follower_recipient").map((value) => String(value)),
       ...String(form.get("recipients") || "")
@@ -578,6 +618,7 @@ async function publishPost(event: SubmitEvent) {
     attachments: draftAttachments
   });
   draftAttachments = [];
+  draftReplyTo = "";
   notice = `Published ${created.visibility} post.`;
   active = "Posts";
   await load();
@@ -647,6 +688,16 @@ async function unfollowActor(target: string) {
   if (!target) return;
   const result = await invoke<FollowResult>("unfollow_actor", { target });
   notice = `Unfollow requested for ${actorLabel(result.following.target_actor_id)}.`;
+  await load();
+}
+
+async function ownerInteraction(objectId: string, interaction: string) {
+  if (!objectId || !interaction) return;
+  const result = await invoke<InteractionResult>("owner_interaction", {
+    objectId,
+    interaction
+  });
+  notice = `${result.interaction} queued for ${shortUrl(result.object_id)}.`;
   await load();
 }
 

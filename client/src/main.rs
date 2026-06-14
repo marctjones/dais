@@ -22,7 +22,7 @@ use cli::{
 };
 use config::ConfigStore;
 use d1::D1Client;
-use dais_client_core::{OwnerApiClient, OwnerSnapshot};
+use dais_client_core::{OwnerApiClient, OwnerInteraction, OwnerSnapshot};
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
     ActivityOutcome, PostDraft, PostOutcome,
@@ -1028,8 +1028,38 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 println!("deliveries={}", result.delivery_ids.join(","));
             }
         }
+        OwnerCommand::Like(args) => owner_interact(&args.api, &args.object_id, "like").await?,
+        OwnerCommand::Unlike(args) => owner_interact(&args.api, &args.object_id, "unlike").await?,
+        OwnerCommand::Boost(args) => owner_interact(&args.api, &args.object_id, "boost").await?,
+        OwnerCommand::Unboost(args) => {
+            owner_interact(&args.api, &args.object_id, "unboost").await?
+        }
     }
 
+    Ok(())
+}
+
+async fn owner_interact(
+    args: &cli::OwnerApiArgs,
+    object_id: &str,
+    interaction: &str,
+) -> Result<()> {
+    let result = owner_api(args)
+        .interact(&OwnerInteraction {
+            object_id: object_id.to_string(),
+            interaction: interaction.to_string(),
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    println!(
+        "{} {} deliveries={}",
+        result.interaction,
+        result.object_id,
+        result.delivery_ids.len()
+    );
+    if !result.delivery_ids.is_empty() {
+        println!("delivery_ids={}", result.delivery_ids.join(","));
+    }
     Ok(())
 }
 

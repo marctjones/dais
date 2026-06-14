@@ -30,6 +30,13 @@ impl OwnerApiClient {
         self.post("/api/dais/owner/posts", draft).await
     }
 
+    pub async fn interact(
+        &self,
+        interaction: &OwnerInteraction,
+    ) -> ClientResult<OwnerInteractionResult> {
+        self.post("/api/dais/owner/interactions", interaction).await
+    }
+
     pub async fn upload_media(&self, media: &OwnerMediaUpload) -> ClientResult<OwnerMedia> {
         self.post("/api/dais/owner/media", media).await
     }
@@ -150,6 +157,7 @@ pub struct ComposeDraft {
     pub visibility: Visibility,
     pub protocol: ProtocolRoute,
     pub encrypt: bool,
+    pub in_reply_to: Option<String>,
     pub recipients: Vec<String>,
     pub attachments: Vec<String>,
 }
@@ -192,6 +200,22 @@ pub struct OwnerCreatedPost {
     pub visibility: String,
     pub protocol: String,
     pub published_at: String,
+    pub in_reply_to: Option<String>,
+    pub delivery_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerInteraction {
+    pub object_id: String,
+    pub interaction: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerInteractionResult {
+    pub ok: bool,
+    pub activity_id: String,
+    pub interaction: String,
+    pub object_id: String,
     pub delivery_ids: Vec<String>,
 }
 
@@ -365,6 +389,7 @@ mod tests {
             visibility: Visibility::Followers,
             protocol: ProtocolRoute::ActivityPub,
             encrypt: false,
+            in_reply_to: None,
             recipients: Vec::new(),
             attachments: Vec::new(),
         };
@@ -379,6 +404,7 @@ mod tests {
             visibility: Visibility::Direct,
             protocol: ProtocolRoute::Both,
             encrypt: true,
+            in_reply_to: None,
             recipients: vec!["https://example.com/users/alice".to_string()],
             attachments: Vec::new(),
         };
