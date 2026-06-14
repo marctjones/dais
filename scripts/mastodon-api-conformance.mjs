@@ -1,0 +1,137 @@
+#!/usr/bin/env node
+
+const config = {
+  baseUrl: process.env.DAIS_SOCIAL_BASE_URL || "https://social.dais.social",
+  token: process.env.DAIS_MASTODON_BEARER_TOKEN || "",
+};
+
+const results = [];
+
+function requirement(id, auth, title, run) {
+  return { id, auth, title, run };
+}
+
+function record(test, status, detail = "") {
+  results.push({ ...test, status, detail });
+}
+
+async function request(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (options.auth && config.token) headers.set("Authorization", `Bearer ${config.token}`);
+  const response = await fetch(`${config.baseUrl}${path}`, {
+    method: options.method || "GET",
+    headers,
+    body: options.body,
+  });
+  const text = await response.text();
+  let json;
+  try {
+    json = text ? JSON.parse(text) : undefined;
+  } catch {
+    json = undefined;
+  }
+  return {
+    status: response.status,
+    contentType: response.headers.get("content-type") || "",
+    text,
+    json,
+  };
+}
+
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function expectArray(value, label) {
+  if (!Array.isArray(value)) throw new Error(`${label} is not an array`);
+}
+
+const tests = [
+  requirement("MASTODON-API-INSTANCE-01", false, "Instance v1/v2 endpoints expose compatible JSON", async () => {
+    const v1 = await request("/api/v1/instance");
+    const v2 = await request("/api/v2/instance");
+    if (v1.status !== 200 || v2.status !== 200) throw new Error(`expected 200/200, got ${v1.status}/${v2.status}`);
+    if (!v1.json?.uri || !v2.json?.configuration?.statuses) throw new Error("instance shape incomplete");
+  }),
+  requirement("MASTODON-API-APPS-01", false, "App registration and OAuth token compatibility flow works", async () => {
+    const app = await request("/api/v1/apps", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_name: "dais conformance", redirect_uris: "urn:ietf:wg:oauth:2.0:oob" }),
+    });
+    const token = await request("/oauth/token", { method: "POST" });
+    if (app.status !== 200 || token.status !== 200) throw new Error(`expected 200/200, got ${app.status}/${token.status}`);
+    if (!app.json?.client_id || token.json?.access_token !== "owner-token-required") {
+      throw new Error("OAuth compatibility shape incomplete or leaked a non-placeholder token");
+    }
+  }),
+  requirement("MASTODON-API-PUBLIC-01", false, "Public timelines and statuses privacy-filter public content", async () => {
+    const timeline = await request("/api/v1/timelines/public?limit=2");
+    if (timeline.status !== 200) throw new Error(`timeline expected 200, got ${timeline.status}`);
+    expectArray(timeline.json, "public timeline");
+    for (const status of timeline.json) {
+      if (status.visibility !== "public") throw new Error(`non-public status leaked: ${status.id}`);
+      if (String(status.content || "").includes("End-to-end encrypted message")) {
+        throw new Error(`encrypted fallback leaked: ${status.id}`);
+      }
+    }
+  }),
+  requirement("MASTODON-API-COMPAT-01", false, "Unauthenticated compatibility endpoints fail closed where required", async () => {
+    const verify = await request("/api/v1/accounts/verify_credentials");
+    const home = await request("/api/v1/timelines/home");
+    if (verify.status !== 401 || home.status !== 401) throw new Error(`expected 401/401, got ${verify.status}/${home.status}`);
+  }),
+  requirement("MASTODON-API-AUTH-01", true, "Authenticated account, timeline, preferences, and notifications work", async () => {
+    const account = await request("/api/v1/accounts/verify_credentials", { auth: true });
+    const home = await request("/api/v1/timelines/home?limit=2", { auth: true });
+    const preferences = await request("/api/v1/preferences", { auth: true });
+    const notifications = await request("/api/v1/notifications?limit=2", { auth: true });
+    const statuses = [account, home, preferences, notifications].map((res) => res.status);
+    if (statuses.some((status) => status !== 200)) throw new Error(`expected all 200, got ${statuses.join("/")}`);
+    if (!account.json?.id || !isObject(preferences.json)) throw new Error("authenticated shapes incomplete");
+    expectArray(home.json, "home timeline");
+    expectArray(notifications.json, "notifications");
+  }),
+  requirement("MASTODON-API-READ-01", true, "Search, relationships, filters, lists, and conversations have client-safe shapes", async () => {
+    const account = await request("/api/v1/accounts/verify_credentials", { auth: true });
+    const id = encodeURIComponent(account.json.id);
+    const checks = await Promise.all([
+      request(`/api/v1/accounts/relationships?id[]=${id}`, { auth: true }),
+      request("/api/v2/search?q=dais&type=statuses", { auth: true }),
+      request("/api/v2/filters", { auth: true }),
+      request("/api/v1/lists", { auth: true }),
+      request("/api/v1/conversations", { auth: true }),
+    ]);
+    if (checks.some((res) => res.status !== 200)) throw new Error(`expected all 200, got ${checks.map((res) => res.status).join("/")}`);
+    expectArray(checks[0].json, "relationships");
+    if (!isObject(checks[1].json) || !Array.isArray(checks[1].json.statuses)) throw new Error("search shape incomplete");
+    expectArray(checks[2].json, "filters");
+    expectArray(checks[3].json, "lists");
+    expectArray(checks[4].json, "conversations");
+  }),
+];
+
+for (const test of tests) {
+  if (test.auth && !config.token) {
+    record(test, "SKIP", "set DAIS_MASTODON_BEARER_TOKEN for authenticated checks");
+    continue;
+  }
+  try {
+    await test.run();
+    record(test, "PASS");
+  } catch (error) {
+    record(test, "FAIL", error?.stack || String(error));
+  }
+}
+
+console.log("\nMastodon API compatibility report");
+console.log(`Target: ${config.baseUrl}`);
+for (const result of results) {
+  console.log(`${result.status.padEnd(5)} ${result.id.padEnd(24)} ${result.title}`);
+  if (result.detail) console.log(`      ${result.detail}`);
+}
+
+const failed = results.filter((result) => result.status === "FAIL");
+const skipped = results.filter((result) => result.status === "SKIP");
+console.log(`\nSummary: PASS=${results.filter((result) => result.status === "PASS").length} FAIL=${failed.length} SKIP=${skipped.length}`);
+if (failed.length > 0) process.exit(1);

@@ -433,10 +433,13 @@ async function handleMastodonApi(request, env, url) {
   }
 
   if (request.method === 'POST' && path === '/oauth/token') {
+    // Do not mint or reveal the production owner API token. Until dais has a
+    // real user-consent OAuth screen, Mastodon clients authenticate with an
+    // owner-provisioned bearer token.
     return apiJson({
-      access_token: 'dais-local-owner-token',
+      access_token: 'owner-token-required',
       token_type: 'Bearer',
-      scope: 'read',
+      scope: 'read write follow push',
       created_at: Math.floor(Date.now() / 1000),
     });
   }
@@ -446,7 +449,7 @@ async function handleMastodonApi(request, env, url) {
   }
 
   if (request.method === 'GET' && path === '/api/v1/preferences') {
-    const auth = requireBearer(request);
+    const auth = requireBearer(request, env);
     if (auth) return auth;
     const settings = await ownerSettings(env);
     return apiJson({
@@ -462,10 +465,52 @@ async function handleMastodonApi(request, env, url) {
     return apiJson([]);
   }
 
+  if (request.method === 'GET' && path === '/api/v1/markers') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson({});
+  }
+
+  if (request.method === 'POST' && path === '/api/v1/markers') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson({});
+  }
+
   if (request.method === 'GET' && path === '/api/v1/accounts/verify_credentials') {
-    const auth = requireBearer(request);
+    const auth = requireBearer(request, env);
     if (auth) return auth;
     return apiJson(await mastodonAccount(env));
+  }
+
+  if (request.method === 'PATCH' && path === '/api/v1/accounts/update_credentials') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const body = await readRequestBody(request);
+    const profile = {};
+    if (body.display_name !== undefined) profile.display_name = body.display_name;
+    if (body.note !== undefined) profile.summary = body.note;
+    if (Object.keys(profile).length > 0) await ownerUpdateProfile(env, profile);
+    return apiJson(await mastodonAccount(env));
+  }
+
+  if (request.method === 'GET' && path === '/api/v1/accounts/relationships') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const ids = url.searchParams.getAll('id[]').concat(url.searchParams.getAll('id'));
+    return apiJson(await mastodonRelationships(env, ids));
+  }
+
+  if (request.method === 'GET' && path === '/api/v1/blocks') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson(await mastodonBlocks(env, clampLimit(url.searchParams.get('limit'))));
+  }
+
+  if (request.method === 'GET' && path === '/api/v1/mutes') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson([]);
   }
 
   if (request.method === 'GET' && path === '/api/v1/timelines/public') {
@@ -473,7 +518,7 @@ async function handleMastodonApi(request, env, url) {
   }
 
   if (request.method === 'GET' && path === '/api/v1/timelines/home') {
-    const auth = requireBearer(request);
+    const auth = requireBearer(request, env);
     if (auth) return auth;
     return apiJson(await mastodonStatuses(env, clampLimit(url.searchParams.get('limit'))));
   }
@@ -498,6 +543,68 @@ async function handleMastodonApi(request, env, url) {
     return apiJson(await mastodonAccount(env));
   }
 
+  const accountAction = path.match(/^\/api\/v1\/accounts\/([^/]+)\/(follow|unfollow|block|unblock|mute|unmute)$/);
+  if (request.method === 'POST' && accountAction) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const id = decodeURIComponent(accountAction[1]);
+    const action = accountAction[2];
+    if (action === 'follow') {
+      try {
+        await ownerFollowActor(env, id);
+      } catch (error) {
+        return apiJson({ error: error.message || 'follow failed' }, 400);
+      }
+    } else if (action === 'unfollow') {
+      try {
+        await ownerUnfollowActor(env, id);
+      } catch {
+        // Keep compatibility shape idempotent for clients refreshing relationship state.
+      }
+    } else if (action === 'block') {
+      await mastodonSetBlock(env, id, true);
+    } else if (action === 'unblock') {
+      await mastodonSetBlock(env, id, false);
+    }
+    return apiJson((await mastodonRelationships(env, [id]))[0]);
+  }
+
+  if (request.method === 'GET' && path === '/api/v1/favourites') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson(await mastodonStatusesByInteraction(env, 'like', clampLimit(url.searchParams.get('limit'))));
+  }
+
+  if (request.method === 'GET' && path === '/api/v1/bookmarks') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson([]);
+  }
+
+  if (request.method === 'GET' && path === '/api/v1/conversations') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson(await mastodonConversations(env, clampLimit(url.searchParams.get('limit'))));
+  }
+
+  if (request.method === 'GET' && (path === '/api/v1/search' || path === '/api/v2/search')) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson(await mastodonSearch(env, url.searchParams.get('q') || '', clampLimit(url.searchParams.get('limit'))));
+  }
+
+  if (request.method === 'GET' && (path === '/api/v1/filters' || path === '/api/v2/filters')) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson([]);
+  }
+
+  if (request.method === 'GET' && path === '/api/v1/lists') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson([]);
+  }
+
   const statusContext = path.match(/^\/api\/v1\/statuses\/(.+)\/context$/);
   if (request.method === 'GET' && statusContext) {
     const value = await mastodonStatus(env, decodeURIComponent(statusContext[1]));
@@ -507,11 +614,13 @@ async function handleMastodonApi(request, env, url) {
 
   const statusAction = path.match(/^\/api\/v1\/statuses\/(.+)\/(favourite|unfavourite|reblog|unreblog)$/);
   if (request.method === 'POST' && statusAction) {
-    const auth = requireBearer(request);
+    const auth = requireBearer(request, env);
     if (auth) return auth;
-    const value = await mastodonStatus(env, decodeURIComponent(statusAction[1]));
+    const statusId = decodeURIComponent(statusAction[1]);
+    const value = await mastodonStatus(env, statusId);
     if (!value) return apiJson({ error: 'Record not found' }, 404);
-    return apiJson(value);
+    await mastodonToggleStatusInteraction(env, statusId, statusAction[2]);
+    return apiJson(await mastodonStatus(env, statusId) || value);
   }
 
   const status = path.match(/^\/api\/v1\/statuses\/([^/]+)$/);
@@ -521,17 +630,40 @@ async function handleMastodonApi(request, env, url) {
     return apiJson(value);
   }
 
+  if ((request.method === 'PUT' || request.method === 'PATCH') && status) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const body = await readRequestBody(request);
+    const updated = await mastodonUpdateStatus(env, decodeURIComponent(status[1]), {
+      text: String(body.status || body.text || '').trim(),
+      summary: String(body.spoiler_text || '').trim() || null,
+    });
+    if (!updated) return apiJson({ error: 'Record not found' }, 404);
+    return apiJson(updated);
+  }
+
+  if (request.method === 'DELETE' && status) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const deleted = await mastodonDeleteStatus(env, decodeURIComponent(status[1]));
+    if (!deleted) return apiJson({ error: 'Record not found' }, 404);
+    return apiJson(deleted);
+  }
+
   if (request.method === 'POST' && path === '/api/v1/statuses') {
-    const auth = requireBearer(request);
+    const auth = requireBearer(request, env);
     if (auth) return auth;
     const body = await readRequestBody(request);
     const text = String(body.status || body.text || '').trim();
     if (!text) return apiJson({ error: 'status is required' }, 400);
     const visibility = normalizeMastodonVisibility(body.visibility || 'private') || 'followers';
+    const mediaIds = requestBodyArray(body, 'media_ids');
     const created = await ownerCreatePost(env, {
       text,
       visibility,
       protocol: 'activitypub',
+      attachments: await mastodonAttachmentsForMediaIds(env, mediaIds, visibility),
+      inReplyTo: optionalString(body.in_reply_to_id),
     });
     return apiJson(statusJson({
       id: created.id,
@@ -544,16 +676,71 @@ async function handleMastodonApi(request, env, url) {
       visibility: created.visibility,
       published_at: created.published_at,
       in_reply_to: body.in_reply_to_id || null,
+      media_attachments: created.attachments?.length ? JSON.stringify(created.attachments) : null,
     }, await mastodonAccount(env)), 201);
   }
 
+  if (request.method === 'POST' && (path === '/api/v1/media' || path === '/api/v2/media')) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    try {
+      return apiJson(await mastodonUploadMedia(request, env), 200);
+    } catch (error) {
+      return apiJson({ error: error.message || 'media upload failed' }, 400);
+    }
+  }
+
   if (request.method === 'GET' && path === '/api/v1/notifications') {
-    const auth = requireBearer(request);
+    const auth = requireBearer(request, env);
     if (auth) return auth;
     return apiJson(await mastodonNotifications(env, clampLimit(url.searchParams.get('limit'))));
   }
 
-  return apiJson({ error: 'Not implemented in read-only dais Mastodon API floor' }, 404);
+  if (request.method === 'POST' && path === '/api/v1/notifications/clear') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    await env.DB.prepare("UPDATE notifications SET read = 1").run();
+    return apiJson({});
+  }
+
+  const notificationDismiss = path.match(/^\/api\/v1\/notifications\/([^/]+)\/dismiss$/);
+  if (request.method === 'POST' && notificationDismiss) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    await env.DB.prepare("UPDATE notifications SET read = 1 WHERE id = ?1").bind(decodeURIComponent(notificationDismiss[1])).run();
+    return apiJson({});
+  }
+
+  if (request.method === 'POST' && path === '/api/v1/reports') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const body = await readRequestBody(request);
+    return apiJson({
+      id: `report-${stableId(`${body.account_id || ''}\n${Date.now()}`)}`,
+      action_taken: false,
+      action_taken_at: null,
+      category: body.category || 'other',
+      comment: body.comment || '',
+      forwarded: false,
+      created_at: new Date().toISOString(),
+      status_ids: requestBodyArray(body, 'status_ids'),
+      rules: [],
+      target_account: body.account_id ? remoteAccountJson({ actor_id: body.account_id, url: body.account_id }) : null,
+    }, 201);
+  }
+
+  if (request.method === 'GET' && path.startsWith('/api/v1/streaming')) {
+    return new Response('', {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  }
+
+  return apiJson({ error: 'Not implemented in dais Mastodon compatibility API' }, 404);
 }
 
 async function handleOwnerApi(request, env, url) {
@@ -1654,7 +1841,7 @@ async function ownerFederationTargetAllowed(env, targetUrl) {
 }
 
 function requireOwnerBearer(request, env) {
-  const configured = env.OWNER_API_TOKEN || env.DAIS_OWNER_TOKEN || '';
+  const configured = configuredOwnerToken(env);
   const isProduction = env.ENVIRONMENT === 'production';
   if (!configured && isProduction) {
     return apiJson({ error: 'OWNER_API_TOKEN is not configured' }, 503);
@@ -1666,6 +1853,10 @@ function requireOwnerBearer(request, env) {
     return apiJson({ error: 'Owner bearer token required' }, 401);
   }
   return null;
+}
+
+function configuredOwnerToken(env) {
+  return env.OWNER_API_TOKEN || env.DAIS_OWNER_TOKEN || '';
 }
 
 async function readJson(request) {
@@ -1767,7 +1958,10 @@ async function mastodonAccount(env) {
 async function mastodonStatuses(env, limit) {
   const rows = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
-            name, summary, visibility, published_at, in_reply_to, media_attachments
+            name, summary, visibility, published_at, in_reply_to, media_attachments,
+            (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
      FROM posts
      WHERE visibility = 'public'
        AND encrypted_message IS NULL
@@ -1782,7 +1976,10 @@ async function mastodonStatuses(env, limit) {
 async function mastodonStatus(env, id) {
   const row = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
-            name, summary, visibility, published_at, in_reply_to, media_attachments
+            name, summary, visibility, published_at, in_reply_to, media_attachments,
+            (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
      FROM posts
      WHERE id = ?1
        AND visibility = 'public'
@@ -1808,9 +2005,9 @@ function statusJson(row, account) {
     created_at: row.published_at,
     edited_at: null,
     emojis: [],
-    replies_count: 0,
-    reblogs_count: 0,
-    favourites_count: 0,
+    replies_count: Number(row.reply_count || 0),
+    reblogs_count: Number(row.boost_count || 0),
+    favourites_count: Number(row.like_count || 0),
     reblogged: false,
     favourited: false,
     muted: false,
@@ -1865,6 +2062,272 @@ function mastodonStatusContent(row) {
   if (row.summary) parts.push(`<p>${escapeHtml(row.summary)}</p>`);
   parts.push(row.content_html || escapeHtml(row.content || ''));
   return parts.join('');
+}
+
+async function mastodonUpdateStatus(env, id, { text, summary }) {
+  const existing = await mastodonStatus(env, id);
+  if (!existing) return null;
+  const assignments = ['updated_at = CURRENT_TIMESTAMP'];
+  const values = [];
+  if (text) {
+    values.push(text);
+    assignments.push(`content = ?${values.length}`);
+    values.push(`<p>${escapeHtml(text).replaceAll('\n', '<br>')}</p>`);
+    assignments.push(`content_html = ?${values.length}`);
+  }
+  values.push(summary);
+  assignments.push(`summary = ?${values.length}`);
+  values.push(id);
+  await env.DB.prepare(
+    `UPDATE posts SET ${assignments.join(', ')} WHERE id = ?${values.length}`,
+  ).bind(...values).run();
+  return mastodonStatus(env, id);
+}
+
+async function mastodonDeleteStatus(env, id) {
+  const existing = await mastodonStatus(env, id);
+  if (!existing) return null;
+  const localActor = await ownerLocalActor(env);
+  const now = new Date().toISOString();
+  const deleteId = `${localActor.id}#deletes/${stableId(`${id}\n${now}`).slice(0, 16)}`;
+  const activity = {
+    '@context': 'https://www.w3.org/ns/activitystreams',
+    id: deleteId,
+    type: 'Delete',
+    actor: localActor.id,
+    published: now,
+    to: ['https://www.w3.org/ns/activitystreams#Public'],
+    cc: [`${localActor.id}/followers`],
+    object: {
+      id,
+      type: 'Tombstone',
+    },
+  };
+  const rows = await env.DB.prepare(
+    `SELECT COALESCE(NULLIF(follower_shared_inbox, ''), follower_inbox) AS inbox
+     FROM followers
+     WHERE status = 'approved'`,
+  ).all();
+  await insertDeliveryRows(env, id, (rows.results || []).map((row) => row.inbox), 'Delete', JSON.stringify(activity));
+  await env.DB.prepare("DELETE FROM posts WHERE id = ?1").bind(id).run();
+  return existing;
+}
+
+async function mastodonToggleStatusInteraction(env, statusId, action) {
+  const localActor = await ownerLocalActor(env);
+  const type = action === 'favourite' || action === 'unfavourite' ? 'like' : 'boost';
+  const interactionId = `${localActor.id}#${type}s/${stableId(statusId).slice(0, 16)}`;
+  if (action === 'unfavourite' || action === 'unreblog') {
+    await env.DB.prepare("DELETE FROM interactions WHERE id = ?1").bind(interactionId).run();
+    return;
+  }
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO interactions (
+       id, type, actor_id, object_url, created_at
+     ) VALUES (?1, ?2, ?3, ?4, ?5)`,
+  ).bind(interactionId, type, localActor.id, statusId, new Date().toISOString()).run();
+}
+
+async function mastodonStatusesByInteraction(env, type, limit) {
+  const rows = await env.DB.prepare(
+    `SELECT p.id, p.actor_id, p.content, p.content_html, COALESCE(p.object_type, 'Note') AS object_type,
+            p.name, p.summary, p.visibility, p.published_at, p.in_reply_to, p.media_attachments,
+            (SELECT COUNT(*) FROM replies r WHERE r.post_id = p.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+            (SELECT COUNT(*) FROM interactions li WHERE (li.post_id = p.id OR li.object_url = p.id) AND li.type = 'like') AS like_count,
+            (SELECT COUNT(*) FROM interactions bi WHERE (bi.post_id = p.id OR bi.object_url = p.id) AND bi.type = 'boost') AS boost_count
+     FROM posts p
+     JOIN interactions i ON i.object_url = p.id OR i.post_id = p.id
+     WHERE i.type = ?1
+       AND p.visibility = 'public'
+       AND p.encrypted_message IS NULL
+       AND p.content NOT LIKE '%End-to-end encrypted message%'
+     ORDER BY i.created_at DESC
+     LIMIT ?2`,
+  ).bind(type, limit).all();
+  const account = await mastodonAccount(env);
+  return (rows.results || []).map((row) => statusJson(row, account));
+}
+
+async function mastodonRelationships(env, ids) {
+  const uniqueIds = [...new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean))];
+  const relationships = [];
+  for (const id of uniqueIds) {
+    const [following, followedBy, blocked] = await Promise.all([
+      env.DB.prepare("SELECT status FROM following WHERE target_actor_id = ?1 LIMIT 1").bind(id).first(),
+      env.DB.prepare("SELECT status FROM followers WHERE follower_actor_id = ?1 LIMIT 1").bind(id).first(),
+      env.DB.prepare("SELECT 1 FROM blocks WHERE actor_id = ?1 OR blocked_domain = ?1 LIMIT 1").bind(id).first(),
+    ]);
+    relationships.push({
+      id,
+      following: following?.status === 'accepted',
+      showing_reblogs: true,
+      notifying: false,
+      followed_by: followedBy?.status === 'approved',
+      blocking: Boolean(blocked),
+      blocked_by: false,
+      muting: false,
+      muting_notifications: false,
+      requested: following?.status === 'pending',
+      domain_blocking: false,
+      endorsed: false,
+      note: '',
+    });
+  }
+  return relationships;
+}
+
+async function mastodonSetBlock(env, actorId, enabled) {
+  if (enabled) {
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO blocks (id, actor_id, reason, created_at)
+       VALUES (?1, ?2, 'Mastodon API block', CURRENT_TIMESTAMP)`,
+    ).bind(`block-${stableId(actorId)}`, actorId).run();
+  } else {
+    await env.DB.prepare("DELETE FROM blocks WHERE actor_id = ?1").bind(actorId).run();
+  }
+}
+
+async function mastodonBlocks(env, limit) {
+  const rows = await env.DB.prepare(
+    `SELECT actor_id, actor_id AS url, created_at
+     FROM blocks
+     WHERE actor_id IS NOT NULL AND actor_id != ''
+     ORDER BY created_at DESC
+     LIMIT ?1`,
+  ).bind(limit).all();
+  return (rows.results || []).map(remoteAccountJson);
+}
+
+async function mastodonSearch(env, query, limit) {
+  const term = String(query || '').trim();
+  if (!term) return { accounts: [], statuses: [], hashtags: [] };
+  if (term.startsWith('@') || term.startsWith('https://')) {
+    try {
+      const actor = await ownerDiscoverActor(env, term);
+      return {
+        accounts: [remoteAccountJson({ actor_id: actor.id, url: actor.id, created_at: new Date(0).toISOString() })],
+        statuses: [],
+        hashtags: [],
+      };
+    } catch {
+      // Fall through to status search.
+    }
+  }
+  const rows = await env.DB.prepare(
+    `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+            name, summary, visibility, published_at, in_reply_to, media_attachments,
+            (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
+     FROM posts
+     WHERE visibility = 'public'
+       AND encrypted_message IS NULL
+       AND content NOT LIKE '%End-to-end encrypted message%'
+       AND (content LIKE ?1 OR name LIKE ?1 OR summary LIKE ?1)
+     ORDER BY published_at DESC
+     LIMIT ?2`,
+  ).bind(`%${term}%`, limit).all();
+  const account = await mastodonAccount(env);
+  return {
+    accounts: [],
+    statuses: (rows.results || []).map((row) => statusJson(row, account)),
+    hashtags: [],
+  };
+}
+
+async function mastodonConversations(env, limit) {
+  const rows = await env.DB.prepare(
+    `SELECT id, participants, last_message_at
+     FROM conversations
+     ORDER BY last_message_at DESC
+     LIMIT ?1`,
+  ).bind(limit).all();
+  return (rows.results || []).map((row) => ({
+    id: row.id,
+    unread: false,
+    last_status: null,
+    accounts: parseJsonArray(row.participants).map((actorId) => remoteAccountJson({ actor_id: actorId, url: actorId })),
+  }));
+}
+
+async function mastodonUploadMedia(request, env) {
+  const body = await readRequestBody(request);
+  let file = body.file || body['file[]'];
+  let filename = String(body.filename || body.description || 'upload.bin');
+  let mediaType = String(body.media_type || body.content_type || '');
+  let dataBase64 = body.data_base64 || null;
+  if (file && typeof file === 'object' && typeof file.arrayBuffer === 'function') {
+    filename = file.name || filename;
+    mediaType = file.type || mediaType || mediaTypeForFilename(filename);
+    dataBase64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+  }
+  if (!dataBase64) throw new Error('file is required');
+  const uploaded = await ownerUploadMedia(env, {
+    filename,
+    data_base64: dataBase64,
+    media_type: mediaType || mediaTypeForFilename(filename),
+    access: 'public',
+  });
+  return mastodonMediaAttachmentFromUpload(uploaded, body.description || null);
+}
+
+function mastodonMediaAttachmentFromUpload(uploaded, description = null) {
+  const attachment = uploaded.attachment || {};
+  const url = uploaded.url || attachment.url;
+  const mediaType = uploaded.media_type || attachment.mediaType || '';
+  return {
+    id: url,
+    type: mediaType.startsWith('image/') ? 'image' : mediaType.startsWith('video/') ? 'video' : 'unknown',
+    url,
+    preview_url: url,
+    remote_url: null,
+    preview_remote_url: null,
+    text_url: null,
+    meta: {},
+    description: description || attachment.name || null,
+    blurhash: null,
+  };
+}
+
+async function mastodonAttachmentsForMediaIds(env, mediaIds, visibility) {
+  return mediaIds.map((id) => {
+    const url = String(id || '').trim();
+    if (!url) return null;
+    if (visibility === 'followers' || visibility === 'direct') {
+      if (!isPrivateMediaAttachment({ url })) {
+        throw new Error('Mastodon API private media posts require private media URLs');
+      }
+    }
+    return {
+      type: 'Document',
+      url,
+      mediaType: mediaTypeForFilename(url),
+      name: decodeURIComponent(url.split('/').pop() || 'media'),
+    };
+  }).filter(Boolean);
+}
+
+function requestBodyArray(body, key) {
+  const bracket = `${key}[]`;
+  const value = body[bracket] !== undefined ? body[bracket] : body[key];
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (value === undefined || value === null || value === '') return [];
+  return [String(value)];
+}
+
+function parseJsonArray(value) {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 async function mastodonNotifications(env, limit) {
@@ -1967,7 +2430,17 @@ async function readRequestBody(request) {
   if (contentType.includes('application/json')) return readJson(request);
   if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
     const form = await request.formData();
-    return Object.fromEntries(form.entries());
+    const body = {};
+    for (const [key, value] of form.entries()) {
+      if (body[key] === undefined) {
+        body[key] = value;
+      } else if (Array.isArray(body[key])) {
+        body[key].push(value);
+      } else {
+        body[key] = [body[key], value];
+      }
+    }
+    return body;
   }
   return {};
 }
@@ -1986,9 +2459,16 @@ function mastodonVisibility(value) {
   return 'private';
 }
 
-function requireBearer(request) {
+function requireBearer(request, env = {}) {
+  const configured = configuredOwnerToken(env);
+  const isProduction = env.ENVIRONMENT === 'production';
+  if (!configured && isProduction) {
+    return apiJson({ error: 'OWNER_API_TOKEN is not configured' }, 503);
+  }
+  const expected = configured || 'dais-local-owner-token';
   const auth = request.headers.get('Authorization') || '';
-  if (auth.startsWith('Bearer ') && auth.slice(7).trim()) return null;
+  const provided = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (provided && provided === expected) return null;
   return apiJson({ error: 'Bearer token required' }, 401);
 }
 
@@ -2011,7 +2491,7 @@ function apiJson(value, status = 200) {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     },
   });
 }

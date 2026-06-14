@@ -5,6 +5,36 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.0] - 2026-06-14
+
+### Added
+- Expanded the Mastodon-compatible API toward v0.27 parity:
+  - account credential update and relationship reads
+  - follow/unfollow/block/unblock compatibility actions
+  - favourites, bookmarks, conversations, search, filters, lists, markers,
+    reports, and streaming placeholder endpoints
+  - status edit/delete support, with deletes queueing ActivityPub `Delete`
+    delivery to approved followers
+  - Mastodon media upload endpoints for public media attachments
+  - notification clear/dismiss endpoints
+- Added `docs/reference/MASTODON_API_PARITY.md` as the v0.27 endpoint matrix.
+- Added `npm run test:mastodon-api-conformance` for public and authenticated
+  Mastodon API compatibility smoke checks.
+
+### Changed
+- Mastodon status JSON now reports reply, favourite, and reblog counts from
+  stored dais interactions.
+- Mastodon API bearer authentication now validates the configured owner token
+  instead of accepting any bearer value.
+- The OAuth token endpoint returns a placeholder instead of revealing or minting
+  the production owner token; production clients need an owner-provisioned token
+  until a real consent screen exists.
+
+### Security
+- Rotated the production `OWNER_API_TOKEN` after a short-lived deployment exposed
+  it through `/oauth/token`. The current replacement token is stored locally at
+  `/private/tmp/dais-owner-token-20260614.txt` with `0600` permissions.
+
 ## [1.26.0] - 2026-06-12
 
 ### Added
