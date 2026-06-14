@@ -38,6 +38,9 @@ type OwnerSnapshot = {
     in_reply_to?: string | null;
     published_at?: string | null;
     protocol?: string | null;
+    reply_count?: number;
+    like_count?: number;
+    boost_count?: number;
   }>;
   posts: Array<{
     id: string;
@@ -47,6 +50,9 @@ type OwnerSnapshot = {
     protocol: ProtocolRoute | string;
     encrypted: boolean;
     attachments?: Array<{ url?: string; mediaType?: string; name?: string }>;
+    reply_count?: number;
+    like_count?: number;
+    boost_count?: number;
     published_at?: string | null;
   }>;
   followers: Array<{
@@ -457,6 +463,7 @@ function postCard(post: OwnerSnapshot["posts"][number]) {
       <span>${escapeHtml(String(post.protocol))}</span>
       ${post.encrypted ? "<span>E2EE</span>" : ""}
       ${post.attachments?.length ? `<span>${post.attachments.length} media</span>` : ""}
+      ${interactionCounts(post)}
       ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
     </footer>
   </article>`;
@@ -474,11 +481,20 @@ function timelineCard(post: OwnerSnapshot["home_timeline"][number]) {
       ${post.protocol ? `<span>${escapeHtml(post.protocol)}</span>` : ""}
       ${post.in_reply_to ? "<span>reply</span>" : ""}
       ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
+      ${interactionCounts(post)}
       <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.object_id)}">Reply</button>
       <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.object_id)}">Like</button>
       <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost</button>
     </footer>
   </article>`;
+}
+
+function interactionCounts(post: { reply_count?: number; like_count?: number; boost_count?: number }) {
+  const parts = [];
+  if (post.reply_count) parts.push(`<span>${post.reply_count} replies</span>`);
+  if (post.like_count) parts.push(`<span>${post.like_count} likes</span>`);
+  if (post.boost_count) parts.push(`<span>${post.boost_count} boosts</span>`);
+  return parts.join("");
 }
 
 function sourceCard(source: OwnerSnapshot["sources"][number]) {

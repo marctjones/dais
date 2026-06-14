@@ -22,7 +22,7 @@ use cli::{
 };
 use config::ConfigStore;
 use d1::D1Client;
-use dais_client_core::{OwnerApiClient, OwnerInteraction, OwnerSnapshot};
+use dais_client_core::{OwnerApiClient, OwnerInteraction, OwnerPostDetail, OwnerSnapshot};
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
     ActivityOutcome, PostDraft, PostOutcome,
@@ -1002,6 +1002,13 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 );
             }
         }
+        OwnerCommand::Post(args) => {
+            let detail = owner_api(&args.api)
+                .post_detail(&args.object_id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_post_detail(&detail);
+        }
         OwnerCommand::Follow(args) => {
             let result = owner_api(&args.api)
                 .follow_actor(&args.target)
@@ -1082,6 +1089,25 @@ fn print_owner_snapshot(snapshot: &OwnerSnapshot) {
             diagnostic.detail
         );
     }
+}
+
+fn print_owner_post_detail(detail: &OwnerPostDetail) {
+    println!("id={}", detail.post.id);
+    println!("visibility={:?}", detail.post.visibility);
+    println!("protocol={:?}", detail.post.protocol);
+    if let Some(reply_to) = detail.in_reply_to.as_deref() {
+        println!("reply_to={reply_to}");
+    }
+    println!(
+        "published_at={}",
+        detail.post.published_at.as_deref().unwrap_or("")
+    );
+    println!("attachments={}", detail.post.attachments.len());
+    println!(
+        "replies={} likes={} boosts={}",
+        detail.post.reply_count, detail.post.like_count, detail.post.boost_count
+    );
+    println!("{}", detail.post.content);
 }
 
 async fn handle_notifications(command: NotificationsCommand) -> Result<()> {

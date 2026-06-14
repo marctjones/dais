@@ -600,6 +600,13 @@ async function handleOwnerApi(request, env, url) {
     });
   }
 
+  const postDetail = path.match(/^\/posts\/(.+)$/);
+  if (request.method === 'GET' && postDetail) {
+    const post = await ownerPostDetail(env, decodeURIComponent(postDetail[1]));
+    if (!post) return apiJson({ error: 'post not found' }, 404);
+    return apiJson(post);
+  }
+
   if (request.method === 'GET' && path === '/timeline/home') {
     return apiJson({
       items: await ownerHomeTimeline(env, clampLimit(url.searchParams.get('limit'))),
@@ -769,6 +776,9 @@ async function ownerSnapshot(env) {
       in_reply_to: post.in_reply_to || null,
       published_at: post.published_at || null,
       protocol: post.protocol || 'activitypub',
+      reply_count: Number(post.reply_count || 0),
+      like_count: Number(post.like_count || 0),
+      boost_count: Number(post.boost_count || 0),
     })),
     posts: posts.map((post) => ({
       id: post.id,
@@ -778,6 +788,9 @@ async function ownerSnapshot(env) {
       protocol: titleProtocol(post.protocol),
       encrypted: Boolean(post.encrypted_message),
       attachments: parseAttachmentArray(post.media_attachments),
+      reply_count: Number(post.reply_count || 0),
+      like_count: Number(post.like_count || 0),
+      boost_count: Number(post.boost_count || 0),
       published_at: post.published_at || null,
     })),
     followers,
@@ -875,7 +888,10 @@ async function ownerPosts(env, limit) {
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
             name, summary, visibility, COALESCE(protocol, 'activitypub') AS protocol,
             atproto_uri, atproto_cid, encrypted_message, media_attachments,
-            published_at, created_at, updated_at
+            published_at, created_at, updated_at,
+            (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
      FROM posts
      ORDER BY published_at DESC
      LIMIT ?1`,
@@ -883,11 +899,76 @@ async function ownerPosts(env, limit) {
   return rows.results || [];
 }
 
+async function ownerPostDetail(env, id) {
+  const post = await env.DB.prepare(
+    `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+            name, summary, visibility, COALESCE(protocol, 'activitypub') AS protocol,
+            atproto_uri, atproto_cid, encrypted_message, media_attachments,
+            published_at, created_at, updated_at, in_reply_to,
+            (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
+     FROM posts
+     WHERE id = ?1
+     LIMIT 1`,
+  ).bind(id).first();
+  if (!post) return null;
+  const [replies, likes, boosts] = await Promise.all([
+    ownerPostReplies(env, id),
+    ownerPostInteractions(env, id, 'like'),
+    ownerPostInteractions(env, id, 'boost'),
+  ]);
+  return {
+    id: post.id,
+    actor_id: post.actor_id,
+    title: post.name || null,
+    content: post.content || '',
+    content_html: post.content_html || null,
+    visibility: titleVisibility(post.visibility),
+    protocol: titleProtocol(post.protocol),
+    encrypted: Boolean(post.encrypted_message),
+    attachments: parseAttachmentArray(post.media_attachments),
+    in_reply_to: post.in_reply_to || null,
+    published_at: post.published_at || null,
+    reply_count: Number(post.reply_count || 0),
+    like_count: Number(post.like_count || 0),
+    boost_count: Number(post.boost_count || 0),
+    replies,
+    likes,
+    boosts,
+  };
+}
+
+async function ownerPostReplies(env, id) {
+  const rows = await env.DB.prepare(
+    `SELECT id, actor_id, actor_username, actor_display_name, actor_avatar_url,
+            content, published_at, created_at
+     FROM replies
+     WHERE post_id = ?1 AND (hidden IS NULL OR hidden = 0)
+     ORDER BY published_at ASC`,
+  ).bind(id).all();
+  return rows.results || [];
+}
+
+async function ownerPostInteractions(env, id, type) {
+  const rows = await env.DB.prepare(
+    `SELECT id, actor_id, actor_username, actor_display_name, actor_avatar_url,
+            object_url, created_at
+     FROM interactions
+     WHERE (post_id = ?1 OR object_url = ?1) AND type = ?2
+     ORDER BY created_at DESC`,
+  ).bind(id, type).all();
+  return rows.results || [];
+}
+
 async function ownerHomeTimeline(env, limit) {
   const rows = await env.DB.prepare(
     `SELECT id, object_id, actor_id, actor_username, actor_display_name, actor_avatar_url,
             content, content_html, visibility, in_reply_to, published_at, updated_at,
-            protocol, created_at
+            protocol, created_at,
+            (SELECT COUNT(*) FROM replies r WHERE r.post_id = timeline_posts.object_id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = timeline_posts.object_id OR i.object_url = timeline_posts.object_id) AND i.type = 'like') AS like_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = timeline_posts.object_id OR i.object_url = timeline_posts.object_id) AND i.type = 'boost') AS boost_count
      FROM timeline_posts
      WHERE deleted_at IS NULL
      ORDER BY published_at DESC

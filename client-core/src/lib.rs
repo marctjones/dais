@@ -26,6 +26,11 @@ impl OwnerApiClient {
         self.get("/api/dais/owner/snapshot").await
     }
 
+    pub async fn post_detail(&self, id: &str) -> ClientResult<OwnerPostDetail> {
+        self.get(&format!("/api/dais/owner/posts/{}", url_encode(id)))
+            .await
+    }
+
     pub async fn create_post(&self, draft: &ComposeDraft) -> ClientResult<OwnerCreatedPost> {
         self.post("/api/dais/owner/posts", draft).await
     }
@@ -172,6 +177,12 @@ pub struct OwnerPost {
     pub encrypted: bool,
     #[serde(default)]
     pub attachments: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub reply_count: u64,
+    #[serde(default)]
+    pub like_count: u64,
+    #[serde(default)]
+    pub boost_count: u64,
     pub published_at: Option<String>,
 }
 
@@ -189,6 +200,26 @@ pub struct OwnerTimelinePost {
     pub in_reply_to: Option<String>,
     pub published_at: Option<String>,
     pub protocol: Option<String>,
+    #[serde(default)]
+    pub reply_count: u64,
+    #[serde(default)]
+    pub like_count: u64,
+    #[serde(default)]
+    pub boost_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerPostDetail {
+    #[serde(flatten)]
+    pub post: OwnerPost,
+    pub content_html: Option<String>,
+    pub in_reply_to: Option<String>,
+    #[serde(default)]
+    pub replies: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub likes: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub boosts: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -376,6 +407,19 @@ pub fn route_warning(draft: &ComposeDraft) -> Option<&'static str> {
         ) => Some("Private ActivityPub visibility is not representable on Bluesky."),
         _ => None,
     }
+}
+
+fn url_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 #[cfg(test)]

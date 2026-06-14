@@ -761,6 +761,8 @@ pub enum OwnerCommand {
     Timeline(OwnerTimelineArgs),
     /// List actors followed by the live instance.
     Following(OwnerApiArgs),
+    /// Show a live owner API post detail and interaction counts.
+    Post(OwnerObjectArgs),
     /// Follow an ActivityPub actor by URL or @user@domain handle.
     Follow(OwnerFollowArgs),
     /// Unfollow an ActivityPub actor by URL or @user@domain handle.
