@@ -104,6 +104,19 @@ type FollowResult = {
   delivery_ids: string[];
 };
 
+type DiscoveredActor = {
+  id: string;
+  inbox: string;
+  shared_inbox?: string | null;
+  preferred_username?: string | null;
+  name?: string | null;
+  summary?: string | null;
+  url?: string | null;
+  icon_url?: string | null;
+  handle?: string | null;
+  following_status?: string | null;
+};
+
 type InteractionResult = {
   ok: boolean;
   activity_id: string;
@@ -122,6 +135,7 @@ type UploadedMedia = {
 const sections = [
   "Home",
   "Following",
+  "Discovery",
   "Compose",
   "Posts",
   "Sources",
@@ -139,6 +153,7 @@ let active = "Home";
 let notice = "";
 let draftAttachments: string[] = [];
 let draftReplyTo = "";
+let discoveredActor: DiscoveredActor | null = null;
 
 async function load() {
   render();
@@ -210,6 +225,10 @@ function render() {
     });
   });
   app.querySelector<HTMLFormElement>("#follow-form")?.addEventListener("submit", followActor);
+  app.querySelector<HTMLFormElement>("#discover-form")?.addEventListener("submit", discoverActor);
+  app.querySelector<HTMLButtonElement>("[data-follow-discovered]")?.addEventListener("click", () => {
+    void followTarget(discoveredActor?.id || "");
+  });
   app.querySelectorAll<HTMLButtonElement>("[data-follower-status]").forEach((button) => {
     button.addEventListener("click", () => {
       const follower = button.dataset.follower || "";
@@ -250,6 +269,8 @@ function view(section: string, data: OwnerSnapshot): string {
       return dashboardView(data);
     case "Following":
       return followingView(data);
+    case "Discovery":
+      return discoveryView();
     case "Compose":
       return composeView(data);
     case "Posts":
@@ -309,6 +330,22 @@ function followingView(data: OwnerSnapshot) {
       </form>
       <h2 class="section-label">Following</h2>
       ${list(data.following.map(followingCard), "No followed actors yet.")}
+    </article>
+  </section>`;
+}
+
+function discoveryView() {
+  return `<section class="split">
+    <article class="panel">
+      <h2>Find actor</h2>
+      <form id="discover-form" class="inline-form">
+        <input name="target" placeholder="@user@example.social or https://..." />
+        <button type="submit">Lookup</button>
+      </form>
+    </article>
+    <article class="panel">
+      <h2>Actor preview</h2>
+      ${discoveredActor ? discoveredActorCard(discoveredActor) : `<p>No actor selected.</p>`}
     </article>
   </section>`;
 }
@@ -541,6 +578,25 @@ function followingCard(row: OwnerSnapshot["following"][number]) {
   </article>`;
 }
 
+function discoveredActorCard(actor: DiscoveredActor) {
+  const title = actor.name || actor.handle || actor.preferred_username || actor.id;
+  const status = actor.following_status || "not-following";
+  return `<article class="item actor-preview">
+    <div>
+      ${actor.icon_url ? `<img class="avatar" src="${escapeAttr(actor.icon_url)}" alt="" />` : ""}
+      <h2>${escapeHtml(title)}</h2>
+      ${actor.handle ? `<p>${escapeHtml(actor.handle)}</p>` : ""}
+      ${actor.summary ? `<p>${escapeHtml(stripTags(actor.summary))}</p>` : ""}
+    </div>
+    <footer>
+      <span>${escapeHtml(status)}</span>
+      <a href="${escapeAttr(actor.url || actor.id)}">${escapeHtml(shortUrl(actor.url || actor.id))}</a>
+      <span>${escapeHtml(shortUrl(actor.inbox))}</span>
+      <button type="button" data-follow-discovered="1">Follow</button>
+    </footer>
+  </article>`;
+}
+
 function recipientOption(row: OwnerSnapshot["followers"][number]) {
   const value = row.follower_actor_id;
   return `<label class="recipient-option">
@@ -695,9 +751,36 @@ async function followActor(event: SubmitEvent) {
     render();
     return;
   }
+  await followTarget(target);
+}
+
+async function followTarget(target: string) {
+  if (!target) {
+    notice = "Enter an ActivityPub actor URL or handle.";
+    render();
+    return;
+  }
   const result = await invoke<FollowResult>("follow_actor", { target });
   notice = `Follow requested for ${actorLabel(result.following.target_actor_id)}.`;
+  discoveredActor =
+    discoveredActor?.id === result.following.target_actor_id
+      ? { ...discoveredActor, following_status: result.following.status }
+      : discoveredActor;
   await load();
+}
+
+async function discoverActor(event: SubmitEvent) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  const target = String(form.get("target") || "").trim();
+  if (!target) {
+    notice = "Enter an ActivityPub actor URL or handle.";
+    render();
+    return;
+  }
+  discoveredActor = await invoke<DiscoveredActor>("discover_actor", { target });
+  notice = `Resolved ${discoveredActor.handle || actorLabel(discoveredActor.id)}.`;
+  render();
 }
 
 async function unfollowActor(target: string) {
@@ -763,6 +846,10 @@ function isPrivateAttachment(value: string) {
   } catch {
     return false;
   }
+}
+
+function stripTags(value: string) {
+  return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function actorLabel(value: string) {

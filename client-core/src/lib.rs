@@ -31,6 +31,11 @@ impl OwnerApiClient {
             .await
     }
 
+    pub async fn discover_actor(&self, target: &str) -> ClientResult<OwnerDiscoveredActor> {
+        self.post("/api/dais/owner/discovery/actor", &FollowTarget { target })
+            .await
+    }
+
     pub async fn create_post(&self, draft: &ComposeDraft) -> ClientResult<OwnerCreatedPost> {
         self.post("/api/dais/owner/posts", draft).await
     }
@@ -309,6 +314,20 @@ pub struct OwnerFollowResult {
     pub ok: bool,
     pub following: OwnerFollowing,
     pub delivery_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerDiscoveredActor {
+    pub id: String,
+    pub inbox: String,
+    pub shared_inbox: Option<String>,
+    pub preferred_username: Option<String>,
+    pub name: Option<String>,
+    pub summary: Option<String>,
+    pub url: Option<String>,
+    pub icon_url: Option<String>,
+    pub handle: Option<String>,
+    pub following_status: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

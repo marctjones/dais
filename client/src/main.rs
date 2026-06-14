@@ -22,7 +22,9 @@ use cli::{
 };
 use config::ConfigStore;
 use d1::D1Client;
-use dais_client_core::{OwnerApiClient, OwnerInteraction, OwnerPostDetail, OwnerSnapshot};
+use dais_client_core::{
+    OwnerApiClient, OwnerDiscoveredActor, OwnerInteraction, OwnerPostDetail, OwnerSnapshot,
+};
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
     ActivityOutcome, PostDraft, PostOutcome,
@@ -1002,6 +1004,13 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 );
             }
         }
+        OwnerCommand::Discover(args) => {
+            let actor = owner_api(&args.api)
+                .discover_actor(&args.target)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_discovered_actor(&actor);
+        }
         OwnerCommand::Post(args) => {
             let detail = owner_api(&args.api)
                 .post_detail(&args.object_id)
@@ -1089,6 +1098,41 @@ fn print_owner_snapshot(snapshot: &OwnerSnapshot) {
             diagnostic.detail
         );
     }
+}
+
+fn print_owner_discovered_actor(actor: &OwnerDiscoveredActor) {
+    println!(
+        "actor={}",
+        actor
+            .handle
+            .as_deref()
+            .or(actor.name.as_deref())
+            .unwrap_or(&actor.id)
+    );
+    println!("id={}", actor.id);
+    if let Some(name) = actor.name.as_deref() {
+        println!("name={name}");
+    }
+    if let Some(username) = actor.preferred_username.as_deref() {
+        println!("preferred_username={username}");
+    }
+    if let Some(summary) = actor.summary.as_deref() {
+        println!("summary={summary}");
+    }
+    if let Some(url) = actor.url.as_deref() {
+        println!("url={url}");
+    }
+    if let Some(icon_url) = actor.icon_url.as_deref() {
+        println!("icon={icon_url}");
+    }
+    println!("inbox={}", actor.inbox);
+    if let Some(shared_inbox) = actor.shared_inbox.as_deref() {
+        println!("shared_inbox={shared_inbox}");
+    }
+    println!(
+        "following_status={}",
+        actor.following_status.as_deref().unwrap_or("not-following")
+    );
 }
 
 fn print_owner_post_detail(detail: &OwnerPostDetail) {

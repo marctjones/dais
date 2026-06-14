@@ -1,8 +1,8 @@
 use dais_client_core::{
     ComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient, OwnerCreatedPost,
-    OwnerFollowResult, OwnerInteraction, OwnerInteractionResult, OwnerMedia, OwnerMediaUpload,
-    OwnerPost, OwnerProfile, OwnerProfileUpdate, OwnerSection, OwnerSettings, OwnerSnapshot,
-    ProtocolRoute, SourceItem, Visibility,
+    OwnerDiscoveredActor, OwnerFollowResult, OwnerInteraction, OwnerInteractionResult, OwnerMedia,
+    OwnerMediaUpload, OwnerPost, OwnerProfile, OwnerProfileUpdate, OwnerSection, OwnerSettings,
+    OwnerSnapshot, ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -91,6 +91,24 @@ async fn owner_interaction(
             object_id,
             interaction,
         })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn discover_actor(
+    app: tauri::AppHandle,
+    target: String,
+) -> Result<OwnerDiscoveredActor, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .discover_actor(&target)
         .await
         .map_err(|error| error.to_string())
 }
@@ -331,6 +349,7 @@ fn main() {
             create_owner_post,
             upload_owner_media,
             owner_interaction,
+            discover_actor,
             update_owner_profile,
             follow_actor,
             unfollow_actor,

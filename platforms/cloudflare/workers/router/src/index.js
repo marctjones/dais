@@ -641,6 +641,15 @@ async function handleOwnerApi(request, env, url) {
     });
   }
 
+  if (request.method === 'POST' && path === '/discovery/actor') {
+    const body = await readJson(request);
+    try {
+      return apiJson(await ownerDiscoverActor(env, String(body.target || '').trim()));
+    } catch (error) {
+      return apiJson({ error: error.message || 'actor discovery failed' }, 400);
+    }
+  }
+
   if (request.method === 'POST' && path === '/following/follow') {
     const body = await readJson(request);
     try {
@@ -1120,6 +1129,25 @@ async function ownerFollowActor(env, target) {
   };
 }
 
+async function ownerDiscoverActor(env, target) {
+  if (!target) throw new Error('target is required');
+  const localActor = await ownerLocalActor(env);
+  const remote = await resolveActivityPubActor(target);
+  const following = await ownerFollowingRow(env, localActor.id, remote.id);
+  return {
+    id: remote.id,
+    inbox: remote.inbox,
+    shared_inbox: remote.shared_inbox || null,
+    preferred_username: remote.preferred_username || null,
+    name: remote.name || null,
+    summary: remote.summary || null,
+    url: remote.url || null,
+    icon_url: remote.icon_url || null,
+    handle: actorHandle(remote),
+    following_status: following?.status || null,
+  };
+}
+
 async function ownerUnfollowActor(env, target) {
   if (!target) throw new Error('target is required');
   const localActor = await ownerLocalActor(env);
@@ -1261,8 +1289,20 @@ async function resolveActivityPubActor(target) {
     shared_inbox: actor.endpoints?.sharedInbox || null,
     preferred_username: actor.preferredUsername || null,
     name: actor.name || null,
+    summary: actor.summary || null,
+    icon_url: actor.icon?.url || null,
     url: actor.url || actorUrl,
   };
+}
+
+function actorHandle(actor) {
+  if (!actor.preferred_username) return null;
+  try {
+    const url = new URL(actor.id || actor.url);
+    return `@${actor.preferred_username}@${url.hostname}`;
+  } catch {
+    return null;
+  }
 }
 
 async function resolveActivityPubObjectInbox(objectId) {

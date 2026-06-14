@@ -348,7 +348,8 @@ select {
 .attachment-chip button,
 .reply-target button,
 .timeline button,
-.follower button {
+.follower button,
+.actor-preview button {
   min-width: 96px;
   border-color: #0f766e;
   background: #0f766e;
@@ -357,7 +358,8 @@ select {
 }
 
 .timeline button,
-.follower button {
+.follower button,
+.actor-preview button {
   min-width: auto;
   min-height: 28px;
   padding: 0 9px;
@@ -440,6 +442,26 @@ select {
 .item p {
   margin-top: 5px;
   white-space: pre-wrap;
+}
+
+.actor-preview > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: center;
+}
+
+.actor-preview > div p {
+  grid-column: 2;
+}
+
+.avatar {
+  grid-row: span 3;
+  width: 46px;
+  height: 46px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: #e8ede7;
 }
 
 .empty {
