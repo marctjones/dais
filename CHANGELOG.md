@@ -5,6 +5,17 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.1] - 2026-06-14
+
+### Fixed
+- Fixed Mastodon inbox verification for signed `Collection-Synchronization`
+  headers so Mastodon-originated replies to Dais posts are accepted and stored.
+- Fixed CLI notification decoding for D1 `read` values stored as `0`/`1`.
+
+### Changed
+- Pinned Rust Cloudflare Worker build commands to `worker-build 0.8.4` to keep
+  deploys compatible with the current `worker` crate lockfiles.
+
 ## [1.28.0] - 2026-06-14
 
 ### Added

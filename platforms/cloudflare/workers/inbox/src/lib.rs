@@ -97,6 +97,12 @@ async fn handle_inbox(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
     if let Some(content_type) = req.headers().get("Content-Type")? {
         headers_map.insert("content-type".to_string(), content_type);
     }
+    if let Some(collection_synchronization) = req.headers().get("Collection-Synchronization")? {
+        headers_map.insert(
+            "collection-synchronization".to_string(),
+            collection_synchronization,
+        );
+    }
 
     // Get request path
     let url = req.url()?;

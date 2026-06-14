@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 #[allow(dead_code)]
@@ -117,6 +117,7 @@ pub struct D1Notification {
     pub post_id: Option<String>,
     pub activity_id: Option<String>,
     pub content: Option<String>,
+    #[serde(default, deserialize_with = "optional_bool_from_d1")]
     pub read: Option<bool>,
     pub created_at: Option<String>,
 }
@@ -1507,6 +1508,32 @@ fn value_u64(row: &Value, key: &str) -> u64 {
     row.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
+fn optional_bool_from_d1<'de, D>(deserializer: D) -> std::result::Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(value)),
+        Some(Value::Number(value)) => match value.as_u64() {
+            Some(0) => Ok(Some(false)),
+            Some(1) => Ok(Some(true)),
+            _ => Err(serde::de::Error::custom(
+                "expected D1 boolean integer 0 or 1",
+            )),
+        },
+        Some(Value::String(value)) => match value.as_str() {
+            "0" => Ok(Some(false)),
+            "1" => Ok(Some(true)),
+            "false" => Ok(Some(false)),
+            "true" => Ok(Some(true)),
+            _ => Err(serde::de::Error::custom("expected D1 boolean string")),
+        },
+        Some(_) => Err(serde::de::Error::custom("expected D1 boolean value")),
+    }
+}
+
 fn clamp_limit(limit: u16) -> u16 {
     limit.clamp(1, 200)
 }
@@ -1584,7 +1611,20 @@ fn wrangler_bin() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{https_host, normalize_host, parse_wrangler_results};
+    use super::{https_host, normalize_host, parse_wrangler_results, D1Notification};
+
+    #[test]
+    fn notification_read_decodes_d1_integer_boolean() {
+        let row = serde_json::json!({
+            "id": "notification-1",
+            "kind": "like",
+            "actor_id": "https://mastodon.example/users/alice",
+            "read": 0
+        });
+
+        let notification: D1Notification = serde_json::from_value(row).unwrap();
+        assert_eq!(notification.read, Some(false));
+    }
 
     #[test]
     fn parses_wrangler_json_results_from_noisy_output() {

@@ -8,7 +8,7 @@ ACTIVITYPUB_DOMAIN = "social.dais.social"
 THEME = "cat-light"
 
 [build]
-command = 'PATH="/opt/homebrew/opt/rustup/bin:$PATH" cargo install -q worker-build && PATH="/opt/homebrew/opt/rustup/bin:$PATH" $HOME/.cargo/bin/worker-build --release'
+command = 'PATH="/opt/homebrew/opt/rustup/bin:$PATH" cargo install -q worker-build --version 0.8.4 --locked && PATH="/opt/homebrew/opt/rustup/bin:$PATH" $HOME/.cargo/bin/worker-build --release'
 
 [env.production]
 name = "outbox-production"
