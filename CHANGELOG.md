@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.18] - 2026-06-15
+
+### Changed
+- Moved the Rust TUI Deliveries tab from raw D1 reads to the live owner API
+  delivery endpoint, matching the CLI and Dais Desk delivery views.
+
 ## [1.28.17] - 2026-06-15
 
 ### Changed

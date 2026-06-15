@@ -20,14 +20,14 @@ use ratatui::{
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
 use crate::d1::{
-    D1Block, D1Client, D1Delivery, D1DirectMessage, D1Friend, D1Post, D1TimelinePost, D1User,
-    ServerStats,
+    D1Block, D1Client, D1DirectMessage, D1Friend, D1Post, D1TimelinePost, D1User, ServerStats,
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
-    OwnerApiClient, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing, OwnerInteraction,
-    OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerTimelinePost, SourceItem,
+    OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing,
+    OwnerInteraction, OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerTimelinePost,
+    SourceItem,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -285,7 +285,7 @@ enum TabData {
     Following(Vec<OwnerFollowing>),
     Notifications(Vec<OwnerNotification>),
     Profile(OwnerProfile),
-    Deliveries(Vec<D1Delivery>),
+    Deliveries(Vec<OwnerDelivery>),
     DMs(Vec<D1DirectMessage>),
     Search {
         posts: Vec<D1Post>,
@@ -371,7 +371,7 @@ struct App {
     following: Vec<OwnerFollowing>,
     notifications: Vec<OwnerNotification>,
     profile: Option<OwnerProfile>,
-    deliveries: Vec<D1Delivery>,
+    deliveries: Vec<OwnerDelivery>,
     direct_messages: Vec<D1DirectMessage>,
     search_posts: Vec<D1Post>,
     search_users: Vec<D1User>,
@@ -1928,8 +1928,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Profile(snapshot.profile))
         }
         Tab::Deliveries => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Deliveries(db.list_deliveries(50, None).await?))
+            let client = owner_api_from_env()?;
+            let deliveries = client
+                .deliveries()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Deliveries(deliveries))
         }
         Tab::DMs => {
             let db = D1Client::new(remote)?;
@@ -2075,13 +2079,15 @@ fn post_detail(post: &D1Post) -> String {
     )
 }
 
-fn delivery_detail(delivery: &D1Delivery) -> String {
+fn delivery_detail(delivery: &OwnerDelivery) -> String {
     format!(
-        "id: {}\npost: {}\ntarget: {}\nprotocol: {}\nstatus: {}\nretry count: {}\ncreated: {}\nlast attempt: {}\ndelivered: {}\nerror: {}",
+        "id: {}\npost: {}\ntarget type: {}\ntarget: {}\nprotocol: {}\nactivity: {}\nstatus: {}\nretry count: {}\ncreated: {}\nlast attempt: {}\ndelivered: {}\nerror: {}",
         delivery.id,
         delivery.post_id,
+        delivery.target_type.as_deref().unwrap_or(""),
         delivery.target_url,
         delivery.protocol,
+        delivery.activity_type.as_deref().unwrap_or(""),
         delivery.status,
         delivery.retry_count.unwrap_or(0),
         delivery.created_at.as_deref().unwrap_or(""),
