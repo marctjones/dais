@@ -20,14 +20,14 @@ use ratatui::{
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
 use crate::d1::{
-    D1Block, D1Client, D1Delivery, D1DirectMessage, D1FollowerRow, D1Friend, D1Notification,
-    D1Post, D1SourceItem, D1TimelinePost, D1User, ServerStats,
+    D1Block, D1Client, D1Delivery, D1DirectMessage, D1Friend, D1Notification, D1Post, D1SourceItem,
+    D1TimelinePost, D1User, ServerStats,
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
-    OwnerApiClient, OwnerDiscoveredActor, OwnerFollowing, OwnerInteraction, OwnerPostDetail,
-    OwnerProfile, OwnerTimelinePost,
+    OwnerApiClient, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing, OwnerInteraction,
+    OwnerPostDetail, OwnerProfile, OwnerTimelinePost,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -281,7 +281,7 @@ enum TabData {
     Home(Vec<D1TimelinePost>),
     Posts(Vec<D1Post>),
     Friends(Vec<D1Friend>),
-    Followers(Vec<D1FollowerRow>),
+    Followers(Vec<OwnerFollower>),
     Following(Vec<OwnerFollowing>),
     Notifications(Vec<D1Notification>),
     Profile(OwnerProfile),
@@ -367,7 +367,7 @@ struct App {
     home: Vec<D1TimelinePost>,
     posts: Vec<D1Post>,
     friends: Vec<crate::d1::D1Friend>,
-    followers: Vec<D1FollowerRow>,
+    followers: Vec<OwnerFollower>,
     following: Vec<OwnerFollowing>,
     notifications: Vec<D1Notification>,
     profile: Option<OwnerProfile>,
@@ -876,36 +876,24 @@ impl App {
         let Some(row) = self.followers.get(self.selected(Tab::Followers)) else {
             return;
         };
-        let actor_id = row.actor_id.clone();
         let follower = row.follower_actor_id.clone();
         let tx = self.tx.clone();
-        let remote = self.remote;
         self.status = format!("Approving {follower}");
         tokio::spawn(async move {
-            let db = match D1Client::new(remote) {
-                Ok(db) => db,
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
                     return;
                 }
             };
-            match db.approve_follower(&actor_id, &follower).await {
-                Ok(()) => match crate::delivery::send_follower_accept(
-                    default_base_url(remote),
-                    &actor_id,
-                    &follower,
-                )
-                .await
-                {
-                    Ok(_) => {
-                        let _ = tx.send(Message::Status(format!("Approved {follower}")));
-                        let _ = tx.send(Message::Refresh(Tab::Followers));
-                        let _ = tx.send(Message::Refresh(Tab::Friends));
-                    }
-                    Err(error) => {
-                        let _ = tx.send(Message::Error(error.to_string()));
-                    }
-                },
+            match client.set_follower_status(&follower, "approved").await {
+                Ok(_) => {
+                    let _ = tx.send(Message::Status(format!("Approved {follower}")));
+                    let _ = tx.send(Message::Refresh(Tab::Followers));
+                    let _ = tx.send(Message::Refresh(Tab::Friends));
+                    let _ = tx.send(Message::Refresh(Tab::Stats));
+                }
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
                 }
@@ -917,23 +905,22 @@ impl App {
         let Some(row) = self.followers.get(self.selected(Tab::Followers)) else {
             return;
         };
-        let actor_id = row.actor_id.clone();
         let follower = row.follower_actor_id.clone();
         let tx = self.tx.clone();
-        let remote = self.remote;
         self.status = format!("Rejecting {follower}");
         tokio::spawn(async move {
-            let db = match D1Client::new(remote) {
-                Ok(db) => db,
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
                     return;
                 }
             };
-            match db.reject_follower(&actor_id, &follower).await {
-                Ok(()) => {
+            match client.set_follower_status(&follower, "rejected").await {
+                Ok(_) => {
                     let _ = tx.send(Message::Status(format!("Rejected {follower}")));
                     let _ = tx.send(Message::Refresh(Tab::Followers));
+                    let _ = tx.send(Message::Refresh(Tab::Stats));
                 }
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
@@ -1916,8 +1903,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             ))
         }
         Tab::Followers => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Followers(db.list_followers(50).await?))
+            let client = owner_api_from_env()?;
+            let snapshot = client
+                .snapshot()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Followers(snapshot.followers))
         }
         Tab::Following => {
             let client = owner_api_from_env()?;
@@ -2099,14 +2090,6 @@ fn encryption_state(encrypted: bool) -> &'static str {
         "[encrypted]"
     } else {
         "[plaintext]"
-    }
-}
-
-fn default_base_url(remote: bool) -> &'static str {
-    if remote {
-        "https://social.dais.social"
-    } else {
-        "http://localhost:8790"
     }
 }
 

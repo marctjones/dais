@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.15] - 2026-06-15
+
+### Changed
+- Moved the Rust TUI Followers tab and approve/reject actions to the live owner
+  API.
+
+### Fixed
+- Owner API follower approval now queues an ActivityPub Accept delivery, so GUI,
+  CLI, and TUI approval paths share the same server-side federation behavior.
+- Updated ActivityPub conformance and federation-matrix public object fixtures
+  to use the retained release announcement after public test-post cleanup.
+
 ## [1.28.14] - 2026-06-15
 
 ### Changed

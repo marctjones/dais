@@ -72,7 +72,7 @@ DAIS_PDS_BASE_URL=https://pds.dais.social \
 DAIS_USERNAME=social \
 DAIS_ACCT_DOMAIN=dais.social \
 DAIS_PRIMARY_ACCT_DOMAIN=dais.social \
-DAIS_PUBLIC_POST_PATH=/users/social/posts/20260608212713-5dafca61 \
+DAIS_PUBLIC_POST_PATH=/users/social/posts/20260615200518-df261fea \
 DAIS_PRIVATE_POST_PATH=/users/social/posts/20260608215639-2ddf52c8 \
 npm run test:activitypub-conformance
 ```

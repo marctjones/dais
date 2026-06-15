@@ -822,18 +822,14 @@ async function handleOwnerApi(request, env, url) {
 
   if (request.method === 'POST' && path === '/followers/status') {
     const body = await readJson(request);
-    const followerActorId = String(body.follower_actor_id || '').trim();
-    const status = String(body.status || '').trim().toLowerCase();
-    if (!followerActorId) return apiJson({ error: 'follower_actor_id is required' }, 400);
-    if (!['approved', 'pending', 'rejected'].includes(status)) {
-      return apiJson({ error: 'status must be approved, pending, or rejected' }, 400);
+    try {
+      return apiJson(await ownerSetFollowerStatus(env, {
+        followerActorId: String(body.follower_actor_id || '').trim(),
+        status: String(body.status || '').trim().toLowerCase(),
+      }));
+    } catch (error) {
+      return apiJson({ error: error.message }, 400);
     }
-    await env.DB.prepare(
-      `UPDATE followers
-       SET status = ?1, updated_at = CURRENT_TIMESTAMP
-       WHERE follower_actor_id = ?2`,
-    ).bind(status, followerActorId).run();
-    return apiJson({ ok: true });
   }
 
   if (request.method === 'GET' && path === '/following') {
@@ -1256,6 +1252,52 @@ async function ownerFollowers(env, limit) {
      LIMIT ?1`,
   ).bind(limit).all();
   return rows.results || [];
+}
+
+async function ownerSetFollowerStatus(env, { followerActorId, status }) {
+  if (!followerActorId) throw new Error('follower_actor_id is required');
+  if (!['approved', 'pending', 'rejected'].includes(status)) {
+    throw new Error('status must be approved, pending, or rejected');
+  }
+
+  const localActor = await ownerLocalActor(env);
+  const existing = await env.DB.prepare(
+    `SELECT id, actor_id, follower_actor_id, follower_inbox, follower_shared_inbox, status
+     FROM followers
+     WHERE actor_id = ?1 AND follower_actor_id = ?2
+     LIMIT 1`,
+  ).bind(localActor.id, followerActorId).first();
+  if (!existing) throw new Error('follower not found');
+
+  await env.DB.prepare(
+    `UPDATE followers
+     SET status = ?1,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE actor_id = ?2 AND follower_actor_id = ?3`,
+  ).bind(status, localActor.id, followerActorId).run();
+
+  let deliveryIds = [];
+  if (status === 'approved') {
+    const followId = existing.id || followerActorId;
+    const acceptId = `${localActor.id}#accepts/${stableId(followId).slice(0, 16)}`;
+    const activity = {
+      '@context': 'https://www.w3.org/ns/activitystreams',
+      id: acceptId,
+      type: 'Accept',
+      actor: localActor.id,
+      to: [followerActorId],
+      object: {
+        id: followId,
+        type: 'Follow',
+        actor: followerActorId,
+        object: localActor.id,
+      },
+    };
+    const inbox = existing.follower_shared_inbox || existing.follower_inbox;
+    deliveryIds = await insertDeliveryRows(env, acceptId, [inbox], 'Accept', JSON.stringify(activity));
+  }
+
+  return { ok: true, delivery_ids: deliveryIds };
 }
 
 async function ownerUploadMedia(env, body) {

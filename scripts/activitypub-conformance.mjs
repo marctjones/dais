@@ -13,7 +13,7 @@ const config = {
     process.env.DAIS_OWNER_TOKEN ||
     (process.env.DAIS_OWNER_TOKEN_FILE ? readTokenFile(process.env.DAIS_OWNER_TOKEN_FILE) : ""),
   knownPublicPost:
-    process.env.DAIS_PUBLIC_POST_PATH || "/users/social/posts/20260608212713-5dafca61",
+    process.env.DAIS_PUBLIC_POST_PATH || "/users/social/posts/20260615200518-df261fea",
   knownPrivatePost:
     process.env.DAIS_PRIVATE_POST_PATH || "/users/social/posts/20260608215639-2ddf52c8",
 };
