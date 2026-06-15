@@ -611,7 +611,7 @@ pub struct ModerationBlockRow {
 pub struct ModerationAllowlistHost {
     pub host: String,
     pub note: Option<String>,
-    pub enabled: bool,
+    pub enabled: serde_json::Value,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }

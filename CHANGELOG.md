@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.7] - 2026-06-15
+
+### Added
+- Added live owner API moderation commands to the Rust CLI for moderation
+  status, block actor/domain, unblock, allow host, and disallow host.
+
 ## [1.28.6] - 2026-06-15
 
 ### Added

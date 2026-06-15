@@ -786,6 +786,18 @@ pub enum OwnerCommand {
     SourceRemove(OwnerSourceIdArgs),
     /// Refresh one live owner API source, or all active sources when no id is supplied.
     SourceRefresh(OwnerSourceRefreshArgs),
+    /// Show live owner API moderation blocks and federation allowlist.
+    Moderation(OwnerApiArgs),
+    /// Block an ActivityPub actor through the live owner API.
+    BlockActor(OwnerModerationActorArgs),
+    /// Block a domain through the live owner API.
+    BlockDomain(OwnerModerationDomainArgs),
+    /// Remove an actor or domain block through the live owner API.
+    Unblock(OwnerModerationValueArgs),
+    /// Allow a federation host through the live owner API.
+    AllowHost(OwnerModerationHostArgs),
+    /// Remove a federation host from the live owner API allowlist.
+    DisallowHost(OwnerModerationHostOnlyArgs),
     /// Resolve an ActivityPub actor before following.
     Discover(OwnerFollowArgs),
     /// Show a live owner API post detail and interaction counts.
@@ -890,6 +902,47 @@ pub struct OwnerSourceRefreshArgs {
     #[command(flatten)]
     pub api: OwnerApiArgs,
     pub id: Option<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerModerationActorArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub actor_id: String,
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerModerationDomainArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub domain: String,
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerModerationValueArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub value: String,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerModerationHostArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub host: String,
+    #[arg(long)]
+    pub note: Option<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerModerationHostOnlyArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub host: String,
 }
 
 #[derive(Args, Clone, Debug)]

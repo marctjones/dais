@@ -23,8 +23,9 @@ use cli::{
 use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
-    OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerInteraction, OwnerNotification,
-    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSnapshot, OwnerSourceAdd, OwnerSources,
+    ModerationState, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerInteraction,
+    OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSnapshot,
+    OwnerSourceAdd, OwnerSources,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
@@ -1084,6 +1085,48 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 }
             }
         }
+        OwnerCommand::Moderation(args) => {
+            let moderation = owner_api(&args)
+                .moderation()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_moderation(&moderation);
+        }
+        OwnerCommand::BlockActor(args) => {
+            owner_api(&args.api)
+                .block_actor(&args.actor_id, args.reason.as_deref())
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Blocked actor {}", args.actor_id);
+        }
+        OwnerCommand::BlockDomain(args) => {
+            owner_api(&args.api)
+                .block_domain(&args.domain, args.reason.as_deref())
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Blocked domain {}", args.domain);
+        }
+        OwnerCommand::Unblock(args) => {
+            owner_api(&args.api)
+                .unblock(&args.value)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Unblocked {}", args.value);
+        }
+        OwnerCommand::AllowHost(args) => {
+            owner_api(&args.api)
+                .allow_host(&args.host, args.note.as_deref())
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Allowed host {}", args.host);
+        }
+        OwnerCommand::DisallowHost(args) => {
+            owner_api(&args.api)
+                .disallow_host(&args.host)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Removed allowlist host {}", args.host);
+        }
         OwnerCommand::Discover(args) => {
             let actor = owner_api(&args.api)
                 .discover_actor(&args.target)
@@ -1332,6 +1375,32 @@ fn print_owner_sources(sources: &OwnerSources) {
         if let Some(url) = item.canonical_url.as_deref() {
             println!("url={url}");
         }
+        println!();
+    }
+}
+
+fn print_owner_moderation(moderation: &ModerationState) {
+    println!("closed_network={}", moderation.closed_network);
+    println!("blocks={}", moderation.block_count);
+    for block in &moderation.blocks {
+        println!("{}", block.id);
+        println!("actor={}", block.actor_id);
+        if let Some(domain) = block.blocked_domain.as_deref() {
+            println!("domain={domain}");
+        }
+        if let Some(reason) = block.reason.as_deref() {
+            println!("reason={reason}");
+        }
+        println!("created={}", block.created_at.as_deref().unwrap_or(""));
+        println!();
+    }
+    println!("allowlist={}", moderation.allowlist_count);
+    for host in &moderation.allowlist {
+        println!("{} enabled={}", host.host, host.enabled);
+        if let Some(note) = host.note.as_deref() {
+            println!("note={note}");
+        }
+        println!("updated={}", host.updated_at.as_deref().unwrap_or(""));
         println!();
     }
 }
