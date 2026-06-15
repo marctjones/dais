@@ -25,7 +25,7 @@ use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
     ModerationBlockRow, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFollower,
     OwnerFollowing, OwnerInteraction, OwnerNotification, OwnerPostDetail, OwnerProfile,
-    OwnerTimelinePost, SourceItem,
+    OwnerSources, OwnerTimelinePost,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -291,7 +291,7 @@ enum TabData {
         query: String,
     },
     Bluesky(Vec<crate::atproto::FeedItem>),
-    Sources(Vec<SourceItem>),
+    Sources(OwnerSources),
     Stats(ServerStats),
     Blocks(Vec<ModerationBlockRow>),
 }
@@ -301,6 +301,66 @@ struct Entry {
     title: String,
     subtitle: String,
     details: String,
+}
+
+#[derive(Clone)]
+enum SourceEntry {
+    Subscription(dais_client_core::SourceSubscription),
+    Item(dais_client_core::SourceItem),
+}
+
+impl SourceEntry {
+    fn subscription_id(&self) -> Option<String> {
+        match self {
+            SourceEntry::Subscription(source) => Some(source.id.clone()),
+            SourceEntry::Item(_) => None,
+        }
+    }
+
+    fn entry(&self) -> Entry {
+        match self {
+            SourceEntry::Subscription(source) => Entry {
+                title: source
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| source.url.clone()),
+                subtitle: format!(
+                    "subscription · {} · {} · cadence={}m",
+                    source.source_type, source.status, source.refresh_cadence_minutes
+                ),
+                details: format!(
+                    "id: {}\nsource type: {}\nurl: {}\nhomepage: {}\nstatus: {}\nlast fetched: {}\nnext fetch: {}\nerrors: {}\nlast error: {}\npolicy: {}",
+                    source.id,
+                    source.source_type,
+                    source.url,
+                    source.homepage_url.as_deref().unwrap_or(""),
+                    source.status,
+                    source.last_fetched_at.as_deref().unwrap_or(""),
+                    source.next_fetch_at.as_deref().unwrap_or(""),
+                    source.error_count,
+                    source.last_error.as_deref().unwrap_or(""),
+                    source.policy_json
+                ),
+            },
+            SourceEntry::Item(item) => Entry {
+                title: item.title.clone(),
+                subtitle: format!(
+                    "item · {} · {}",
+                    item.source_type,
+                    if item.read { "read" } else { "unread" }
+                ),
+                details: format!(
+                    "id: {}\nsource type: {}\nurl: {}\nread: {}\npolicy: {}\n\n{}",
+                    item.id,
+                    item.source_type,
+                    item.canonical_url.as_deref().unwrap_or(""),
+                    item.read,
+                    item.rights_policy_json,
+                    item.excerpt.as_deref().unwrap_or("")
+                ),
+            },
+        }
+    }
 }
 
 enum Message {
@@ -377,7 +437,7 @@ struct App {
     reader_details: HashMap<String, OwnerPostDetail>,
     discovered_actor: Option<OwnerDiscoveredActor>,
     bluesky_feed: Vec<crate::atproto::FeedItem>,
-    source_items: Vec<SourceItem>,
+    sources: OwnerSources,
     stats: Option<ServerStats>,
     blocks: Vec<ModerationBlockRow>,
 }
@@ -421,7 +481,10 @@ impl App {
             reader_details: HashMap::new(),
             discovered_actor: None,
             bluesky_feed: Vec::new(),
-            source_items: Vec::new(),
+            sources: OwnerSources {
+                subscriptions: Vec::new(),
+                items: Vec::new(),
+            },
             stats: None,
             blocks: Vec::new(),
         }
@@ -473,6 +536,8 @@ impl App {
             KeyCode::Char('x') => self.reject_selected_follower(),
             KeyCode::Char('m') => self.mark_selected_notification_read(),
             KeyCode::Char('u') => self.unblock_selected_block(),
+            KeyCode::Char('s') => self.refresh_selected_source(),
+            KeyCode::Char('v') => self.remove_selected_source(),
             KeyCode::Enter => self.load_selected_reader_detail(),
             KeyCode::Char('l') => self.reader_interaction("like"),
             KeyCode::Char('o') => self.reader_interaction("boost"),
@@ -954,6 +1019,83 @@ impl App {
         });
     }
 
+    fn selected_source_subscription_id(&self) -> Option<String> {
+        self.source_entries()
+            .get(self.selected(Tab::Sources))
+            .and_then(SourceEntry::subscription_id)
+    }
+
+    fn source_entries(&self) -> Vec<SourceEntry> {
+        self.sources
+            .subscriptions
+            .iter()
+            .cloned()
+            .map(SourceEntry::Subscription)
+            .chain(self.sources.items.iter().cloned().map(SourceEntry::Item))
+            .collect()
+    }
+
+    fn refresh_selected_source(&mut self) {
+        let Some(id) = self.selected_source_subscription_id() else {
+            self.status = "Select a source subscription to refresh".to_string();
+            return;
+        };
+        let tx = self.tx.clone();
+        self.status = format!("Refreshing source {id}");
+        tokio::spawn(async move {
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                    return;
+                }
+            };
+            match client.refresh_sources(Some(&id)).await {
+                Ok(result) => {
+                    let status = result
+                        .items
+                        .iter()
+                        .find(|item| item.id == id)
+                        .and_then(|item| item.error.as_ref().map(|error| format!("{id}: {error}")))
+                        .unwrap_or_else(|| format!("Refreshed source {id}"));
+                    let _ = tx.send(Message::Status(status));
+                    let _ = tx.send(Message::Refresh(Tab::Sources));
+                }
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn remove_selected_source(&mut self) {
+        let Some(id) = self.selected_source_subscription_id() else {
+            self.status = "Select a source subscription to remove".to_string();
+            return;
+        };
+        let tx = self.tx.clone();
+        self.status = format!("Removing source {id}");
+        tokio::spawn(async move {
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                    return;
+                }
+            };
+            match client.remove_source(&id).await {
+                Ok(_) => {
+                    let _ = tx.send(Message::Status(format!("Removed source {id}")));
+                    let _ = tx.send(Message::Refresh(Tab::Sources));
+                    let _ = tx.send(Message::Refresh(Tab::Stats));
+                }
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
     fn unblock_selected_block(&mut self) {
         let Some(row) = self.blocks.get(self.selected(Tab::Blocks)) else {
             return;
@@ -1174,7 +1316,7 @@ impl App {
                         self.search.query = TextBuffer::from_text(&query);
                     }
                     TabData::Bluesky(value) => self.bluesky_feed = value,
-                    TabData::Sources(value) => self.source_items = value,
+                    TabData::Sources(value) => self.sources = value,
                     TabData::Stats(value) => self.stats = Some(value),
                     TabData::Blocks(value) => self.blocks = value,
                 }
@@ -1780,25 +1922,9 @@ impl App {
                 })
                 .collect(),
             Tab::Sources => self
-                .source_items
+                .source_entries()
                 .iter()
-                .map(|item| Entry {
-                    title: item.title.clone(),
-                    subtitle: format!(
-                        "{} · {}",
-                        item.source_type,
-                        if item.read { "read" } else { "unread" }
-                    ),
-                    details: format!(
-                        "id: {}\nsource type: {}\nurl: {}\nread: {}\npolicy: {}\n\n{}",
-                        item.id,
-                        item.source_type,
-                        item.canonical_url.as_deref().unwrap_or(""),
-                        item.read,
-                        item.rights_policy_json,
-                        item.excerpt.as_deref().unwrap_or("")
-                    ),
-                })
+                .map(SourceEntry::entry)
                 .collect(),
             Tab::Stats => self.stats.as_ref().map_or_else(Vec::new, |stats| {
                 vec![
@@ -1961,7 +2087,7 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
                 .sources()
                 .await
                 .map_err(|error| anyhow!(error.to_string()))?;
-            Ok(TabData::Sources(sources.items))
+            Ok(TabData::Sources(sources))
         }
         Tab::Stats => {
             let db = D1Client::new(remote)?;

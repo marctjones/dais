@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.24] - 2026-06-15
+
+### Changed
+- Expanded the Rust TUI Sources tab to show live owner API source subscriptions
+  alongside reader items.
+- Added TUI source refresh and remove actions for selected subscriptions.
+
 ## [1.28.23] - 2026-06-15
 
 ### Fixed
