@@ -611,9 +611,9 @@ async function handleMastodonApi(request, env, url) {
 
   const statusContext = path.match(/^\/api\/v1\/statuses\/(.+)\/context$/);
   if (request.method === 'GET' && statusContext) {
-    const value = await mastodonStatus(env, decodeURIComponent(statusContext[1]));
+    const value = await mastodonStatusContext(env, decodeURIComponent(statusContext[1]));
     if (!value) return apiJson({ error: 'Record not found' }, 404);
-    return apiJson({ ancestors: [], descendants: [] });
+    return apiJson(value);
   }
 
   const statusAction = path.match(/^\/api\/v1\/statuses\/(.+)\/(favourite|unfavourite|reblog|unreblog)$/);
@@ -1625,6 +1625,15 @@ async function resolveActivityPubObjectInbox(objectId) {
   return actor.shared_inbox || actor.inbox;
 }
 
+function isLocalObjectUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.hostname === 'social.dais.social' && url.pathname.startsWith('/users/social/');
+  } catch {
+    return false;
+  }
+}
+
 async function resolveWebfingerActor(target) {
   const handle = target.trim().replace(/^@/, '');
   if (!handle.includes('@')) {
@@ -2040,7 +2049,9 @@ async function ownerCreatePost(env, {
   let replyTargetInbox = null;
   if (inReplyTo) {
     publicHttpsUrl(inReplyTo, 'in_reply_to');
-    replyTargetInbox = await resolveActivityPubObjectInbox(inReplyTo);
+    if (!isLocalObjectUrl(inReplyTo)) {
+      replyTargetInbox = await resolveActivityPubObjectInbox(inReplyTo);
+    }
   }
   const mediaAttachmentsJson = mediaAttachments.length ? JSON.stringify(mediaAttachments) : null;
   await env.DB.prepare(
@@ -2356,6 +2367,43 @@ async function mastodonStatus(env, id) {
   ).bind(id).first();
   if (!row) return null;
   return statusJson(row, await mastodonAccount(env));
+}
+
+async function mastodonStatusContext(env, id) {
+  const status = await mastodonStatus(env, id);
+  if (!status) return null;
+
+  const ancestors = [];
+  const seenAncestors = new Set([id]);
+  let parentId = status.in_reply_to_id;
+  while (parentId && ancestors.length < 20 && !seenAncestors.has(parentId)) {
+    seenAncestors.add(parentId);
+    const parent = await mastodonStatus(env, parentId);
+    if (!parent) break;
+    ancestors.unshift(parent);
+    parentId = parent.in_reply_to_id;
+  }
+
+  const account = await mastodonAccount(env);
+  const rows = await env.DB.prepare(
+    `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+            name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
+            (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+            (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
+     FROM posts
+     WHERE in_reply_to = ?1
+       AND visibility = 'public'
+       AND encrypted_message IS NULL
+       AND content NOT LIKE '%End-to-end encrypted message%'
+     ORDER BY published_at ASC
+     LIMIT 40`,
+  ).bind(id).all();
+
+  return {
+    ancestors,
+    descendants: (rows.results || []).map((row) => statusJson(row, account)),
+  };
 }
 
 function statusJson(row, account) {

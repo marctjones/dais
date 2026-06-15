@@ -234,6 +234,54 @@ const tests = [
       }
     }
   }),
+  requirement("MASTODON-API-WRITE-03", true, "Reply creation round-trips through status read and context descendants", async () => {
+    let parentId = "";
+    let replyId = "";
+    try {
+      const parent = await request("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: `dais Mastodon reply parent conformance ${new Date().toISOString()}`,
+          visibility: "public",
+        }),
+      });
+      if (parent.status !== 201) throw new Error(`parent create expected 201, got ${parent.status}: ${parent.text}`);
+      parentId = parent.json?.id || "";
+
+      const reply = await request("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: `dais Mastodon reply child conformance ${new Date().toISOString()}`,
+          visibility: "public",
+          in_reply_to_id: parentId,
+        }),
+      });
+      if (reply.status !== 201) throw new Error(`reply create expected 201, got ${reply.status}: ${reply.text}`);
+      replyId = reply.json?.id || "";
+      if (reply.json?.in_reply_to_id !== parentId) throw new Error("created reply missing in_reply_to_id");
+
+      const read = await request(`/api/v1/statuses/${encodeURIComponent(replyId)}`, { auth: true });
+      if (read.status !== 200) throw new Error(`reply read expected 200, got ${read.status}`);
+      if (read.json?.in_reply_to_id !== parentId) throw new Error("reply did not round-trip in_reply_to_id");
+
+      const context = await request(`/api/v1/statuses/${encodeURIComponent(parentId)}/context`, { auth: true });
+      if (context.status !== 200) throw new Error(`context expected 200, got ${context.status}`);
+      if (!Array.isArray(context.json?.descendants) || !context.json.descendants.some((status) => status.id === replyId)) {
+        throw new Error("parent context descendants did not include reply");
+      }
+    } finally {
+      if (replyId) {
+        await request(`/api/v1/statuses/${encodeURIComponent(replyId)}`, { method: "DELETE", auth: true });
+      }
+      if (parentId) {
+        await request(`/api/v1/statuses/${encodeURIComponent(parentId)}`, { method: "DELETE", auth: true });
+      }
+    }
+  }),
 ];
 
 for (const test of tests) {

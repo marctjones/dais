@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.21] - 2026-06-15
+
+### Changed
+- Added Mastodon API reply-thread context for local public replies, so clients can
+  read reply descendants through `GET /api/v1/statuses/:id/context`.
+- Expanded Mastodon API conformance with authenticated reply create, readback,
+  context, and cleanup coverage.
+
 ## [1.28.20] - 2026-06-15
 
 ### Changed
