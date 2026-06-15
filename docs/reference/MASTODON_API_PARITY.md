@@ -13,7 +13,8 @@ must not publish followers-only, direct, or E2EE content as public data.
 | Area | Endpoints | Status |
 | --- | --- | --- |
 | Instance | `GET /api/v1/instance`, `GET /api/v2/instance` | Implemented |
-| Apps/OAuth | `POST /api/v1/apps`, `GET /oauth/authorize`, `POST /oauth/token`, `POST /oauth/revoke` | Compatibility shape; production access still requires an owner-provisioned bearer token |
+| Apps/OAuth | `POST /api/v1/apps`, `GET /oauth/authorize`, `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server`, `GET /.well-known/openid-configuration` | Compatibility shape; production access still requires an owner-provisioned bearer token |
+| Discovery | `GET /.well-known/nodeinfo`, `GET /nodeinfo/2.0` | Implemented for client/server metadata discovery |
 | Account | `GET /api/v1/accounts/verify_credentials`, `PATCH /api/v1/accounts/update_credentials`, `GET /api/v1/accounts/:id` | Implemented for single local account |
 | Graph | `GET /api/v1/accounts/:id/followers`, `GET /api/v1/accounts/:id/following`, `GET /api/v1/accounts/relationships` | Implemented |
 | Relationship writes | `POST /api/v1/accounts/:id/follow`, `unfollow`, `block`, `unblock`, `mute`, `unmute` | Implemented; mute/unmute are compatibility no-ops |

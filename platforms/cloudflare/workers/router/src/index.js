@@ -35,6 +35,22 @@ export default {
       return handleMastodonApi(request, env, url);
     }
 
+    if (request.method === 'GET' && path === '/.well-known/oauth-authorization-server') {
+      return oauthAuthorizationServerMetadata(url);
+    }
+
+    if (request.method === 'GET' && path === '/.well-known/openid-configuration') {
+      return oauthAuthorizationServerMetadata(url);
+    }
+
+    if (request.method === 'GET' && path === '/.well-known/nodeinfo') {
+      return nodeInfoDiscovery(url);
+    }
+
+    if (request.method === 'GET' && path === '/nodeinfo/2.0') {
+      return nodeInfoDocument(env);
+    }
+
     // Serve media files from R2
     if (path.startsWith('/media/')) {
       return handleMedia(request, env, path);
@@ -757,6 +773,62 @@ async function handleMastodonApi(request, env, url) {
   }
 
   return apiJson({ error: 'Not implemented in dais Mastodon compatibility API' }, 404);
+}
+
+function oauthAuthorizationServerMetadata(url) {
+  const origin = url.origin;
+  return apiJson({
+    issuer: origin,
+    authorization_endpoint: `${origin}/oauth/authorize`,
+    token_endpoint: `${origin}/oauth/token`,
+    revocation_endpoint: `${origin}/oauth/revoke`,
+    scopes_supported: ['read', 'write', 'follow', 'push'],
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic', 'none'],
+    code_challenge_methods_supported: ['S256', 'plain'],
+    service_documentation: 'https://github.com/marctjones/dais',
+  });
+}
+
+function nodeInfoDiscovery(url) {
+  return apiJson({
+    links: [
+      {
+        rel: 'http://nodeinfo.diaspora.software/ns/schema/2.0',
+        href: `${url.origin}/nodeinfo/2.0`,
+      },
+    ],
+  });
+}
+
+async function nodeInfoDocument(env) {
+  return apiJson({
+    version: '2.0',
+    software: {
+      name: 'dais',
+      version: '1.28',
+      repository: 'https://github.com/marctjones/dais',
+    },
+    protocols: ['activitypub'],
+    services: {
+      inbound: [],
+      outbound: [],
+    },
+    openRegistrations: false,
+    usage: {
+      users: {
+        total: 1,
+        activeMonth: 1,
+        activeHalfyear: 1,
+      },
+      localPosts: await publicStatusCount(env),
+    },
+    metadata: {
+      nodeName: 'dais',
+      privateByDefault: true,
+    },
+  });
 }
 
 async function handleOwnerApi(request, env, url) {

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.26] - 2026-06-15
+
+### Added
+- Added Mastodon client discovery metadata at
+  `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`,
+  `/.well-known/nodeinfo`, and `/nodeinfo/2.0`.
+- Expanded Mastodon API conformance with OAuth and NodeInfo discovery checks.
+
 ## [1.28.25] - 2026-06-15
 
 ### Changed

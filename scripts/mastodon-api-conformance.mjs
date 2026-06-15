@@ -69,6 +69,26 @@ const tests = [
       throw new Error("OAuth compatibility shape incomplete or leaked a non-placeholder token");
     }
   }),
+  requirement("MASTODON-API-DISCOVERY-01", false, "OAuth and NodeInfo discovery metadata expose client-safe shapes", async () => {
+    const oauth = await request("/.well-known/oauth-authorization-server");
+    const openid = await request("/.well-known/openid-configuration");
+    const nodeInfoDiscovery = await request("/.well-known/nodeinfo");
+    const nodeInfo = await request("/nodeinfo/2.0");
+    const statuses = [oauth, openid, nodeInfoDiscovery, nodeInfo].map((res) => res.status);
+    if (statuses.some((status) => status !== 200)) throw new Error(`expected all 200, got ${statuses.join("/")}`);
+    if (!oauth.json?.authorization_endpoint || !oauth.json?.token_endpoint || oauth.json.issuer !== config.baseUrl) {
+      throw new Error("OAuth metadata shape incomplete");
+    }
+    if (openid.json?.issuer !== oauth.json.issuer || openid.json?.token_endpoint !== oauth.json.token_endpoint) {
+      throw new Error("OpenID metadata did not match OAuth metadata");
+    }
+    if (!Array.isArray(nodeInfoDiscovery.json?.links) || !nodeInfoDiscovery.json.links[0]?.href) {
+      throw new Error("NodeInfo discovery shape incomplete");
+    }
+    if (nodeInfo.json?.software?.name !== "dais" || !nodeInfo.json?.usage?.users) {
+      throw new Error("NodeInfo document shape incomplete");
+    }
+  }),
   requirement("MASTODON-API-PUBLIC-01", false, "Public timelines and statuses privacy-filter public content", async () => {
     const timeline = await request("/api/v1/timelines/public?limit=2");
     if (timeline.status !== 200) throw new Error(`timeline expected 200, got ${timeline.status}`);
