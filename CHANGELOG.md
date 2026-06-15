@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.17] - 2026-06-15
+
+### Changed
+- Moved the Rust TUI Notifications tab and mark-read action from raw D1 access to
+  the live owner API notifications endpoints.
+
 ## [1.28.16] - 2026-06-15
 
 ### Changed

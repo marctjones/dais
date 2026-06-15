@@ -20,14 +20,14 @@ use ratatui::{
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
 use crate::d1::{
-    D1Block, D1Client, D1Delivery, D1DirectMessage, D1Friend, D1Notification, D1Post,
-    D1TimelinePost, D1User, ServerStats,
+    D1Block, D1Client, D1Delivery, D1DirectMessage, D1Friend, D1Post, D1TimelinePost, D1User,
+    ServerStats,
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
     OwnerApiClient, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing, OwnerInteraction,
-    OwnerPostDetail, OwnerProfile, OwnerTimelinePost, SourceItem,
+    OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerTimelinePost, SourceItem,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -283,7 +283,7 @@ enum TabData {
     Friends(Vec<D1Friend>),
     Followers(Vec<OwnerFollower>),
     Following(Vec<OwnerFollowing>),
-    Notifications(Vec<D1Notification>),
+    Notifications(Vec<OwnerNotification>),
     Profile(OwnerProfile),
     Deliveries(Vec<D1Delivery>),
     DMs(Vec<D1DirectMessage>),
@@ -369,7 +369,7 @@ struct App {
     friends: Vec<crate::d1::D1Friend>,
     followers: Vec<OwnerFollower>,
     following: Vec<OwnerFollowing>,
-    notifications: Vec<D1Notification>,
+    notifications: Vec<OwnerNotification>,
     profile: Option<OwnerProfile>,
     deliveries: Vec<D1Delivery>,
     direct_messages: Vec<D1DirectMessage>,
@@ -935,19 +935,19 @@ impl App {
         };
         let id = row.id.clone();
         let tx = self.tx.clone();
-        let remote = self.remote;
         tokio::spawn(async move {
-            let db = match D1Client::new(remote) {
-                Ok(db) => db,
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
                     return;
                 }
             };
-            match db.mark_notification_read(&id).await {
-                Ok(()) => {
+            match client.mark_notification_read(&id).await {
+                Ok(_) => {
                     let _ = tx.send(Message::Status(format!("Marked notification {id} read")));
                     let _ = tx.send(Message::Refresh(Tab::Notifications));
+                    let _ = tx.send(Message::Refresh(Tab::Stats));
                 }
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
@@ -1662,7 +1662,7 @@ impl App {
                     ),
                     subtitle: format!(
                         "{} · {}",
-                        if row.read.unwrap_or(false) {
+                        if owner_notification_read(row) {
                             "read"
                         } else {
                             "unread"
@@ -1912,8 +1912,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Following(snapshot.following))
         }
         Tab::Notifications => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Notifications(db.list_notifications(50).await?))
+            let client = owner_api_from_env()?;
+            let notifications = client
+                .notifications()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Notifications(notifications))
         }
         Tab::Profile => {
             let client = owner_api_from_env()?;
@@ -1965,6 +1969,13 @@ fn owner_api_from_env() -> Result<OwnerApiClient> {
     let instance = std::env::var("DAIS_OWNER_INSTANCE_URL")
         .unwrap_or_else(|_| "https://social.dais.social".to_string());
     Ok(OwnerApiClient::new(instance, token))
+}
+
+fn owner_notification_read(notification: &OwnerNotification) -> bool {
+    notification.read == serde_json::Value::Bool(true)
+        || notification.read == serde_json::Value::Number(1.into())
+        || notification.read == serde_json::Value::String("1".to_string())
+        || notification.read == serde_json::Value::String("true".to_string())
 }
 
 async fn load_search(
