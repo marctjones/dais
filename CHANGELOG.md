@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.31] - 2026-06-15
+
+### Added
+- Added Mastodon API conformance coverage for relationship block/unblock and
+  mute/unmute compatibility responses.
+
 ## [1.28.30] - 2026-06-15
 
 ### Added

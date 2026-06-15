@@ -492,6 +492,43 @@ const tests = [
       }
     }
   }),
+  requirement("MASTODON-API-WRITE-07", true, "Relationship block and mute actions return Mastodon-compatible state", async () => {
+    const actorId = `https://example.invalid/users/dais-conformance-${Date.now()}`;
+    const encoded = encodeURIComponent(actorId);
+    try {
+      const block = await request(`/api/v1/accounts/${encoded}/block`, { method: "POST", auth: true });
+      if (block.status !== 200) throw new Error(`block expected 200, got ${block.status}: ${block.text}`);
+      if (block.json?.id !== actorId || block.json?.blocking !== true) throw new Error("block response did not set blocking state");
+
+      const relationships = await request(`/api/v1/accounts/relationships?id[]=${encoded}`, { auth: true });
+      if (relationships.status !== 200) throw new Error(`relationships expected 200, got ${relationships.status}`);
+      if (!relationships.json?.some((row) => row.id === actorId && row.blocking === true)) {
+        throw new Error("relationship lookup did not retain blocking state");
+      }
+
+      const blocks = await request("/api/v1/blocks?limit=20", { auth: true });
+      if (blocks.status !== 200) throw new Error(`blocks expected 200, got ${blocks.status}`);
+      if (!blocks.json?.some((row) => row.id === actorId || row.url === actorId)) {
+        throw new Error("blocks list did not include blocked actor");
+      }
+
+      const mute = await request(`/api/v1/accounts/${encoded}/mute`, { method: "POST", auth: true });
+      const unmute = await request(`/api/v1/accounts/${encoded}/unmute`, { method: "POST", auth: true });
+      if (mute.status !== 200 || unmute.status !== 200) {
+        throw new Error(`mute/unmute expected 200/200, got ${mute.status}/${unmute.status}`);
+      }
+      if (mute.json?.id !== actorId || unmute.json?.id !== actorId) throw new Error("mute/unmute response id mismatch");
+      if (mute.json?.muting !== false || unmute.json?.muting !== false) {
+        throw new Error("mute no-op compatibility state changed unexpectedly");
+      }
+
+      const unblock = await request(`/api/v1/accounts/${encoded}/unblock`, { method: "POST", auth: true });
+      if (unblock.status !== 200) throw new Error(`unblock expected 200, got ${unblock.status}: ${unblock.text}`);
+      if (unblock.json?.blocking !== false) throw new Error("unblock response did not clear blocking state");
+    } finally {
+      await request(`/api/v1/accounts/${encoded}/unblock`, { method: "POST", auth: true });
+    }
+  }),
 ];
 
 for (const test of tests) {
