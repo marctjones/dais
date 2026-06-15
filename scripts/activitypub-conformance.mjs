@@ -306,7 +306,7 @@ const tests = [
   }),
 
   requirement("MASTODON-SECURITY-01", "MASTODON", "Signed inbox delivery verification is implemented", async (t) => {
-    t.info("requires remote actor key and valid HTTP Signature fixture; covered by federation smoke, not this anonymous suite");
+    t.info("valid HTTP Signature + Digest fixture is covered by core tests; live remote signed POST remains covered by federation smoke");
   }),
 
   requirement("MASTODON-SECURITY-02", "MASTODON", "Authorized fetch for private posts is implemented", async (t) => {

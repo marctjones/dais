@@ -20,8 +20,8 @@ use ratatui::{
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
 use crate::d1::{
-    D1Block, D1Client, D1Delivery, D1DirectMessage, D1FollowerRow, D1FollowingRow, D1Friend,
-    D1Notification, D1Post, D1SourceItem, D1TimelinePost, D1User, ServerStats,
+    D1Actor, D1Block, D1Client, D1Delivery, D1DirectMessage, D1FollowerRow, D1FollowingRow,
+    D1Friend, D1Notification, D1Post, D1SourceItem, D1TimelinePost, D1User, ServerStats,
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
@@ -34,6 +34,7 @@ enum Tab {
     Followers,
     Following,
     Notifications,
+    Profile,
     Deliveries,
     DMs,
     Search,
@@ -44,7 +45,7 @@ enum Tab {
 }
 
 impl Tab {
-    fn all() -> [Tab; 13] {
+    fn all() -> [Tab; 14] {
         [
             Tab::Home,
             Tab::Posts,
@@ -52,6 +53,7 @@ impl Tab {
             Tab::Followers,
             Tab::Following,
             Tab::Notifications,
+            Tab::Profile,
             Tab::Deliveries,
             Tab::DMs,
             Tab::Search,
@@ -70,6 +72,7 @@ impl Tab {
             Tab::Followers => "Followers",
             Tab::Following => "Following",
             Tab::Notifications => "Notifications",
+            Tab::Profile => "Profile",
             Tab::Deliveries => "Deliveries",
             Tab::DMs => "DMs",
             Tab::Search => "Search",
@@ -267,6 +270,7 @@ enum TabData {
     Followers(Vec<D1FollowerRow>),
     Following(Vec<D1FollowingRow>),
     Notifications(Vec<D1Notification>),
+    Profile(Option<D1Actor>),
     Deliveries(Vec<D1Delivery>),
     DMs(Vec<D1DirectMessage>),
     Search {
@@ -351,6 +355,7 @@ struct App {
     followers: Vec<D1FollowerRow>,
     following: Vec<D1FollowingRow>,
     notifications: Vec<D1Notification>,
+    profile: Option<D1Actor>,
     deliveries: Vec<D1Delivery>,
     direct_messages: Vec<D1DirectMessage>,
     search_posts: Vec<D1Post>,
@@ -390,6 +395,7 @@ impl App {
             followers: Vec::new(),
             following: Vec::new(),
             notifications: Vec::new(),
+            profile: None,
             deliveries: Vec::new(),
             direct_messages: Vec::new(),
             search_posts: Vec::new(),
@@ -915,6 +921,7 @@ impl App {
                     TabData::Followers(value) => self.followers = value,
                     TabData::Following(value) => self.following = value,
                     TabData::Notifications(value) => self.notifications = value,
+                    TabData::Profile(value) => self.profile = value,
                     TabData::Deliveries(value) => self.deliveries = value,
                     TabData::DMs(value) => self.direct_messages = value,
                     TabData::Search {
@@ -1322,6 +1329,17 @@ impl App {
                     ),
                 })
                 .collect(),
+            Tab::Profile => self.profile.as_ref().map_or_else(Vec::new, |profile| {
+                vec![Entry {
+                    title: profile_display_name(profile).to_string(),
+                    subtitle: format!(
+                        "{} · {}",
+                        profile.username,
+                        profile.actor_type.as_deref().unwrap_or("Person")
+                    ),
+                    details: profile_detail(profile),
+                }]
+            }),
             Tab::Deliveries => self
                 .deliveries
                 .iter()
@@ -1498,6 +1516,7 @@ impl App {
             Tab::Stats => "No stats loaded yet".to_string(),
             Tab::Search => "Run a search with /".to_string(),
             Tab::Bluesky => "Login to Bluesky and refresh".to_string(),
+            Tab::Profile => "No local profile loaded yet".to_string(),
             Tab::Sources => "No source items loaded".to_string(),
             _ => "No data".to_string(),
         }
@@ -1532,6 +1551,10 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
         Tab::Notifications => {
             let db = D1Client::new(remote)?;
             Ok(TabData::Notifications(db.list_notifications(50).await?))
+        }
+        Tab::Profile => {
+            let db = D1Client::new(remote)?;
+            Ok(TabData::Profile(db.get_actor("social").await?))
         }
         Tab::Deliveries => {
             let db = D1Client::new(remote)?;
@@ -1602,6 +1625,28 @@ fn stats_detail(stats: &ServerStats) -> String {
         stats.blocks_total,
         stats.allowlist_hosts,
         stats.closed_network,
+    )
+}
+
+fn profile_display_name(profile: &D1Actor) -> &str {
+    profile
+        .display_name
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&profile.username)
+}
+
+fn profile_detail(profile: &D1Actor) -> String {
+    format!(
+        "public handle: @{}@dais.social\nactor URL: {}\nusername: {}\nactor type: {}\ndisplay name: {}\nsummary: {}\nicon/avatar URL: {}\nimage/header URL: {}\npublic surfaces: ActivityPub actor JSON, HTML profile, Mastodon account API",
+        profile.username,
+        profile.id,
+        profile.username,
+        profile.actor_type.as_deref().unwrap_or("Person"),
+        profile.display_name.as_deref().unwrap_or(""),
+        profile.summary.as_deref().unwrap_or(""),
+        profile.icon.as_deref().unwrap_or(""),
+        profile.image.as_deref().unwrap_or(""),
     )
 }
 

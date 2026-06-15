@@ -109,6 +109,41 @@ const tests = [
     expectArray(checks[3].json, "lists");
     expectArray(checks[4].json, "conversations");
   }),
+  requirement("MASTODON-API-WRITE-01", true, "Status creation accepts Mastodon poll parameters and returns poll shape", async () => {
+    let createdId = "";
+    try {
+      const create = await request("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: `dais Mastodon poll conformance ${new Date().toISOString()}`,
+          visibility: "public",
+          poll: {
+            options: ["Yes", "No"],
+            multiple: false,
+            expires_in: 300,
+          },
+        }),
+      });
+      if (create.status !== 201) throw new Error(`create expected 201, got ${create.status}: ${create.text}`);
+      createdId = create.json?.id || "";
+      if (!create.json?.poll || create.json.poll.multiple !== false) throw new Error("created status missing poll shape");
+      if (!Array.isArray(create.json.poll.options) || create.json.poll.options.length !== 2) {
+        throw new Error("created poll options shape incomplete");
+      }
+
+      const read = await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { auth: true });
+      if (read.status !== 200) throw new Error(`read expected 200, got ${read.status}`);
+      if (!read.json?.poll || read.json.poll.options?.[0]?.title !== "Yes") {
+        throw new Error("stored poll did not round-trip through status read");
+      }
+    } finally {
+      if (createdId) {
+        await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { method: "DELETE", auth: true });
+      }
+    }
+  }),
 ];
 
 for (const test of tests) {

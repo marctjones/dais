@@ -425,6 +425,63 @@ mod tests {
     }
 
     #[test]
+    fn valid_signed_inbox_request_round_trips_and_rejects_tampering() {
+        let body = r#"{"type":"Like","actor":"https://remote.example/users/alice","object":"https://social.example/users/social/posts/1"}"#;
+        let digest = digest_header_for(body);
+        let date = "Thu, 11 Jun 2026 12:00:00 GMT";
+        let mut headers = HashMap::new();
+        headers.insert("host".to_string(), "social.example".to_string());
+        headers.insert("date".to_string(), date.to_string());
+        headers.insert("digest".to_string(), digest.clone());
+
+        let signed_headers = vec![
+            "(request-target)".to_string(),
+            "host".to_string(),
+            "date".to_string(),
+            "digest".to_string(),
+        ];
+        let sig = sign_request(
+            TEST_PRIVATE_KEY,
+            "https://remote.example/users/alice#main-key",
+            "POST",
+            "/users/social/inbox",
+            &headers,
+            &signed_headers,
+        )
+        .expect("fixture private key should sign");
+
+        validate_inbound_post_signature_policy(
+            &sig,
+            &headers,
+            chrono::DateTime::parse_from_rfc2822("Thu, 11 Jun 2026 12:01:00 GMT")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        )
+        .expect("valid signed inbox request should satisfy policy");
+        assert!(verify_digest(body, &digest).expect("digest should parse"));
+        assert!(verify_request(
+            TEST_PUBLIC_KEY,
+            &sig,
+            "POST",
+            "/users/social/inbox",
+            &headers
+        )
+        .expect("public key should verify"));
+
+        assert!(!verify_digest("{}", &digest).expect("digest should parse"));
+        let mut tampered_headers = headers.clone();
+        tampered_headers.insert("host".to_string(), "attacker.example".to_string());
+        assert!(!verify_request(
+            TEST_PUBLIC_KEY,
+            &sig,
+            "POST",
+            "/users/social/inbox",
+            &tampered_headers
+        )
+        .expect("tampered signed host should fail verification"));
+    }
+
+    #[test]
     fn inbound_policy_rejects_stale_date() {
         let err = validate_http_date_window(
             "Thu, 11 Jun 2026 12:00:00 GMT",
@@ -445,4 +502,50 @@ mod tests {
         assert!(verify_digest("hello", digest).unwrap());
         assert!(!verify_digest("hello!", digest).unwrap());
     }
+
+    fn digest_header_for(body: &str) -> String {
+        use sha2::Digest;
+
+        let body_hash = Sha256::digest(body.as_bytes());
+        format!("SHA-256={}", BASE64.encode(body_hash))
+    }
+
+    const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCFJamBxWkIONrM
+DotzjZEuUlpVE51/uSP7H4bD+rHs/KQfbbSbeefR2v9q9ZHeCPNfuuG/apgHBQQt
+ziYUuvLaCpbgTXTf1iQobmEuM2TzOs+8t1IpumzCPMUorU/YsG81SduO+RRxC7xP
+Zn8gE0eedQRo+IHssT+bp6+30kT7XPbHEkRx4T1JOKsOt2IDJCw2e5eZH1fRcpb8
+rKnNzCYJ+m40CniOiznCeqZJ/1SKiTPS4ct+EKALyuvIqL1//azX6UyxuGtyfpc+
+jZRUHKS8di9v0DBYhfkVI8fxShkN95yHUo8V9joxrYZQ14ikXRIt2MlHKBpog7Ba
+M0LxjlARAgMBAAECggEABVQWRkf+9dIGqZNsb8Wq2Xp4vH5iN3YSk05173plK/mJ
+XOugRneYuCyGO8LToVnk2YAqYCV1K5S/D9E382zu4px5YMUgyANzI34VXAq4/8Xr
+Ad+pRVu9VgGmF0RmVWLsNGr+AykDMSn50YilzkQPQe9na4cEdhM62zEZBmd/FLsb
+KtxxQbo/SiI6iWWGUSkS8Lt+Cc7TBGeTJihTqHi2gxO3M53cXcSinuuo2QtLTSLc
+sIebtDLdr1KkMFad+1kttvIJpJE9W7R3qOT/GtFsix+ZdjqCnpQF9cFpqbR/JbWV
+E/Dsc996+S+Bm25hHpxjiYY02aAI6RyFSiFBVDbuMQKBgQC7E0fmW2Mtipd7yiQx
+PBWufgMYGdUQXqw4ydstJfgiiVc6XgJ4dgQenjEzWK26ohs+xe46+p/ytho8fe45
+BawTs4eOsEGj1bJXUL7lPYKmxcYgdyuUwvlTQkJbHsMpjd2ymGPi15x99Su2GPIW
+J7g1i6HkkCb/z+VsUuzbiE8ayQKBgQC2M/A6TFKTYUQsKBeMwSl4P8LfdwHGGJna
+jVoCTMXi+IzruHM5TjxyeHhruWZ0mrGRQexX2MRDzXi0qYx9HJ/TD18fYiGZntDZ
+uRWFy0UpBz4eKn+tm8hIPWH7alcGUghRASkNboCAHkyvsl7dr2xn51I2HI09hn6N
+j5qYK0PnCQKBgH6jEqzxeDW/98Ools9taQ/x5Y5PDlhCfjsDCgeKCGr4pb+xG+MH
+oMpJM+0aPqB0VBUuT5JFTjky5JfGd5jKKi47/autzQFnC47n7hGojeTvRKt9gFb3
+lWezFtAwBtT+X/EiD5vjcOAjMy/VuyscQCqfFzxuCLhqt1eY2xXRNBthAoGARSxI
+yslJHFz0FdOOxUhcZyPF5zL2QG/8kUXS40akZjw4vBFF5X63YjosdbFonWJRgbVG
+dj98m8U5S1WHWcRxRR7z3SVTXlA2OEKVUjtO4Xm3cppt6MpY6lwrg9jmeybPs3k+
+TbQjIwDd2mJcs8sy2+utgY+ra61RBIt9hMIAQIkCgYAdRrC7ID5giFV8RkMJ9Bkn
+MfvuXGSOWsDjORDLKCfNHZIJVmmIRamJSqIvnYCI/0hbaD1VlPhEMy4zsN9t+ziH
+JyCxt8TCRhh04p69kGTne12xle8oS+S3ZvAFLn/6oHBcGDxkC+IvUXMW3s9AZ9ST
+eGpX9b/Qfb48lrUkBirJwA==
+-----END PRIVATE KEY-----"#;
+
+    const TEST_PUBLIC_KEY: &str = r#"-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAhSWpgcVpCDjazA6Lc42R
+LlJaVROdf7kj+x+Gw/qx7PykH220m3nn0dr/avWR3gjzX7rhv2qYBwUELc4mFLry
+2gqW4E1039YkKG5hLjNk8zrPvLdSKbpswjzFKK1P2LBvNUnbjvkUcQu8T2Z/IBNH
+nnUEaPiB7LE/m6evt9JE+1z2xxJEceE9STirDrdiAyQsNnuXmR9X0XKW/Kypzcwm
+CfpuNAp4jos5wnqmSf9Uiokz0uHLfhCgC8rryKi9f/2s1+lMsbhrcn6XPo2UVByk
+vHYvb9AwWIX5FSPH8UoZDfech1KPFfY6Ma2GUNeIpF0SLdjJRygaaIOwWjNC8Y5Q
+EQIDAQAB
+-----END PUBLIC KEY-----"#;
 }

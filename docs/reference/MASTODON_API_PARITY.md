@@ -22,7 +22,7 @@ must not publish followers-only, direct, or E2EE content as public data.
 | Status writes | `POST /api/v1/statuses`, `PUT/PATCH /api/v1/statuses/:id`, `DELETE /api/v1/statuses/:id` | Implemented; deletes queue ActivityPub `Delete` to followers |
 | Interactions | `POST /api/v1/statuses/:id/favourite`, `unfavourite`, `reblog`, `unreblog`, `GET /api/v1/favourites` | Implemented for local status state |
 | Media | `POST /api/v1/media`, `POST /api/v2/media` | Implemented for public media uploads |
-| Polls | ActivityPub `Question` with `oneOf`/`anyOf` options | Implemented for CLI-created posts and server-to-server object rendering; Mastodon API poll creation remains pending |
+| Polls | ActivityPub `Question` with `oneOf`/`anyOf` options; Mastodon API `poll` parameters on `POST /api/v1/statuses` | Implemented for CLI-created posts, server-to-server object rendering, and Mastodon API status creation |
 | Notifications | `GET /api/v1/notifications`, `POST /api/v1/notifications/:id/dismiss`, `POST /api/v1/notifications/clear` | Implemented |
 | Search | `GET /api/v1/search`, `GET /api/v2/search` | Implemented for public local statuses and ActivityPub actor lookup |
 | Client lists | `GET /api/v1/filters`, `GET /api/v2/filters`, `GET /api/v1/lists`, `GET /api/v1/bookmarks`, `GET /api/v1/conversations`, `GET/POST /api/v1/markers` | Implemented as empty/compatible single-user surfaces |
@@ -37,8 +37,6 @@ must not publish followers-only, direct, or E2EE content as public data.
   an owner-provisioned bearer token.
 - Private, direct, and E2EE posts are not exposed through public Mastodon
   timelines or public status reads.
-- Mastodon API poll creation remains unsupported until owner/API status writes
-  can translate Mastodon poll parameters into dais `Question` objects.
 - Mute/unmute return relationship-compatible state but do not yet maintain a
   separate mute table.
 - Streaming is a compatibility placeholder; clients should fall back to polling.

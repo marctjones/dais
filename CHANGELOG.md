@@ -5,6 +5,33 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.28.5] - 2026-06-15
+
+### Added
+- Added Mastodon API poll creation support for `POST /api/v1/statuses`, mapping
+  client poll parameters into stored ActivityPub `Question` posts and returning
+  Mastodon-compatible poll JSON.
+- Added owner-profile parity for terminal users: `dais owner profile show`,
+  `dais owner profile update`, and a read-only TUI Profile tab now expose the
+  public account fields shared through ActivityPub, HTML profile, and Mastodon
+  account API surfaces.
+- Added Dais Desk post detail parity for owner posts, including replies, likes,
+  boosts, reply target, attachment count, and post metadata from the secure
+  owner API.
+- Added live Dais Desk Notifications and Deliveries screens backed by the
+  secure owner API, replacing the previous placeholder views.
+- Added `dais owner notifications` and `dais owner deliveries` so terminal
+  users can inspect the same live owner API rows as Dais Desk.
+- Added live owner API notification read actions to the CLI and Dais Desk.
+- Added live Dais Desk source subscription visibility alongside reader items
+  using the secure owner API `/sources` response.
+- Added `dais owner sources` for live owner API source subscription and reader
+  item inspection.
+- Added live owner API source add, remove, and refresh workflows with matching
+  Rust CLI and Dais Desk controls.
+
 ## [1.28.4] - 2026-06-15
 
 ### Added

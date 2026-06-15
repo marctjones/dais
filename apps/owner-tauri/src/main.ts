@@ -132,6 +132,65 @@ type UploadedMedia = {
   attachment: unknown;
 };
 
+type OwnerPostDetail = OwnerSnapshot["posts"][number] & {
+  content_html?: string | null;
+  in_reply_to?: string | null;
+  replies?: unknown[];
+  likes?: unknown[];
+  boosts?: unknown[];
+};
+
+type OwnerNotification = {
+  id: string;
+  type: string;
+  actor_id: string;
+  actor_username?: string | null;
+  actor_display_name?: string | null;
+  actor_avatar_url?: string | null;
+  post_id?: string | null;
+  activity_id?: string | null;
+  content?: string | null;
+  read: boolean | number | string | null;
+  created_at?: string | null;
+};
+
+type OwnerDelivery = {
+  id: string;
+  post_id: string;
+  target_type?: string | null;
+  target_url: string;
+  protocol: string;
+  status: string;
+  retry_count?: number | null;
+  last_attempt_at?: string | null;
+  error_message?: string | null;
+  activity_type?: string | null;
+  created_at?: string | null;
+  delivered_at?: string | null;
+};
+
+type SourceSubscription = {
+  id: string;
+  source_type: string;
+  url: string;
+  title?: string | null;
+  homepage_url?: string | null;
+  status: string;
+  refresh_cadence_minutes: number;
+  last_fetched_at?: string | null;
+  next_fetch_at?: string | null;
+  last_error?: string | null;
+  error_count: number;
+  policy_json: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type OwnerSources = {
+  subscriptions: SourceSubscription[];
+  items: OwnerSnapshot["sources"];
+};
+
 const sections = [
   "Home",
   "Following",
@@ -154,12 +213,18 @@ let notice = "";
 let draftAttachments: string[] = [];
 let draftReplyTo = "";
 let discoveredActor: DiscoveredActor | null = null;
+let selectedPostDetail: OwnerPostDetail | null = null;
+let notifications: OwnerNotification[] = [];
+let deliveries: OwnerDelivery[] = [];
+let sourceSubscriptions: SourceSubscription[] = [];
+let sourceItems: OwnerSnapshot["sources"] = [];
 
 async function load() {
   render();
   snapshot = await invoke<OwnerSnapshot>("owner_snapshot");
   active = active || snapshot.active_section || "Home";
   render();
+  await loadLiveSection(active);
 }
 
 function render() {
@@ -208,6 +273,7 @@ function render() {
       active = button.dataset.section || "Home";
       notice = "";
       render();
+      void loadLiveSection(active);
     });
   });
   app.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", saveSettings);
@@ -226,6 +292,10 @@ function render() {
   });
   app.querySelector<HTMLFormElement>("#follow-form")?.addEventListener("submit", followActor);
   app.querySelector<HTMLFormElement>("#discover-form")?.addEventListener("submit", discoverActor);
+  app.querySelector<HTMLFormElement>("#source-form")?.addEventListener("submit", addSource);
+  app.querySelector<HTMLButtonElement>("[data-refresh-sources]")?.addEventListener("click", () => {
+    void refreshSource(null);
+  });
   app.querySelector<HTMLButtonElement>("[data-follow-discovered]")?.addEventListener("click", () => {
     void followTarget(discoveredActor?.id || "");
   });
@@ -255,6 +325,26 @@ function render() {
       }
     });
   });
+  app.querySelectorAll<HTMLButtonElement>("[data-post-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void loadPostDetail(button.dataset.postDetail || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-notification-read]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void markNotificationRead(button.dataset.notificationRead || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-source-refresh]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void refreshSource(button.dataset.sourceRefresh || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-source-remove]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void removeSource(button.dataset.sourceRemove || "");
+    });
+  });
 }
 
 function navButton(section: string) {
@@ -274,9 +364,9 @@ function view(section: string, data: OwnerSnapshot): string {
     case "Compose":
       return composeView(data);
     case "Posts":
-      return list(data.posts.map(postCard), "No posts returned by the owner API yet.");
+      return postsView(data);
     case "Sources":
-      return list(data.sources.map(sourceCard), "No source items are available yet.");
+      return sourcesView(data);
     case "Moderation":
       return moderationView(data);
     case "Settings":
@@ -288,11 +378,62 @@ function view(section: string, data: OwnerSnapshot): string {
     case "Profile":
       return profileView(data);
     case "Notifications":
+      return notificationsView();
     case "Deliveries":
-      return pendingLiveView(section);
+      return deliveriesView();
     default:
       return pendingLiveView(section);
   }
+}
+
+function postsView(data: OwnerSnapshot) {
+  return `<section class="split">
+    <div>${list(data.posts.map(postCard), "No posts returned by the owner API yet.")}</div>
+    <article class="panel detail">
+      <h2>Post detail</h2>
+      ${selectedPostDetail ? postDetailView(selectedPostDetail) : `<p>Select a post to inspect replies, reactions, boosts, and attachments.</p>`}
+    </article>
+  </section>`;
+}
+
+function notificationsView() {
+  return `<section>
+    ${list(notifications.map(notificationCard), "No notifications returned by the owner API.")}
+  </section>`;
+}
+
+function deliveriesView() {
+  return `<section>
+    ${list(deliveries.map(deliveryCard), "No deliveries returned by the owner API.")}
+  </section>`;
+}
+
+function sourcesView(data: OwnerSnapshot) {
+  const items = sourceItems.length ? sourceItems : data.sources;
+  return `<section class="split">
+    <article>
+      <div class="section-heading">
+        <h2 class="section-label">Subscriptions</h2>
+        <button type="button" data-refresh-sources>Refresh all</button>
+      </div>
+      <form id="source-form" class="compact-form">
+        <select name="source_type">
+          <option value="rss">RSS</option>
+          <option value="atom">Atom</option>
+          <option value="api">API</option>
+        </select>
+        <input name="url" placeholder="https://example.com/feed.xml" />
+        <input name="title" placeholder="Title" />
+        <input name="cadence_minutes" type="number" min="5" max="1440" value="60" />
+        <button type="submit">Add</button>
+      </form>
+      ${list(sourceSubscriptions.map(sourceSubscriptionCard), "No source subscriptions returned by the owner API.")}
+    </article>
+    <article>
+      <h2 class="section-label">Reader items</h2>
+      ${list(items.map(sourceCard), "No source items are available yet.")}
+    </article>
+  </section>`;
 }
 
 function dashboardView(data: OwnerSnapshot) {
@@ -502,8 +643,26 @@ function postCard(post: OwnerSnapshot["posts"][number]) {
       ${post.attachments?.length ? `<span>${post.attachments.length} media</span>` : ""}
       ${interactionCounts(post)}
       ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
+      <button type="button" data-post-detail="${escapeAttr(post.id)}">Detail</button>
     </footer>
   </article>`;
+}
+
+function postDetailView(post: OwnerPostDetail) {
+  return `<div class="detail-body">
+    <p>${escapeHtml(post.content)}</p>
+    <dl>
+      <dt>ID</dt><dd>${escapeHtml(shortUrl(post.id))}</dd>
+      <dt>Visibility</dt><dd>${escapeHtml(String(post.visibility))}</dd>
+      <dt>Protocol</dt><dd>${escapeHtml(String(post.protocol))}</dd>
+      <dt>Reply target</dt><dd>${post.in_reply_to ? escapeHtml(shortUrl(post.in_reply_to)) : "none"}</dd>
+      <dt>Published</dt><dd>${post.published_at ? escapeHtml(formatTime(post.published_at)) : ""}</dd>
+      <dt>Media</dt><dd>${post.attachments?.length || 0}</dd>
+      <dt>Replies</dt><dd>${post.reply_count || post.replies?.length || 0}</dd>
+      <dt>Likes</dt><dd>${post.like_count || post.likes?.length || 0}</dd>
+      <dt>Boosts</dt><dd>${post.boost_count || post.boosts?.length || 0}</dd>
+    </dl>
+  </div>`;
 }
 
 function timelineCard(post: OwnerSnapshot["home_timeline"][number]) {
@@ -544,6 +703,57 @@ function sourceCard(source: OwnerSnapshot["sources"][number]) {
       <span>${escapeHtml(source.source_type)}</span>
       <span>${source.read ? "Read" : "Unread"}</span>
       ${source.canonical_url ? `<a href="${escapeAttr(source.canonical_url)}">${escapeHtml(shortHost(source.canonical_url))}</a>` : ""}
+    </footer>
+  </article>`;
+}
+
+function sourceSubscriptionCard(source: SourceSubscription) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(source.title || shortHost(source.url))}</h2>
+      <p>${escapeHtml(source.url)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(source.source_type)}</span>
+      <span>${escapeHtml(source.status)}</span>
+      <span>${source.refresh_cadence_minutes} min</span>
+      ${source.last_fetched_at ? `<time>${escapeHtml(formatTime(source.last_fetched_at))}</time>` : ""}
+      ${source.last_error ? `<span>${escapeHtml(source.last_error)}</span>` : ""}
+    </footer>
+    <div class="row-actions">
+      <button type="button" data-source-refresh="${escapeAttr(source.id)}">Refresh</button>
+      <button type="button" data-source-remove="${escapeAttr(source.id)}">Remove</button>
+    </div>
+  </article>`;
+}
+
+function notificationCard(row: OwnerNotification) {
+  const actor = row.actor_display_name || row.actor_username || actorLabel(row.actor_id);
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.type)} from ${escapeHtml(actor)}</h2>
+      <p>${escapeHtml(row.content || row.activity_id || "")}</p>
+    </div>
+    <footer>
+      <span>${isRead(row.read) ? "read" : "unread"}</span>
+      ${row.post_id ? `<span>${escapeHtml(shortUrl(row.post_id))}</span>` : ""}
+      ${row.created_at ? `<time>${escapeHtml(formatTime(row.created_at))}</time>` : ""}
+      <button type="button" data-notification-read="${escapeAttr(row.id)}">Mark read</button>
+    </footer>
+  </article>`;
+}
+
+function deliveryCard(row: OwnerDelivery) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.status)} ${escapeHtml(row.protocol)}</h2>
+      <p>${escapeHtml(shortUrl(row.target_url))}</p>
+    </div>
+    <footer>
+      ${row.activity_type ? `<span>${escapeHtml(row.activity_type)}</span>` : ""}
+      <span>retries ${row.retry_count || 0}</span>
+      ${row.last_attempt_at ? `<time>${escapeHtml(formatTime(row.last_attempt_at))}</time>` : ""}
+      ${row.error_message ? `<span>${escapeHtml(row.error_message)}</span>` : ""}
     </footer>
   </article>`;
 }
@@ -790,6 +1000,46 @@ async function unfollowActor(target: string) {
   await load();
 }
 
+async function addSource(event: SubmitEvent) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  const url = String(form.get("url") || "").trim();
+  if (!url) {
+    notice = "Enter a source URL.";
+    render();
+    return;
+  }
+  const title = String(form.get("title") || "").trim();
+  const cadence = Number(form.get("cadence_minutes") || 60);
+  const result = await invoke<{ source: SourceSubscription }>("add_owner_source", {
+    sourceType: String(form.get("source_type") || "rss"),
+    url,
+    title: title || null,
+    cadenceMinutes: Number.isFinite(cadence) ? cadence : 60
+  });
+  notice = `Added ${result.source.id}.`;
+  await loadLiveSection("Sources");
+}
+
+async function refreshSource(id: string | null) {
+  const result = await invoke<{ ok: boolean; items: Array<{ id: string; ok: boolean; error?: string | null }> }>(
+    "refresh_owner_source",
+    { id }
+  );
+  const failures = result.items.filter((item) => !item.ok);
+  notice = failures.length
+    ? `Refresh completed with ${failures.length} error${failures.length === 1 ? "" : "s"}.`
+    : `Refreshed ${result.items.length} source${result.items.length === 1 ? "" : "s"}.`;
+  await loadLiveSection("Sources");
+}
+
+async function removeSource(id: string) {
+  if (!id) return;
+  await invoke("remove_owner_source", { id });
+  notice = `Removed ${id}.`;
+  await loadLiveSection("Sources");
+}
+
 async function ownerInteraction(objectId: string, interaction: string) {
   if (!objectId || !interaction) return;
   const result = await invoke<InteractionResult>("owner_interaction", {
@@ -798,6 +1048,39 @@ async function ownerInteraction(objectId: string, interaction: string) {
   });
   notice = `${result.interaction} queued for ${shortUrl(result.object_id)}.`;
   await load();
+}
+
+async function loadPostDetail(objectId: string) {
+  if (!objectId) return;
+  selectedPostDetail = await invoke<OwnerPostDetail>("owner_post_detail", { objectId });
+  notice = `Loaded ${shortUrl(objectId)}.`;
+  render();
+}
+
+async function loadLiveSection(section: string) {
+  if (section === "Notifications") {
+    notifications = await invoke<OwnerNotification[]>("owner_notifications");
+    render();
+  } else if (section === "Deliveries") {
+    deliveries = await invoke<OwnerDelivery[]>("owner_deliveries");
+    render();
+  } else if (section === "Sources") {
+    const sources = await invoke<OwnerSources>("owner_sources");
+    sourceSubscriptions = sources.subscriptions;
+    sourceItems = sources.items;
+    render();
+  }
+}
+
+async function markNotificationRead(id: string) {
+  if (!id) return;
+  await invoke("mark_owner_notification_read", { id });
+  notice = `Marked notification ${id} read.`;
+  await loadLiveSection("Notifications");
+}
+
+function isRead(value: OwnerNotification["read"]) {
+  return value === true || value === 1 || value === "1" || value === "true";
 }
 
 function option(value: string, selected: boolean) {

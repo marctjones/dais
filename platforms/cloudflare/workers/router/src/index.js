@@ -390,7 +390,7 @@ async function handleMastodonApi(request, env, url) {
         configuration: {
           statuses: { max_characters: 5000, max_media_attachments: 4, characters_reserved_per_url: 23 },
           media_attachments: { supported_mime_types: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] },
-          polls: { max_options: 0, max_characters_per_option: 0, min_expiration: 0, max_expiration: 0 },
+          polls: { max_options: 4, max_characters_per_option: 200, min_expiration: 300, max_expiration: 2629746 },
         },
       });
     }
@@ -658,25 +658,35 @@ async function handleMastodonApi(request, env, url) {
     if (!text) return apiJson({ error: 'status is required' }, 400);
     const visibility = normalizeMastodonVisibility(body.visibility || 'private') || 'followers';
     const mediaIds = requestBodyArray(body, 'media_ids');
+    let poll = null;
+    try {
+      poll = mastodonPollFromRequestBody(body);
+    } catch (error) {
+      return apiJson({ error: error.message || 'invalid poll' }, 400);
+    }
     const created = await ownerCreatePost(env, {
       text,
       visibility,
       protocol: 'activitypub',
       attachments: await mastodonAttachmentsForMediaIds(env, mediaIds, visibility),
       inReplyTo: optionalString(body.in_reply_to_id),
+      objectType: poll ? 'Question' : 'Note',
+      pollOptions: poll,
+      summary: optionalString(body.spoiler_text),
     });
     return apiJson(statusJson({
       id: created.id,
       actor_id: created.actor_id,
       content: created.content,
       content_html: created.content_html,
-      object_type: 'Note',
+      object_type: created.object_type,
       name: null,
-      summary: body.spoiler_text || null,
+      summary: created.summary,
       visibility: created.visibility,
       published_at: created.published_at,
       in_reply_to: body.in_reply_to_id || null,
       media_attachments: created.attachments?.length ? JSON.stringify(created.attachments) : null,
+      poll_options: created.poll_options,
     }, await mastodonAccount(env)), 201);
   }
 
@@ -879,6 +889,32 @@ async function handleOwnerApi(request, env, url) {
       subscriptions: await ownerSourceSubscriptions(env, clampLimit(url.searchParams.get('limit'))),
       items: await ownerSourceItems(env, clampLimit(url.searchParams.get('items_limit') || '40')),
     });
+  }
+
+  if (request.method === 'POST' && path === '/sources') {
+    const body = await readJson(request);
+    try {
+      const source = await ownerAddSource(env, body);
+      return apiJson({ ok: true, source }, 201);
+    } catch (error) {
+      return apiJson({ error: error.message || 'source add failed' }, 400);
+    }
+  }
+
+  if (request.method === 'DELETE' && path.startsWith('/sources/')) {
+    const id = decodeURIComponent(path.slice('/sources/'.length));
+    if (!id) return apiJson({ error: 'id is required' }, 400);
+    await env.DB.prepare("DELETE FROM source_subscriptions WHERE id = ?1").bind(id).run();
+    return apiJson({ ok: true });
+  }
+
+  if (request.method === 'POST' && path === '/sources/refresh') {
+    const body = await readJson(request);
+    try {
+      return apiJson(await ownerRefreshSources(env, optionalString(body.id)));
+    } catch (error) {
+      return apiJson({ error: error.message || 'source refresh failed' }, 400);
+    }
   }
 
   if (request.method === 'GET' && path === '/moderation') {
@@ -1559,6 +1595,13 @@ function publicHttpsUrl(value, field) {
   return url;
 }
 
+async function sourceId(sourceType, sourceUrl) {
+  const bytes = new TextEncoder().encode(`${sourceType}\n${sourceUrl}`);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const hex = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `source-${hex.slice(0, 24)}`;
+}
+
 async function ownerNotifications(env, limit) {
   const rows = await env.DB.prepare(
     `SELECT id, type, actor_id, actor_username, actor_display_name, actor_avatar_url,
@@ -1589,6 +1632,93 @@ async function ownerSourceSubscriptions(env, limit) {
      ORDER BY updated_at DESC
      LIMIT ?1`,
   ).bind(limit).all();
+  return rows.results || [];
+}
+
+async function ownerAddSource(env, body) {
+  const sourceType = String(body.source_type || body.sourceType || '').trim().toLowerCase();
+  if (!['rss', 'atom', 'api'].includes(sourceType)) {
+    throw new Error('source_type must be rss, atom, or api');
+  }
+  const sourceUrl = publicHttpsUrl(body.url, 'source url').toString();
+  const id = await sourceId(sourceType, sourceUrl);
+  const title = optionalString(body.title);
+  const cadenceMinutes = Math.max(5, Math.min(1440, Number(body.cadence_minutes || body.cadenceMinutes || 60)));
+  const apiSecretName = optionalString(body.api_secret_name || body.apiSecretName);
+  const policy = {
+    private_reader_only: body.private_reader_only !== false && body.privateReaderOnly !== false,
+    excerpt_only: body.excerpt_only !== false && body.excerptOnly !== false,
+    link_required: body.link_required !== false && body.linkRequired !== false,
+    attribution_required: body.attribution_required !== false && body.attributionRequired !== false,
+    image_allowed: Boolean(body.image_allowed || body.imageAllowed),
+    full_text_allowed: Boolean(body.full_text_allowed || body.fullTextAllowed),
+  };
+  await env.DB.prepare(`
+    INSERT INTO source_subscriptions (
+      id, source_type, url, title, refresh_cadence_minutes, policy_json,
+      api_secret_name, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO UPDATE SET
+      source_type = excluded.source_type,
+      url = excluded.url,
+      title = excluded.title,
+      refresh_cadence_minutes = excluded.refresh_cadence_minutes,
+      policy_json = excluded.policy_json,
+      api_secret_name = excluded.api_secret_name,
+      status = 'active',
+      last_error = NULL,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(id, sourceType, sourceUrl, title, cadenceMinutes, JSON.stringify(policy), apiSecretName).run();
+  return (await ownerSourceById(env, id)) || { id, source_type: sourceType, url: sourceUrl };
+}
+
+async function ownerRefreshSources(env, id) {
+  const sources = id ? [await ownerSourceById(env, id)] : await ownerActiveSources(env);
+  const rows = sources.filter(Boolean);
+  if (id && rows.length === 0) throw new Error(`source not found: ${id}`);
+  const results = [];
+  for (const source of rows) {
+    try {
+      await refreshFeedSource(env, source, { manual: true });
+      const refreshed = await ownerSourceById(env, source.id);
+      results.push({ id: source.id, ok: true, status: refreshed?.status || 'active' });
+    } catch (error) {
+      const message = String(error && error.message ? error.message : error).slice(0, 500);
+      await env.DB.prepare(`
+        UPDATE source_subscriptions
+        SET status = 'error',
+            last_error = ?,
+            error_count = error_count + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(message, source.id).run();
+      results.push({ id: source.id, ok: false, error: message });
+    }
+  }
+  return { ok: results.every((row) => row.ok), items: results };
+}
+
+async function ownerSourceById(env, id) {
+  return env.DB.prepare(
+    `SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+            etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+            policy_json, api_secret_name, created_at, updated_at
+     FROM source_subscriptions
+     WHERE id = ?1`,
+  ).bind(id).first();
+}
+
+async function ownerActiveSources(env) {
+  const rows = await env.DB.prepare(
+    `SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+            etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+            policy_json, api_secret_name, created_at, updated_at
+     FROM source_subscriptions
+     WHERE status = 'active'
+       AND source_type IN ('rss', 'atom', 'api')
+     ORDER BY COALESCE(next_fetch_at, created_at) ASC
+     LIMIT 20`,
+  ).all();
   return rows.results || [];
 }
 
@@ -1664,7 +1794,18 @@ async function ownerDiagnostics(env) {
   ];
 }
 
-async function ownerCreatePost(env, { text, visibility, protocol, recipients = [], attachments = [], encrypt = false, inReplyTo = null }) {
+async function ownerCreatePost(env, {
+  text,
+  visibility,
+  protocol,
+  recipients = [],
+  attachments = [],
+  encrypt = false,
+  inReplyTo = null,
+  objectType = 'Note',
+  pollOptions = null,
+  summary = null,
+}) {
   const actor = await env.DB.prepare(
     "SELECT id FROM actors WHERE username = 'social' LIMIT 1",
   ).first();
@@ -1686,6 +1827,8 @@ async function ownerCreatePost(env, { text, visibility, protocol, recipients = [
   if (mediaAttachments.length > 0 && ['followers', 'direct'].includes(visibility) && !mediaAttachments.every(isPrivateMediaAttachment)) {
     throw new Error('private and direct media attachments must use private media upload URLs');
   }
+  const normalizedObjectType = objectType === 'Question' ? 'Question' : 'Note';
+  const pollOptionsJson = pollOptions ? JSON.stringify(pollOptions) : null;
   let replyTargetInbox = null;
   if (inReplyTo) {
     publicHttpsUrl(inReplyTo, 'in_reply_to');
@@ -1694,10 +1837,23 @@ async function ownerCreatePost(env, { text, visibility, protocol, recipients = [
   const mediaAttachmentsJson = mediaAttachments.length ? JSON.stringify(mediaAttachments) : null;
   await env.DB.prepare(
     `INSERT INTO posts (
-      id, actor_id, content, content_html, object_type, visibility, protocol,
-      published_at, media_attachments, in_reply_to, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, 'Note', ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-  ).bind(postId, actorId, text, contentHtml, visibility, protocol, now, mediaAttachmentsJson, inReplyTo).run();
+      id, actor_id, content, content_html, object_type, summary, visibility, protocol,
+      published_at, media_attachments, in_reply_to, poll_options, created_at, updated_at
+    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  ).bind(
+    postId,
+    actorId,
+    text,
+    contentHtml,
+    normalizedObjectType,
+    summary,
+    visibility,
+    protocol,
+    now,
+    mediaAttachmentsJson,
+    inReplyTo,
+    pollOptionsJson,
+  ).run();
   const deliveryIds =
     protocol === 'activitypub' || protocol === 'both'
       ? await ownerCreatePostDeliveries(env, { postId, visibility, directTargets, extraTargets: replyTargetInbox ? [replyTargetInbox] : [] })
@@ -1707,10 +1863,13 @@ async function ownerCreatePost(env, { text, visibility, protocol, recipients = [
     actor_id: actorId,
     content: text,
     content_html: contentHtml,
+    object_type: normalizedObjectType,
+    summary,
     visibility,
     protocol,
     published_at: now,
     in_reply_to: inReplyTo,
+    poll_options: pollOptionsJson,
     recipients,
     attachments: mediaAttachments,
     delivery_ids: deliveryIds,
@@ -1958,7 +2117,7 @@ async function mastodonAccount(env) {
 async function mastodonStatuses(env, limit) {
   const rows = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
-            name, summary, visibility, published_at, in_reply_to, media_attachments,
+            name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
             (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
             (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
             (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
@@ -1976,7 +2135,7 @@ async function mastodonStatuses(env, limit) {
 async function mastodonStatus(env, id) {
   const row = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
-            name, summary, visibility, published_at, in_reply_to, media_attachments,
+            name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
             (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
             (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
             (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
@@ -2018,7 +2177,31 @@ function statusJson(row, account) {
     mentions: [],
     tags: [],
     card: null,
-    poll: null,
+    poll: mastodonPollJson(row),
+  };
+}
+
+function mastodonPollJson(row) {
+  if (row.object_type !== 'Question' || !row.poll_options) return null;
+  let parsed;
+  try {
+    parsed = typeof row.poll_options === 'string' ? JSON.parse(row.poll_options) : row.poll_options;
+  } catch {
+    return null;
+  }
+  const options = Array.isArray(parsed?.options) ? parsed.options.map((title) => String(title)) : [];
+  if (options.length === 0) return null;
+  return {
+    id: `${row.id}#poll`,
+    expires_at: null,
+    expired: false,
+    multiple: Boolean(parsed.multiple),
+    votes_count: 0,
+    voters_count: 0,
+    voted: false,
+    own_votes: [],
+    options: options.map((title) => ({ title, votes_count: 0 })),
+    emojis: [],
   };
 }
 
@@ -2131,7 +2314,7 @@ async function mastodonToggleStatusInteraction(env, statusId, action) {
 async function mastodonStatusesByInteraction(env, type, limit) {
   const rows = await env.DB.prepare(
     `SELECT p.id, p.actor_id, p.content, p.content_html, COALESCE(p.object_type, 'Note') AS object_type,
-            p.name, p.summary, p.visibility, p.published_at, p.in_reply_to, p.media_attachments,
+            p.name, p.summary, p.visibility, p.published_at, p.in_reply_to, p.poll_options, p.media_attachments,
             (SELECT COUNT(*) FROM replies r WHERE r.post_id = p.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
             (SELECT COUNT(*) FROM interactions li WHERE (li.post_id = p.id OR li.object_url = p.id) AND li.type = 'like') AS like_count,
             (SELECT COUNT(*) FROM interactions bi WHERE (bi.post_id = p.id OR bi.object_url = p.id) AND bi.type = 'boost') AS boost_count
@@ -2215,7 +2398,7 @@ async function mastodonSearch(env, query, limit) {
   }
   const rows = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
-            name, summary, visibility, published_at, in_reply_to, media_attachments,
+            name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
             (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
             (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
             (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
@@ -2307,9 +2490,50 @@ async function mastodonAttachmentsForMediaIds(env, mediaIds, visibility) {
   }).filter(Boolean);
 }
 
+function mastodonPollFromRequestBody(body) {
+  const options = mastodonPollOptionsFromRequestBody(body);
+  const multiple = mastodonPollMultipleFromRequestBody(body);
+  if (options.length === 0) {
+    if (multiple) throw new Error('poll[multiple] requires poll[options][]');
+    return null;
+  }
+  if (options.length < 2 || options.length > 4) {
+    throw new Error('polls require between two and four options');
+  }
+  for (const option of options) {
+    if (!option.trim()) throw new Error('poll options must not be empty');
+    if ([...option].length > 200) throw new Error('poll options must be 200 characters or fewer');
+  }
+  return { multiple, options };
+}
+
+function mastodonPollOptionsFromRequestBody(body) {
+  const poll = body.poll && typeof body.poll === 'object' ? body.poll : {};
+  const candidates = [
+    poll.options,
+    body['poll[options]'],
+    body['poll[options][]'],
+  ];
+  for (const candidate of candidates) {
+    const values = arrayFromBodyValue(candidate).map((value) => String(value).trim()).filter(Boolean);
+    if (values.length > 0) return values;
+  }
+  return [];
+}
+
+function mastodonPollMultipleFromRequestBody(body) {
+  const poll = body.poll && typeof body.poll === 'object' ? body.poll : {};
+  const value = poll.multiple !== undefined ? poll.multiple : body['poll[multiple]'];
+  return ['true', '1', 'on', 'yes'].includes(String(value || '').toLowerCase());
+}
+
 function requestBodyArray(body, key) {
   const bracket = `${key}[]`;
   const value = body[bracket] !== undefined ? body[bracket] : body[key];
+  return arrayFromBodyValue(value).map(String).filter(Boolean);
+}
+
+function arrayFromBodyValue(value) {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
   if (value === undefined || value === null || value === '') return [];
   return [String(value)];

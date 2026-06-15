@@ -765,10 +765,27 @@ pub enum FollowersCommand {
 pub enum OwnerCommand {
     /// Show live owner API counts.
     Snapshot(OwnerApiArgs),
+    /// Show or update public account profile metadata through the live owner API.
+    #[command(subcommand)]
+    Profile(OwnerProfileCommand),
     /// Read the live owner API home timeline.
     Timeline(OwnerTimelineArgs),
     /// List actors followed by the live instance.
     Following(OwnerApiArgs),
+    /// List live owner API notifications.
+    Notifications(OwnerApiArgs),
+    /// Mark one live owner API notification as read.
+    NotificationRead(OwnerNotificationReadArgs),
+    /// List live owner API delivery jobs.
+    Deliveries(OwnerApiArgs),
+    /// List live owner API source subscriptions and reader items.
+    Sources(OwnerApiArgs),
+    /// Add a source subscription through the live owner API.
+    SourceAdd(OwnerSourceAddArgs),
+    /// Remove a live owner API source subscription.
+    SourceRemove(OwnerSourceIdArgs),
+    /// Refresh one live owner API source, or all active sources when no id is supplied.
+    SourceRefresh(OwnerSourceRefreshArgs),
     /// Resolve an ActivityPub actor before following.
     Discover(OwnerFollowArgs),
     /// Show a live owner API post detail and interaction counts.
@@ -801,12 +818,85 @@ pub struct OwnerApiArgs {
     pub owner_token: String,
 }
 
+#[derive(Subcommand)]
+pub enum OwnerProfileCommand {
+    /// Show public profile metadata exposed through ActivityPub and Mastodon APIs.
+    Show(OwnerApiArgs),
+    /// Update public profile metadata exposed through ActivityPub and Mastodon APIs.
+    Update(OwnerProfileUpdateArgs),
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerProfileUpdateArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    #[arg(long)]
+    pub actor_type: Option<String>,
+    #[arg(long)]
+    pub display_name: Option<String>,
+    #[arg(long)]
+    pub summary: Option<String>,
+    /// ActivityStreams icon/avatar URL.
+    #[arg(long)]
+    pub icon: Option<String>,
+    /// ActivityStreams image/header URL.
+    #[arg(long)]
+    pub image: Option<String>,
+}
+
 #[derive(Args, Clone, Debug)]
 pub struct OwnerTimelineArgs {
     #[command(flatten)]
     pub api: OwnerApiArgs,
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerSourceAddArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub source_type: String,
+    pub url: String,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub cadence_minutes: Option<u16>,
+    #[arg(long)]
+    pub api_secret_name: Option<String>,
+    #[arg(long, default_value_t = true)]
+    pub private_reader_only: bool,
+    #[arg(long, default_value_t = true)]
+    pub excerpt_only: bool,
+    #[arg(long, default_value_t = true)]
+    pub link_required: bool,
+    #[arg(long, default_value_t = true)]
+    pub attribution_required: bool,
+    #[arg(long)]
+    pub image_allowed: bool,
+    #[arg(long)]
+    pub full_text_allowed: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerSourceIdArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub id: String,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerSourceRefreshArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub id: Option<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerNotificationReadArgs {
+    pub id: String,
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
 }
 
 #[derive(Args, Clone, Debug)]

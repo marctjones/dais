@@ -70,6 +70,48 @@ impl OwnerApiClient {
         self.post("/api/dais/owner/profile", profile).await
     }
 
+    pub async fn notifications(&self) -> ClientResult<Vec<OwnerNotification>> {
+        let response: OwnerItems<OwnerNotification> =
+            self.get("/api/dais/owner/notifications").await?;
+        Ok(response.items)
+    }
+
+    pub async fn mark_notification_read(&self, id: &str) -> ClientResult<OwnerActionResult> {
+        self.post(
+            "/api/dais/owner/notifications/read",
+            &NotificationRead { id },
+        )
+        .await
+    }
+
+    pub async fn deliveries(&self) -> ClientResult<Vec<OwnerDelivery>> {
+        let response: OwnerItems<OwnerDelivery> = self.get("/api/dais/owner/deliveries").await?;
+        Ok(response.items)
+    }
+
+    pub async fn sources(&self) -> ClientResult<OwnerSources> {
+        self.get("/api/dais/owner/sources").await
+    }
+
+    pub async fn add_source(&self, source: &OwnerSourceAdd) -> ClientResult<OwnerSourceAddResult> {
+        self.post("/api/dais/owner/sources", source).await
+    }
+
+    pub async fn remove_source(&self, id: &str) -> ClientResult<OwnerActionResult> {
+        self.delete(&format!("/api/dais/owner/sources/{id}")).await
+    }
+
+    pub async fn refresh_sources(
+        &self,
+        id: Option<&str>,
+    ) -> ClientResult<OwnerSourceRefreshResult> {
+        self.post(
+            "/api/dais/owner/sources/refresh",
+            &OwnerSourceRefresh { id },
+        )
+        .await
+    }
+
     pub async fn follow_actor(&self, target: &str) -> ClientResult<OwnerFollowResult> {
         self.post("/api/dais/owner/following/follow", &FollowTarget { target })
             .await
@@ -106,6 +148,19 @@ impl OwnerApiClient {
             .post(format!("{}{}", self.base_url, path))
             .bearer_auth(&self.owner_token)
             .json(body)
+            .send()
+            .await?;
+        decode_response(response).await
+    }
+
+    async fn delete<T>(&self, path: &str) -> ClientResult<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let response = self
+            .http
+            .delete(format!("{}{}", self.base_url, path))
+            .bearer_auth(&self.owner_token)
             .send()
             .await?;
         decode_response(response).await
@@ -287,6 +342,16 @@ struct FollowTarget<'a> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct NotificationRead<'a> {
+    id: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct OwnerItems<T> {
+    items: Vec<T>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerFollower {
     pub id: String,
     pub actor_id: String,
@@ -331,6 +396,38 @@ pub struct OwnerDiscoveredActor {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerNotification {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub actor_id: String,
+    pub actor_username: Option<String>,
+    pub actor_display_name: Option<String>,
+    pub actor_avatar_url: Option<String>,
+    pub post_id: Option<String>,
+    pub activity_id: Option<String>,
+    pub content: Option<String>,
+    pub read: serde_json::Value,
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerDelivery {
+    pub id: String,
+    pub post_id: String,
+    pub target_type: Option<String>,
+    pub target_url: String,
+    pub protocol: String,
+    pub status: String,
+    pub retry_count: Option<u64>,
+    pub last_attempt_at: Option<String>,
+    pub error_message: Option<String>,
+    pub activity_type: Option<String>,
+    pub created_at: Option<String>,
+    pub delivered_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerProfile {
     pub id: String,
     pub username: String,
@@ -363,6 +460,70 @@ pub struct SourceItem {
     pub excerpt: Option<String>,
     pub rights_policy_json: String,
     pub read: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceSubscription {
+    pub id: String,
+    pub source_type: String,
+    pub url: String,
+    pub title: Option<String>,
+    pub homepage_url: Option<String>,
+    pub status: String,
+    pub refresh_cadence_minutes: u64,
+    pub last_fetched_at: Option<String>,
+    pub next_fetch_at: Option<String>,
+    pub last_error: Option<String>,
+    pub error_count: u64,
+    pub policy_json: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSources {
+    pub subscriptions: Vec<SourceSubscription>,
+    pub items: Vec<SourceItem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSourceAdd {
+    pub source_type: String,
+    pub url: String,
+    pub title: Option<String>,
+    pub cadence_minutes: Option<u16>,
+    pub api_secret_name: Option<String>,
+    pub private_reader_only: bool,
+    pub excerpt_only: bool,
+    pub link_required: bool,
+    pub attribution_required: bool,
+    pub image_allowed: bool,
+    pub full_text_allowed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSourceAddResult {
+    pub ok: bool,
+    pub source: SourceSubscription,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct OwnerSourceRefresh<'a> {
+    id: Option<&'a str>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSourceRefreshItem {
+    pub id: String,
+    pub ok: bool,
+    pub status: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSourceRefreshResult {
+    pub ok: bool,
+    pub items: Vec<OwnerSourceRefreshItem>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

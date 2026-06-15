@@ -23,7 +23,8 @@ use cli::{
 use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
-    OwnerApiClient, OwnerDiscoveredActor, OwnerInteraction, OwnerPostDetail, OwnerSnapshot,
+    OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerInteraction, OwnerNotification,
+    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSnapshot, OwnerSourceAdd, OwnerSources,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
@@ -968,6 +969,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_snapshot(&snapshot);
         }
+        OwnerCommand::Profile(command) => handle_owner_profile(command).await?,
         OwnerCommand::Timeline(args) => {
             let snapshot = owner_api(&args.api)
                 .snapshot()
@@ -1006,6 +1008,80 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                     row.target_inbox,
                     row.accepted_at.as_deref().unwrap_or("")
                 );
+            }
+        }
+        OwnerCommand::Notifications(args) => {
+            let notifications = owner_api(&args)
+                .notifications()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_notifications(&notifications);
+        }
+        OwnerCommand::NotificationRead(args) => {
+            owner_api(&args.api)
+                .mark_notification_read(&args.id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Marked notification {} read", args.id);
+        }
+        OwnerCommand::Deliveries(args) => {
+            let deliveries = owner_api(&args)
+                .deliveries()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_deliveries(&deliveries);
+        }
+        OwnerCommand::Sources(args) => {
+            let sources = owner_api(&args)
+                .sources()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_sources(&sources);
+        }
+        OwnerCommand::SourceAdd(args) => {
+            let result = owner_api(&args.api)
+                .add_source(&OwnerSourceAdd {
+                    source_type: args.source_type,
+                    url: args.url,
+                    title: args.title,
+                    cadence_minutes: args.cadence_minutes,
+                    api_secret_name: args.api_secret_name,
+                    private_reader_only: args.private_reader_only,
+                    excerpt_only: args.excerpt_only,
+                    link_required: args.link_required,
+                    attribution_required: args.attribution_required,
+                    image_allowed: args.image_allowed,
+                    full_text_allowed: args.full_text_allowed,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!(
+                "Added source {} {} {}",
+                result.source.id, result.source.source_type, result.source.url
+            );
+        }
+        OwnerCommand::SourceRemove(args) => {
+            owner_api(&args.api)
+                .remove_source(&args.id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Removed source {}", args.id);
+        }
+        OwnerCommand::SourceRefresh(args) => {
+            let result = owner_api(&args.api)
+                .refresh_sources(args.id.as_deref())
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            for item in result.items {
+                if item.ok {
+                    println!(
+                        "{} ok status={}",
+                        item.id,
+                        item.status.unwrap_or_else(|| "active".to_string())
+                    );
+                } else {
+                    println!("{} error={}", item.id, item.error.unwrap_or_default());
+                }
             }
         }
         OwnerCommand::Discover(args) => {
@@ -1059,6 +1135,32 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
     Ok(())
 }
 
+async fn handle_owner_profile(command: cli::OwnerProfileCommand) -> Result<()> {
+    match command {
+        cli::OwnerProfileCommand::Show(args) => {
+            let snapshot = owner_api(&args)
+                .snapshot()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_profile(&snapshot.profile);
+        }
+        cli::OwnerProfileCommand::Update(args) => {
+            let profile = owner_api(&args.api)
+                .update_profile(&OwnerProfileUpdate {
+                    actor_type: args.actor_type,
+                    display_name: args.display_name,
+                    summary: args.summary,
+                    icon: args.icon,
+                    image: args.image,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_profile(&profile);
+        }
+    }
+    Ok(())
+}
+
 async fn owner_interact(
     args: &cli::OwnerApiArgs,
     object_id: &str,
@@ -1101,6 +1203,136 @@ fn print_owner_snapshot(snapshot: &OwnerSnapshot) {
             if diagnostic.ok { "ok" } else { "warn" },
             diagnostic.detail
         );
+    }
+}
+
+fn print_owner_profile(profile: &OwnerProfile) {
+    println!("public_handle={}", profile.public_handle);
+    println!("actor_url={}", profile.actor_url);
+    println!("username={}", profile.username);
+    println!("actor_type={}", profile.actor_type);
+    println!(
+        "display_name={}",
+        profile.display_name.as_deref().unwrap_or("")
+    );
+    println!("summary={}", profile.summary.as_deref().unwrap_or(""));
+    println!(
+        "icon={}",
+        profile
+            .icon
+            .as_deref()
+            .or(profile.avatar_url.as_deref())
+            .unwrap_or("")
+    );
+    println!(
+        "image={}",
+        profile
+            .image
+            .as_deref()
+            .or(profile.header_url.as_deref())
+            .unwrap_or("")
+    );
+    println!("public_surfaces=ActivityPub actor JSON, HTML profile, Mastodon account API");
+}
+
+fn print_owner_notifications(notifications: &[OwnerNotification]) {
+    if notifications.is_empty() {
+        println!("No notifications found");
+        return;
+    }
+    for notification in notifications {
+        let actor = notification
+            .actor_display_name
+            .as_deref()
+            .or(notification.actor_username.as_deref())
+            .unwrap_or(&notification.actor_id);
+        println!(
+            "{} [{}] {} {} {}",
+            notification.id,
+            notification.kind,
+            actor,
+            if owner_notification_read(notification) {
+                "read"
+            } else {
+                "unread"
+            },
+            notification.created_at.as_deref().unwrap_or("")
+        );
+        if let Some(post_id) = notification.post_id.as_deref() {
+            println!("post={post_id}");
+        }
+        if let Some(content) = notification.content.as_deref() {
+            println!("{content}");
+        }
+        println!();
+    }
+}
+
+fn owner_notification_read(notification: &OwnerNotification) -> bool {
+    notification.read == serde_json::Value::Bool(true)
+        || notification.read == serde_json::Value::Number(1.into())
+        || notification.read == serde_json::Value::String("1".to_string())
+        || notification.read == serde_json::Value::String("true".to_string())
+}
+
+fn print_owner_deliveries(deliveries: &[OwnerDelivery]) {
+    if deliveries.is_empty() {
+        println!("No deliveries found");
+        return;
+    }
+    for delivery in deliveries {
+        println!(
+            "{} [{}] {} retries={}",
+            delivery.id,
+            delivery.status,
+            delivery.protocol,
+            delivery.retry_count.unwrap_or(0)
+        );
+        println!("post={}", delivery.post_id);
+        println!("target={}", delivery.target_url);
+        if let Some(activity_type) = delivery.activity_type.as_deref() {
+            println!("activity={activity_type}");
+        }
+        if let Some(error) = delivery.error_message.as_deref() {
+            println!("error={error}");
+        }
+        println!();
+    }
+}
+
+fn print_owner_sources(sources: &OwnerSources) {
+    println!("subscriptions={}", sources.subscriptions.len());
+    for source in &sources.subscriptions {
+        println!(
+            "{} [{}] {} cadence={}m errors={}",
+            source.id,
+            source.status,
+            source.source_type,
+            source.refresh_cadence_minutes,
+            source.error_count
+        );
+        println!("url={}", source.url);
+        if let Some(title) = source.title.as_deref() {
+            println!("title={title}");
+        }
+        if let Some(last_error) = source.last_error.as_deref() {
+            println!("error={last_error}");
+        }
+        println!();
+    }
+    println!("items={}", sources.items.len());
+    for item in sources.items.iter().take(20) {
+        println!(
+            "{} [{}] {}",
+            item.id,
+            item.source_type,
+            if item.read { "read" } else { "unread" }
+        );
+        println!("{}", item.title);
+        if let Some(url) = item.canonical_url.as_deref() {
+            println!("url={url}");
+        }
+        println!();
     }
 }
 

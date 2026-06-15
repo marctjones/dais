@@ -267,6 +267,27 @@ textarea {
   gap: 12px;
 }
 
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.compact-form {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1.6fr) minmax(0, 1fr) 82px auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .inline-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -342,11 +363,14 @@ select {
 }
 
 .compose-actions button,
+.compact-form button,
 .settings button,
 .inline-form button,
 .media-row button,
 .attachment-chip button,
 .reply-target button,
+.item button,
+.section-heading button,
 .timeline button,
 .follower button,
 .actor-preview button {
@@ -358,6 +382,7 @@ select {
 }
 
 .timeline button,
+.item button,
 .follower button,
 .actor-preview button {
   min-width: auto;
@@ -442,6 +467,32 @@ select {
 .item p {
   margin-top: 5px;
   white-space: pre-wrap;
+}
+
+.detail {
+  align-self: start;
+}
+
+.detail-body {
+  display: grid;
+  gap: 12px;
+}
+
+.detail-body dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 7px 12px;
+  margin: 0;
+}
+
+.detail-body dt {
+  color: #5b665e;
+  font-weight: 700;
+}
+
+.detail-body dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .actor-preview > div {
@@ -585,6 +636,7 @@ select {
   }
 
   .metrics,
+  .compact-form,
   .form-grid,
   .split {
     grid-template-columns: 1fr;
