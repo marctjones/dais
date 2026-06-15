@@ -400,6 +400,41 @@ const tests = [
       }
     }
   }),
+  requirement("MASTODON-API-WRITE-06", true, "Mentions and hashtags round-trip through Mastodon status JSON", async () => {
+    let createdId = "";
+    try {
+      const create = await request("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: `dais Mastodon content shape conformance @social@dais.social #DaisApiSmoke ${new Date().toISOString()}`,
+          visibility: "public",
+        }),
+      });
+      if (create.status !== 201) throw new Error(`create expected 201, got ${create.status}: ${create.text}`);
+      createdId = create.json?.id || "";
+      if (!create.json?.mentions?.some((mention) => mention.acct === "social@dais.social")) {
+        throw new Error("created status missing mention shape");
+      }
+      if (!create.json?.tags?.some((tag) => tag.name === "DaisApiSmoke")) {
+        throw new Error("created status missing hashtag shape");
+      }
+
+      const read = await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { auth: true });
+      if (read.status !== 200) throw new Error(`read expected 200, got ${read.status}`);
+      if (!read.json?.mentions?.some((mention) => mention.acct === "social@dais.social")) {
+        throw new Error("status read did not retain mention shape");
+      }
+      if (!read.json?.tags?.some((tag) => tag.name === "DaisApiSmoke")) {
+        throw new Error("status read did not retain hashtag shape");
+      }
+    } finally {
+      if (createdId) {
+        await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { method: "DELETE", auth: true });
+      }
+    }
+  }),
 ];
 
 for (const test of tests) {

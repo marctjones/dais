@@ -19,7 +19,7 @@ must not publish followers-only, direct, or E2EE content as public data.
 | Graph | `GET /api/v1/accounts/:id/followers`, `GET /api/v1/accounts/:id/following`, `GET /api/v1/accounts/relationships` | Implemented |
 | Relationship writes | `POST /api/v1/accounts/:id/follow`, `unfollow`, `block`, `unblock`, `mute`, `unmute` | Implemented; mute/unmute are compatibility no-ops |
 | Timelines | `GET /api/v1/timelines/public`, `GET /api/v1/timelines/home`, `GET /api/v1/accounts/:id/statuses` | Implemented with privacy filtering |
-| Status reads | `GET /api/v1/statuses/:id`, `GET /api/v1/statuses/:id/context` | Implemented; context includes local public ancestors and direct reply descendants |
+| Status reads | `GET /api/v1/statuses/:id`, `GET /api/v1/statuses/:id/context` | Implemented; context includes local public ancestors and direct reply descendants, and status JSON includes mention/tag arrays |
 | Status writes | `POST /api/v1/statuses`, `PUT/PATCH /api/v1/statuses/:id`, `DELETE /api/v1/statuses/:id` | Implemented; deletes queue ActivityPub `Delete` to followers |
 | Interactions | `POST /api/v1/statuses/:id/favourite`, `unfavourite`, `reblog`, `unreblog`, `GET /api/v1/favourites` | Implemented for local status state |
 | Media | `POST /api/v1/media`, `POST /api/v2/media` | Implemented for public image and video uploads |

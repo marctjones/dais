@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.27] - 2026-06-15
+
+### Added
+- Mastodon API status JSON now includes `mentions` and `tags` arrays derived
+  from `@user@host` mentions and hashtags in status text.
+- Expanded Mastodon API conformance with authenticated mention/hashtag status
+  shape and cleanup coverage.
+
 ## [1.28.26] - 2026-06-15
 
 ### Added

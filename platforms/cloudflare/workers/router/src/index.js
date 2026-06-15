@@ -2510,8 +2510,8 @@ function statusJson(row, account) {
     spoiler_text: '',
     visibility: mastodonVisibility(row.visibility),
     media_attachments: mastodonMediaAttachments(row),
-    mentions: [],
-    tags: [],
+    mentions: mastodonMentions(row),
+    tags: mastodonTags(row),
     card: null,
     poll: mastodonPollJson(row),
   };
@@ -2581,6 +2581,44 @@ function mastodonStatusContent(row) {
   if (row.summary) parts.push(`<p>${escapeHtml(row.summary)}</p>`);
   parts.push(row.content_html || escapeHtml(row.content || ''));
   return parts.join('');
+}
+
+function mastodonMentions(row) {
+  const text = mastodonPlainText(row);
+  const mentions = [];
+  const seen = new Set();
+  for (const match of text.matchAll(/(^|[\s(])@([A-Za-z0-9_][A-Za-z0-9_.-]*)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g)) {
+    const username = match[2];
+    const host = match[3].toLowerCase();
+    const acct = `${username}@${host}`;
+    if (seen.has(acct)) continue;
+    seen.add(acct);
+    const url = `https://${host}/@${username}`;
+    mentions.push({
+      id: url,
+      username,
+      acct,
+      url,
+    });
+  }
+  return mentions;
+}
+
+function mastodonTags(row) {
+  const text = mastodonPlainText(row);
+  const tags = [];
+  const seen = new Set();
+  for (const match of text.matchAll(/(^|[^\p{L}\p{N}_])#([\p{L}\p{N}_][\p{L}\p{N}_-]{0,79})/gu)) {
+    const name = match[2];
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push({
+      name,
+      url: `https://social.dais.social/tags/${encodeURIComponent(name)}`,
+    });
+  }
+  return tags;
 }
 
 async function mastodonUpdateStatus(env, id, { text, summary }) {
