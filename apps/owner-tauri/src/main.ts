@@ -65,6 +65,14 @@ type OwnerSnapshot = {
     created_at?: string | null;
     updated_at?: string | null;
   }>;
+  friends: Array<{
+    friend_actor_id: string;
+    friend_inbox?: string | null;
+    friend_shared_inbox?: string | null;
+    follower_since?: string | null;
+    following_since?: string | null;
+    accepted_at?: string | null;
+  }>;
   following: Array<{
     id: string;
     actor_id: string;
@@ -504,6 +512,7 @@ function dashboardView(data: OwnerSnapshot) {
     <section class="metrics">
       <article><span>Posts</span><strong>${data.posts.length}</strong></article>
       <article><span>Followers</span><strong>${data.followers.filter((row) => row.status === "approved").length}</strong></article>
+      <article><span>Friends</span><strong>${data.friends.length}</strong></article>
       <article><span>Following</span><strong>${data.following.length}</strong></article>
       <article><span>Sources</span><strong>${data.sources.length}</strong></article>
     </section>

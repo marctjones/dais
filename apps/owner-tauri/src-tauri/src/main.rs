@@ -428,6 +428,7 @@ fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> Own
             published_at: None,
         }],
         followers: Vec::new(),
+        friends: Vec::new(),
         following: Vec::new(),
         sources: vec![SourceItem {
             id: "sources-ready".to_string(),

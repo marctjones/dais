@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.34] - 2026-06-15
+
+### Fixed
+- Updated Dais Desk's local owner snapshot fallback and dashboard model for the
+  new owner API friends field.
+
 ## [1.28.33] - 2026-06-15
 
 ### Added
