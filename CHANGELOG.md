@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.10] - 2026-06-15
+
+### Added
+- Added a live owner API-backed Discovery tab to the Rust TUI with actor lookup
+  and follow request actions.
+
 ## [1.28.9] - 2026-06-15
 
 ### Added

@@ -25,11 +25,14 @@ use crate::d1::{
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
-use dais_client_core::{OwnerApiClient, OwnerInteraction, OwnerPostDetail, OwnerTimelinePost};
+use dais_client_core::{
+    OwnerApiClient, OwnerDiscoveredActor, OwnerInteraction, OwnerPostDetail, OwnerTimelinePost,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum Tab {
     Reader,
+    Discovery,
     Home,
     Posts,
     Friends,
@@ -47,9 +50,10 @@ enum Tab {
 }
 
 impl Tab {
-    fn all() -> [Tab; 15] {
+    fn all() -> [Tab; 16] {
         [
             Tab::Reader,
+            Tab::Discovery,
             Tab::Home,
             Tab::Posts,
             Tab::Friends,
@@ -70,6 +74,7 @@ impl Tab {
     fn title(self) -> &'static str {
         match self {
             Tab::Reader => "Reader",
+            Tab::Discovery => "Discovery",
             Tab::Home => "Home",
             Tab::Posts => "Posts",
             Tab::Friends => "Friends",
@@ -93,6 +98,7 @@ enum Mode {
     Normal,
     Compose,
     Search,
+    Discovery,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -270,6 +276,7 @@ impl SearchState {
 enum TabData {
     Reader(Vec<OwnerTimelinePost>),
     ReaderDetail(OwnerPostDetail),
+    Discovery(OwnerDiscoveredActor),
     Home(Vec<D1TimelinePost>),
     Posts(Vec<D1Post>),
     Friends(Vec<D1Friend>),
@@ -355,6 +362,7 @@ struct App {
     mode: Mode,
     compose: ComposeState,
     search: SearchState,
+    discovery: SearchState,
     home: Vec<D1TimelinePost>,
     posts: Vec<D1Post>,
     friends: Vec<crate::d1::D1Friend>,
@@ -368,6 +376,7 @@ struct App {
     search_users: Vec<D1User>,
     reader: Vec<OwnerTimelinePost>,
     reader_details: HashMap<String, OwnerPostDetail>,
+    discovered_actor: Option<OwnerDiscoveredActor>,
     bluesky_feed: Vec<crate::atproto::FeedItem>,
     source_items: Vec<D1SourceItem>,
     stats: Option<ServerStats>,
@@ -397,6 +406,7 @@ impl App {
             mode: Mode::Normal,
             compose: ComposeState::new(),
             search: SearchState::new(),
+            discovery: SearchState::new(),
             home: Vec::new(),
             posts: Vec::new(),
             friends: Vec::new(),
@@ -410,6 +420,7 @@ impl App {
             search_users: Vec::new(),
             reader: Vec::new(),
             reader_details: HashMap::new(),
+            discovered_actor: None,
             bluesky_feed: Vec::new(),
             source_items: Vec::new(),
             stats: None,
@@ -422,6 +433,7 @@ impl App {
             Mode::Normal => self.handle_normal_key(key),
             Mode::Compose => self.handle_compose_key(key),
             Mode::Search => self.handle_search_key(key),
+            Mode::Discovery => self.handle_discovery_key(key),
         }
     }
 
@@ -451,6 +463,12 @@ impl App {
                 self.mode = Mode::Search;
                 self.status = "Search".to_string();
             }
+            KeyCode::Char('g') => {
+                self.mode = Mode::Discovery;
+                self.active = Tab::Discovery;
+                self.status = "Discover actor".to_string();
+            }
+            KeyCode::Char('f') => self.follow_discovered_actor(),
             KeyCode::Char('a') => self.approve_selected_follower(),
             KeyCode::Char('x') => self.reject_selected_follower(),
             KeyCode::Char('m') => self.mark_selected_notification_read(),
@@ -562,6 +580,33 @@ impl App {
         }
     }
 
+    fn handle_discovery_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.status = "Discovery canceled".to_string();
+            }
+            KeyCode::Enter => {
+                let target = self.discovery.query.text();
+                if target.trim().is_empty() {
+                    self.status = "Discovery target is empty".to_string();
+                } else {
+                    self.run_discovery(target.clone());
+                    self.active = Tab::Discovery;
+                    self.mode = Mode::Normal;
+                    self.status = format!("Resolving {target}");
+                }
+            }
+            KeyCode::Backspace => self.discovery.query.backspace(),
+            KeyCode::Left => self.discovery.query.move_left(),
+            KeyCode::Right => self.discovery.query.move_right(),
+            KeyCode::Up => self.discovery.query.move_up(),
+            KeyCode::Down => self.discovery.query.move_down(),
+            KeyCode::Char(ch) => self.discovery.query.insert_char(ch),
+            _ => {}
+        }
+    }
+
     fn current_compose_buffer(&mut self) -> &mut TextBuffer {
         match self.compose.field {
             ComposeField::Body => &mut self.compose.body,
@@ -621,7 +666,7 @@ impl App {
     }
 
     fn ensure_loaded(&mut self, tab: Tab) {
-        if tab == Tab::Search {
+        if tab == Tab::Search || tab == Tab::Discovery {
             return;
         }
         if self.loading.contains(&tab) {
@@ -651,6 +696,35 @@ impl App {
                             query,
                         },
                     ));
+                }
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn run_discovery(&mut self, target: String) {
+        self.loading.insert(Tab::Discovery);
+        self.status = format!("Resolving {target}");
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                    return;
+                }
+            };
+            match client.discover_actor(&target).await {
+                Ok(actor) => {
+                    let label = actor
+                        .handle
+                        .clone()
+                        .or(actor.name.clone())
+                        .unwrap_or_else(|| actor.id.clone());
+                    let _ = tx.send(Message::Loaded(Tab::Discovery, TabData::Discovery(actor)));
+                    let _ = tx.send(Message::Status(format!("Resolved {label}")));
                 }
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
@@ -1006,6 +1080,40 @@ impl App {
         self.status = format!("Replying to {object_id}");
     }
 
+    fn follow_discovered_actor(&mut self) {
+        if self.active != Tab::Discovery {
+            return;
+        }
+        let Some(actor) = self.discovered_actor.clone() else {
+            self.status = "Resolve an actor before following".to_string();
+            return;
+        };
+        let target = actor.id;
+        let tx = self.tx.clone();
+        self.status = format!("Following {target}");
+        tokio::spawn(async move {
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                    return;
+                }
+            };
+            match client.follow_actor(&target).await {
+                Ok(result) => {
+                    let _ = tx.send(Message::Status(format!(
+                        "Follow requested for {}",
+                        result.following.target_actor_id
+                    )));
+                    let _ = tx.send(Message::Refresh(Tab::Reader));
+                }
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
     fn selected(&self, tab: Tab) -> usize {
         *self.selection.get(&tab).unwrap_or(&0)
     }
@@ -1019,6 +1127,7 @@ impl App {
                     TabData::ReaderDetail(value) => {
                         self.reader_details.insert(value.post.id.clone(), value);
                     }
+                    TabData::Discovery(value) => self.discovered_actor = Some(value),
                     TabData::Home(value) => self.home = value,
                     TabData::Posts(value) => self.posts = value,
                     TabData::Friends(value) => self.friends = value,
@@ -1075,6 +1184,8 @@ impl App {
             self.draw_compose_overlay(frame);
         } else if self.mode == Mode::Search {
             self.draw_search_overlay(frame);
+        } else if self.mode == Mode::Discovery {
+            self.draw_discovery_overlay(frame);
         }
     }
 
@@ -1169,9 +1280,10 @@ impl App {
 
     fn draw_footer(&self, frame: &mut Frame<'_>, area: Rect) {
         let left = match self.mode {
-            Mode::Normal => "q quit · tab switch · r refresh · c compose · enter detail · y reply · l like · o boost",
+            Mode::Normal => "q quit · tab switch · r refresh · g discover · f follow · enter detail · y reply · l like · o boost",
             Mode::Compose => "ctrl+s send · tab field · v visibility · p protocol · e e2ee · esc cancel",
             Mode::Search => "enter search · esc cancel · backspace edit",
+            Mode::Discovery => "enter lookup actor · esc cancel · backspace edit",
         };
         let right = if self.loading.contains(&self.active) {
             "Loading..."
@@ -1307,8 +1419,64 @@ impl App {
         frame.render_widget(hint, layout[1]);
     }
 
+    fn draw_discovery_overlay(&self, frame: &mut Frame<'_>) {
+        let area = centered_rect(74, 40, frame.area());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Discover actor");
+        frame.render_widget(block, area);
+        let inner = area.inner(Margin::new(1, 1));
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(1)])
+            .split(inner);
+        let query = Paragraph::new(self.discovery.query.text()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("@user@example.social or https://..."),
+        );
+        frame.render_widget(query, layout[0]);
+        let hint = Paragraph::new("Enter resolves through the live owner API. Esc cancels.")
+            .block(Block::default().borders(Borders::ALL));
+        frame.render_widget(hint, layout[1]);
+    }
+
     fn entries(&self, tab: Tab) -> Vec<Entry> {
         match tab {
+            Tab::Discovery => {
+                let details = self.discovered_actor.as_ref().map_or_else(
+                    || {
+                        "Press g to resolve an ActivityPub actor by @user@host or URL. Press f after resolving to follow.".to_string()
+                    },
+                    |actor| {
+                        format!(
+                            "id: {}\nhandle: {}\ninbox: {}\nshared inbox: {}\nstatus: {}\nurl: {}\nicon: {}\n\n{}\n\nPress f to follow this actor.",
+                            actor.id,
+                            actor.handle.as_deref().unwrap_or(""),
+                            actor.inbox,
+                            actor.shared_inbox.as_deref().unwrap_or(""),
+                            actor.following_status.as_deref().unwrap_or("not-following"),
+                            actor.url.as_deref().unwrap_or(""),
+                            actor.icon_url.as_deref().unwrap_or(""),
+                            actor.summary.as_deref().unwrap_or("")
+                        )
+                    },
+                );
+                vec![Entry {
+                    title: self
+                        .discovered_actor
+                        .as_ref()
+                        .and_then(|actor| actor.handle.as_deref().or(actor.name.as_deref()))
+                        .unwrap_or("No actor resolved")
+                        .to_string(),
+                    subtitle: self
+                        .discovered_actor
+                        .as_ref()
+                        .map(|actor| actor.id.clone())
+                        .unwrap_or_else(|| "Press g to lookup".to_string()),
+                    details,
+                }]
+            }
             Tab::Reader => self
                 .reader
                 .iter()
@@ -1732,6 +1900,7 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::DMs(db.list_direct_messages(50).await?))
         }
         Tab::Search => Err(anyhow!("search requires a query")),
+        Tab::Discovery => Err(anyhow!("discovery requires a target")),
         Tab::Bluesky => {
             let config = store.load_bluesky().context("Bluesky config not found")?;
             let mut client = AtprotoClient::from_config(&config)?;
