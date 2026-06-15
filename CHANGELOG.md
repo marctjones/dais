@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.23] - 2026-06-15
+
+### Fixed
+- Mastodon API status responses now reflect owner favourite/reblog state after
+  favourite, unfavourite, reblog, and unreblog actions.
+- Expanded Mastodon API conformance with authenticated favourite/reblog state and
+  cleanup coverage.
+
 ## [1.28.22] - 2026-06-15
 
 ### Changed

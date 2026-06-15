@@ -282,6 +282,53 @@ const tests = [
       }
     }
   }),
+  requirement("MASTODON-API-WRITE-04", true, "Favourite and reblog actions update returned status state", async () => {
+    let createdId = "";
+    try {
+      const create = await request("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: `dais Mastodon interaction conformance ${new Date().toISOString()}`,
+          visibility: "public",
+        }),
+      });
+      if (create.status !== 201) throw new Error(`create expected 201, got ${create.status}: ${create.text}`);
+      createdId = create.json?.id || "";
+
+      const favourite = await request(`/api/v1/statuses/${encodeURIComponent(createdId)}/favourite`, { method: "POST", auth: true });
+      if (favourite.status !== 200) throw new Error(`favourite expected 200, got ${favourite.status}: ${favourite.text}`);
+      if (favourite.json?.favourited !== true || Number(favourite.json?.favourites_count || 0) < 1) {
+        throw new Error("favourite response did not reflect favourited state");
+      }
+
+      const reblog = await request(`/api/v1/statuses/${encodeURIComponent(createdId)}/reblog`, { method: "POST", auth: true });
+      if (reblog.status !== 200) throw new Error(`reblog expected 200, got ${reblog.status}: ${reblog.text}`);
+      if (reblog.json?.reblogged !== true || Number(reblog.json?.reblogs_count || 0) < 1) {
+        throw new Error("reblog response did not reflect reblogged state");
+      }
+
+      const read = await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { auth: true });
+      if (read.status !== 200) throw new Error(`read expected 200, got ${read.status}`);
+      if (read.json?.favourited !== true || read.json?.reblogged !== true) {
+        throw new Error("status read did not retain interaction state");
+      }
+
+      const unfavourite = await request(`/api/v1/statuses/${encodeURIComponent(createdId)}/unfavourite`, { method: "POST", auth: true });
+      const unreblog = await request(`/api/v1/statuses/${encodeURIComponent(createdId)}/unreblog`, { method: "POST", auth: true });
+      if (unfavourite.status !== 200 || unreblog.status !== 200) {
+        throw new Error(`undo interactions expected 200/200, got ${unfavourite.status}/${unreblog.status}`);
+      }
+      if (unfavourite.json?.favourited !== false || unreblog.json?.reblogged !== false) {
+        throw new Error("undo interaction responses did not clear state");
+      }
+    } finally {
+      if (createdId) {
+        await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { method: "DELETE", auth: true });
+      }
+    }
+  }),
 ];
 
 for (const test of tests) {
