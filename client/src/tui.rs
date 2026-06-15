@@ -19,15 +19,13 @@ use ratatui::{
 
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
-use crate::d1::{
-    D1Block, D1Client, D1DirectMessage, D1Friend, D1Post, D1TimelinePost, D1User, ServerStats,
-};
+use crate::d1::{D1Client, D1DirectMessage, D1Friend, D1Post, D1TimelinePost, D1User, ServerStats};
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
-    OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing,
-    OwnerInteraction, OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerTimelinePost,
-    SourceItem,
+    ModerationBlockRow, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFollower,
+    OwnerFollowing, OwnerInteraction, OwnerNotification, OwnerPostDetail, OwnerProfile,
+    OwnerTimelinePost, SourceItem,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -295,7 +293,7 @@ enum TabData {
     Bluesky(Vec<crate::atproto::FeedItem>),
     Sources(Vec<SourceItem>),
     Stats(ServerStats),
-    Blocks(Vec<D1Block>),
+    Blocks(Vec<ModerationBlockRow>),
 }
 
 #[derive(Clone, Debug)]
@@ -381,7 +379,7 @@ struct App {
     bluesky_feed: Vec<crate::atproto::FeedItem>,
     source_items: Vec<SourceItem>,
     stats: Option<ServerStats>,
-    blocks: Vec<D1Block>,
+    blocks: Vec<ModerationBlockRow>,
 }
 
 impl App {
@@ -960,21 +958,25 @@ impl App {
         let Some(row) = self.blocks.get(self.selected(Tab::Blocks)) else {
             return;
         };
-        let actor_id = row.actor_id.clone();
+        let value = row
+            .blocked_domain
+            .clone()
+            .filter(|domain| !domain.is_empty())
+            .unwrap_or_else(|| row.actor_id.clone());
         let tx = self.tx.clone();
-        let remote = self.remote;
         tokio::spawn(async move {
-            let db = match D1Client::new(remote) {
-                Ok(db) => db,
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
                     return;
                 }
             };
-            match db.unblock(&actor_id).await {
-                Ok(()) => {
-                    let _ = tx.send(Message::Status(format!("Unblocked {actor_id}")));
+            match client.unblock(&value).await {
+                Ok(_) => {
+                    let _ = tx.send(Message::Status(format!("Unblocked {value}")));
                     let _ = tx.send(Message::Refresh(Tab::Blocks));
+                    let _ = tx.send(Message::Refresh(Tab::Stats));
                 }
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
@@ -1837,7 +1839,12 @@ impl App {
                 .blocks
                 .iter()
                 .map(|row| Entry {
-                    title: row.actor_id.clone(),
+                    title: row
+                        .blocked_domain
+                        .as_deref()
+                        .filter(|domain| !domain.is_empty())
+                        .unwrap_or(&row.actor_id)
+                        .to_string(),
                     subtitle: row
                         .blocked_domain
                         .as_deref()
@@ -1961,8 +1968,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Stats(db.stats().await?))
         }
         Tab::Blocks => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Blocks(db.list_blocks(50).await?))
+            let client = owner_api_from_env()?;
+            let moderation = client
+                .moderation()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Blocks(moderation.blocks))
         }
     }
 }

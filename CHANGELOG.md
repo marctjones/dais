@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.22] - 2026-06-15
+
+### Changed
+- Moved the Rust TUI Blocks tab and unblock action from raw D1 access to the
+  live owner moderation API.
+
 ## [1.28.21] - 2026-06-15
 
 ### Changed
