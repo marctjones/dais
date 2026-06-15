@@ -170,6 +170,9 @@ const tests = [
     expectArray(checks[5].json, "blocks");
     expectArray(checks[6].json, "mutes");
     if (!checks[7].contentType.includes("text/event-stream")) throw new Error("streaming content-type is not event-stream");
+    if (!checks[7].text.includes("event: connected") || !checks[7].text.includes("polling-recommended")) {
+      throw new Error("streaming response did not include an SSE connection frame");
+    }
     if (!checks[8].json?.id || checks[8].json.action_taken !== false) throw new Error("report shape incomplete");
     if (!Array.isArray(checks[9].json?.ancestors) || !Array.isArray(checks[9].json?.descendants)) {
       throw new Error("status context shape incomplete");

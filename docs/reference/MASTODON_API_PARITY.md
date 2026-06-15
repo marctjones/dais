@@ -28,7 +28,7 @@ must not publish followers-only, direct, or E2EE content as public data.
 | Search | `GET /api/v1/search`, `GET /api/v2/search` | Implemented for public local statuses and ActivityPub actor lookup; status results support `max_id`/`since_id`/`min_id` cursors |
 | Client lists | `GET /api/v1/filters`, `GET /api/v2/filters`, `GET /api/v1/lists`, `GET /api/v1/bookmarks`, `GET /api/v1/conversations`, `GET/POST /api/v1/markers` | Implemented as empty/compatible single-user surfaces |
 | Moderation | `GET /api/v1/blocks`, `GET /api/v1/mutes`, `POST /api/v1/reports` | Implemented |
-| Streaming | `GET /api/v1/streaming/*` | Compatibility event-stream placeholder |
+| Streaming | `GET /api/v1/streaming/*` | SSE-compatible fallback stream with reconnect guidance; clients should still poll for new data |
 
 ## Intentional Limits
 
@@ -40,7 +40,8 @@ must not publish followers-only, direct, or E2EE content as public data.
   timelines or public status reads.
 - Mute/unmute return relationship-compatible state but do not yet maintain a
   separate mute table.
-- Streaming is a compatibility placeholder; clients should fall back to polling.
+- Streaming returns a valid SSE connection frame and reconnect hint, but does
+  not yet push live updates; clients should poll for new data.
 
 ## Release Gates
 

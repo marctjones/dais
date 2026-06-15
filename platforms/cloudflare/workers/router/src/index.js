@@ -762,12 +762,22 @@ async function handleMastodonApi(request, env, url) {
   }
 
   if (request.method === 'GET' && path.startsWith('/api/v1/streaming')) {
-    return new Response('', {
+    const stream = new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode('retry: 30000\n'));
+        controller.enqueue(encoder.encode('event: connected\n'));
+        controller.enqueue(encoder.encode('data: {"stream":"polling-recommended"}\n\n'));
+        controller.close();
+      },
+    });
+    return new Response(stream, {
       status: 200,
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Access-Control-Allow-Origin': '*',
+        'X-Accel-Buffering': 'no',
       },
     });
   }

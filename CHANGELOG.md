@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.32] - 2026-06-15
+
+### Changed
+- Upgraded the Mastodon streaming compatibility endpoint from an empty
+  event-stream response to an SSE-compatible connected frame with reconnect
+  guidance for polling clients.
+
 ## [1.28.31] - 2026-06-15
 
 ### Added
