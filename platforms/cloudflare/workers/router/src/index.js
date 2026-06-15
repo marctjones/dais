@@ -536,18 +536,18 @@ async function handleMastodonApi(request, env, url) {
   }
 
   if (request.method === 'GET' && path === '/api/v1/timelines/public') {
-    return apiJson(await mastodonStatuses(env, clampLimit(url.searchParams.get('limit'))));
+    return apiJson(await mastodonStatuses(env, clampLimit(url.searchParams.get('limit')), mastodonCursorOptions(url)));
   }
 
   if (request.method === 'GET' && path === '/api/v1/timelines/home') {
     const auth = requireBearer(request, env);
     if (auth) return auth;
-    return apiJson(await mastodonStatuses(env, clampLimit(url.searchParams.get('limit'))));
+    return apiJson(await mastodonStatuses(env, clampLimit(url.searchParams.get('limit')), mastodonCursorOptions(url)));
   }
 
   const accountStatuses = path.match(/^\/api\/v1\/accounts\/([^/]+)\/statuses$/);
   if (request.method === 'GET' && accountStatuses) {
-    return apiJson(await mastodonStatuses(env, clampLimit(url.searchParams.get('limit'))));
+    return apiJson(await mastodonStatuses(env, clampLimit(url.searchParams.get('limit')), mastodonCursorOptions(url)));
   }
 
   const accountFollowers = path.match(/^\/api\/v1\/accounts\/([^/]+)\/followers$/);
@@ -594,7 +594,7 @@ async function handleMastodonApi(request, env, url) {
   if (request.method === 'GET' && path === '/api/v1/favourites') {
     const auth = requireBearer(request, env);
     if (auth) return auth;
-    return apiJson(await mastodonStatusesByInteraction(env, 'like', clampLimit(url.searchParams.get('limit'))));
+    return apiJson(await mastodonStatusesByInteraction(env, 'like', clampLimit(url.searchParams.get('limit')), mastodonCursorOptions(url)));
   }
 
   if (request.method === 'GET' && path === '/api/v1/bookmarks') {
@@ -612,7 +612,7 @@ async function handleMastodonApi(request, env, url) {
   if (request.method === 'GET' && (path === '/api/v1/search' || path === '/api/v2/search')) {
     const auth = requireBearer(request, env);
     if (auth) return auth;
-    return apiJson(await mastodonSearch(env, url.searchParams.get('q') || '', clampLimit(url.searchParams.get('limit'))));
+    return apiJson(await mastodonSearch(env, url.searchParams.get('q') || '', clampLimit(url.searchParams.get('limit')), mastodonCursorOptions(url)));
   }
 
   if (request.method === 'GET' && (path === '/api/v1/filters' || path === '/api/v2/filters')) {
@@ -2407,7 +2407,10 @@ async function mastodonAccount(env) {
   };
 }
 
-async function mastodonStatuses(env, limit) {
+async function mastodonStatuses(env, limit, cursors = {}) {
+  const values = [];
+  const where = mastodonStatusListWhere('posts', cursors, values);
+  values.push(limit);
   const rows = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
             name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
@@ -2417,12 +2420,10 @@ async function mastodonStatuses(env, limit) {
             EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like' AND i.actor_id = posts.actor_id) AS favourited,
             EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost' AND i.actor_id = posts.actor_id) AS reblogged
      FROM posts
-     WHERE visibility = 'public'
-       AND encrypted_message IS NULL
-       AND content NOT LIKE '%End-to-end encrypted message%'
+     WHERE ${where}
      ORDER BY published_at DESC
-     LIMIT ?1`,
-  ).bind(limit).all();
+     LIMIT ?${values.length}`,
+  ).bind(...values).all();
   const account = await mastodonAccount(env);
   return (rows.results || []).map((row) => statusJson(row, account));
 }
@@ -2685,7 +2686,10 @@ async function mastodonToggleStatusInteraction(env, statusId, action) {
   ).bind(interactionId, type, localActor.id, statusId, new Date().toISOString()).run();
 }
 
-async function mastodonStatusesByInteraction(env, type, limit) {
+async function mastodonStatusesByInteraction(env, type, limit, cursors = {}) {
+  const values = [type];
+  const where = mastodonStatusListWhere('p', cursors, values);
+  values.push(limit);
   const rows = await env.DB.prepare(
     `SELECT p.id, p.actor_id, p.content, p.content_html, COALESCE(p.object_type, 'Note') AS object_type,
             p.name, p.summary, p.visibility, p.published_at, p.in_reply_to, p.poll_options, p.media_attachments,
@@ -2697,12 +2701,10 @@ async function mastodonStatusesByInteraction(env, type, limit) {
      FROM posts p
      JOIN interactions i ON i.object_url = p.id OR i.post_id = p.id
      WHERE i.type = ?1
-       AND p.visibility = 'public'
-       AND p.encrypted_message IS NULL
-       AND p.content NOT LIKE '%End-to-end encrypted message%'
+       AND ${where}
      ORDER BY i.created_at DESC
-     LIMIT ?2`,
-  ).bind(type, limit).all();
+     LIMIT ?${values.length}`,
+  ).bind(...values).all();
   const account = await mastodonAccount(env);
   return (rows.results || []).map((row) => statusJson(row, account));
 }
@@ -2757,7 +2759,7 @@ async function mastodonBlocks(env, limit) {
   return (rows.results || []).map(remoteAccountJson);
 }
 
-async function mastodonSearch(env, query, limit) {
+async function mastodonSearch(env, query, limit, cursors = {}) {
   const term = String(query || '').trim();
   if (!term) return { accounts: [], statuses: [], hashtags: [] };
   if (term.startsWith('@') || term.startsWith('https://')) {
@@ -2772,6 +2774,11 @@ async function mastodonSearch(env, query, limit) {
       // Fall through to status search.
     }
   }
+  const values = [];
+  const where = mastodonStatusListWhere('posts', cursors, values);
+  values.push(`%${term}%`);
+  const termParam = `?${values.length}`;
+  values.push(limit);
   const rows = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
             name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
@@ -2781,13 +2788,11 @@ async function mastodonSearch(env, query, limit) {
             EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like' AND i.actor_id = posts.actor_id) AS favourited,
             EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost' AND i.actor_id = posts.actor_id) AS reblogged
      FROM posts
-     WHERE visibility = 'public'
-       AND encrypted_message IS NULL
-       AND content NOT LIKE '%End-to-end encrypted message%'
-       AND (content LIKE ?1 OR name LIKE ?1 OR summary LIKE ?1)
+     WHERE ${where}
+       AND (content LIKE ${termParam} OR name LIKE ${termParam} OR summary LIKE ${termParam})
      ORDER BY published_at DESC
-     LIMIT ?2`,
-  ).bind(`%${term}%`, limit).all();
+     LIMIT ?${values.length}`,
+  ).bind(...values).all();
   const account = await mastodonAccount(env);
   return {
     accounts: [],
@@ -3078,6 +3083,32 @@ function clampLimit(value) {
   const parsed = Number.parseInt(value || '20', 10);
   if (!Number.isFinite(parsed)) return 20;
   return Math.max(1, Math.min(parsed, 80));
+}
+
+function mastodonCursorOptions(url) {
+  return {
+    maxId: optionalString(url.searchParams.get('max_id')),
+    sinceId: optionalString(url.searchParams.get('since_id')),
+    minId: optionalString(url.searchParams.get('min_id')),
+  };
+}
+
+function mastodonStatusListWhere(alias, cursors, values) {
+  const conditions = [
+    `${alias}.visibility = 'public'`,
+    `${alias}.encrypted_message IS NULL`,
+    `${alias}.content NOT LIKE '%End-to-end encrypted message%'`,
+  ];
+  if (cursors.maxId) {
+    values.push(cursors.maxId);
+    conditions.push(`${alias}.id < ?${values.length}`);
+  }
+  const newerThan = cursors.sinceId || cursors.minId;
+  if (newerThan) {
+    values.push(newerThan);
+    conditions.push(`${alias}.id > ?${values.length}`);
+  }
+  return conditions.join('\n       AND ');
 }
 
 function stableId(value) {

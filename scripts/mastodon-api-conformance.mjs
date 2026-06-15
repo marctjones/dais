@@ -175,6 +175,63 @@ const tests = [
       throw new Error("status context shape incomplete");
     }
   }),
+  requirement("MASTODON-API-READ-03", true, "Timeline and search pagination honor Mastodon cursor parameters", async () => {
+    const createdIds = [];
+    const token = `DaisPageSmoke${Date.now()}`;
+    try {
+      const older = await request("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: `${token} older cursor fixture`,
+          visibility: "public",
+        }),
+      });
+      if (older.status !== 201) throw new Error(`older create expected 201, got ${older.status}: ${older.text}`);
+      createdIds.push(older.json?.id);
+
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+
+      const newer = await request("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: `${token} newer cursor fixture`,
+          visibility: "public",
+        }),
+      });
+      if (newer.status !== 201) throw new Error(`newer create expected 201, got ${newer.status}: ${newer.text}`);
+      createdIds.push(newer.json?.id);
+
+      const maxId = encodeURIComponent(newer.json.id);
+      const sinceId = encodeURIComponent(older.json.id);
+      const timelineOlder = await request(`/api/v1/timelines/public?limit=20&max_id=${maxId}`);
+      const timelineNewer = await request(`/api/v1/timelines/public?limit=20&since_id=${sinceId}`);
+      if (timelineOlder.status !== 200 || timelineNewer.status !== 200) {
+        throw new Error(`timeline pagination expected 200/200, got ${timelineOlder.status}/${timelineNewer.status}`);
+      }
+      if (timelineOlder.json?.some((status) => status.id === newer.json.id)) throw new Error("max_id page included cursor status");
+      if (!timelineOlder.json?.some((status) => status.id === older.json.id)) throw new Error("max_id page missed older fixture");
+      if (timelineNewer.json?.some((status) => status.id === older.json.id)) throw new Error("since_id page included cursor status");
+      if (!timelineNewer.json?.some((status) => status.id === newer.json.id)) throw new Error("since_id page missed newer fixture");
+
+      const searchOlder = await request(`/api/v2/search?q=${token}&type=statuses&limit=20&max_id=${maxId}`, { auth: true });
+      const searchNewer = await request(`/api/v2/search?q=${token}&type=statuses&limit=20&min_id=${sinceId}`, { auth: true });
+      if (searchOlder.status !== 200 || searchNewer.status !== 200) {
+        throw new Error(`search pagination expected 200/200, got ${searchOlder.status}/${searchNewer.status}`);
+      }
+      if (searchOlder.json?.statuses?.some((status) => status.id === newer.json.id)) throw new Error("search max_id included cursor status");
+      if (!searchOlder.json?.statuses?.some((status) => status.id === older.json.id)) throw new Error("search max_id missed older fixture");
+      if (searchNewer.json?.statuses?.some((status) => status.id === older.json.id)) throw new Error("search min_id included cursor status");
+      if (!searchNewer.json?.statuses?.some((status) => status.id === newer.json.id)) throw new Error("search min_id missed newer fixture");
+    } finally {
+      for (const id of createdIds.filter(Boolean).reverse()) {
+        await request(`/api/v1/statuses/${encodeURIComponent(id)}`, { method: "DELETE", auth: true });
+      }
+    }
+  }),
   requirement("MASTODON-API-WRITE-01", true, "Status creation accepts Mastodon poll parameters and returns poll shape", async () => {
     let createdId = "";
     try {

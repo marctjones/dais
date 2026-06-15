@@ -18,14 +18,14 @@ must not publish followers-only, direct, or E2EE content as public data.
 | Account | `GET /api/v1/accounts/verify_credentials`, `PATCH /api/v1/accounts/update_credentials`, `GET /api/v1/accounts/:id` | Implemented for single local account |
 | Graph | `GET /api/v1/accounts/:id/followers`, `GET /api/v1/accounts/:id/following`, `GET /api/v1/accounts/relationships` | Implemented |
 | Relationship writes | `POST /api/v1/accounts/:id/follow`, `unfollow`, `block`, `unblock`, `mute`, `unmute` | Implemented; mute/unmute are compatibility no-ops |
-| Timelines | `GET /api/v1/timelines/public`, `GET /api/v1/timelines/home`, `GET /api/v1/accounts/:id/statuses` | Implemented with privacy filtering |
+| Timelines | `GET /api/v1/timelines/public`, `GET /api/v1/timelines/home`, `GET /api/v1/accounts/:id/statuses` | Implemented with privacy filtering and `max_id`/`since_id`/`min_id` cursors |
 | Status reads | `GET /api/v1/statuses/:id`, `GET /api/v1/statuses/:id/context` | Implemented; context includes local public ancestors and direct reply descendants, and status JSON includes mention/tag arrays |
 | Status writes | `POST /api/v1/statuses`, `PUT/PATCH /api/v1/statuses/:id`, `DELETE /api/v1/statuses/:id` | Implemented; deletes queue ActivityPub `Delete` to followers |
 | Interactions | `POST /api/v1/statuses/:id/favourite`, `unfavourite`, `reblog`, `unreblog`, `GET /api/v1/favourites` | Implemented for local status state |
 | Media | `POST /api/v1/media`, `POST /api/v2/media` | Implemented for public image and video uploads |
 | Polls | ActivityPub `Question` with `oneOf`/`anyOf` options; Mastodon API `poll` parameters on `POST /api/v1/statuses` | Implemented for CLI-created posts, server-to-server object rendering, and Mastodon API status creation |
 | Notifications | `GET /api/v1/notifications`, `POST /api/v1/notifications/:id/dismiss`, `POST /api/v1/notifications/clear` | Implemented |
-| Search | `GET /api/v1/search`, `GET /api/v2/search` | Implemented for public local statuses and ActivityPub actor lookup |
+| Search | `GET /api/v1/search`, `GET /api/v2/search` | Implemented for public local statuses and ActivityPub actor lookup; status results support `max_id`/`since_id`/`min_id` cursors |
 | Client lists | `GET /api/v1/filters`, `GET /api/v2/filters`, `GET /api/v1/lists`, `GET /api/v1/bookmarks`, `GET /api/v1/conversations`, `GET/POST /api/v1/markers` | Implemented as empty/compatible single-user surfaces |
 | Moderation | `GET /api/v1/blocks`, `GET /api/v1/mutes`, `POST /api/v1/reports` | Implemented |
 | Streaming | `GET /api/v1/streaming/*` | Compatibility event-stream placeholder |

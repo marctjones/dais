@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.30] - 2026-06-15
+
+### Added
+- Added Mastodon-compatible `max_id`, `since_id`, and `min_id` cursor handling
+  for public, home, account-status, favourites, and search status lists.
+
 ## [1.28.29] - 2026-06-15
 
 ### Added
