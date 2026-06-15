@@ -921,6 +921,38 @@ async function handleOwnerApi(request, env, url) {
     return apiJson(await ownerModeration(env));
   }
 
+  if (request.method === 'POST' && path === '/moderation/block') {
+    const body = await readJson(request);
+    try {
+      return apiJson(await ownerBlock(env, body), 201);
+    } catch (error) {
+      return apiJson({ error: error.message || 'block failed' }, 400);
+    }
+  }
+
+  if (request.method === 'POST' && path === '/moderation/unblock') {
+    const body = await readJson(request);
+    const value = optionalString(body.value || body.actor_id || body.actorId || body.domain);
+    if (!value) return apiJson({ error: 'value is required' }, 400);
+    await env.DB.prepare("DELETE FROM blocks WHERE id = ?1 OR actor_id = ?1 OR blocked_domain = ?1").bind(value).run();
+    return apiJson({ ok: true });
+  }
+
+  if (request.method === 'POST' && path === '/moderation/allowlist') {
+    const body = await readJson(request);
+    try {
+      return apiJson(await ownerAllowHost(env, body), 201);
+    } catch (error) {
+      return apiJson({ error: error.message || 'allowlist update failed' }, 400);
+    }
+  }
+
+  if (request.method === 'DELETE' && path.startsWith('/moderation/allowlist/')) {
+    const host = normalizeHost(decodeURIComponent(path.slice('/moderation/allowlist/'.length)));
+    await env.DB.prepare("DELETE FROM federation_allowlist WHERE host = ?1").bind(host).run();
+    return apiJson({ ok: true });
+  }
+
   if (request.method === 'GET' && path === '/diagnostics') {
     return apiJson({
       items: await ownerDiagnostics(env),
@@ -1595,6 +1627,32 @@ function publicHttpsUrl(value, field) {
   return url;
 }
 
+function normalizeHost(value) {
+  const raw = optionalString(value);
+  if (!raw) throw new Error('host is required');
+  const host = raw
+    .replace(/^https?:\/\//i, '')
+    .split('/')[0]
+    .split(':')[0]
+    .trim()
+    .toLowerCase();
+  if (!/^[a-z0-9.-]+$/.test(host) || !host.includes('.')) {
+    throw new Error('host must be a domain name');
+  }
+  if (
+    host === 'localhost' ||
+    host.endsWith('.local') ||
+    host === '127.0.0.1' ||
+    host.startsWith('10.') ||
+    host.startsWith('192.168.') ||
+    host.startsWith('169.254.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+  ) {
+    throw new Error('host is not allowed');
+  }
+  return host;
+}
+
 async function sourceId(sourceType, sourceUrl) {
   const bytes = new TextEncoder().encode(`${sourceType}\n${sourceUrl}`);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -1749,9 +1807,11 @@ async function ownerSourceItems(env, limit) {
 
 async function ownerModeration(env) {
   const settings = await ownerSettings(env);
-  const [blocks, allowlist] = await Promise.all([
+  const [blocks, allowlist, blockRows, allowlistRows] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) AS count FROM blocks").first(),
     env.DB.prepare("SELECT COUNT(*) AS count FROM federation_allowlist WHERE enabled = 1").first(),
+    ownerBlocks(env),
+    ownerAllowlist(env),
   ]);
   return {
     closed_network: Boolean(settings.closed_network),
@@ -1759,7 +1819,68 @@ async function ownerModeration(env) {
     allowlist_count: Number(allowlist?.count || 0),
     require_authorized_fetch: Boolean(settings.require_authorized_fetch),
     manually_approves_followers: Boolean(settings.manually_approves_followers),
+    blocks: blockRows,
+    allowlist: allowlistRows,
   };
+}
+
+async function ownerBlocks(env) {
+  const rows = await env.DB.prepare(
+    `SELECT id, actor_id, blocked_domain, reason, created_at
+     FROM blocks
+     ORDER BY created_at DESC
+     LIMIT 80`,
+  ).all();
+  return rows.results || [];
+}
+
+async function ownerAllowlist(env) {
+  const rows = await env.DB.prepare(
+    `SELECT host, note, enabled, created_at, updated_at
+     FROM federation_allowlist
+     ORDER BY host ASC
+     LIMIT 120`,
+  ).all();
+  return rows.results || [];
+}
+
+async function ownerBlock(env, body) {
+  const reason = optionalString(body.reason);
+  const actorId = optionalString(body.actor_id || body.actorId);
+  const domain = optionalString(body.domain || body.blocked_domain || body.blockedDomain);
+  if (actorId) {
+    const actorUrl = publicHttpsUrl(actorId, 'actor_id').toString();
+    const id = `block-${stableId(actorUrl)}`;
+    await env.DB.prepare(`
+      INSERT OR REPLACE INTO blocks (id, actor_id, blocked_domain, reason, created_at)
+      VALUES (?1, ?2, NULL, ?3, CURRENT_TIMESTAMP)
+    `).bind(id, actorUrl, reason).run();
+    return { ok: true, id, actor_id: actorUrl };
+  }
+  if (domain) {
+    const host = normalizeHost(domain);
+    const id = `block-domain-${host}`;
+    await env.DB.prepare(`
+      INSERT OR REPLACE INTO blocks (id, actor_id, blocked_domain, reason, created_at)
+      VALUES (?1, ?2, ?2, ?3, CURRENT_TIMESTAMP)
+    `).bind(id, host, reason).run();
+    return { ok: true, id, blocked_domain: host };
+  }
+  throw new Error('actor_id or domain is required');
+}
+
+async function ownerAllowHost(env, body) {
+  const host = normalizeHost(body.host);
+  const note = optionalString(body.note);
+  await env.DB.prepare(`
+    INSERT INTO federation_allowlist (host, note, enabled, created_at, updated_at)
+    VALUES (?1, ?2, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(host) DO UPDATE SET
+      note = excluded.note,
+      enabled = 1,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(host, note).run();
+  return { ok: true, host };
 }
 
 async function ownerDiagnostics(env) {

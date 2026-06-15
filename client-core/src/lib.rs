@@ -112,6 +112,67 @@ impl OwnerApiClient {
         .await
     }
 
+    pub async fn moderation(&self) -> ClientResult<ModerationState> {
+        self.get("/api/dais/owner/moderation").await
+    }
+
+    pub async fn block_actor(
+        &self,
+        actor_id: &str,
+        reason: Option<&str>,
+    ) -> ClientResult<OwnerActionResult> {
+        self.post(
+            "/api/dais/owner/moderation/block",
+            &ModerationBlock {
+                actor_id: Some(actor_id),
+                domain: None,
+                reason,
+            },
+        )
+        .await
+    }
+
+    pub async fn block_domain(
+        &self,
+        domain: &str,
+        reason: Option<&str>,
+    ) -> ClientResult<OwnerActionResult> {
+        self.post(
+            "/api/dais/owner/moderation/block",
+            &ModerationBlock {
+                actor_id: None,
+                domain: Some(domain),
+                reason,
+            },
+        )
+        .await
+    }
+
+    pub async fn unblock(&self, value: &str) -> ClientResult<OwnerActionResult> {
+        self.post(
+            "/api/dais/owner/moderation/unblock",
+            &ModerationUnblock { value },
+        )
+        .await
+    }
+
+    pub async fn allow_host(
+        &self,
+        host: &str,
+        note: Option<&str>,
+    ) -> ClientResult<OwnerActionResult> {
+        self.post(
+            "/api/dais/owner/moderation/allowlist",
+            &ModerationAllow { host, note },
+        )
+        .await
+    }
+
+    pub async fn disallow_host(&self, host: &str) -> ClientResult<OwnerActionResult> {
+        self.delete(&format!("/api/dais/owner/moderation/allowlist/{host}"))
+            .await
+    }
+
     pub async fn follow_actor(&self, target: &str) -> ClientResult<OwnerFollowResult> {
         self.post("/api/dais/owner/following/follow", &FollowTarget { target })
             .await
@@ -531,6 +592,46 @@ pub struct ModerationState {
     pub closed_network: bool,
     pub block_count: u64,
     pub allowlist_count: u64,
+    #[serde(default)]
+    pub blocks: Vec<ModerationBlockRow>,
+    #[serde(default)]
+    pub allowlist: Vec<ModerationAllowlistHost>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ModerationBlockRow {
+    pub id: String,
+    pub actor_id: String,
+    pub blocked_domain: Option<String>,
+    pub reason: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ModerationAllowlistHost {
+    pub host: String,
+    pub note: Option<String>,
+    pub enabled: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ModerationBlock<'a> {
+    actor_id: Option<&'a str>,
+    domain: Option<&'a str>,
+    reason: Option<&'a str>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ModerationUnblock<'a> {
+    value: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ModerationAllow<'a> {
+    host: &'a str,
+    note: Option<&'a str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -671,6 +772,8 @@ mod tests {
                 closed_network: false,
                 block_count: 0,
                 allowlist_count: 0,
+                blocks: Vec::new(),
+                allowlist: Vec::new(),
             },
             diagnostics: vec![DiagnosticStatus {
                 key: "owner-api".to_string(),

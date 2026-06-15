@@ -82,12 +82,32 @@ type OwnerSnapshot = {
     excerpt?: string | null;
     read: boolean;
   }>;
-  moderation: {
-    closed_network: boolean;
-    block_count: number;
-    allowlist_count: number;
-  };
+  moderation: ModerationState;
   diagnostics: Array<{ key: string; ok: boolean; detail: string }>;
+};
+
+type ModerationState = {
+  closed_network: boolean;
+  block_count: number;
+  allowlist_count: number;
+  blocks?: ModerationBlock[];
+  allowlist?: ModerationAllowlistHost[];
+};
+
+type ModerationBlock = {
+  id: string;
+  actor_id: string;
+  blocked_domain?: string | null;
+  reason?: string | null;
+  created_at?: string | null;
+};
+
+type ModerationAllowlistHost = {
+  host: string;
+  note?: string | null;
+  enabled: boolean | number | string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 type CreatedPost = {
@@ -218,6 +238,7 @@ let notifications: OwnerNotification[] = [];
 let deliveries: OwnerDelivery[] = [];
 let sourceSubscriptions: SourceSubscription[] = [];
 let sourceItems: OwnerSnapshot["sources"] = [];
+let moderationState: ModerationState | null = null;
 
 async function load() {
   render();
@@ -293,6 +314,9 @@ function render() {
   app.querySelector<HTMLFormElement>("#follow-form")?.addEventListener("submit", followActor);
   app.querySelector<HTMLFormElement>("#discover-form")?.addEventListener("submit", discoverActor);
   app.querySelector<HTMLFormElement>("#source-form")?.addEventListener("submit", addSource);
+  app.querySelector<HTMLFormElement>("#block-actor-form")?.addEventListener("submit", blockActor);
+  app.querySelector<HTMLFormElement>("#block-domain-form")?.addEventListener("submit", blockDomain);
+  app.querySelector<HTMLFormElement>("#allow-host-form")?.addEventListener("submit", allowHost);
   app.querySelector<HTMLButtonElement>("[data-refresh-sources]")?.addEventListener("click", () => {
     void refreshSource(null);
   });
@@ -343,6 +367,16 @@ function render() {
   app.querySelectorAll<HTMLButtonElement>("[data-source-remove]").forEach((button) => {
     button.addEventListener("click", () => {
       void removeSource(button.dataset.sourceRemove || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-unblock-value]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void unblockValue(button.dataset.unblockValue || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-disallow-host]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void disallowHost(button.dataset.disallowHost || "");
     });
   });
 }
@@ -574,13 +608,32 @@ function followersView(data: OwnerSnapshot) {
 }
 
 function moderationView(data: OwnerSnapshot) {
+  const moderation = moderationState || data.moderation;
+  const blocks = moderation.blocks || [];
+  const allowlist = moderation.allowlist || [];
   return `<section class="split">
     <article class="panel"><h2>Federation safety</h2>
-      <p>Closed network: ${data.moderation.closed_network ? "enabled" : "disabled"}</p>
-      <p>Blocked actors/domains: ${data.moderation.block_count}</p>
-      <p>Allowed hosts: ${data.moderation.allowlist_count}</p>
+      <p>Closed network: ${moderation.closed_network ? "enabled" : "disabled"}</p>
+      <p>Blocked actors/domains: ${moderation.block_count}</p>
+      <p>Allowed hosts: ${moderation.allowlist_count}</p>
+      <form id="block-actor-form" class="inline-form">
+        <input name="actor_id" placeholder="https://example.social/users/name" />
+        <button type="submit">Block actor</button>
+      </form>
+      <form id="block-domain-form" class="inline-form">
+        <input name="domain" placeholder="example.social" />
+        <button type="submit">Block domain</button>
+      </form>
+      <h2 class="section-label">Blocks</h2>
+      ${list(blocks.map(blockCard), "No actor or domain blocks.")}
     </article>
-    <article class="panel"><h2>Policy</h2>
+    <article class="panel"><h2>Allowlist</h2>
+      <form id="allow-host-form" class="inline-form">
+        <input name="host" placeholder="example.social" />
+        <button type="submit">Allow host</button>
+      </form>
+      ${list(allowlist.map(allowlistCard), "No allowed federation hosts.")}
+      <h2 class="section-label">Policy</h2>
       <p>Private posts stay off public outboxes and Bluesky routes.</p>
       <p>Public routing is explicit from compose.</p>
     </article>
@@ -825,6 +878,34 @@ function diagnosticCard(row: OwnerSnapshot["diagnostics"][number]) {
   </article>`;
 }
 
+function blockCard(row: ModerationBlock) {
+  const value = row.blocked_domain || row.actor_id || row.id;
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.blocked_domain || actorLabel(row.actor_id))}</h2>
+      <p>${escapeHtml(row.reason || row.actor_id || row.id)}</p>
+    </div>
+    <footer>
+      ${row.created_at ? `<time>${escapeHtml(formatTime(row.created_at))}</time>` : ""}
+      <button type="button" data-unblock-value="${escapeAttr(value)}">Unblock</button>
+    </footer>
+  </article>`;
+}
+
+function allowlistCard(row: ModerationAllowlistHost) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.host)}</h2>
+      <p>${escapeHtml(row.note || "")}</p>
+    </div>
+    <footer>
+      <span>${isEnabled(row.enabled) ? "enabled" : "disabled"}</span>
+      ${row.updated_at ? `<time>${escapeHtml(formatTime(row.updated_at))}</time>` : ""}
+      <button type="button" data-disallow-host="${escapeAttr(row.host)}">Remove</button>
+    </footer>
+  </article>`;
+}
+
 function list(items: string[], emptyText: string) {
   return `<section class="list">${items.length ? items.join("") : `<article class="panel empty"><p>${escapeHtml(emptyText)}</p></article>`}</section>`;
 }
@@ -1040,6 +1121,62 @@ async function removeSource(id: string) {
   await loadLiveSection("Sources");
 }
 
+async function blockActor(event: SubmitEvent) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  const actorId = String(form.get("actor_id") || "").trim();
+  if (!actorId) {
+    notice = "Enter an actor URL.";
+    render();
+    return;
+  }
+  await invoke("block_owner_actor", { actorId, reason: null });
+  notice = `Blocked ${shortUrl(actorId)}.`;
+  await loadLiveSection("Moderation");
+}
+
+async function blockDomain(event: SubmitEvent) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  const domain = String(form.get("domain") || "").trim();
+  if (!domain) {
+    notice = "Enter a domain.";
+    render();
+    return;
+  }
+  await invoke("block_owner_domain", { domain, reason: null });
+  notice = `Blocked ${domain}.`;
+  await loadLiveSection("Moderation");
+}
+
+async function unblockValue(value: string) {
+  if (!value) return;
+  await invoke("unblock_owner_value", { value });
+  notice = `Unblocked ${value}.`;
+  await loadLiveSection("Moderation");
+}
+
+async function allowHost(event: SubmitEvent) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  const host = String(form.get("host") || "").trim();
+  if (!host) {
+    notice = "Enter a host.";
+    render();
+    return;
+  }
+  await invoke("allow_owner_host", { host, note: null });
+  notice = `Allowed ${host}.`;
+  await loadLiveSection("Moderation");
+}
+
+async function disallowHost(host: string) {
+  if (!host) return;
+  await invoke("disallow_owner_host", { host });
+  notice = `Removed ${host} from allowlist.`;
+  await loadLiveSection("Moderation");
+}
+
 async function ownerInteraction(objectId: string, interaction: string) {
   if (!objectId || !interaction) return;
   const result = await invoke<InteractionResult>("owner_interaction", {
@@ -1069,6 +1206,9 @@ async function loadLiveSection(section: string) {
     sourceSubscriptions = sources.subscriptions;
     sourceItems = sources.items;
     render();
+  } else if (section === "Moderation") {
+    moderationState = await invoke<ModerationState>("owner_moderation");
+    render();
   }
 }
 
@@ -1080,6 +1220,10 @@ async function markNotificationRead(id: string) {
 }
 
 function isRead(value: OwnerNotification["read"]) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function isEnabled(value: ModerationAllowlistHost["enabled"]) {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 

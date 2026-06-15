@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.6] - 2026-06-15
+
+### Added
+- Added live owner API moderation block/allowlist rows and Dais Desk controls
+  for block, unblock, allow host, and remove allowed host workflows.
+
 ## [1.28.5] - 2026-06-15
 
 ### Added

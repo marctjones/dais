@@ -238,6 +238,110 @@ async fn refresh_owner_source(
 }
 
 #[tauri::command]
+async fn owner_moderation(app: tauri::AppHandle) -> Result<ModerationState, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client.moderation().await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn block_owner_actor(
+    app: tauri::AppHandle,
+    actor_id: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .block_actor(&actor_id, reason.as_deref())
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn block_owner_domain(
+    app: tauri::AppHandle,
+    domain: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .block_domain(&domain, reason.as_deref())
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn unblock_owner_value(app: tauri::AppHandle, value: String) -> Result<(), String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .unblock(&value)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn allow_owner_host(
+    app: tauri::AppHandle,
+    host: String,
+    note: Option<String>,
+) -> Result<(), String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .allow_host(&host, note.as_deref())
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn disallow_owner_host(app: tauri::AppHandle, host: String) -> Result<(), String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .disallow_host(&host)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn discover_actor(
     app: tauri::AppHandle,
     target: String,
@@ -338,6 +442,8 @@ fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> Own
             closed_network: false,
             block_count: 0,
             allowlist_count: 0,
+            blocks: Vec::new(),
+            allowlist: Vec::new(),
         },
         diagnostics: vec![
             DiagnosticStatus {
@@ -499,6 +605,12 @@ fn main() {
             add_owner_source,
             remove_owner_source,
             refresh_owner_source,
+            owner_moderation,
+            block_owner_actor,
+            block_owner_domain,
+            unblock_owner_value,
+            allow_owner_host,
+            disallow_owner_host,
             discover_actor,
             update_owner_profile,
             follow_actor,
