@@ -94,6 +94,21 @@ impl OwnerApiClient {
         Ok(response.items)
     }
 
+    pub async fn direct_messages(&self) -> ClientResult<Vec<OwnerDirectMessage>> {
+        let response: OwnerItems<OwnerDirectMessage> =
+            self.get("/api/dais/owner/direct-messages").await?;
+        Ok(response.items)
+    }
+
+    pub async fn search(&self, query: &str) -> ClientResult<OwnerSearchResult> {
+        self.get(&format!("/api/dais/owner/search?q={}", url_encode(query)))
+            .await
+    }
+
+    pub async fn stats(&self) -> ClientResult<OwnerStats> {
+        self.get("/api/dais/owner/stats").await
+    }
+
     pub async fn sources(&self) -> ClientResult<OwnerSources> {
         self.get("/api/dais/owner/sources").await
     }
@@ -501,6 +516,80 @@ pub struct OwnerDelivery {
     pub activity_type: Option<String>,
     pub created_at: Option<String>,
     pub delivered_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerDirectMessage {
+    pub id: String,
+    pub conversation_id: String,
+    pub sender_id: String,
+    pub content: String,
+    pub published_at: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSearchResult {
+    #[serde(default)]
+    pub posts: Vec<OwnerSearchPost>,
+    #[serde(default)]
+    pub users: Vec<OwnerSearchUser>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSearchPost {
+    pub id: String,
+    pub actor_id: Option<String>,
+    pub content: String,
+    pub content_html: Option<String>,
+    pub object_type: Option<String>,
+    pub name: Option<String>,
+    pub summary: Option<String>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub location: Option<String>,
+    pub poll_options: Option<String>,
+    pub visibility: Option<String>,
+    pub protocol: Option<String>,
+    pub published_at: Option<String>,
+    pub in_reply_to: Option<String>,
+    pub atproto_uri: Option<String>,
+    pub encrypted_message: Option<String>,
+    pub media_attachments: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSearchUser {
+    pub actor_id: String,
+    pub relation: String,
+    pub status: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerStats {
+    pub followers_total: u64,
+    pub followers_approved: u64,
+    pub followers_pending: u64,
+    pub followers_rejected: u64,
+    pub following_total: u64,
+    pub posts_total: u64,
+    pub activities_total: u64,
+    pub deliveries_total: u64,
+    pub deliveries_failed: u64,
+    pub deliveries_queued: u64,
+    pub deliveries_retry: u64,
+    pub deliveries_delivered: u64,
+    pub dual_protocol_posts: u64,
+    pub public_posts: u64,
+    pub private_posts: u64,
+    pub direct_posts: u64,
+    pub encrypted_posts: u64,
+    pub media_posts: u64,
+    pub notifications_unread: u64,
+    pub blocks_total: u64,
+    pub allowlist_hosts: u64,
+    pub closed_network: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

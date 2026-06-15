@@ -19,12 +19,12 @@ use ratatui::{
 
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
-use crate::d1::{D1Client, D1DirectMessage, D1Post, D1User, ServerStats};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, ModerationBlockRow, OwnerApiClient, OwnerDelivery,
-    OwnerDiscoveredActor, OwnerFollower, OwnerFollowing, OwnerFriend, OwnerInteraction,
-    OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSources,
+    OwnerDirectMessage, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing, OwnerFriend,
+    OwnerInteraction, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
+    OwnerProfileUpdate, OwnerSearchPost, OwnerSearchUser, OwnerSources, OwnerStats,
     OwnerTimelinePost, ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
 };
 
@@ -340,15 +340,15 @@ enum TabData {
     Notifications(Vec<OwnerNotification>),
     Profile(OwnerProfile),
     Deliveries(Vec<OwnerDelivery>),
-    DMs(Vec<D1DirectMessage>),
+    DMs(Vec<OwnerDirectMessage>),
     Search {
-        posts: Vec<D1Post>,
-        users: Vec<D1User>,
+        posts: Vec<OwnerSearchPost>,
+        users: Vec<OwnerSearchUser>,
         query: String,
     },
     Bluesky(Vec<crate::atproto::FeedItem>),
     Sources(OwnerSources),
-    Stats(ServerStats),
+    Stats(OwnerStats),
     Blocks(Vec<ModerationBlockRow>),
 }
 
@@ -487,15 +487,15 @@ struct App {
     notifications: Vec<OwnerNotification>,
     profile: Option<OwnerProfile>,
     deliveries: Vec<OwnerDelivery>,
-    direct_messages: Vec<D1DirectMessage>,
-    search_posts: Vec<D1Post>,
-    search_users: Vec<D1User>,
+    direct_messages: Vec<OwnerDirectMessage>,
+    search_posts: Vec<OwnerSearchPost>,
+    search_users: Vec<OwnerSearchUser>,
     reader: Vec<OwnerTimelinePost>,
     reader_details: HashMap<String, OwnerPostDetail>,
     discovered_actor: Option<OwnerDiscoveredActor>,
     bluesky_feed: Vec<crate::atproto::FeedItem>,
     sources: OwnerSources,
-    stats: Option<ServerStats>,
+    stats: Option<OwnerStats>,
     blocks: Vec<ModerationBlockRow>,
 }
 
@@ -2191,7 +2191,7 @@ impl App {
     }
 }
 
-async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData> {
+async fn load_tab(_remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData> {
     match tab {
         Tab::Reader => {
             let client = owner_api_from_env()?;
@@ -2266,8 +2266,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Deliveries(deliveries))
         }
         Tab::DMs => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::DMs(db.list_direct_messages(50).await?))
+            let client = owner_api_from_env()?;
+            let direct_messages = client
+                .direct_messages()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::DMs(direct_messages))
         }
         Tab::Search => Err(anyhow!("search requires a query")),
         Tab::Discovery => Err(anyhow!("discovery requires a target")),
@@ -2287,8 +2291,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Sources(sources))
         }
         Tab::Stats => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Stats(db.stats().await?))
+            let client = owner_api_from_env()?;
+            let stats = client
+                .stats()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Stats(stats))
         }
         Tab::Blocks => {
             let client = owner_api_from_env()?;
@@ -2334,17 +2342,19 @@ fn owner_protocol(value: Protocol) -> OwnerProtocolRoute {
 }
 
 async fn load_search(
-    remote: bool,
+    _remote: bool,
     _store: ConfigStore,
     query: &str,
-) -> Result<(Vec<D1Post>, Vec<D1User>)> {
-    let db = D1Client::new(remote)?;
-    let posts = db.search_posts(query, 50).await?;
-    let users = db.search_users(query, 50).await?;
-    Ok((posts, users))
+) -> Result<(Vec<OwnerSearchPost>, Vec<OwnerSearchUser>)> {
+    let client = owner_api_from_env()?;
+    let results = client
+        .search(query)
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    Ok((results.posts, results.users))
 }
 
-fn stats_detail(stats: &ServerStats) -> String {
+fn stats_detail(stats: &OwnerStats) -> String {
     format!(
         "followers total: {}\nfollowers approved: {}\nfollowers pending: {}\nfollowers rejected: {}\nfollowing total: {}\nposts total: {}\nposts public: {}\nposts private: {}\nposts direct: {}\nposts encrypted: {}\nposts media: {}\nposts dual protocol: {}\nactivities total: {}\ndeliveries total: {}\ndeliveries queued: {}\ndeliveries retry: {}\ndeliveries delivered: {}\ndeliveries failed: {}\nnotifications unread: {}\nblocks total: {}\nallowlist hosts: {}\nclosed network: {}",
         stats.followers_total,
@@ -2438,7 +2448,7 @@ fn owner_post_detail(post: &OwnerPost) -> String {
     )
 }
 
-fn post_detail(post: &D1Post) -> String {
+fn post_detail(post: &OwnerSearchPost) -> String {
     format!(
         "id: {}\nvisibility: {}\nprotocol: {}\npublished: {}\natproto: {}\nattachments: {}\n{}\n{}",
         post.id,

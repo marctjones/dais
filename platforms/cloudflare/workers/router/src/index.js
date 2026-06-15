@@ -974,6 +974,20 @@ async function handleOwnerApi(request, env, url) {
     });
   }
 
+  if (request.method === 'GET' && path === '/direct-messages') {
+    return apiJson({
+      items: await ownerDirectMessages(env, clampLimit(url.searchParams.get('limit'))),
+    });
+  }
+
+  if (request.method === 'GET' && path === '/search') {
+    return apiJson(await ownerSearch(env, url.searchParams.get('q') || '', clampLimit(url.searchParams.get('limit'))));
+  }
+
+  if (request.method === 'GET' && path === '/stats') {
+    return apiJson(await ownerStats(env));
+  }
+
   if (request.method === 'GET' && path === '/sources') {
     return apiJson({
       subscriptions: await ownerSourceSubscriptions(env, clampLimit(url.searchParams.get('limit'))),
@@ -1881,6 +1895,99 @@ async function ownerDeliveries(env, limit) {
      LIMIT ?1`,
   ).bind(limit).all();
   return rows.results || [];
+}
+
+async function ownerDirectMessages(env, limit) {
+  const rows = await env.DB.prepare(
+    `SELECT id, conversation_id, sender_id, content, published_at, created_at
+     FROM direct_messages
+     ORDER BY published_at DESC
+     LIMIT ?1`,
+  ).bind(limit).all();
+  return rows.results || [];
+}
+
+async function ownerSearch(env, query, limit) {
+  const term = String(query || '').trim();
+  if (!term) return { posts: [], users: [] };
+  const like = `%${term}%`;
+  const posts = await env.DB.prepare(
+    `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+            name, summary, start_time, end_time, location, poll_options,
+            visibility, COALESCE(protocol, 'activitypub') AS protocol,
+            published_at, in_reply_to, atproto_uri, encrypted_message, media_attachments
+     FROM posts
+     WHERE content LIKE ?1 OR name LIKE ?1 OR summary LIKE ?1
+     ORDER BY published_at DESC
+     LIMIT ?2`,
+  ).bind(like, limit).all();
+  const users = await env.DB.prepare(
+    `SELECT follower_actor_id AS actor_id, 'follower' AS relation, status, created_at
+     FROM followers
+     WHERE follower_actor_id LIKE ?1
+     UNION ALL
+     SELECT target_actor_id AS actor_id, 'following' AS relation, status, created_at
+     FROM following
+     WHERE target_actor_id LIKE ?1
+     ORDER BY created_at DESC
+     LIMIT ?2`,
+  ).bind(like, limit).all();
+  return {
+    posts: posts.results || [],
+    users: users.results || [],
+  };
+}
+
+async function ownerStats(env) {
+  const row = await env.DB.prepare(
+    `SELECT
+        (SELECT COUNT(*) FROM followers) AS followers_total,
+        (SELECT COUNT(*) FROM followers WHERE status='approved') AS followers_approved,
+        (SELECT COUNT(*) FROM followers WHERE status='pending') AS followers_pending,
+        (SELECT COUNT(*) FROM followers WHERE status='rejected') AS followers_rejected,
+        (SELECT COUNT(*) FROM following) AS following_total,
+        (SELECT COUNT(*) FROM posts) AS posts_total,
+        (SELECT COUNT(*) FROM activities) AS activities_total,
+        (SELECT COUNT(*) FROM deliveries) AS deliveries_total,
+        (SELECT COUNT(*) FROM deliveries WHERE status='failed') AS deliveries_failed,
+        (SELECT COUNT(*) FROM deliveries WHERE status='queued') AS deliveries_queued,
+        (SELECT COUNT(*) FROM deliveries WHERE status='retry') AS deliveries_retry,
+        (SELECT COUNT(*) FROM deliveries WHERE status='delivered') AS deliveries_delivered,
+        (SELECT COUNT(*) FROM posts WHERE protocol='both') AS dual_protocol_posts,
+        (SELECT COUNT(*) FROM posts WHERE visibility='public') AS public_posts,
+        (SELECT COUNT(*) FROM posts WHERE visibility IN ('followers', 'unlisted')) AS private_posts,
+        (SELECT COUNT(*) FROM posts WHERE visibility='direct') AS direct_posts,
+        (SELECT COUNT(*) FROM posts WHERE encrypted_message IS NOT NULL) AS encrypted_posts,
+        (SELECT COUNT(*) FROM posts WHERE media_attachments IS NOT NULL AND media_attachments != '') AS media_posts,
+        (SELECT COUNT(*) FROM notifications WHERE read = 0 OR read IS NULL) AS notifications_unread,
+        (SELECT COUNT(*) FROM blocks) AS blocks_total,
+        (SELECT COUNT(*) FROM federation_allowlist WHERE enabled = 1) AS allowlist_hosts,
+        (SELECT closed_network FROM instance_settings WHERE id = 1) AS closed_network`,
+  ).first();
+  return {
+    followers_total: Number(row?.followers_total || 0),
+    followers_approved: Number(row?.followers_approved || 0),
+    followers_pending: Number(row?.followers_pending || 0),
+    followers_rejected: Number(row?.followers_rejected || 0),
+    following_total: Number(row?.following_total || 0),
+    posts_total: Number(row?.posts_total || 0),
+    activities_total: Number(row?.activities_total || 0),
+    deliveries_total: Number(row?.deliveries_total || 0),
+    deliveries_failed: Number(row?.deliveries_failed || 0),
+    deliveries_queued: Number(row?.deliveries_queued || 0),
+    deliveries_retry: Number(row?.deliveries_retry || 0),
+    deliveries_delivered: Number(row?.deliveries_delivered || 0),
+    dual_protocol_posts: Number(row?.dual_protocol_posts || 0),
+    public_posts: Number(row?.public_posts || 0),
+    private_posts: Number(row?.private_posts || 0),
+    direct_posts: Number(row?.direct_posts || 0),
+    encrypted_posts: Number(row?.encrypted_posts || 0),
+    media_posts: Number(row?.media_posts || 0),
+    notifications_unread: Number(row?.notifications_unread || 0),
+    blocks_total: Number(row?.blocks_total || 0),
+    allowlist_hosts: Number(row?.allowlist_hosts || 0),
+    closed_network: Boolean(row?.closed_network),
+  };
 }
 
 async function ownerSourceSubscriptions(env, limit) {

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.36] - 2026-06-15
+
+### Added
+- Added owner API endpoints and shared client models for search, direct messages,
+  and server stats so first-party clients do not need direct D1 access for those
+  views.
+
+### Changed
+- Moved the Rust TUI Search, DMs, and Stats tabs to the live owner API.
+
 ## [1.28.35] - 2026-06-15
 
 ### Changed

@@ -726,19 +726,6 @@ impl D1Client {
         self.query(&sql)
     }
 
-    pub async fn list_direct_messages(&self, limit: u16) -> Result<Vec<D1DirectMessage>> {
-        let limit = clamp_limit(limit);
-        let sql = format!(
-            r#"
-            SELECT id, conversation_id, sender_id, content, published_at, created_at
-            FROM direct_messages
-            ORDER BY published_at DESC
-            LIMIT {limit}
-            "#
-        );
-        self.query(&sql)
-    }
-
     pub async fn list_blocks(&self, limit: u16) -> Result<Vec<D1Block>> {
         let limit = clamp_limit(limit);
         let sql = format!(
