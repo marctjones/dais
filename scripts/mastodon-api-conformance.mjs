@@ -5,6 +5,9 @@ const config = {
   token: process.env.DAIS_MASTODON_BEARER_TOKEN || "",
 };
 
+const tinyPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
 const results = [];
 
 function requirement(id, auth, title, run) {
@@ -179,6 +182,51 @@ const tests = [
       if (read.status !== 200) throw new Error(`read expected 200, got ${read.status}`);
       if (!read.json?.poll || read.json.poll.options?.[0]?.title !== "Yes") {
         throw new Error("stored poll did not round-trip through status read");
+      }
+    } finally {
+      if (createdId) {
+        await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { method: "DELETE", auth: true });
+      }
+    }
+  }),
+  requirement("MASTODON-API-WRITE-02", true, "Media upload can be attached to a public status and round-trips as media_attachments", async () => {
+    let createdId = "";
+    try {
+      const media = await request("/api/v1/media", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: "dais-conformance.png",
+          media_type: "image/png",
+          data_base64: tinyPngBase64,
+          description: "dais conformance pixel",
+        }),
+      });
+      if (media.status !== 200) throw new Error(`media upload expected 200, got ${media.status}: ${media.text}`);
+      if (!media.json?.id || media.json.type !== "image" || !media.json.url) throw new Error("media upload shape incomplete");
+
+      const create = await request("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: `dais Mastodon media conformance ${new Date().toISOString()}`,
+          visibility: "public",
+          media_ids: [media.json.id],
+        }),
+      });
+      if (create.status !== 201) throw new Error(`media status create expected 201, got ${create.status}: ${create.text}`);
+      createdId = create.json?.id || "";
+      if (!Array.isArray(create.json?.media_attachments) || create.json.media_attachments.length !== 1) {
+        throw new Error("created status missing media attachment");
+      }
+      if (create.json.media_attachments[0].type !== "image") throw new Error("created status media attachment is not image");
+
+      const read = await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { auth: true });
+      if (read.status !== 200) throw new Error(`media status read expected 200, got ${read.status}`);
+      if (!Array.isArray(read.json?.media_attachments) || read.json.media_attachments[0]?.url !== media.json.url) {
+        throw new Error("media attachment did not round-trip through status read");
       }
     } finally {
       if (createdId) {
