@@ -7,6 +7,7 @@ const config = {
 
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+const tinyMp4Base64 = "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQ==";
 
 const results = [];
 
@@ -227,6 +228,56 @@ const tests = [
       if (read.status !== 200) throw new Error(`media status read expected 200, got ${read.status}`);
       if (!Array.isArray(read.json?.media_attachments) || read.json.media_attachments[0]?.url !== media.json.url) {
         throw new Error("media attachment did not round-trip through status read");
+      }
+    } finally {
+      if (createdId) {
+        await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { method: "DELETE", auth: true });
+      }
+    }
+  }),
+  requirement("MASTODON-API-WRITE-05", true, "Video media upload is advertised and round-trips as a video attachment", async () => {
+    let createdId = "";
+    try {
+      const instance = await request("/api/v2/instance");
+      const supported = instance.json?.configuration?.media_attachments?.supported_mime_types || [];
+      if (!supported.includes("video/mp4") || !supported.includes("video/webm")) {
+        throw new Error("instance does not advertise supported video MIME types");
+      }
+
+      const media = await request("/api/v1/media", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: "dais-conformance.mp4",
+          media_type: "video/mp4",
+          data_base64: tinyMp4Base64,
+          description: "dais conformance video",
+        }),
+      });
+      if (media.status !== 200) throw new Error(`video upload expected 200, got ${media.status}: ${media.text}`);
+      if (!media.json?.id || media.json.type !== "video" || !media.json.url) throw new Error("video upload shape incomplete");
+
+      const create = await request("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: `dais Mastodon video conformance ${new Date().toISOString()}`,
+          visibility: "public",
+          media_ids: [media.json.id],
+        }),
+      });
+      if (create.status !== 201) throw new Error(`video status create expected 201, got ${create.status}: ${create.text}`);
+      createdId = create.json?.id || "";
+      if (create.json?.media_attachments?.[0]?.type !== "video") {
+        throw new Error("created status media attachment is not video");
+      }
+
+      const read = await request(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { auth: true });
+      if (read.status !== 200) throw new Error(`video status read expected 200, got ${read.status}`);
+      if (read.json?.media_attachments?.[0]?.type !== "video" || read.json.media_attachments[0].url !== media.json.url) {
+        throw new Error("video attachment did not round-trip through status read");
       }
     } finally {
       if (createdId) {

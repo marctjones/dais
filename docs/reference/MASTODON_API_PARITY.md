@@ -21,7 +21,7 @@ must not publish followers-only, direct, or E2EE content as public data.
 | Status reads | `GET /api/v1/statuses/:id`, `GET /api/v1/statuses/:id/context` | Implemented; context includes local public ancestors and direct reply descendants |
 | Status writes | `POST /api/v1/statuses`, `PUT/PATCH /api/v1/statuses/:id`, `DELETE /api/v1/statuses/:id` | Implemented; deletes queue ActivityPub `Delete` to followers |
 | Interactions | `POST /api/v1/statuses/:id/favourite`, `unfavourite`, `reblog`, `unreblog`, `GET /api/v1/favourites` | Implemented for local status state |
-| Media | `POST /api/v1/media`, `POST /api/v2/media` | Implemented for public media uploads |
+| Media | `POST /api/v1/media`, `POST /api/v2/media` | Implemented for public image and video uploads |
 | Polls | ActivityPub `Question` with `oneOf`/`anyOf` options; Mastodon API `poll` parameters on `POST /api/v1/statuses` | Implemented for CLI-created posts, server-to-server object rendering, and Mastodon API status creation |
 | Notifications | `GET /api/v1/notifications`, `POST /api/v1/notifications/:id/dismiss`, `POST /api/v1/notifications/clear` | Implemented |
 | Search | `GET /api/v1/search`, `GET /api/v2/search` | Implemented for public local statuses and ActivityPub actor lookup |

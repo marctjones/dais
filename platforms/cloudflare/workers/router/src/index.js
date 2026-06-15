@@ -393,7 +393,9 @@ async function handleMastodonApi(request, env, url) {
         languages: ['en'],
         configuration: {
           statuses: { max_characters: 5000, max_media_attachments: 4, characters_reserved_per_url: 23 },
-          media_attachments: { supported_mime_types: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] },
+          media_attachments: {
+            supported_mime_types: ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm'],
+          },
           polls: { max_options: 4, max_characters_per_option: 200, min_expiration: 300, max_expiration: 2629746 },
         },
       });

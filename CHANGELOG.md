@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.25] - 2026-06-15
+
+### Changed
+- Mastodon API instance metadata now advertises `video/mp4` and `video/webm`
+  media uploads.
+- Expanded Mastodon API conformance with authenticated video upload, public
+  status attachment, readback, and cleanup coverage.
+
 ## [1.28.24] - 2026-06-15
 
 ### Changed
