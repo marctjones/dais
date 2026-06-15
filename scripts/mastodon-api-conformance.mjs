@@ -101,6 +101,8 @@ const tests = [
       request("/api/v2/filters", { auth: true }),
       request("/api/v1/lists", { auth: true }),
       request("/api/v1/conversations", { auth: true }),
+      request("/api/v1/bookmarks", { auth: true }),
+      request("/api/v1/markers", { auth: true }),
     ]);
     if (checks.some((res) => res.status !== 200)) throw new Error(`expected all 200, got ${checks.map((res) => res.status).join("/")}`);
     expectArray(checks[0].json, "relationships");
@@ -108,6 +110,46 @@ const tests = [
     expectArray(checks[2].json, "filters");
     expectArray(checks[3].json, "lists");
     expectArray(checks[4].json, "conversations");
+    expectArray(checks[5].json, "bookmarks");
+    if (!isObject(checks[6].json)) throw new Error("markers shape incomplete");
+  }),
+  requirement("MASTODON-API-READ-02", true, "Account graph, status context, favourites, moderation, and streaming shapes work", async () => {
+    const account = await request("/api/v1/accounts/verify_credentials", { auth: true });
+    const accountId = encodeURIComponent(account.json.id);
+    const timeline = await request("/api/v1/timelines/public?limit=1");
+    const statusId = timeline.json?.[0]?.id ? encodeURIComponent(timeline.json[0].id) : "";
+    const checks = await Promise.all([
+      request(`/api/v1/accounts/${accountId}`, { auth: true }),
+      request(`/api/v1/accounts/${accountId}/statuses?limit=1`, { auth: true }),
+      request(`/api/v1/accounts/${accountId}/followers?limit=2`, { auth: true }),
+      request(`/api/v1/accounts/${accountId}/following?limit=2`, { auth: true }),
+      request("/api/v1/favourites?limit=2", { auth: true }),
+      request("/api/v1/blocks?limit=2", { auth: true }),
+      request("/api/v1/mutes?limit=2", { auth: true }),
+      request("/api/v1/streaming/user", { auth: true }),
+      request("/api/v1/reports", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account_id: account.json.id, comment: "dais conformance compatibility report" }),
+      }),
+      statusId ? request(`/api/v1/statuses/${statusId}/context`, { auth: true }) : Promise.resolve({ status: 200, json: { ancestors: [], descendants: [] } }),
+    ]);
+    if (checks.some((res) => res.status !== 200 && res.status !== 201)) {
+      throw new Error(`expected 200/201, got ${checks.map((res) => res.status).join("/")}`);
+    }
+    if (!checks[0].json?.id) throw new Error("account lookup shape incomplete");
+    expectArray(checks[1].json, "account statuses");
+    expectArray(checks[2].json, "followers");
+    expectArray(checks[3].json, "following");
+    expectArray(checks[4].json, "favourites");
+    expectArray(checks[5].json, "blocks");
+    expectArray(checks[6].json, "mutes");
+    if (!checks[7].contentType.includes("text/event-stream")) throw new Error("streaming content-type is not event-stream");
+    if (!checks[8].json?.id || checks[8].json.action_taken !== false) throw new Error("report shape incomplete");
+    if (!Array.isArray(checks[9].json?.ancestors) || !Array.isArray(checks[9].json?.descendants)) {
+      throw new Error("status context shape incomplete");
+    }
   }),
   requirement("MASTODON-API-WRITE-01", true, "Status creation accepts Mastodon poll parameters and returns poll shape", async () => {
     let createdId = "";

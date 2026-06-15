@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.19] - 2026-06-15
+
+### Changed
+- Expanded the Mastodon API conformance gate to cover account graph reads,
+  status context, favourites, bookmarks, markers, moderation lists, reports, and
+  streaming compatibility shapes.
+
 ## [1.28.18] - 2026-06-15
 
 ### Changed
