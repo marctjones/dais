@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
+import { createHash, createSign, generateKeyPairSync } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 const config = {
   socialBaseUrl: process.env.DAIS_SOCIAL_BASE_URL || "https://social.dais.social",
   pdsBaseUrl: process.env.DAIS_PDS_BASE_URL || "https://pds.dais.social",
   username: process.env.DAIS_USERNAME || "social",
   acctDomain: process.env.DAIS_ACCT_DOMAIN || "social.dais.social",
   primaryAcctDomain: process.env.DAIS_PRIMARY_ACCT_DOMAIN || "dais.social",
+  ownerToken:
+    process.env.DAIS_OWNER_TOKEN ||
+    (process.env.DAIS_OWNER_TOKEN_FILE ? readTokenFile(process.env.DAIS_OWNER_TOKEN_FILE) : ""),
   knownPublicPost:
     process.env.DAIS_PUBLIC_POST_PATH || "/users/social/posts/20260608212713-5dafca61",
   knownPrivatePost:
@@ -80,6 +86,14 @@ function parseJson(text) {
   }
 }
 
+function readTokenFile(path) {
+  try {
+    return readFileSync(path, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -110,6 +124,145 @@ function hasSelfLink(jrd, href) {
 
 function summarizeJson(value) {
   return JSON.stringify(value).slice(0, 220);
+}
+
+function base64Url(value) {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function digestHeader(body) {
+  return `SHA-256=${createHash("sha256").update(body).digest("base64")}`;
+}
+
+function signHttpSignature(privateKeyPem, signingString) {
+  return createSign("RSA-SHA256").update(signingString).sign(privateKeyPem, "base64");
+}
+
+async function signedInboxFixture() {
+  const fixture = generateFixtureActor();
+  const body = JSON.stringify({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: `${fixture.actorUrl}#activities/${Date.now()}`,
+    type: "View",
+    actor: fixture.actorUrl,
+    object: fixture.actorUrl,
+  });
+  return signedActivityPost(fixture, body);
+}
+
+function generateFixtureActor() {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  const actorUrl = `${config.socialBaseUrl}/__dais-fixtures/activitypub/actor?pk=${base64Url(publicKey)}`;
+  return { actorUrl, privateKey };
+}
+
+async function signedActivityPost(fixture, body) {
+  const inboxPath = `${actorPath}/inbox`;
+  const host = new URL(config.socialBaseUrl).host;
+  const date = new Date().toUTCString();
+  const digest = digestHeader(body);
+  const headersToSign = ["(request-target)", "host", "date", "digest", "content-type"];
+  const signingString = [
+    `(request-target): post ${inboxPath}`,
+    `host: ${host}`,
+    `date: ${date}`,
+    `digest: ${digest}`,
+    "content-type: application/activity+json",
+  ].join("\n");
+  const signature = signHttpSignature(fixture.privateKey, signingString);
+  const signatureHeader =
+    `keyId="${fixture.actorUrl}#main-key",algorithm="rsa-sha256",headers="${headersToSign.join(" ")}",signature="${signature}"`;
+  return request(inboxPath, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/activity+json",
+      Date: date,
+      Digest: digest,
+      Signature: signatureHeader,
+    },
+    body,
+  });
+}
+
+async function ownerApi(path, options = {}) {
+  const res = await request(`/api/dais/owner${path}`, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${config.ownerToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`owner API ${path} returned ${res.status}: ${res.text}`);
+  }
+  return res;
+}
+
+async function signedGetFixture(fixture, path) {
+  const host = new URL(config.socialBaseUrl).host;
+  const date = new Date().toUTCString();
+  const headersToSign = ["(request-target)", "host", "date", "accept"];
+  const signingString = [
+    `(request-target): get ${path}`,
+    `host: ${host}`,
+    `date: ${date}`,
+    "accept: application/activity+json",
+  ].join("\n");
+  const signature = signHttpSignature(fixture.privateKey, signingString);
+  return request(path, {
+    headers: {
+      Accept: "application/activity+json",
+      Date: date,
+      Signature:
+        `keyId="${fixture.actorUrl}#main-key",algorithm="rsa-sha256",headers="${headersToSign.join(" ")}",signature="${signature}"`,
+    },
+  });
+}
+
+async function authorizedFetchFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live authorized-fetch fixture" };
+  }
+  const fixture = generateFixtureActor();
+  const followId = `${fixture.actorUrl}#activities/follow-${Date.now()}`;
+  const follow = JSON.stringify({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: followId,
+    type: "Follow",
+    actor: fixture.actorUrl,
+    object: actorUrl,
+  });
+  const undo = JSON.stringify({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: `${fixture.actorUrl}#activities/undo-${Date.now()}`,
+    type: "Undo",
+    actor: fixture.actorUrl,
+    object: {
+      id: followId,
+      type: "Follow",
+      actor: fixture.actorUrl,
+      object: actorUrl,
+    },
+  });
+  try {
+    const followRes = await signedActivityPost(fixture, follow);
+    if (followRes.status < 200 || followRes.status >= 300) {
+      throw new Error(`signed Follow expected 2xx, got ${followRes.status}: ${followRes.text}`);
+    }
+    await ownerApi("/followers/status", {
+      method: "POST",
+      body: JSON.stringify({ follower_actor_id: fixture.actorUrl, status: "approved" }),
+    });
+    const signedGet = await signedGetFixture(fixture, config.knownPrivatePost);
+    return { signedGet };
+  } finally {
+    await signedActivityPost(fixture, undo).catch(() => {});
+  }
 }
 
 function rkeyFromAtUri(uri) {
@@ -306,11 +459,24 @@ const tests = [
   }),
 
   requirement("MASTODON-SECURITY-01", "MASTODON", "Signed inbox delivery verification is implemented", async (t) => {
-    t.info("valid HTTP Signature + Digest fixture is covered by core tests; live remote signed POST remains covered by federation smoke");
+    const res = await signedInboxFixture();
+    if (res.status < 200 || res.status >= 300) {
+      return t.fail(`signed fixture POST expected 2xx, got ${res.status}: ${res.text}`);
+    }
+    t.pass("valid signed POST with Digest accepted by deployed inbox");
   }),
 
   requirement("MASTODON-SECURITY-02", "MASTODON", "Authorized fetch for private posts is implemented", async (t) => {
-    t.info("unsigned/private denial is tested; valid signed approved-follower fetch needs a fixture actor key");
+    const result = await authorizedFetchFixture();
+    if (result.skipped) return t.info(result.detail);
+    const res = result.signedGet;
+    if (res.status !== 200) {
+      return t.fail(`signed approved-follower GET expected 200, got ${res.status}: ${res.text}`);
+    }
+    if (!isObject(res.json) || res.json.id !== `${config.socialBaseUrl}${config.knownPrivatePost}`) {
+      return t.fail(`private post response mismatch: ${summarizeJson(res.json)}`);
+    }
+    t.pass("valid signed approved-follower GET can fetch private post");
   }),
 
   requirement("MASTODON-CONTENT-01", "MASTODON", "Mastodon status payload basics are present", async (t) => {

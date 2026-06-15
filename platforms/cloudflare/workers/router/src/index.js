@@ -23,6 +23,10 @@ export default {
       return Response.redirect(new URL('/users/social', url).toString(), 302);
     }
 
+    if (path === '/__dais-fixtures/activitypub/actor') {
+      return fixtureActivityPubActor(url);
+    }
+
     if (path.startsWith('/api/dais/owner/')) {
       return handleOwnerApi(request, env, url);
     }
@@ -1651,6 +1655,47 @@ function normalizeHost(value) {
     throw new Error('host is not allowed');
   }
   return host;
+}
+
+function fixtureActivityPubActor(url) {
+  const publicKeyPem = decodeFixturePublicKey(url.searchParams.get('pk') || '');
+  if (!publicKeyPem) {
+    return new Response('Missing or invalid fixture public key', { status: 400 });
+  }
+  const actorUrl = url.toString();
+  const name = optionalString(url.searchParams.get('name')) || 'dais-s2s-fixture';
+  const actor = {
+    '@context': 'https://www.w3.org/ns/activitystreams',
+    id: actorUrl,
+    type: 'Application',
+    preferredUsername: name,
+    inbox: `${url.origin}/__dais-fixtures/activitypub/inbox`,
+    publicKey: {
+      id: `${actorUrl}#main-key`,
+      owner: actorUrl,
+      publicKeyPem,
+    },
+  };
+  return new Response(JSON.stringify(actor), {
+    headers: {
+      'Content-Type': 'application/activity+json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+function decodeFixturePublicKey(value) {
+  if (!value || value.length > 2000 || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+    const pem = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '='));
+    if (!pem.includes('-----BEGIN PUBLIC KEY-----') || !pem.includes('-----END PUBLIC KEY-----')) {
+      return null;
+    }
+    return pem;
+  } catch {
+    return null;
+  }
 }
 
 async function sourceId(sourceType, sourceUrl) {
