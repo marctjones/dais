@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use anyhow::{anyhow, Result};
+use reqwest::Url;
 
 use crate::atproto::AtprotoClient;
 use crate::cli::{ActivityObjectType, CreatePostArgs, E2eeFallbackMode};
@@ -312,13 +313,7 @@ pub async fn publish_post(
     db: &D1Client,
 ) -> Result<PostOutcome> {
     let effective = effective_protocol(draft.protocol, draft.visibility);
-    if !draft.attachments.is_empty()
-        && !matches!(draft.visibility, Visibility::Public | Visibility::Unlisted)
-    {
-        anyhow::bail!(
-            "media attachments currently require public or unlisted visibility; private media access is not implemented yet"
-        );
-    }
+    validate_media_attachments(&draft.attachments, draft.visibility)?;
     if !draft.attachments.is_empty() && effective != Protocol::ActivityPub {
         anyhow::bail!(
             "media attachments currently require ActivityPub routing; AT Protocol media upload is not implemented yet"
@@ -567,6 +562,11 @@ fn build_create_activity_json(input: CreateActivityInput<'_>) -> Result<String> 
         note["attachment"] = serde_json::json!(attachment_values(input.attachments)?);
     }
 
+    let tags = activity_tags(input.content);
+    if !tags.is_empty() {
+        note["tag"] = serde_json::json!(tags);
+    }
+
     if let Some(in_reply_to) = input.in_reply_to {
         note["inReplyTo"] = serde_json::json!(in_reply_to);
     }
@@ -630,6 +630,101 @@ fn attachment_values(attachments: &[String]) -> Result<Vec<serde_json::Value>> {
         .collect()
 }
 
+fn validate_media_attachments(attachments: &[String], visibility: Visibility) -> Result<()> {
+    if attachments.is_empty() {
+        return Ok(());
+    }
+
+    let values = attachment_values(attachments)?;
+    if matches!(visibility, Visibility::Followers | Visibility::Direct)
+        && !values.iter().all(is_private_media_attachment)
+    {
+        anyhow::bail!(
+            "followers-only and direct media attachments must use private media upload URLs"
+        );
+    }
+
+    if visibility == Visibility::Public || visibility == Visibility::Unlisted {
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+fn is_private_media_attachment(attachment: &serde_json::Value) -> bool {
+    let Some(url) = attachment.get("url").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.host_str() == Some("social.dais.social")
+        && parsed.path().starts_with("/media/_private/")
+}
+
+fn activity_tags(content: &str) -> Vec<serde_json::Value> {
+    let mut tags = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for token in content.split_whitespace() {
+        let trimmed = token.trim_matches(|c: char| {
+            matches!(
+                c,
+                '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\''
+            )
+        });
+        if let Some(tag) = hashtag_tag(trimmed) {
+            if seen.insert(format!("hashtag:{trimmed}")) {
+                tags.push(tag);
+            }
+            continue;
+        }
+        if let Some(tag) = mention_tag(trimmed) {
+            if seen.insert(format!("mention:{trimmed}")) {
+                tags.push(tag);
+            }
+        }
+    }
+    tags
+}
+
+fn hashtag_tag(token: &str) -> Option<serde_json::Value> {
+    let name = token.strip_prefix('#')?;
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": "Hashtag",
+        "name": format!("#{name}"),
+        "href": format!("https://social.dais.social/tags/{name}")
+    }))
+}
+
+fn mention_tag(token: &str) -> Option<serde_json::Value> {
+    let without_prefix = token.strip_prefix('@')?;
+    let mut parts = without_prefix.split('@');
+    let username = parts.next()?.trim();
+    let host = parts.next()?.trim();
+    if parts.next().is_some()
+        || username.is_empty()
+        || host.is_empty()
+        || !username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.'))
+    {
+        return None;
+    }
+    let href = format!("https://{host}/users/{username}");
+    Some(serde_json::json!({
+        "type": "Mention",
+        "name": format!("@{username}@{host}"),
+        "href": href
+    }))
+}
+
 fn activity_suffix(value: &str) -> String {
     use sha2::{Digest, Sha256};
 
@@ -638,4 +733,65 @@ fn activity_suffix(value: &str) -> String {
         .take(8)
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        activity_tags, build_create_activity_json, validate_media_attachments, CreateActivityInput,
+    };
+    use crate::cli::ActivityObjectType;
+    use crate::routing::Visibility;
+
+    #[test]
+    fn followers_media_requires_private_capability_url() {
+        let attachments = vec!["https://social.dais.social/media/uploads/public.png".to_string()];
+        let error = validate_media_attachments(&attachments, Visibility::Followers)
+            .expect_err("public media must not be valid for followers posts");
+        assert!(error
+            .to_string()
+            .contains("must use private media upload URLs"));
+    }
+
+    #[test]
+    fn followers_media_allows_private_capability_url() {
+        let attachments =
+            vec!["https://social.dais.social/media/_private/token/image.png".to_string()];
+        validate_media_attachments(&attachments, Visibility::Followers).unwrap();
+    }
+
+    #[test]
+    fn activity_tags_extract_mentions_and_hashtags() {
+        let tags = activity_tags("hello @alice@example.social #Dais");
+        assert_eq!(tags.len(), 2);
+        assert_eq!(tags[0]["type"], "Mention");
+        assert_eq!(tags[0]["name"], "@alice@example.social");
+        assert_eq!(tags[1]["type"], "Hashtag");
+        assert_eq!(tags[1]["name"], "#Dais");
+    }
+
+    #[test]
+    fn create_activity_includes_mastodon_tag_shapes() {
+        let json = build_create_activity_json(CreateActivityInput {
+            actor_id: "https://social.dais.social/users/social",
+            post_id: "https://social.dais.social/users/social/posts/1",
+            content: "hello @alice@example.social #Dais",
+            visibility: "followers",
+            published_at: "2026-06-15T00:00:00Z",
+            encrypted_message: None,
+            in_reply_to: None,
+            recipients: &[],
+            object_type: ActivityObjectType::Note,
+            title: None,
+            summary: None,
+            starts_at: None,
+            ends_at: None,
+            location: None,
+            attachments: &[],
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["object"]["tag"][0]["type"], "Mention");
+        assert_eq!(value["object"]["tag"][1]["type"], "Hashtag");
+    }
 }

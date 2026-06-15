@@ -485,6 +485,11 @@ pub fn build_note_object(post: &Post, interactions: Option<&PostInteractions>) -
         }
     }
 
+    let tags = activity_tags(&post.content);
+    if !tags.is_empty() {
+        note["tag"] = json!(tags);
+    }
+
     if let Some(ref encrypted_message) = post.encrypted_message {
         if let Ok(encrypted) = serde_json::from_str::<Value>(encrypted_message) {
             note["encryptedMessage"] = encrypted;
@@ -507,6 +512,67 @@ fn note_audience(visibility: &str, followers_collection: &str) -> (Vec<String>, 
         "direct" => (Vec::new(), Vec::new()),
         _ => (vec![followers_collection.to_string()], Vec::new()),
     }
+}
+
+fn activity_tags(content: &str) -> Vec<Value> {
+    let mut tags = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for token in content.split_whitespace() {
+        let trimmed = token.trim_matches(|c: char| {
+            matches!(
+                c,
+                '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\''
+            )
+        });
+        if let Some(tag) = hashtag_tag(trimmed) {
+            if seen.insert(format!("hashtag:{trimmed}")) {
+                tags.push(tag);
+            }
+            continue;
+        }
+        if let Some(tag) = mention_tag(trimmed) {
+            if seen.insert(format!("mention:{trimmed}")) {
+                tags.push(tag);
+            }
+        }
+    }
+    tags
+}
+
+fn hashtag_tag(token: &str) -> Option<Value> {
+    let name = token.strip_prefix('#')?;
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(json!({
+        "type": "Hashtag",
+        "name": format!("#{name}"),
+        "href": format!("https://social.dais.social/tags/{name}")
+    }))
+}
+
+fn mention_tag(token: &str) -> Option<Value> {
+    let without_prefix = token.strip_prefix('@')?;
+    let mut parts = without_prefix.split('@');
+    let username = parts.next()?.trim();
+    let host = parts.next()?.trim();
+    if parts.next().is_some()
+        || username.is_empty()
+        || host.is_empty()
+        || !username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.'))
+    {
+        return None;
+    }
+    Some(json!({
+        "type": "Mention",
+        "name": format!("@{username}@{host}"),
+        "href": format!("https://{host}/users/{username}")
+    }))
 }
 
 #[cfg(test)]
@@ -617,5 +683,17 @@ mod tests {
             event["to"],
             serde_json::json!(["https://social.example/users/social/followers"])
         );
+    }
+
+    #[test]
+    fn note_builder_exposes_mastodon_mentions_and_hashtags() {
+        let mut post = post_with_visibility("public");
+        post.content = "hello @alice@example.social #Dais".to_string();
+        let note = build_note_object(&post, None);
+
+        assert_eq!(note["tag"][0]["type"], "Mention");
+        assert_eq!(note["tag"][0]["name"], "@alice@example.social");
+        assert_eq!(note["tag"][1]["type"], "Hashtag");
+        assert_eq!(note["tag"][1]["name"], "#Dais");
     }
 }

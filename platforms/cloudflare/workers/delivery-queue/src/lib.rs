@@ -650,6 +650,11 @@ fn build_create_activity_json(
         }
     }
 
+    let tags = activity_tags(content);
+    if !tags.is_empty() {
+        note["tag"] = serde_json::json!(tags);
+    }
+
     if let Some(encrypted_message) = encrypted_message {
         note["encryptedMessage"] = encrypted_message;
     }
@@ -666,6 +671,67 @@ fn build_create_activity_json(
     });
 
     serde_json::to_string(&activity).map_err(|e| e.to_string())
+}
+
+fn activity_tags(content: &str) -> Vec<serde_json::Value> {
+    let mut tags = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for token in content.split_whitespace() {
+        let trimmed = token.trim_matches(|c: char| {
+            matches!(
+                c,
+                '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\''
+            )
+        });
+        if let Some(tag) = hashtag_tag(trimmed) {
+            if seen.insert(format!("hashtag:{trimmed}")) {
+                tags.push(tag);
+            }
+            continue;
+        }
+        if let Some(tag) = mention_tag(trimmed) {
+            if seen.insert(format!("mention:{trimmed}")) {
+                tags.push(tag);
+            }
+        }
+    }
+    tags
+}
+
+fn hashtag_tag(token: &str) -> Option<serde_json::Value> {
+    let name = token.strip_prefix('#')?;
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": "Hashtag",
+        "name": format!("#{name}"),
+        "href": format!("https://social.dais.social/tags/{name}")
+    }))
+}
+
+fn mention_tag(token: &str) -> Option<serde_json::Value> {
+    let without_prefix = token.strip_prefix('@')?;
+    let mut parts = without_prefix.split('@');
+    let username = parts.next()?.trim();
+    let host = parts.next()?.trim();
+    if parts.next().is_some()
+        || username.is_empty()
+        || host.is_empty()
+        || !username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.'))
+    {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": "Mention",
+        "name": format!("@{username}@{host}"),
+        "href": format!("https://{host}/users/{username}")
+    }))
 }
 
 fn activity_to(
