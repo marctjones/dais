@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.14] - 2026-06-15
+
+### Changed
+- Moved the Rust TUI Profile tab from raw D1 actor reads to the live owner API
+  profile snapshot, matching the CLI and Dais Desk account surfaces.
+
 ## [1.28.13] - 2026-06-15
 
 ### Added
