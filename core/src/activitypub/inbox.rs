@@ -986,7 +986,139 @@ pub async fn process_inbox_activity(
 
 #[cfg(test)]
 mod tests {
-    use super::{actor_delivery_info_from_json, fallback_actor_inbox};
+    use super::{
+        actor_delivery_info_from_json, fallback_actor_inbox, handle_announce, handle_like,
+        handle_undo,
+    };
+    use crate::activitypub::types::{Activity, Context};
+    use crate::traits::{
+        DatabaseDialect, DatabaseProvider, HttpProvider, PlatformResult, Request, Response, Row,
+        Statement,
+    };
+    use async_trait::async_trait;
+    use serde_json::{json, Value};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct StoredInteraction {
+        id: String,
+        interaction_type: String,
+        actor_id: String,
+        object_url: String,
+    }
+
+    #[derive(Default)]
+    struct InteractionDb {
+        interactions: RefCell<Vec<StoredInteraction>>,
+        notification_count: RefCell<usize>,
+    }
+
+    impl InteractionDb {
+        fn interaction_count(&self, interaction_type: &str) -> usize {
+            self.interactions
+                .borrow()
+                .iter()
+                .filter(|interaction| interaction.interaction_type == interaction_type)
+                .count()
+        }
+
+        fn notification_count(&self) -> usize {
+            *self.notification_count.borrow()
+        }
+    }
+
+    #[async_trait(?Send)]
+    impl DatabaseProvider for InteractionDb {
+        async fn execute(&self, sql: &str, params: &[Value]) -> PlatformResult<Vec<Row>> {
+            if sql.contains("INSERT OR IGNORE INTO interactions") {
+                let interaction_type = if sql.contains("VALUES (?1, 'boost'") {
+                    "boost"
+                } else {
+                    "like"
+                };
+                let id = params.first().and_then(Value::as_str).unwrap_or_default();
+                let mut interactions = self.interactions.borrow_mut();
+                if !interactions.iter().any(|interaction| interaction.id == id) {
+                    interactions.push(StoredInteraction {
+                        id: id.to_string(),
+                        interaction_type: interaction_type.to_string(),
+                        actor_id: params
+                            .get(1)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        object_url: params
+                            .get(5)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    });
+                }
+                return Ok(Vec::new());
+            }
+
+            if sql.contains("DELETE FROM interactions WHERE id = ?1") {
+                let id = params.first().and_then(Value::as_str).unwrap_or_default();
+                self.interactions
+                    .borrow_mut()
+                    .retain(|interaction| interaction.id != id);
+                return Ok(Vec::new());
+            }
+
+            if sql.contains("INSERT INTO notifications") {
+                *self.notification_count.borrow_mut() += 1;
+                return Ok(Vec::new());
+            }
+
+            Ok(Vec::new())
+        }
+
+        async fn batch(&self, _statements: Vec<Statement>) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        fn dialect(&self) -> DatabaseDialect {
+            DatabaseDialect::SQLite
+        }
+    }
+
+    struct ActorHttp;
+
+    #[async_trait(?Send)]
+    impl HttpProvider for ActorHttp {
+        async fn fetch(&self, request: Request) -> PlatformResult<Response> {
+            Ok(Response {
+                status: 200,
+                headers: HashMap::new(),
+                body: json!({
+                    "id": request.url,
+                    "type": "Person",
+                    "preferredUsername": "alice",
+                    "name": "Alice Example",
+                    "icon": { "url": "https://mastodon.example/alice.png" }
+                })
+                .to_string()
+                .into_bytes(),
+                url: request.url,
+            })
+        }
+    }
+
+    fn interaction_activity(activity_type: &str, id: &str, object: &str) -> Activity {
+        Activity {
+            context: Context::default(),
+            activity_type: activity_type.to_string(),
+            id: id.to_string(),
+            actor: "https://mastodon.example/users/alice".to_string(),
+            object: Some(Value::String(object.to_string())),
+            target: None,
+            to: None,
+            cc: None,
+            published: Some("2026-06-15T19:45:00Z".to_string()),
+            extra: HashMap::new(),
+        }
+    }
 
     #[test]
     fn actor_delivery_info_prefers_published_inbox_and_shared_inbox() {
@@ -1026,5 +1158,55 @@ mod tests {
             fallback_actor_inbox("https://remote.example/users/bob/"),
             "https://remote.example/users/bob/inbox"
         );
+    }
+
+    #[tokio::test]
+    async fn mastodon_like_announce_and_undo_update_interactions() {
+        let db = InteractionDb::default();
+        let http = ActorHttp;
+        let object = "https://social.dais.social/users/social/posts/1";
+
+        let like =
+            interaction_activity("Like", "https://mastodon.example/activities/like-1", object);
+        handle_like(&db, &http, &like).await.unwrap();
+        assert_eq!(db.interaction_count("like"), 1);
+        assert_eq!(db.notification_count(), 1);
+
+        let announce = interaction_activity(
+            "Announce",
+            "https://mastodon.example/activities/announce-1",
+            object,
+        );
+        handle_announce(&db, &http, &announce).await.unwrap();
+        assert_eq!(db.interaction_count("boost"), 1);
+        assert_eq!(db.notification_count(), 2);
+
+        let undo_like = Activity {
+            activity_type: "Undo".to_string(),
+            id: "https://mastodon.example/activities/undo-like-1".to_string(),
+            object: Some(json!({
+                "id": like.id,
+                "type": "Like",
+                "actor": like.actor,
+                "object": object
+            })),
+            ..interaction_activity("Undo", "unused", object)
+        };
+        handle_undo(&db, &undo_like).await.unwrap();
+        assert_eq!(db.interaction_count("like"), 0);
+
+        let undo_announce = Activity {
+            activity_type: "Undo".to_string(),
+            id: "https://mastodon.example/activities/undo-announce-1".to_string(),
+            object: Some(json!({
+                "id": announce.id,
+                "type": "Announce",
+                "actor": announce.actor,
+                "object": object
+            })),
+            ..interaction_activity("Undo", "unused", object)
+        };
+        handle_undo(&db, &undo_announce).await.unwrap();
+        assert_eq!(db.interaction_count("boost"), 0);
     }
 }

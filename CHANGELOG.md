@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.12] - 2026-06-15
+
+### Added
+- Added a Mastodon required-pass mode to the federation lab gate and core
+  regression coverage for Mastodon-style Like, Announce, and Undo inbox
+  interactions.
+
 ## [1.28.11] - 2026-06-15
 
 ### Added

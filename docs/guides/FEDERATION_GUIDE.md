@@ -151,6 +151,12 @@ Run the deterministic coverage gate:
 npm run test:federation-lab
 ```
 
+Require the Mastodon row to be fully covered before a Mastodon-family release:
+
+```bash
+npm run test:federation-lab -- --require-pass mastodon
+```
+
 Run live endpoint probes against configured remote accounts:
 
 ```bash

@@ -7,6 +7,12 @@ const defaultProfile = "docs/reference/federation-lab-targets.json";
 const args = new Set(process.argv.slice(2));
 const profilePath = valueAfter("--profile") || process.env.DAIS_FEDERATION_LAB_PROFILE || defaultProfile;
 const outputJson = args.has("--json");
+const requiredPassServers = new Set(
+  [valueAfter("--require-pass"), process.env.DAIS_FEDERATION_REQUIRE_PASS || ""]
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
 
 const requiredServers = ["mastodon", "pleroma", "misskey", "pixelfed"];
 const requiredCapabilities = [
@@ -120,6 +126,9 @@ const missing = rows.filter((item) => item.status === "missing");
 const blocked = rows.filter((item) => item.status === "blocked");
 const manual = rows.filter((item) => item.status === "manual");
 const pass = rows.filter((item) => item.status === "pass");
+const requiredFailures = rows.filter(
+  (item) => requiredPassServers.has(item.server) && item.status !== "pass",
+);
 
 if (outputJson) {
   console.log(JSON.stringify({ profile: profile.name, rows }, null, 2));
@@ -128,7 +137,7 @@ if (outputJson) {
 }
 
 console.error(
-  `\nFederation lab: PASS=${pass.length} MANUAL=${manual.length} BLOCKED=${blocked.length} MISSING=${missing.length}`,
+  `\nFederation lab: PASS=${pass.length} MANUAL=${manual.length} BLOCKED=${blocked.length} MISSING=${missing.length} REQUIRED_FAIL=${requiredFailures.length}`,
 );
 
-process.exit(missing.length > 0 ? 1 : 0);
+process.exit(missing.length > 0 || requiredFailures.length > 0 ? 1 : 0);

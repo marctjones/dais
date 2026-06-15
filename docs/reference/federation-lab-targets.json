@@ -1,6 +1,6 @@
 {
   "name": "dais v0.15 Mastodon-family federation lab",
-  "updated": "2026-06-11",
+  "updated": "2026-06-15",
   "targets": [
     {
       "server": "mastodon",
@@ -27,16 +27,16 @@
           "detail": "Followers-only and public Create delivery covered by live smoke path."
         },
         "reply": {
-          "status": "manual",
-          "detail": "Use toot reply against a known dais status until a dedicated test account is wired into CI."
+          "status": "pass",
+          "detail": "Covered by the live toot inbound reply smoke gate and owner post-detail assertion."
         },
         "like": {
-          "status": "manual",
-          "detail": "Use toot favourite against a known dais status until a dedicated test account is wired into CI."
+          "status": "pass",
+          "detail": "Covered by the live toot favourite smoke gate and owner post-detail assertion."
         },
         "announce": {
-          "status": "manual",
-          "detail": "Use toot reblog against a known dais status until a dedicated test account is wired into CI."
+          "status": "pass",
+          "detail": "Covered by core inbox Announce/Undo regression tests for Mastodon-style boosts."
         },
         "authorized_fetch": {
           "status": "pass",
