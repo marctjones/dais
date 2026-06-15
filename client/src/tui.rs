@@ -20,13 +20,14 @@ use ratatui::{
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
 use crate::d1::{
-    D1Actor, D1Block, D1Client, D1Delivery, D1DirectMessage, D1FollowerRow, D1FollowingRow,
-    D1Friend, D1Notification, D1Post, D1SourceItem, D1TimelinePost, D1User, ServerStats,
+    D1Actor, D1Block, D1Client, D1Delivery, D1DirectMessage, D1FollowerRow, D1Friend,
+    D1Notification, D1Post, D1SourceItem, D1TimelinePost, D1User, ServerStats,
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
-    OwnerApiClient, OwnerDiscoveredActor, OwnerInteraction, OwnerPostDetail, OwnerTimelinePost,
+    OwnerApiClient, OwnerDiscoveredActor, OwnerFollowing, OwnerInteraction, OwnerPostDetail,
+    OwnerTimelinePost,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -281,7 +282,7 @@ enum TabData {
     Posts(Vec<D1Post>),
     Friends(Vec<D1Friend>),
     Followers(Vec<D1FollowerRow>),
-    Following(Vec<D1FollowingRow>),
+    Following(Vec<OwnerFollowing>),
     Notifications(Vec<D1Notification>),
     Profile(Option<D1Actor>),
     Deliveries(Vec<D1Delivery>),
@@ -367,7 +368,7 @@ struct App {
     posts: Vec<D1Post>,
     friends: Vec<crate::d1::D1Friend>,
     followers: Vec<D1FollowerRow>,
-    following: Vec<D1FollowingRow>,
+    following: Vec<OwnerFollowing>,
     notifications: Vec<D1Notification>,
     profile: Option<D1Actor>,
     deliveries: Vec<D1Delivery>,
@@ -469,6 +470,7 @@ impl App {
                 self.status = "Discover actor".to_string();
             }
             KeyCode::Char('f') => self.follow_discovered_actor(),
+            KeyCode::Char('w') => self.unfollow_selected_following(),
             KeyCode::Char('a') => self.approve_selected_follower(),
             KeyCode::Char('x') => self.reject_selected_follower(),
             KeyCode::Char('m') => self.mark_selected_notification_read(),
@@ -1105,6 +1107,42 @@ impl App {
                         "Follow requested for {}",
                         result.following.target_actor_id
                     )));
+                    let _ = tx.send(Message::Refresh(Tab::Following));
+                    let _ = tx.send(Message::Refresh(Tab::Reader));
+                }
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn unfollow_selected_following(&mut self) {
+        if self.active != Tab::Following {
+            return;
+        }
+        let Some(row) = self.following.get(self.selected(Tab::Following)) else {
+            self.status = "Select a followed actor before unfollowing".to_string();
+            return;
+        };
+        let target = row.target_actor_id.clone();
+        let tx = self.tx.clone();
+        self.status = format!("Unfollowing {target}");
+        tokio::spawn(async move {
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                    return;
+                }
+            };
+            match client.unfollow_actor(&target).await {
+                Ok(result) => {
+                    let _ = tx.send(Message::Status(format!(
+                        "Unfollow requested for {}",
+                        result.following.target_actor_id
+                    )));
+                    let _ = tx.send(Message::Refresh(Tab::Following));
                     let _ = tx.send(Message::Refresh(Tab::Reader));
                 }
                 Err(error) => {
@@ -1280,7 +1318,7 @@ impl App {
 
     fn draw_footer(&self, frame: &mut Frame<'_>, area: Rect) {
         let left = match self.mode {
-            Mode::Normal => "q quit · tab switch · r refresh · g discover · f follow · enter detail · y reply · l like · o boost",
+            Mode::Normal => "q quit · tab switch · r refresh · g discover · f follow · w unfollow · enter detail · y/l/o actions",
             Mode::Compose => "ctrl+s send · tab field · v visibility · p protocol · e e2ee · esc cancel",
             Mode::Search => "enter search · esc cancel · backspace edit",
             Mode::Discovery => "enter lookup actor · esc cancel · backspace edit",
@@ -1880,8 +1918,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Followers(db.list_followers(50).await?))
         }
         Tab::Following => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Following(db.list_following(50).await?))
+            let client = owner_api_from_env()?;
+            let snapshot = client
+                .snapshot()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Following(snapshot.following))
         }
         Tab::Notifications => {
             let db = D1Client::new(remote)?;
@@ -1927,7 +1969,7 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
 
 fn owner_api_from_env() -> Result<OwnerApiClient> {
     let token = std::env::var("DAIS_OWNER_TOKEN")
-        .context("DAIS_OWNER_TOKEN is required for the TUI Reader tab")?;
+        .context("DAIS_OWNER_TOKEN is required for live owner API TUI tabs")?;
     let instance = std::env::var("DAIS_OWNER_INSTANCE_URL")
         .unwrap_or_else(|_| "https://social.dais.social".to_string());
     Ok(OwnerApiClient::new(instance, token))

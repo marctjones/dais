@@ -96,18 +96,6 @@ pub struct D1FollowerRow {
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
-pub struct D1FollowingRow {
-    pub id: String,
-    pub actor_id: String,
-    pub target_actor_id: String,
-    pub target_inbox: String,
-    pub status: String,
-    pub created_at: Option<String>,
-    pub accepted_at: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
 pub struct D1Notification {
     pub id: String,
     pub kind: String,
@@ -722,20 +710,6 @@ impl D1Client {
             sql_literal(activity_id)
         );
         self.execute(&sql)
-    }
-
-    pub async fn list_following(&self, limit: u16) -> Result<Vec<D1FollowingRow>> {
-        let limit = clamp_limit(limit);
-        let sql = format!(
-            r#"
-            SELECT id, actor_id, target_actor_id, target_inbox,
-                   status, created_at, accepted_at
-            FROM following
-            ORDER BY created_at DESC
-            LIMIT {limit}
-            "#
-        );
-        self.query(&sql)
     }
 
     pub async fn list_notifications(&self, limit: u16) -> Result<Vec<D1Notification>> {

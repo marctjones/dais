@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.11] - 2026-06-15
+
+### Added
+- Moved the Rust TUI Following tab to the live owner API and added
+  selected-row unfollow from the TUI.
+
 ## [1.28.10] - 2026-06-15
 
 ### Added
