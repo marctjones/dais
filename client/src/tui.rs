@@ -19,12 +19,12 @@ use ratatui::{
 
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
-use crate::d1::{D1Client, D1DirectMessage, D1Friend, D1Post, D1TimelinePost, D1User, ServerStats};
+use crate::d1::{D1Client, D1DirectMessage, D1Friend, D1Post, D1User, ServerStats};
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
     ModerationBlockRow, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFollower,
-    OwnerFollowing, OwnerInteraction, OwnerNotification, OwnerPostDetail, OwnerProfile,
+    OwnerFollowing, OwnerInteraction, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
     OwnerSources, OwnerTimelinePost,
 };
 
@@ -276,8 +276,8 @@ enum TabData {
     Reader(Vec<OwnerTimelinePost>),
     ReaderDetail(OwnerPostDetail),
     Discovery(OwnerDiscoveredActor),
-    Home(Vec<D1TimelinePost>),
-    Posts(Vec<D1Post>),
+    Home(Vec<OwnerTimelinePost>),
+    Posts(Vec<OwnerPost>),
     Friends(Vec<D1Friend>),
     Followers(Vec<OwnerFollower>),
     Following(Vec<OwnerFollowing>),
@@ -422,8 +422,8 @@ struct App {
     compose: ComposeState,
     search: SearchState,
     discovery: SearchState,
-    home: Vec<D1TimelinePost>,
-    posts: Vec<D1Post>,
+    home: Vec<OwnerTimelinePost>,
+    posts: Vec<OwnerPost>,
     friends: Vec<crate::d1::D1Friend>,
     followers: Vec<OwnerFollower>,
     following: Vec<OwnerFollowing>,
@@ -1711,12 +1711,14 @@ impl App {
                     Entry {
                         title: display.to_string(),
                         subtitle: format!(
-                            "{} · {} · {}",
-                            post.visibility.as_deref().unwrap_or("unknown"),
+                            "{} · {} · replies={} likes={} boosts={}",
+                            post.visibility,
                             post.published_at.as_deref().unwrap_or("unknown time"),
-                            encryption_state(post.encrypted_message.is_some())
+                            post.reply_count,
+                            post.like_count,
+                            post.boost_count
                         ),
-                        details: timeline_detail(post),
+                        details: owner_timeline_detail(post),
                     }
                 })
                 .collect(),
@@ -1730,11 +1732,10 @@ impl App {
                         .unwrap_or("unknown time")
                         .to_string(),
                     subtitle: format!(
-                        "{} · {}",
-                        post.visibility.as_deref().unwrap_or("unknown"),
-                        encryption_state(post.encrypted_message.is_some())
+                        "{:?} · {:?} · replies={} likes={} boosts={}",
+                        post.visibility, post.protocol, post.reply_count, post.like_count, post.boost_count
                     ),
-                    details: post_detail(post),
+                    details: owner_post_detail(post),
                 })
                 .collect(),
             Tab::Friends => self
@@ -2014,12 +2015,20 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Reader(snapshot.home_timeline))
         }
         Tab::Home => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Home(db.home_timeline(50, None).await?))
+            let client = owner_api_from_env()?;
+            let snapshot = client
+                .snapshot()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Home(snapshot.home_timeline))
         }
         Tab::Posts => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Posts(db.list_posts(50).await?))
+            let client = owner_api_from_env()?;
+            let snapshot = client
+                .snapshot()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Posts(snapshot.posts))
         }
         Tab::Friends => {
             let db = D1Client::new(remote)?;
@@ -2188,16 +2197,38 @@ fn profile_detail(profile: &OwnerProfile) -> String {
     )
 }
 
-fn timeline_detail(post: &D1TimelinePost) -> String {
+fn owner_timeline_detail(post: &OwnerTimelinePost) -> String {
     format!(
-        "actor: {}\nusername: {}\nvisibility: {}\nprotocol: {}\npublished: {}\nupdated: {}\n{}\n{}",
+        "id: {}\nobject: {}\nactor: {}\nusername: {}\ndisplay name: {}\nvisibility: {}\nprotocol: {}\nreply to: {}\npublished: {}\nreplies: {}\nlikes: {}\nboosts: {}\n\n{}",
+        post.id,
+        post.object_id,
         post.actor_id,
         post.actor_username.as_deref().unwrap_or(""),
-        post.visibility.as_deref().unwrap_or("unknown"),
+        post.actor_display_name.as_deref().unwrap_or(""),
+        post.visibility,
         post.protocol.as_deref().unwrap_or("activitypub"),
+        post.in_reply_to.as_deref().unwrap_or(""),
         post.published_at.as_deref().unwrap_or(""),
-        post.updated_at.as_deref().unwrap_or(""),
-        encryption_state(post.encrypted_message.is_some()),
+        post.reply_count,
+        post.like_count,
+        post.boost_count,
+        post.content
+    )
+}
+
+fn owner_post_detail(post: &OwnerPost) -> String {
+    format!(
+        "id: {}\ntitle: {}\nvisibility: {:?}\nprotocol: {:?}\npublished: {}\nencrypted: {}\nattachments: {}\nreplies: {}\nlikes: {}\nboosts: {}\n\n{}",
+        post.id,
+        post.title.as_deref().unwrap_or(""),
+        post.visibility,
+        post.protocol,
+        post.published_at.as_deref().unwrap_or(""),
+        post.encrypted,
+        post.attachments.len(),
+        post.reply_count,
+        post.like_count,
+        post.boost_count,
         post.content
     )
 }

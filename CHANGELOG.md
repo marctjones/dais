@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.28] - 2026-06-15
+
+### Changed
+- Moved the Rust TUI Home and Posts tabs from raw D1 reads to the live owner API
+  snapshot, matching Dais Desk and CLI owner surfaces.
+
 ## [1.28.27] - 2026-06-15
 
 ### Added
