@@ -20,14 +20,14 @@ use ratatui::{
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
 use crate::d1::{
-    D1Block, D1Client, D1Delivery, D1DirectMessage, D1Friend, D1Notification, D1Post, D1SourceItem,
+    D1Block, D1Client, D1Delivery, D1DirectMessage, D1Friend, D1Notification, D1Post,
     D1TimelinePost, D1User, ServerStats,
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
     OwnerApiClient, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing, OwnerInteraction,
-    OwnerPostDetail, OwnerProfile, OwnerTimelinePost,
+    OwnerPostDetail, OwnerProfile, OwnerTimelinePost, SourceItem,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -293,7 +293,7 @@ enum TabData {
         query: String,
     },
     Bluesky(Vec<crate::atproto::FeedItem>),
-    Sources(Vec<D1SourceItem>),
+    Sources(Vec<SourceItem>),
     Stats(ServerStats),
     Blocks(Vec<D1Block>),
 }
@@ -379,7 +379,7 @@ struct App {
     reader_details: HashMap<String, OwnerPostDetail>,
     discovered_actor: Option<OwnerDiscoveredActor>,
     bluesky_feed: Vec<crate::atproto::FeedItem>,
-    source_items: Vec<D1SourceItem>,
+    source_items: Vec<SourceItem>,
     stats: Option<ServerStats>,
     blocks: Vec<D1Block>,
 }
@@ -1783,23 +1783,16 @@ impl App {
                 .map(|item| Entry {
                     title: item.title.clone(),
                     subtitle: format!(
-                        "{} · {}{}",
+                        "{} · {}",
                         item.source_type,
-                        item.published_at
-                            .as_deref()
-                            .or(item.fetched_at.as_deref())
-                            .unwrap_or("unknown time"),
-                        if item.read.unwrap_or(0) == 1 {
-                            " · read"
-                        } else {
-                            ""
-                        }
+                        if item.read { "read" } else { "unread" }
                     ),
                     details: format!(
-                        "source: {}\nurl: {}\nauthor: {}\npolicy: {}\n\n{}",
-                        item.source_id,
+                        "id: {}\nsource type: {}\nurl: {}\nread: {}\npolicy: {}\n\n{}",
+                        item.id,
+                        item.source_type,
                         item.canonical_url.as_deref().unwrap_or(""),
-                        item.author.as_deref().unwrap_or(""),
+                        item.read,
                         item.rights_policy_json,
                         item.excerpt.as_deref().unwrap_or("")
                     ),
@@ -1948,10 +1941,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Bluesky(feed.feed))
         }
         Tab::Sources => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Sources(
-                db.list_source_items(None, 50, false).await?,
-            ))
+            let client = owner_api_from_env()?;
+            let sources = client
+                .sources()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Sources(sources.items))
         }
         Tab::Stats => {
             let db = D1Client::new(remote)?;
