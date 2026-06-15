@@ -20,12 +20,12 @@ use ratatui::{
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
 use crate::d1::{D1Client, D1DirectMessage, D1Post, D1User, ServerStats};
-use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
-    ModerationBlockRow, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFollower,
-    OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerNotification, OwnerPost, OwnerPostDetail,
-    OwnerProfile, OwnerProfileUpdate, OwnerSources, OwnerTimelinePost,
+    ComposeDraft as OwnerComposeDraft, ModerationBlockRow, OwnerApiClient, OwnerDelivery,
+    OwnerDiscoveredActor, OwnerFollower, OwnerFollowing, OwnerFriend, OwnerInteraction,
+    OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSources,
+    OwnerTimelinePost, ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -971,28 +971,10 @@ impl App {
             return;
         }
 
-        let mut recipients = HashMap::new();
-        for line in self.compose.recipients.text().lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let (key_id, path) = match line.split_once('=') {
-                Some(parts) => parts,
-                None => {
-                    self.status = "Recipients must be key_id=public_key_pem_file".to_string();
-                    return;
-                }
-            };
-            match std::fs::read_to_string(path) {
-                Ok(value) => {
-                    recipients.insert(key_id.to_string(), value);
-                }
-                Err(error) => {
-                    self.status = format!("Could not read recipient key {path}: {error}");
-                    return;
-                }
-            }
+        if !self.compose.recipients.text().trim().is_empty() {
+            self.status =
+                "Owner API compose uses actor URL recipients; clear E2EE keys first".to_string();
+            return;
         }
         let to: Vec<String> = self
             .compose
@@ -1014,31 +996,19 @@ impl App {
             Some(reply_to)
         };
 
-        let draft = PostDraft {
+        let draft = OwnerComposeDraft {
             text,
-            visibility: self.compose.visibility,
-            protocol: self.compose.protocol,
+            visibility: owner_visibility(self.compose.visibility),
+            protocol: owner_protocol(self.compose.protocol),
             encrypt: self.compose.encrypt,
-            recipients: recipients.into_iter().collect(),
-            reply_to,
-            to,
-            e2ee_fallback: crate::cli::E2eeFallbackMode::Strict,
-            object_type: crate::cli::ActivityObjectType::Note,
-            title: None,
-            summary: None,
-            starts_at: None,
-            ends_at: None,
-            location: None,
-            poll_options: Vec::new(),
-            poll_multiple: false,
+            in_reply_to: reply_to,
+            recipients: to,
             attachments: Vec::new(),
         };
 
         let tx = self.tx.clone();
-        let store = self.store.clone();
-        let remote = self.remote;
-        let db = match D1Client::new(remote) {
-            Ok(db) => db,
+        let client = match owner_api_from_env() {
+            Ok(client) => client,
             Err(error) => {
                 self.status = error.to_string();
                 return;
@@ -1052,46 +1022,20 @@ impl App {
         self.loading.insert(Tab::Home);
 
         tokio::spawn(async move {
-            let outcome = publish_post(draft, &store, &db).await;
-            match outcome {
+            match client.create_post(&draft).await {
                 Ok(result) => {
-                    let (status, refresh_tabs) = match result {
-                        PostOutcome::ActivityPub {
-                            post_id,
-                            read_url,
-                            delivery_ids,
-                            ..
-                        } => {
-                            let mut status = format!("Published ActivityPub post {post_id}");
-                            if let Some(read_url) = read_url {
-                                status.push_str(&format!(" (read: {read_url})"));
-                            }
-                            status.push_str(&format!("; deliveries queued {}", delivery_ids.len()));
-                            (status, vec![Tab::Home, Tab::Posts])
-                        }
-                        PostOutcome::Bluesky { uri } => {
-                            (format!("Published Bluesky post {uri}"), vec![Tab::Bluesky])
-                        }
-                        PostOutcome::Both {
-                            post_id,
-                            uri,
-                            read_url,
-                            delivery_ids,
-                            ..
-                        } => {
-                            let mut status = format!(
-                                "Published ActivityPub post {post_id} and Bluesky post {uri}"
-                            );
-                            if let Some(read_url) = read_url {
-                                status.push_str(&format!(" (read: {read_url})"));
-                            }
-                            status.push_str(&format!("; deliveries queued {}", delivery_ids.len()));
-                            (status, vec![Tab::Home, Tab::Posts, Tab::Bluesky])
-                        }
-                    };
+                    let mut status = format!("Published owner API post {}", result.id);
+                    status.push_str(&format!(
+                        "; deliveries queued {}",
+                        result.delivery_ids.len()
+                    ));
                     let _ = tx.send(Message::Status(status));
-                    for tab in refresh_tabs {
-                        let _ = tx.send(Message::Refresh(tab));
+                    let _ = tx.send(Message::Refresh(Tab::Home));
+                    let _ = tx.send(Message::Refresh(Tab::Posts));
+                    if draft.protocol == OwnerProtocolRoute::AtProto
+                        || draft.protocol == OwnerProtocolRoute::Both
+                    {
+                        let _ = tx.send(Message::Refresh(Tab::Bluesky));
                     }
                 }
                 Err(error) => {
@@ -1704,7 +1648,7 @@ impl App {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(compose_field_title(
-                        "E2EE keys",
+                        "Legacy E2EE keys",
                         self.compose.field == ComposeField::Recipients,
                     )),
             )
@@ -1734,7 +1678,7 @@ impl App {
         frame.render_widget(reply_to, recipient_chunks[2]);
 
         let instructions = Paragraph::new(
-            "E2EE keys use key_id=public_key_pem_file. Direct messages use one actor URL per line. Ctrl+S sends.",
+            "Owner API compose uses actor URLs for direct/E2EE recipients. Leave legacy E2EE keys empty. Ctrl+S sends.",
         )
         .block(Block::default().borders(Borders::ALL));
         frame.render_widget(instructions, layout[2]);
@@ -2370,6 +2314,23 @@ fn owner_notification_read(notification: &OwnerNotification) -> bool {
         || notification.read == serde_json::Value::Number(1.into())
         || notification.read == serde_json::Value::String("1".to_string())
         || notification.read == serde_json::Value::String("true".to_string())
+}
+
+fn owner_visibility(value: Visibility) -> OwnerVisibility {
+    match value {
+        Visibility::Public => OwnerVisibility::Public,
+        Visibility::Unlisted => OwnerVisibility::Unlisted,
+        Visibility::Followers => OwnerVisibility::Followers,
+        Visibility::Direct => OwnerVisibility::Direct,
+    }
+}
+
+fn owner_protocol(value: Protocol) -> OwnerProtocolRoute {
+    match value {
+        Protocol::ActivityPub => OwnerProtocolRoute::ActivityPub,
+        Protocol::Atproto => OwnerProtocolRoute::AtProto,
+        Protocol::Both => OwnerProtocolRoute::Both,
+    }
 }
 
 async fn load_search(

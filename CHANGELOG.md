@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.35] - 2026-06-15
+
+### Changed
+- Moved Rust TUI compose publishing from the local D1 publishing path to the
+  live owner API post creation endpoint used by Dais Desk.
+
 ## [1.28.34] - 2026-06-15
 
 ### Fixed

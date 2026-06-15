@@ -423,7 +423,6 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
                 PostOutcome::Both {
                     post_id,
                     uri,
-                    read_url: _,
                     delivery_ids,
                 } => {
                     println!("Posted to ActivityPub and Bluesky");

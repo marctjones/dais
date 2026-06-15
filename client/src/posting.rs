@@ -25,7 +25,6 @@ pub enum PostOutcome {
     Both {
         post_id: String,
         uri: String,
-        read_url: Option<String>,
         delivery_ids: Vec<String>,
     },
 }
@@ -460,7 +459,6 @@ pub async fn publish_post(
             Ok(PostOutcome::Both {
                 post_id,
                 uri: created.uri,
-                read_url: None,
                 delivery_ids,
             })
         }
