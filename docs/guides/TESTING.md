@@ -250,6 +250,25 @@ Cloudflare Queue consumer. It then polls the Mastodon home timeline through
 `toot`. Local/default runs skip the live delivery step unless
 `RUN_LIVE_DELIVERY=1` is set or `DAIS_BASE_URL` is an HTTPS deployment URL.
 
+To assert the full Mastodon-to-dais inbound loop, include an owner token and set
+`INBOUND_TOOT_ASSERT=1`:
+
+```bash
+TOOT_BIN=.venv-toot/bin/toot \
+DAIS_BASE_URL=https://social.dais.social \
+RUN_LIVE_DELIVERY=1 \
+REMOTE_TIMELINE_ASSERT=1 \
+INBOUND_TOOT_ASSERT=1 \
+DAIS_OWNER_TOKEN_FILE=/private/tmp/dais-owner-token-20260614.txt \
+./scripts/test-federation-smoke.sh
+```
+
+That path favourites the delivered Mastodon status, replies to it from Mastodon,
+then verifies the resulting like, reply, and reply notification through the dais
+owner API and CLI. `toot post` may still exit nonzero on macOS if the sandbox
+blocks its local cache write after Mastodon returns JSON; the harness treats a
+valid JSON status response as success.
+
 Useful delivery inspection commands:
 
 ```bash

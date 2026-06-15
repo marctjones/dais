@@ -5,6 +5,15 @@ All notable changes to dais will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.2] - 2026-06-14
+
+### Added
+- Extended the federation smoke harness with opt-in live `toot` assertions for
+  inbound Mastodon favourites, replies, owner post detail, and reply
+  notifications.
+- Added `npm run test:federation-smoke` as a discoverable entry point for the
+  shell smoke harness.
+
 ## [1.28.1] - 2026-06-14
 
 ### Fixed
