@@ -772,6 +772,8 @@ pub enum OwnerCommand {
     Timeline(OwnerTimelineArgs),
     /// List actors followed by the live instance.
     Following(OwnerApiArgs),
+    /// List mutual friend relationships through the live owner API.
+    Friends(OwnerApiArgs),
     /// List live owner API notifications.
     Notifications(OwnerApiArgs),
     /// Mark one live owner API notification as read.

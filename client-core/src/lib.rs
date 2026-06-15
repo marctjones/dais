@@ -76,6 +76,11 @@ impl OwnerApiClient {
         Ok(response.items)
     }
 
+    pub async fn friends(&self) -> ClientResult<Vec<OwnerFriend>> {
+        let response: OwnerItems<OwnerFriend> = self.get("/api/dais/owner/friends").await?;
+        Ok(response.items)
+    }
+
     pub async fn mark_notification_read(&self, id: &str) -> ClientResult<OwnerActionResult> {
         self.post(
             "/api/dais/owner/notifications/read",
@@ -425,6 +430,16 @@ pub struct OwnerFollower {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerFriend {
+    pub friend_actor_id: String,
+    pub friend_inbox: Option<String>,
+    pub friend_shared_inbox: Option<String>,
+    pub follower_since: Option<String>,
+    pub following_since: Option<String>,
+    pub accepted_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerFollowing {
     pub id: String,
     pub actor_id: String,
@@ -649,6 +664,7 @@ pub struct OwnerSnapshot {
     pub home_timeline: Vec<OwnerTimelinePost>,
     pub posts: Vec<OwnerPost>,
     pub followers: Vec<OwnerFollower>,
+    pub friends: Vec<OwnerFriend>,
     pub following: Vec<OwnerFollowing>,
     pub sources: Vec<SourceItem>,
     pub moderation: ModerationState,
@@ -766,6 +782,7 @@ mod tests {
             home_timeline: Vec::new(),
             posts: Vec::new(),
             followers: Vec::new(),
+            friends: Vec::new(),
             following: Vec::new(),
             sources: Vec::new(),
             moderation: ModerationState {

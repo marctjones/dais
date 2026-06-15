@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.33] - 2026-06-15
+
+### Added
+- Added live owner API friends listing support for shared clients.
+- Added `dais owner friends` and moved the Rust TUI Friends tab from raw D1
+  reads to the owner API.
+
 ## [1.28.32] - 2026-06-15
 
 ### Changed

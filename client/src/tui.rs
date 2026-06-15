@@ -19,13 +19,13 @@ use ratatui::{
 
 use crate::atproto::AtprotoClient;
 use crate::config::ConfigStore;
-use crate::d1::{D1Client, D1DirectMessage, D1Friend, D1Post, D1User, ServerStats};
+use crate::d1::{D1Client, D1DirectMessage, D1Post, D1User, ServerStats};
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
     ModerationBlockRow, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFollower,
-    OwnerFollowing, OwnerInteraction, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
-    OwnerProfileUpdate, OwnerSources, OwnerTimelinePost,
+    OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerNotification, OwnerPost, OwnerPostDetail,
+    OwnerProfile, OwnerProfileUpdate, OwnerSources, OwnerTimelinePost,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -334,7 +334,7 @@ enum TabData {
     Discovery(OwnerDiscoveredActor),
     Home(Vec<OwnerTimelinePost>),
     Posts(Vec<OwnerPost>),
-    Friends(Vec<D1Friend>),
+    Friends(Vec<OwnerFriend>),
     Followers(Vec<OwnerFollower>),
     Following(Vec<OwnerFollowing>),
     Notifications(Vec<OwnerNotification>),
@@ -481,7 +481,7 @@ struct App {
     profile_edit: ProfileEditState,
     home: Vec<OwnerTimelinePost>,
     posts: Vec<OwnerPost>,
-    friends: Vec<crate::d1::D1Friend>,
+    friends: Vec<OwnerFriend>,
     followers: Vec<OwnerFollower>,
     following: Vec<OwnerFollowing>,
     notifications: Vec<OwnerNotification>,
@@ -2274,11 +2274,12 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Posts(snapshot.posts))
         }
         Tab::Friends => {
-            let db = D1Client::new(remote)?;
-            Ok(TabData::Friends(
-                db.list_friends("https://social.dais.social/users/social", 50)
-                    .await?,
-            ))
+            let client = owner_api_from_env()?;
+            let friends = client
+                .friends()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Friends(friends))
         }
         Tab::Followers => {
             let client = owner_api_from_env()?;

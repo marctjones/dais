@@ -904,6 +904,12 @@ async function handleOwnerApi(request, env, url) {
     });
   }
 
+  if (request.method === 'GET' && path === '/friends') {
+    return apiJson({
+      items: await ownerFriends(env, clampLimit(url.searchParams.get('limit'))),
+    });
+  }
+
   if (request.method === 'POST' && path === '/followers/status') {
     const body = await readJson(request);
     try {
@@ -1091,11 +1097,12 @@ async function handleOwnerApi(request, env, url) {
 }
 
 async function ownerSnapshot(env) {
-  const [profile, homeTimeline, posts, followers, following, sources, moderation, diagnostics] = await Promise.all([
+  const [profile, homeTimeline, posts, followers, friends, following, sources, moderation, diagnostics] = await Promise.all([
     ownerProfile(env),
     ownerHomeTimeline(env, 20),
     ownerPosts(env, 20),
     ownerFollowers(env, 100),
+    ownerFriends(env, 100),
     ownerFollowing(env, 100),
     ownerSourceItems(env, 20),
     ownerModeration(env),
@@ -1142,6 +1149,7 @@ async function ownerSnapshot(env) {
       published_at: post.published_at || null,
     })),
     followers,
+    friends,
     following,
     sources,
     moderation,
@@ -1335,6 +1343,19 @@ async function ownerFollowers(env, limit) {
        updated_at DESC
      LIMIT ?1`,
   ).bind(limit).all();
+  return rows.results || [];
+}
+
+async function ownerFriends(env, limit) {
+  const localActor = await ownerLocalActor(env);
+  const rows = await env.DB.prepare(
+    `SELECT friend_actor_id, friend_inbox, friend_shared_inbox,
+            follower_since, following_since, accepted_at
+     FROM friends
+     WHERE local_actor_id = ?1
+     ORDER BY COALESCE(accepted_at, following_since, follower_since) DESC
+     LIMIT ?2`,
+  ).bind(localActor.id, limit).all();
   return rows.results || [];
 }
 

@@ -23,9 +23,9 @@ use cli::{
 use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
-    ModerationState, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerInteraction,
-    OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSnapshot,
-    OwnerSourceAdd, OwnerSources,
+    ModerationState, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFriend,
+    OwnerInteraction, OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate,
+    OwnerSnapshot, OwnerSourceAdd, OwnerSources,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
@@ -1011,6 +1011,13 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 );
             }
         }
+        OwnerCommand::Friends(args) => {
+            let friends = owner_api(&args)
+                .friends()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_friends(&friends);
+        }
         OwnerCommand::Notifications(args) => {
             let notifications = owner_api(&args)
                 .notifications()
@@ -1237,6 +1244,7 @@ fn print_owner_snapshot(snapshot: &OwnerSnapshot) {
     println!("posts={}", snapshot.posts.len());
     println!("timeline={}", snapshot.home_timeline.len());
     println!("followers={}", snapshot.followers.len());
+    println!("friends={}", snapshot.friends.len());
     println!("following={}", snapshot.following.len());
     println!("sources={}", snapshot.sources.len());
     for diagnostic in &snapshot.diagnostics {
@@ -1276,6 +1284,24 @@ fn print_owner_profile(profile: &OwnerProfile) {
             .unwrap_or("")
     );
     println!("public_surfaces=ActivityPub actor JSON, HTML profile, Mastodon account API");
+}
+
+fn print_owner_friends(friends: &[OwnerFriend]) {
+    if friends.is_empty() {
+        println!("No friends found");
+        return;
+    }
+    for row in friends {
+        println!(
+            "{} inbox={} shared_inbox={} follower_since={} following_since={} accepted_at={}",
+            row.friend_actor_id,
+            row.friend_inbox.as_deref().unwrap_or(""),
+            row.friend_shared_inbox.as_deref().unwrap_or(""),
+            row.follower_since.as_deref().unwrap_or(""),
+            row.following_since.as_deref().unwrap_or(""),
+            row.accepted_at.as_deref().unwrap_or("")
+        );
+    }
 }
 
 fn print_owner_notifications(notifications: &[OwnerNotification]) {
