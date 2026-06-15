@@ -25,9 +25,11 @@ use crate::d1::{
 };
 use crate::posting::{publish_post, PostDraft, PostOutcome};
 use crate::routing::{Protocol, Visibility};
+use dais_client_core::{OwnerApiClient, OwnerInteraction, OwnerPostDetail, OwnerTimelinePost};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum Tab {
+    Reader,
     Home,
     Posts,
     Friends,
@@ -45,8 +47,9 @@ enum Tab {
 }
 
 impl Tab {
-    fn all() -> [Tab; 14] {
+    fn all() -> [Tab; 15] {
         [
+            Tab::Reader,
             Tab::Home,
             Tab::Posts,
             Tab::Friends,
@@ -66,6 +69,7 @@ impl Tab {
 
     fn title(self) -> &'static str {
         match self {
+            Tab::Reader => "Reader",
             Tab::Home => "Home",
             Tab::Posts => "Posts",
             Tab::Friends => "Friends",
@@ -264,6 +268,8 @@ impl SearchState {
 
 #[derive(Clone, Debug)]
 enum TabData {
+    Reader(Vec<OwnerTimelinePost>),
+    ReaderDetail(OwnerPostDetail),
     Home(Vec<D1TimelinePost>),
     Posts(Vec<D1Post>),
     Friends(Vec<D1Friend>),
@@ -360,6 +366,8 @@ struct App {
     direct_messages: Vec<D1DirectMessage>,
     search_posts: Vec<D1Post>,
     search_users: Vec<D1User>,
+    reader: Vec<OwnerTimelinePost>,
+    reader_details: HashMap<String, OwnerPostDetail>,
     bluesky_feed: Vec<crate::atproto::FeedItem>,
     source_items: Vec<D1SourceItem>,
     stats: Option<ServerStats>,
@@ -400,6 +408,8 @@ impl App {
             direct_messages: Vec::new(),
             search_posts: Vec::new(),
             search_users: Vec::new(),
+            reader: Vec::new(),
+            reader_details: HashMap::new(),
             bluesky_feed: Vec::new(),
             source_items: Vec::new(),
             stats: None,
@@ -445,6 +455,10 @@ impl App {
             KeyCode::Char('x') => self.reject_selected_follower(),
             KeyCode::Char('m') => self.mark_selected_notification_read(),
             KeyCode::Char('u') => self.unblock_selected_block(),
+            KeyCode::Enter => self.load_selected_reader_detail(),
+            KeyCode::Char('l') => self.reader_interaction("like"),
+            KeyCode::Char('o') => self.reader_interaction("boost"),
+            KeyCode::Char('y') => self.reply_to_selected_reader_post(),
             KeyCode::Char('b') => {
                 self.compose.reset();
                 self.compose.visibility = Visibility::Public;
@@ -906,6 +920,92 @@ impl App {
         });
     }
 
+    fn selected_reader_object_id(&self) -> Option<String> {
+        self.reader
+            .get(self.selected(Tab::Reader))
+            .map(|row| row.object_id.clone())
+    }
+
+    fn load_selected_reader_detail(&mut self) {
+        if self.active != Tab::Reader {
+            return;
+        }
+        let Some(object_id) = self.selected_reader_object_id() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        self.loading.insert(Tab::Reader);
+        self.status = format!("Loading detail {object_id}");
+        tokio::spawn(async move {
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                    return;
+                }
+            };
+            match client.post_detail(&object_id).await {
+                Ok(detail) => {
+                    let _ = tx.send(Message::Loaded(Tab::Reader, TabData::ReaderDetail(detail)));
+                    let _ = tx.send(Message::Status(format!("Loaded detail {object_id}")));
+                }
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn reader_interaction(&mut self, interaction: &'static str) {
+        if self.active != Tab::Reader {
+            return;
+        }
+        let Some(object_id) = self.selected_reader_object_id() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        self.status = format!("Sending {interaction} for {object_id}");
+        tokio::spawn(async move {
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                    return;
+                }
+            };
+            let action = OwnerInteraction {
+                object_id: object_id.clone(),
+                interaction: interaction.to_string(),
+            };
+            match client.interact(&action).await {
+                Ok(_) => {
+                    let _ = tx.send(Message::Status(format!(
+                        "{interaction} queued for {object_id}"
+                    )));
+                    let _ = tx.send(Message::Refresh(Tab::Reader));
+                }
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn reply_to_selected_reader_post(&mut self) {
+        if self.active != Tab::Reader {
+            return;
+        }
+        let Some(object_id) = self.selected_reader_object_id() else {
+            return;
+        };
+        self.compose.reset();
+        self.compose.visibility = Visibility::Public;
+        self.compose.protocol = Protocol::ActivityPub;
+        self.compose.reply_to = TextBuffer::from_text(&object_id);
+        self.mode = Mode::Compose;
+        self.status = format!("Replying to {object_id}");
+    }
+
     fn selected(&self, tab: Tab) -> usize {
         *self.selection.get(&tab).unwrap_or(&0)
     }
@@ -915,6 +1015,10 @@ impl App {
             Message::Loaded(tab, data) => {
                 self.loading.remove(&tab);
                 match data {
+                    TabData::Reader(value) => self.reader = value,
+                    TabData::ReaderDetail(value) => {
+                        self.reader_details.insert(value.post.id.clone(), value);
+                    }
                     TabData::Home(value) => self.home = value,
                     TabData::Posts(value) => self.posts = value,
                     TabData::Friends(value) => self.friends = value,
@@ -1065,7 +1169,7 @@ impl App {
 
     fn draw_footer(&self, frame: &mut Frame<'_>, area: Rect) {
         let left = match self.mode {
-            Mode::Normal => "q quit · tab switch · r refresh · c compose · d direct · / search · a approve · x reject · m read · u unblock",
+            Mode::Normal => "q quit · tab switch · r refresh · c compose · enter detail · y reply · l like · o boost",
             Mode::Compose => "ctrl+s send · tab field · v visibility · p protocol · e e2ee · esc cancel",
             Mode::Search => "enter search · esc cancel · backspace edit",
         };
@@ -1205,6 +1309,58 @@ impl App {
 
     fn entries(&self, tab: Tab) -> Vec<Entry> {
         match tab {
+            Tab::Reader => self
+                .reader
+                .iter()
+                .map(|post| {
+                    let author = post
+                        .actor_display_name
+                        .as_deref()
+                        .or(post.actor_username.as_deref())
+                        .unwrap_or(&post.actor_id);
+                    let cached = self.reader_details.get(&post.object_id);
+                    let details = cached.map_or_else(
+                        || {
+                            format!(
+                                "{}\n\nobject: {}\nvisibility: {}\nprotocol: {}\nreply_to: {}\nreplies: {} likes: {} boosts: {}",
+                                post.content,
+                                post.object_id,
+                                post.visibility,
+                                post.protocol.as_deref().unwrap_or("activitypub"),
+                                post.in_reply_to.as_deref().unwrap_or(""),
+                                post.reply_count,
+                                post.like_count,
+                                post.boost_count
+                            )
+                        },
+                        |detail| {
+                            format!(
+                                "{}\n\nobject: {}\nvisibility: {:?}\nprotocol: {:?}\nattachments: {}\nreplies: {} likes: {} boosts: {}\n\nPress y to reply, l to like, o to boost.",
+                                detail.post.content,
+                                detail.post.id,
+                                detail.post.visibility,
+                                detail.post.protocol,
+                                detail.post.attachments.len(),
+                                detail.post.reply_count,
+                                detail.post.like_count,
+                                detail.post.boost_count
+                            )
+                        },
+                    );
+                    Entry {
+                        title: author.to_string(),
+                        subtitle: format!(
+                            "{} · {} · replies={} likes={} boosts={}",
+                            post.visibility,
+                            post.published_at.as_deref().unwrap_or("unknown time"),
+                            post.reply_count,
+                            post.like_count,
+                            post.boost_count
+                        ),
+                        details,
+                    }
+                })
+                .collect(),
             Tab::Home => self
                 .home
                 .iter()
@@ -1514,6 +1670,9 @@ impl App {
     fn empty_detail(&self, tab: Tab) -> String {
         match tab {
             Tab::Stats => "No stats loaded yet".to_string(),
+            Tab::Reader => {
+                "No live owner timeline rows loaded. Set DAIS_OWNER_TOKEN and refresh.".to_string()
+            }
             Tab::Search => "Run a search with /".to_string(),
             Tab::Bluesky => "Login to Bluesky and refresh".to_string(),
             Tab::Profile => "No local profile loaded yet".to_string(),
@@ -1525,6 +1684,14 @@ impl App {
 
 async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData> {
     match tab {
+        Tab::Reader => {
+            let client = owner_api_from_env()?;
+            let snapshot = client
+                .snapshot()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            Ok(TabData::Reader(snapshot.home_timeline))
+        }
         Tab::Home => {
             let db = D1Client::new(remote)?;
             Ok(TabData::Home(db.home_timeline(50, None).await?))
@@ -1587,6 +1754,14 @@ async fn load_tab(remote: bool, store: ConfigStore, tab: Tab) -> Result<TabData>
             Ok(TabData::Blocks(db.list_blocks(50).await?))
         }
     }
+}
+
+fn owner_api_from_env() -> Result<OwnerApiClient> {
+    let token = std::env::var("DAIS_OWNER_TOKEN")
+        .context("DAIS_OWNER_TOKEN is required for the TUI Reader tab")?;
+    let instance = std::env::var("DAIS_OWNER_INSTANCE_URL")
+        .unwrap_or_else(|_| "https://social.dais.social".to_string());
+    Ok(OwnerApiClient::new(instance, token))
 }
 
 async fn load_search(

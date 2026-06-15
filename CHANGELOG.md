@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.9] - 2026-06-15
+
+### Added
+- Added a live owner API-backed Reader tab to the Rust TUI with selected-post
+  detail, reply, like, and boost actions.
+
 ## [1.28.8] - 2026-06-15
 
 ### Added
