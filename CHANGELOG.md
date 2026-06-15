@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.29] - 2026-06-15
+
+### Added
+- Added a Rust TUI profile edit form that updates actor type, display name,
+  summary, icon/avatar URL, and image/header URL through the live owner API.
+
 ## [1.28.28] - 2026-06-15
 
 ### Changed

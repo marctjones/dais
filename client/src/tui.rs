@@ -25,7 +25,7 @@ use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
     ModerationBlockRow, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFollower,
     OwnerFollowing, OwnerInteraction, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
-    OwnerSources, OwnerTimelinePost,
+    OwnerProfileUpdate, OwnerSources, OwnerTimelinePost,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -98,6 +98,7 @@ enum Mode {
     Compose,
     Search,
     Discovery,
+    ProfileEdit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -106,6 +107,15 @@ enum ComposeField {
     Recipients,
     DirectRecipients,
     ReplyTo,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProfileField {
+    ActorType,
+    DisplayName,
+    Summary,
+    Icon,
+    Image,
 }
 
 #[derive(Clone, Debug)]
@@ -272,6 +282,52 @@ impl SearchState {
 }
 
 #[derive(Clone, Debug)]
+struct ProfileEditState {
+    actor_type: TextBuffer,
+    display_name: TextBuffer,
+    summary: TextBuffer,
+    icon: TextBuffer,
+    image: TextBuffer,
+    field: ProfileField,
+}
+
+impl ProfileEditState {
+    fn new() -> Self {
+        Self {
+            actor_type: TextBuffer::from_text("Person"),
+            display_name: TextBuffer::new(),
+            summary: TextBuffer::new(),
+            icon: TextBuffer::new(),
+            image: TextBuffer::new(),
+            field: ProfileField::DisplayName,
+        }
+    }
+
+    fn from_profile(profile: &OwnerProfile) -> Self {
+        Self {
+            actor_type: TextBuffer::from_text(&profile.actor_type),
+            display_name: TextBuffer::from_text(profile.display_name.as_deref().unwrap_or("")),
+            summary: TextBuffer::from_text(profile.summary.as_deref().unwrap_or("")),
+            icon: TextBuffer::from_text(
+                profile
+                    .icon
+                    .as_deref()
+                    .or(profile.avatar_url.as_deref())
+                    .unwrap_or(""),
+            ),
+            image: TextBuffer::from_text(
+                profile
+                    .image
+                    .as_deref()
+                    .or(profile.header_url.as_deref())
+                    .unwrap_or(""),
+            ),
+            field: ProfileField::DisplayName,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 enum TabData {
     Reader(Vec<OwnerTimelinePost>),
     ReaderDetail(OwnerPostDetail),
@@ -422,6 +478,7 @@ struct App {
     compose: ComposeState,
     search: SearchState,
     discovery: SearchState,
+    profile_edit: ProfileEditState,
     home: Vec<OwnerTimelinePost>,
     posts: Vec<OwnerPost>,
     friends: Vec<crate::d1::D1Friend>,
@@ -466,6 +523,7 @@ impl App {
             compose: ComposeState::new(),
             search: SearchState::new(),
             discovery: SearchState::new(),
+            profile_edit: ProfileEditState::new(),
             home: Vec::new(),
             posts: Vec::new(),
             friends: Vec::new(),
@@ -496,6 +554,7 @@ impl App {
             Mode::Compose => self.handle_compose_key(key),
             Mode::Search => self.handle_search_key(key),
             Mode::Discovery => self.handle_discovery_key(key),
+            Mode::ProfileEdit => self.handle_profile_edit_key(key),
         }
     }
 
@@ -530,6 +589,7 @@ impl App {
                 self.active = Tab::Discovery;
                 self.status = "Discover actor".to_string();
             }
+            KeyCode::Char('p') => self.edit_profile(),
             KeyCode::Char('f') => self.follow_discovered_actor(),
             KeyCode::Char('w') => self.unfollow_selected_following(),
             KeyCode::Char('a') => self.approve_selected_follower(),
@@ -672,12 +732,66 @@ impl App {
         }
     }
 
+    fn handle_profile_edit_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.status = "Profile edit canceled".to_string();
+            }
+            KeyCode::Tab => {
+                self.profile_edit.field = match self.profile_edit.field {
+                    ProfileField::ActorType => ProfileField::DisplayName,
+                    ProfileField::DisplayName => ProfileField::Summary,
+                    ProfileField::Summary => ProfileField::Icon,
+                    ProfileField::Icon => ProfileField::Image,
+                    ProfileField::Image => ProfileField::ActorType,
+                };
+            }
+            KeyCode::BackTab => {
+                self.profile_edit.field = match self.profile_edit.field {
+                    ProfileField::ActorType => ProfileField::Image,
+                    ProfileField::DisplayName => ProfileField::ActorType,
+                    ProfileField::Summary => ProfileField::DisplayName,
+                    ProfileField::Icon => ProfileField::Summary,
+                    ProfileField::Image => ProfileField::Icon,
+                };
+            }
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.save_profile_edit();
+            }
+            KeyCode::Enter => {
+                if self.profile_edit.field == ProfileField::Summary {
+                    self.current_profile_buffer().insert_newline();
+                }
+            }
+            KeyCode::Backspace => {
+                self.current_profile_buffer().backspace();
+            }
+            KeyCode::Left => self.current_profile_buffer().move_left(),
+            KeyCode::Right => self.current_profile_buffer().move_right(),
+            KeyCode::Up => self.current_profile_buffer().move_up(),
+            KeyCode::Down => self.current_profile_buffer().move_down(),
+            KeyCode::Char(ch) => self.current_profile_buffer().insert_char(ch),
+            _ => {}
+        }
+    }
+
     fn current_compose_buffer(&mut self) -> &mut TextBuffer {
         match self.compose.field {
             ComposeField::Body => &mut self.compose.body,
             ComposeField::Recipients => &mut self.compose.recipients,
             ComposeField::DirectRecipients => &mut self.compose.direct_recipients,
             ComposeField::ReplyTo => &mut self.compose.reply_to,
+        }
+    }
+
+    fn current_profile_buffer(&mut self) -> &mut TextBuffer {
+        match self.profile_edit.field {
+            ProfileField::ActorType => &mut self.profile_edit.actor_type,
+            ProfileField::DisplayName => &mut self.profile_edit.display_name,
+            ProfileField::Summary => &mut self.profile_edit.summary,
+            ProfileField::Icon => &mut self.profile_edit.icon,
+            ProfileField::Image => &mut self.profile_edit.image,
         }
     }
 
@@ -790,6 +904,58 @@ impl App {
                         .unwrap_or_else(|| actor.id.clone());
                     let _ = tx.send(Message::Loaded(Tab::Discovery, TabData::Discovery(actor)));
                     let _ = tx.send(Message::Status(format!("Resolved {label}")));
+                }
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn edit_profile(&mut self) {
+        if self.active != Tab::Profile {
+            self.active = Tab::Profile;
+        }
+        if let Some(profile) = self.profile.as_ref() {
+            self.profile_edit = ProfileEditState::from_profile(profile);
+            self.mode = Mode::ProfileEdit;
+            self.status = "Editing profile".to_string();
+        } else {
+            self.status = "Load the Profile tab before editing".to_string();
+            self.refresh(Tab::Profile);
+        }
+    }
+
+    fn save_profile_edit(&mut self) {
+        let actor_type = self.profile_edit.actor_type.text().trim().to_string();
+        if !matches!(actor_type.as_str(), "Person" | "Group" | "Organization") {
+            self.status = "Actor type must be Person, Group, or Organization".to_string();
+            return;
+        }
+        let update = OwnerProfileUpdate {
+            actor_type: Some(actor_type),
+            display_name: optional_trimmed(self.profile_edit.display_name.text()),
+            summary: optional_trimmed(self.profile_edit.summary.text()),
+            icon: optional_trimmed(self.profile_edit.icon.text()),
+            image: optional_trimmed(self.profile_edit.image.text()),
+        };
+        let tx = self.tx.clone();
+        self.status = "Saving profile".to_string();
+        self.mode = Mode::Normal;
+        self.loading.insert(Tab::Profile);
+        tokio::spawn(async move {
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                    return;
+                }
+            };
+            match client.update_profile(&update).await {
+                Ok(profile) => {
+                    let _ = tx.send(Message::Loaded(Tab::Profile, TabData::Profile(profile)));
+                    let _ = tx.send(Message::Status("Saved profile".to_string()));
+                    let _ = tx.send(Message::Refresh(Tab::Stats));
                 }
                 Err(error) => {
                     let _ = tx.send(Message::Error(error.to_string()));
@@ -1355,6 +1521,8 @@ impl App {
             self.draw_search_overlay(frame);
         } else if self.mode == Mode::Discovery {
             self.draw_discovery_overlay(frame);
+        } else if self.mode == Mode::ProfileEdit {
+            self.draw_profile_edit_overlay(frame);
         }
     }
 
@@ -1453,6 +1621,7 @@ impl App {
             Mode::Compose => "ctrl+s send · tab field · v visibility · p protocol · e e2ee · esc cancel",
             Mode::Search => "enter search · esc cancel · backspace edit",
             Mode::Discovery => "enter lookup actor · esc cancel · backspace edit",
+            Mode::ProfileEdit => "ctrl+s save profile · tab field · enter newline in summary · esc cancel",
         };
         let right = if self.loading.contains(&self.active) {
             "Loading..."
@@ -1608,6 +1777,80 @@ impl App {
         let hint = Paragraph::new("Enter resolves through the live owner API. Esc cancels.")
             .block(Block::default().borders(Borders::ALL));
         frame.render_widget(hint, layout[1]);
+    }
+
+    fn draw_profile_edit_overlay(&self, frame: &mut Frame<'_>) {
+        let area = centered_rect(82, 84, frame.area());
+        let block = Block::default().borders(Borders::ALL).title("Edit profile");
+        frame.render_widget(block, area);
+        let inner = area.inner(Margin::new(1, 1));
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(6),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+            ])
+            .split(inner);
+
+        let actor_type = Paragraph::new(self.profile_edit.actor_type.text()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(profile_field_title(
+                    "Actor type",
+                    self.profile_edit.field == ProfileField::ActorType,
+                )),
+        );
+        frame.render_widget(actor_type, layout[0]);
+
+        let display_name = Paragraph::new(self.profile_edit.display_name.text()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(profile_field_title(
+                    "Display name",
+                    self.profile_edit.field == ProfileField::DisplayName,
+                )),
+        );
+        frame.render_widget(display_name, layout[1]);
+
+        let summary = Paragraph::new(self.profile_edit.summary.text())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(profile_field_title(
+                        "Summary",
+                        self.profile_edit.field == ProfileField::Summary,
+                    )),
+            )
+            .wrap(Wrap { trim: false });
+        frame.render_widget(summary, layout[2]);
+
+        let icon = Paragraph::new(self.profile_edit.icon.text()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(profile_field_title(
+                    "Icon/avatar URL",
+                    self.profile_edit.field == ProfileField::Icon,
+                )),
+        );
+        frame.render_widget(icon, layout[3]);
+
+        let image = Paragraph::new(self.profile_edit.image.text()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(profile_field_title(
+                    "Image/header URL",
+                    self.profile_edit.field == ProfileField::Image,
+                )),
+        );
+        frame.render_widget(image, layout[4]);
+
+        let hint = Paragraph::new("Actor type: Person, Group, or Organization. Empty optional fields are left unchanged by the owner API.")
+            .block(Block::default().borders(Borders::ALL));
+        frame.render_widget(hint, layout[5]);
     }
 
     fn entries(&self, tab: Tab) -> Vec<Entry> {
@@ -2278,6 +2521,23 @@ fn compose_field_title(label: &str, active: bool) -> String {
         format!("> {label}")
     } else {
         label.to_string()
+    }
+}
+
+fn profile_field_title(label: &str, active: bool) -> String {
+    if active {
+        format!("> {label}")
+    } else {
+        label.to_string()
+    }
+}
+
+fn optional_trimmed(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
     }
 }
 
