@@ -20,6 +20,7 @@ pub struct Post {
     pub start_time: Option<String>,
     pub end_time: Option<String>,
     pub location: Option<String>,
+    pub poll_options: Option<String>,
     pub visibility: String,
     pub published_at: String,
     pub in_reply_to: Option<String>,
@@ -80,7 +81,7 @@ pub async fn get_outbox_posts(db: &dyn DatabaseProvider, username: &str) -> Core
         r#"
         SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
                name, summary, start_time, end_time, location, visibility, published_at, in_reply_to,
-               media_attachments, atproto_uri, encrypted_message
+               poll_options, media_attachments, atproto_uri, encrypted_message
         FROM posts
         WHERE actor_id = ?1
           AND {ANONYMOUS_PUBLIC_POST_SQL_PREDICATE}
@@ -137,6 +138,10 @@ pub async fn get_outbox_posts(db: &dyn DatabaseProvider, username: &str) -> Core
                 .get("location")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
+            poll_options: row
+                .get("poll_options")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             visibility: row
                 .get("visibility")
                 .and_then(|v| v.as_str())
@@ -181,7 +186,7 @@ pub async fn get_post(
     let post_query = r#"
         SELECT p.id, p.actor_id, p.content, p.content_html, COALESCE(p.object_type, 'Note') AS object_type,
                p.name, p.summary, p.start_time, p.end_time, p.location, p.visibility,
-               p.published_at, p.in_reply_to, p.media_attachments, p.atproto_uri,
+               p.published_at, p.in_reply_to, p.poll_options, p.media_attachments, p.atproto_uri,
                p.encrypted_message
         FROM posts p
         JOIN actors a ON p.actor_id = a.id
@@ -250,6 +255,10 @@ pub async fn get_post(
             .map(|s| s.to_string()),
         location: row
             .get("location")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        poll_options: row
+            .get("poll_options")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         visibility: row
@@ -475,6 +484,14 @@ pub fn build_note_object(post: &Post, interactions: Option<&PostInteractions>) -
         });
     }
 
+    if let Some(ref poll_options) = post.poll_options {
+        if let Some((multiple, options)) = parse_poll_options(poll_options) {
+            let key = if multiple { "anyOf" } else { "oneOf" };
+            note[key] = json!(poll_option_values(&options));
+            note["votersCount"] = json!(0);
+        }
+    }
+
     if let Some(ref in_reply_to) = post.in_reply_to {
         note["inReplyTo"] = json!(in_reply_to);
     }
@@ -512,6 +529,47 @@ fn note_audience(visibility: &str, followers_collection: &str) -> (Vec<String>, 
         "direct" => (Vec::new(), Vec::new()),
         _ => (vec![followers_collection.to_string()], Vec::new()),
     }
+}
+
+fn parse_poll_options(value: &str) -> Option<(bool, Vec<String>)> {
+    let value = serde_json::from_str::<Value>(value).ok()?;
+    if let Some(options) = value.as_array() {
+        return Some((
+            false,
+            options
+                .iter()
+                .filter_map(|option| option.as_str().map(ToString::to_string))
+                .collect(),
+        ));
+    }
+
+    let multiple = value
+        .get("multiple")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let options = value
+        .get("options")?
+        .as_array()?
+        .iter()
+        .filter_map(|option| option.as_str().map(ToString::to_string))
+        .collect::<Vec<_>>();
+    Some((multiple, options))
+}
+
+fn poll_option_values(options: &[String]) -> Vec<Value> {
+    options
+        .iter()
+        .map(|option| {
+            json!({
+                "type": "Note",
+                "name": option.trim(),
+                "replies": {
+                    "type": "Collection",
+                    "totalItems": 0
+                }
+            })
+        })
+        .collect()
 }
 
 fn activity_tags(content: &str) -> Vec<Value> {
@@ -591,6 +649,7 @@ mod tests {
             start_time: None,
             end_time: None,
             location: None,
+            poll_options: None,
             visibility: visibility.to_string(),
             published_at: "2026-06-11T00:00:00Z".to_string(),
             in_reply_to: None,
@@ -683,6 +742,23 @@ mod tests {
             event["to"],
             serde_json::json!(["https://social.example/users/social/followers"])
         );
+    }
+
+    #[test]
+    fn note_builder_exposes_question_poll_metadata() {
+        let mut post = post_with_visibility("public");
+        post.object_type = "Question".to_string();
+        post.end_time = Some("2026-06-16T00:00:00Z".to_string());
+        post.poll_options = Some(r#"{"multiple":false,"options":["Yes","No"]}"#.to_string());
+
+        let question = build_note_object(&post, None);
+
+        assert_eq!(question["type"], "Question");
+        assert_eq!(question["oneOf"][0]["type"], "Note");
+        assert_eq!(question["oneOf"][0]["name"], "Yes");
+        assert_eq!(question["oneOf"][0]["replies"]["totalItems"], 0);
+        assert_eq!(question["votersCount"], 0);
+        assert_eq!(question["endTime"], "2026-06-16T00:00:00Z");
     }
 
     #[test]

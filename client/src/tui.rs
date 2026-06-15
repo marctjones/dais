@@ -704,6 +704,8 @@ impl App {
             starts_at: None,
             ends_at: None,
             location: None,
+            poll_options: Vec::new(),
+            poll_multiple: false,
             attachments: Vec::new(),
         };
 

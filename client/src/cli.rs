@@ -284,6 +284,12 @@ pub struct CreatePostArgs {
     /// ActivityStreams Event location label.
     #[arg(long)]
     pub location: Option<String>,
+    /// ActivityStreams Question option. Repeat to create a poll.
+    #[arg(long = "poll-option")]
+    pub poll_options: Vec<String>,
+    /// Allow multiple poll answers. Uses ActivityStreams anyOf instead of oneOf.
+    #[arg(long)]
+    pub poll_multiple: bool,
     /// ActivityStreams attachment URL. Repeat for multiple attachments.
     #[arg(long = "attachment")]
     pub attachments: Vec<String>,
@@ -512,6 +518,7 @@ pub enum ActivityObjectType {
     Article,
     Document,
     Event,
+    Question,
 }
 
 impl std::fmt::Display for ActivityObjectType {
@@ -521,6 +528,7 @@ impl std::fmt::Display for ActivityObjectType {
             ActivityObjectType::Article => f.write_str("Article"),
             ActivityObjectType::Document => f.write_str("Document"),
             ActivityObjectType::Event => f.write_str("Event"),
+            ActivityObjectType::Question => f.write_str("Question"),
         }
     }
 }

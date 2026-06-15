@@ -17,6 +17,7 @@ pub struct D1Post {
     pub start_time: Option<String>,
     pub end_time: Option<String>,
     pub location: Option<String>,
+    pub poll_options: Option<String>,
     pub visibility: Option<String>,
     pub protocol: Option<String>,
     pub published_at: Option<String>,
@@ -324,7 +325,7 @@ impl D1Client {
         let sql = format!(
             r#"
             SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
-                   start_time, end_time, location,
+                   start_time, end_time, location, poll_options,
                    visibility, COALESCE(protocol, 'activitypub') AS protocol,
                    published_at, atproto_uri, encrypted_message, in_reply_to, media_attachments
             FROM posts
@@ -349,6 +350,7 @@ impl D1Client {
         starts_at: Option<&str>,
         ends_at: Option<&str>,
         location: Option<&str>,
+        poll_options_json: Option<&str>,
         media_attachments_json: Option<&str>,
     ) -> Result<()> {
         let content_html = escape_html(content);
@@ -371,16 +373,19 @@ impl D1Client {
         let media_attachments = media_attachments_json
             .map(sql_literal)
             .unwrap_or_else(|| "NULL".to_string());
+        let poll_options = poll_options_json
+            .map(sql_literal)
+            .unwrap_or_else(|| "NULL".to_string());
         let sql = format!(
             r#"
             INSERT INTO posts (
                 id, actor_id, content, content_html, object_type, name, summary, visibility,
                 published_at, protocol, in_reply_to, start_time, end_time, location,
-                media_attachments
+                poll_options, media_attachments
             ) VALUES (
                 {id}, {actor_id}, {content}, {content_html}, {object_type}, {name}, {summary},
                 {visibility}, {published_at}, 'activitypub', {in_reply_to}, {starts_at}, {ends_at},
-                {location}, {media_attachments}
+                {location}, {poll_options}, {media_attachments}
             )
             "#,
             id = sql_literal(id),
@@ -396,6 +401,7 @@ impl D1Client {
             starts_at = starts_at,
             ends_at = ends_at,
             location = location,
+            poll_options = poll_options,
             media_attachments = media_attachments,
         );
         self.execute(&sql)
@@ -433,7 +439,7 @@ impl D1Client {
         let sql = format!(
             r#"
             SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
-                   start_time, end_time, location,
+                   start_time, end_time, location, poll_options,
                    visibility, COALESCE(protocol, 'activitypub') AS protocol,
                    published_at, atproto_uri, encrypted_message, in_reply_to, media_attachments
             FROM posts
@@ -1001,7 +1007,7 @@ impl D1Client {
         let sql = format!(
             r#"
             SELECT id, content, COALESCE(object_type, 'Note') AS object_type, name, summary,
-                   start_time, end_time, location, visibility,
+                   start_time, end_time, location, poll_options, visibility,
                    COALESCE(protocol, 'activitypub') AS protocol, published_at, atproto_uri,
                    encrypted_message, in_reply_to, media_attachments
             FROM posts

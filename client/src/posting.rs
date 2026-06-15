@@ -50,6 +50,8 @@ pub struct PostDraft {
     pub starts_at: Option<String>,
     pub ends_at: Option<String>,
     pub location: Option<String>,
+    pub poll_options: Vec<String>,
+    pub poll_multiple: bool,
     pub attachments: Vec<String>,
 }
 
@@ -270,6 +272,8 @@ struct CreateActivityInput<'a> {
     starts_at: Option<&'a str>,
     ends_at: Option<&'a str>,
     location: Option<&'a str>,
+    poll_options: &'a [String],
+    poll_multiple: bool,
     attachments: &'a [String],
 }
 
@@ -281,6 +285,11 @@ impl PostDraft {
                 .split_once('=')
                 .ok_or_else(|| anyhow!("recipient must be in key_id=public_key_pem_file form"))?;
             recipients.insert(key_id.to_string(), fs::read_to_string(path)?);
+        }
+
+        let mut object_type = args.object_type;
+        if !args.poll_options.is_empty() && object_type == ActivityObjectType::Note {
+            object_type = ActivityObjectType::Question;
         }
 
         Ok(Self {
@@ -296,12 +305,14 @@ impl PostDraft {
             reply_to: args.reply_to,
             to: args.to,
             e2ee_fallback: args.e2ee_fallback,
-            object_type: args.object_type,
+            object_type,
             title: args.title,
             summary: args.summary,
             starts_at: args.starts_at,
             ends_at: args.ends_at,
             location: args.location,
+            poll_options: args.poll_options,
+            poll_multiple: args.poll_multiple,
             attachments: args.attachments,
         })
     }
@@ -314,6 +325,7 @@ pub async fn publish_post(
 ) -> Result<PostOutcome> {
     let effective = effective_protocol(draft.protocol, draft.visibility);
     validate_media_attachments(&draft.attachments, draft.visibility)?;
+    validate_poll(&draft)?;
     if !draft.attachments.is_empty() && effective != Protocol::ActivityPub {
         anyhow::bail!(
             "media attachments currently require ActivityPub routing; AT Protocol media upload is not implemented yet"
@@ -376,6 +388,8 @@ pub async fn publish_post(
             starts_at: None,
             ends_at: None,
             location: None,
+            poll_options: &[],
+            poll_multiple: false,
             attachments: &[],
         })?;
         let delivery_ids =
@@ -414,6 +428,7 @@ pub async fn publish_post(
                 draft.starts_at.as_deref(),
                 draft.ends_at.as_deref(),
                 draft.location.as_deref(),
+                poll_json(&draft)?.as_deref(),
                 attachment_json(&draft.attachments)?.as_deref(),
             )
             .await?;
@@ -433,6 +448,8 @@ pub async fn publish_post(
                 starts_at: draft.starts_at.as_deref(),
                 ends_at: draft.ends_at.as_deref(),
                 location: draft.location.as_deref(),
+                poll_options: &draft.poll_options,
+                poll_multiple: draft.poll_multiple,
                 attachments: &draft.attachments,
             })?;
             let delivery_ids =
@@ -465,6 +482,7 @@ pub async fn publish_post(
                 draft.starts_at.as_deref(),
                 draft.ends_at.as_deref(),
                 draft.location.as_deref(),
+                poll_json(&draft)?.as_deref(),
                 attachment_json(&draft.attachments)?.as_deref(),
             )
             .await?;
@@ -484,6 +502,8 @@ pub async fn publish_post(
                 starts_at: draft.starts_at.as_deref(),
                 ends_at: draft.ends_at.as_deref(),
                 location: draft.location.as_deref(),
+                poll_options: &draft.poll_options,
+                poll_multiple: draft.poll_multiple,
                 attachments: &draft.attachments,
             })?;
             let delivery_ids =
@@ -558,6 +578,16 @@ fn build_create_activity_json(input: CreateActivityInput<'_>) -> Result<String> 
         });
     }
 
+    if !input.poll_options.is_empty() {
+        let key = if input.poll_multiple {
+            "anyOf"
+        } else {
+            "oneOf"
+        };
+        note[key] = serde_json::json!(poll_option_values(input.poll_options));
+        note["votersCount"] = serde_json::json!(0);
+    }
+
     if !input.attachments.is_empty() {
         note["attachment"] = serde_json::json!(attachment_values(input.attachments)?);
     }
@@ -613,6 +643,50 @@ fn attachment_json(attachments: &[String]) -> Result<Option<String>> {
     )?)?))
 }
 
+fn poll_json(draft: &PostDraft) -> Result<Option<String>> {
+    if draft.poll_options.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(serde_json::to_string(&serde_json::json!({
+        "multiple": draft.poll_multiple,
+        "options": draft.poll_options
+    }))?))
+}
+
+fn validate_poll(draft: &PostDraft) -> Result<()> {
+    if draft.poll_options.is_empty() {
+        if draft.poll_multiple {
+            anyhow::bail!("--poll-multiple requires at least one --poll-option");
+        }
+        if draft.object_type == ActivityObjectType::Question {
+            anyhow::bail!("Question objects require at least two --poll-option values");
+        }
+        return Ok(());
+    }
+
+    if draft.object_type != ActivityObjectType::Question {
+        anyhow::bail!("poll options can only be used with ActivityPub Question objects");
+    }
+    if draft.encrypt {
+        anyhow::bail!("encrypted ActivityPub polls are not supported");
+    }
+    if draft.poll_options.len() < 2 || draft.poll_options.len() > 4 {
+        anyhow::bail!("polls require between two and four --poll-option values");
+    }
+    for option in &draft.poll_options {
+        let trimmed = option.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("poll options must not be empty");
+        }
+        if trimmed.chars().count() > 200 {
+            anyhow::bail!("poll options must be 200 characters or fewer");
+        }
+    }
+
+    Ok(())
+}
+
 fn attachment_values(attachments: &[String]) -> Result<Vec<serde_json::Value>> {
     attachments
         .iter()
@@ -626,6 +700,22 @@ fn attachment_values(attachments: &[String]) -> Result<Vec<serde_json::Value>> {
                     "url": attachment
                 }))
             }
+        })
+        .collect()
+}
+
+fn poll_option_values(options: &[String]) -> Vec<serde_json::Value> {
+    options
+        .iter()
+        .map(|option| {
+            serde_json::json!({
+                "type": "Note",
+                "name": option.trim(),
+                "replies": {
+                    "type": "Collection",
+                    "totalItems": 0
+                }
+            })
         })
         .collect()
 }
@@ -738,10 +828,11 @@ fn activity_suffix(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        activity_tags, build_create_activity_json, validate_media_attachments, CreateActivityInput,
+        activity_tags, build_create_activity_json, validate_media_attachments, validate_poll,
+        CreateActivityInput, PostDraft,
     };
-    use crate::cli::ActivityObjectType;
-    use crate::routing::Visibility;
+    use crate::cli::{ActivityObjectType, E2eeFallbackMode};
+    use crate::routing::{Protocol, Visibility};
 
     #[test]
     fn followers_media_requires_private_capability_url() {
@@ -787,11 +878,101 @@ mod tests {
             starts_at: None,
             ends_at: None,
             location: None,
+            poll_options: &[],
+            poll_multiple: false,
             attachments: &[],
         })
         .unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["object"]["tag"][0]["type"], "Mention");
         assert_eq!(value["object"]["tag"][1]["type"], "Hashtag");
+    }
+
+    #[test]
+    fn create_activity_includes_mastodon_question_options() {
+        let options = vec!["Yes".to_string(), "No".to_string()];
+        let json = build_create_activity_json(CreateActivityInput {
+            actor_id: "https://social.dais.social/users/social",
+            post_id: "https://social.dais.social/users/social/posts/1",
+            content: "Poll?",
+            visibility: "public",
+            published_at: "2026-06-15T00:00:00Z",
+            encrypted_message: None,
+            in_reply_to: None,
+            recipients: &[],
+            object_type: ActivityObjectType::Question,
+            title: None,
+            summary: None,
+            starts_at: None,
+            ends_at: Some("2026-06-16T00:00:00Z"),
+            location: None,
+            poll_options: &options,
+            poll_multiple: false,
+            attachments: &[],
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["object"]["type"], "Question");
+        assert_eq!(value["object"]["oneOf"][0]["type"], "Note");
+        assert_eq!(value["object"]["oneOf"][0]["name"], "Yes");
+        assert_eq!(value["object"]["oneOf"][0]["replies"]["totalItems"], 0);
+        assert_eq!(value["object"]["votersCount"], 0);
+        assert_eq!(value["object"]["endTime"], "2026-06-16T00:00:00Z");
+    }
+
+    #[test]
+    fn create_activity_uses_anyof_for_multiple_choice_poll() {
+        let options = vec!["A".to_string(), "B".to_string()];
+        let json = build_create_activity_json(CreateActivityInput {
+            actor_id: "https://social.dais.social/users/social",
+            post_id: "https://social.dais.social/users/social/posts/1",
+            content: "Poll?",
+            visibility: "public",
+            published_at: "2026-06-15T00:00:00Z",
+            encrypted_message: None,
+            in_reply_to: None,
+            recipients: &[],
+            object_type: ActivityObjectType::Question,
+            title: None,
+            summary: None,
+            starts_at: None,
+            ends_at: None,
+            location: None,
+            poll_options: &options,
+            poll_multiple: true,
+            attachments: &[],
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value["object"]["oneOf"].is_null());
+        assert_eq!(value["object"]["anyOf"][1]["name"], "B");
+    }
+
+    #[test]
+    fn question_requires_poll_options() {
+        let draft = PostDraft {
+            text: "Poll?".to_string(),
+            visibility: Visibility::Public,
+            protocol: Protocol::ActivityPub,
+            encrypt: false,
+            recipients: Default::default(),
+            reply_to: None,
+            to: Vec::new(),
+            e2ee_fallback: E2eeFallbackMode::Strict,
+            object_type: ActivityObjectType::Question,
+            title: None,
+            summary: None,
+            starts_at: None,
+            ends_at: None,
+            location: None,
+            poll_options: Vec::new(),
+            poll_multiple: false,
+            attachments: Vec::new(),
+        };
+
+        assert!(validate_poll(&draft)
+            .expect_err("question without options should fail")
+            .to_string()
+            .contains("require at least two"));
     }
 }

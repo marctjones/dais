@@ -362,6 +362,8 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
                 starts_at: args.starts_at,
                 ends_at: args.ends_at,
                 location: args.location,
+                poll_options: args.poll_options,
+                poll_multiple: args.poll_multiple,
                 attachments: args.attachments,
                 to: args.to,
                 remote: args.remote,
@@ -526,6 +528,8 @@ async fn handle_events(command: EventsCommand, store: &ConfigStore) -> Result<()
                 starts_at: Some(args.starts_at),
                 ends_at: args.ends_at,
                 location: args.location,
+                poll_options: Vec::new(),
+                poll_multiple: false,
                 attachments: Vec::new(),
             };
             match publish_post(draft, store, &db).await? {

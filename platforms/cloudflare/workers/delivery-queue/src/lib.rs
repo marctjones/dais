@@ -402,6 +402,8 @@ async fn process_delivery(
             COALESCE(p.object_type, 'Note') AS object_type,
             p.name,
             p.summary,
+            p.end_time,
+            p.poll_options,
             p.visibility,
             p.published_at,
             p.encrypted_message,
@@ -467,6 +469,8 @@ async fn process_delivery(
         .unwrap_or("Note");
     let name = row.get("name").and_then(|v| v.as_str());
     let summary = row.get("summary").and_then(|v| v.as_str());
+    let end_time = row.get("end_time").and_then(|v| v.as_str());
+    let poll_options = row.get("poll_options").and_then(|v| v.as_str());
     let visibility = row
         .get("visibility")
         .and_then(|v| v.as_str())
@@ -518,6 +522,8 @@ async fn process_delivery(
             object_type,
             name,
             summary,
+            end_time,
+            poll_options,
             visibility,
             published_at,
             encrypted_message,
@@ -603,6 +609,8 @@ fn build_create_activity_json(
     object_type: &str,
     name: Option<&str>,
     summary: Option<&str>,
+    end_time: Option<&str>,
+    poll_options: Option<&str>,
     visibility: &str,
     published_at: &str,
     encrypted_message: Option<serde_json::Value>,
@@ -640,6 +648,10 @@ fn build_create_activity_json(
         note["summary"] = serde_json::json!(summary);
     }
 
+    if let Some(end_time) = end_time {
+        note["endTime"] = serde_json::json!(end_time);
+    }
+
     if let Some(in_reply_to) = in_reply_to {
         note["inReplyTo"] = serde_json::json!(in_reply_to);
     }
@@ -647,6 +659,14 @@ fn build_create_activity_json(
     if let Some(media_attachments) = media_attachments {
         if let Ok(attachments) = serde_json::from_str::<serde_json::Value>(media_attachments) {
             note["attachment"] = attachments;
+        }
+    }
+
+    if let Some(poll_options) = poll_options {
+        if let Some((multiple, options)) = parse_poll_options(poll_options) {
+            let key = if multiple { "anyOf" } else { "oneOf" };
+            note[key] = serde_json::json!(poll_option_values(&options));
+            note["votersCount"] = serde_json::json!(0);
         }
     }
 
@@ -696,6 +716,47 @@ fn activity_tags(content: &str) -> Vec<serde_json::Value> {
         }
     }
     tags
+}
+
+fn parse_poll_options(value: &str) -> Option<(bool, Vec<String>)> {
+    let value = serde_json::from_str::<serde_json::Value>(value).ok()?;
+    if let Some(options) = value.as_array() {
+        return Some((
+            false,
+            options
+                .iter()
+                .filter_map(|option| option.as_str().map(ToString::to_string))
+                .collect(),
+        ));
+    }
+
+    let multiple = value
+        .get("multiple")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let options = value
+        .get("options")?
+        .as_array()?
+        .iter()
+        .filter_map(|option| option.as_str().map(ToString::to_string))
+        .collect::<Vec<_>>();
+    Some((multiple, options))
+}
+
+fn poll_option_values(options: &[String]) -> Vec<serde_json::Value> {
+    options
+        .iter()
+        .map(|option| {
+            serde_json::json!({
+                "type": "Note",
+                "name": option.trim(),
+                "replies": {
+                    "type": "Collection",
+                    "totalItems": 0
+                }
+            })
+        })
+        .collect()
 }
 
 fn hashtag_tag(token: &str) -> Option<serde_json::Value> {
