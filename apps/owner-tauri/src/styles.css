@@ -165,6 +165,7 @@ h2 {
 
 .top-actions,
 .compose-actions,
+.detail-actions,
 .item footer {
   display: flex;
   align-items: center;
@@ -369,6 +370,7 @@ select {
 .media-row button,
 .attachment-chip button,
 .reply-target button,
+.detail-actions button,
 .item button,
 .section-heading button,
 .timeline button,
@@ -383,6 +385,7 @@ select {
 
 .timeline button,
 .item button,
+.detail-actions button,
 .follower button,
 .actor-preview button {
   min-width: auto;
@@ -492,6 +495,37 @@ select {
 
 .detail-body dd {
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail-list {
+  display: grid;
+  gap: 8px;
+}
+
+.detail-list h3 {
+  margin: 0;
+  font-size: 0.84rem;
+  color: #354039;
+}
+
+.detail-list article {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid #dde5dd;
+  border-radius: 8px;
+  background: #f9fbf7;
+}
+
+.detail-list p {
+  color: #354039;
+}
+
+.detail-list span,
+.detail-list time {
+  color: #667168;
+  font-size: 0.78rem;
   overflow-wrap: anywhere;
 }
 

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.13] - 2026-06-15
+
+### Added
+- Added Dais Desk post-detail actions for reply, like, boost, copy link, and
+  open original, plus reply/like/boost row rendering from the owner API detail
+  payload.
+
 ## [1.28.12] - 2026-06-15
 
 ### Added

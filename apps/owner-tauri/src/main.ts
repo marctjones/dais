@@ -155,9 +155,28 @@ type UploadedMedia = {
 type OwnerPostDetail = OwnerSnapshot["posts"][number] & {
   content_html?: string | null;
   in_reply_to?: string | null;
-  replies?: unknown[];
-  likes?: unknown[];
-  boosts?: unknown[];
+  replies?: PostReply[];
+  likes?: PostInteraction[];
+  boosts?: PostInteraction[];
+};
+
+type PostReply = {
+  id: string;
+  actor_id: string;
+  actor_username?: string | null;
+  actor_display_name?: string | null;
+  content?: string | null;
+  published_at?: string | null;
+  created_at?: string | null;
+};
+
+type PostInteraction = {
+  id: string;
+  actor_id: string;
+  actor_username?: string | null;
+  actor_display_name?: string | null;
+  object_url?: string | null;
+  created_at?: string | null;
 };
 
 type OwnerNotification = {
@@ -352,6 +371,16 @@ function render() {
   app.querySelectorAll<HTMLButtonElement>("[data-post-detail]").forEach((button) => {
     button.addEventListener("click", () => {
       void loadPostDetail(button.dataset.postDetail || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-copy-link]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void copyLink(button.dataset.copyLink || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-open-link]").forEach((button) => {
+    button.addEventListener("click", () => {
+      openLink(button.dataset.openLink || "");
     });
   });
   app.querySelectorAll<HTMLButtonElement>("[data-notification-read]").forEach((button) => {
@@ -704,6 +733,13 @@ function postCard(post: OwnerSnapshot["posts"][number]) {
 function postDetailView(post: OwnerPostDetail) {
   return `<div class="detail-body">
     <p>${escapeHtml(post.content)}</p>
+    <div class="detail-actions">
+      <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.id)}">Reply</button>
+      <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.id)}">Like</button>
+      <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.id)}">Boost</button>
+      <button type="button" data-copy-link="${escapeAttr(post.id)}">Copy link</button>
+      <button type="button" data-open-link="${escapeAttr(post.id)}">Open original</button>
+    </div>
     <dl>
       <dt>ID</dt><dd>${escapeHtml(shortUrl(post.id))}</dd>
       <dt>Visibility</dt><dd>${escapeHtml(String(post.visibility))}</dd>
@@ -715,7 +751,40 @@ function postDetailView(post: OwnerPostDetail) {
       <dt>Likes</dt><dd>${post.like_count || post.likes?.length || 0}</dd>
       <dt>Boosts</dt><dd>${post.boost_count || post.boosts?.length || 0}</dd>
     </dl>
+    ${postDetailReplies(post.replies || [])}
+    ${postDetailInteractions("Likes", post.likes || [])}
+    ${postDetailInteractions("Boosts", post.boosts || [])}
   </div>`;
+}
+
+function postDetailReplies(rows: PostReply[]) {
+  return `<section class="detail-list">
+    <h3>Replies</h3>
+    ${
+      rows.length
+        ? rows.map((row) => `<article>
+            <strong>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</strong>
+            <p>${escapeHtml(row.content || row.id)}</p>
+            ${row.published_at || row.created_at ? `<time>${escapeHtml(formatTime(row.published_at || row.created_at || ""))}</time>` : ""}
+          </article>`).join("")
+        : `<p>None</p>`
+    }
+  </section>`;
+}
+
+function postDetailInteractions(title: string, rows: PostInteraction[]) {
+  return `<section class="detail-list">
+    <h3>${escapeHtml(title)}</h3>
+    ${
+      rows.length
+        ? rows.map((row) => `<article>
+            <strong>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</strong>
+            <span>${escapeHtml(shortUrl(row.actor_id))}</span>
+            ${row.created_at ? `<time>${escapeHtml(formatTime(row.created_at))}</time>` : ""}
+          </article>`).join("")
+        : `<p>None</p>`
+    }
+  </section>`;
 }
 
 function timelineCard(post: OwnerSnapshot["home_timeline"][number]) {
@@ -1185,12 +1254,30 @@ async function ownerInteraction(objectId: string, interaction: string) {
   });
   notice = `${result.interaction} queued for ${shortUrl(result.object_id)}.`;
   await load();
+  if (active === "Posts" && selectedPostDetail?.id === objectId) {
+    selectedPostDetail = await invoke<OwnerPostDetail>("owner_post_detail", { objectId });
+    render();
+  }
 }
 
 async function loadPostDetail(objectId: string) {
   if (!objectId) return;
   selectedPostDetail = await invoke<OwnerPostDetail>("owner_post_detail", { objectId });
   notice = `Loaded ${shortUrl(objectId)}.`;
+  render();
+}
+
+async function copyLink(url: string) {
+  if (!url) return;
+  await navigator.clipboard.writeText(url);
+  notice = `Copied ${shortUrl(url)}.`;
+  render();
+}
+
+function openLink(url: string) {
+  if (!url) return;
+  window.open(url, "_blank", "noopener");
+  notice = `Opened ${shortUrl(url)}.`;
   render();
 }
 
