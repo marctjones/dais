@@ -2,9 +2,9 @@ use dais_client_core::{
     ComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient, OwnerCreatedPost,
     OwnerDelivery, OwnerDiscoveredActor, OwnerFollowResult, OwnerInteraction,
     OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification, OwnerPost,
-    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSection, OwnerSettings, OwnerSnapshot,
-    OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources, ProtocolRoute,
-    SourceItem, Visibility,
+    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSection,
+    OwnerSettings, OwnerSnapshot, OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult,
+    OwnerSources, OwnerStats, ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -156,6 +156,50 @@ async fn owner_deliveries(app: tauri::AppHandle) -> Result<Vec<OwnerDelivery>, S
         .ok_or_else(|| "owner token is required".to_string())?;
     let client = OwnerApiClient::new(&stored.instance_url, token);
     client.deliveries().await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn owner_direct_messages(
+    app: tauri::AppHandle,
+) -> Result<Vec<dais_client_core::OwnerDirectMessage>, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .direct_messages()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn owner_search(app: tauri::AppHandle, query: String) -> Result<OwnerSearchResult, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .search(&query)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn owner_stats(app: tauri::AppHandle) -> Result<OwnerStats, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client.stats().await.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -602,6 +646,9 @@ fn main() {
             owner_notifications,
             mark_owner_notification_read,
             owner_deliveries,
+            owner_direct_messages,
+            owner_search,
+            owner_stats,
             owner_sources,
             add_owner_source,
             remove_owner_source,

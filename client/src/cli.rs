@@ -780,6 +780,12 @@ pub enum OwnerCommand {
     NotificationRead(OwnerNotificationReadArgs),
     /// List live owner API delivery jobs.
     Deliveries(OwnerApiArgs),
+    /// List live owner API direct messages.
+    Dms(OwnerApiArgs),
+    /// Search live owner API posts and actor relationships.
+    Search(OwnerSearchArgs),
+    /// Show live owner API server stats.
+    Stats(OwnerApiArgs),
     /// List live owner API source subscriptions and reader items.
     Sources(OwnerApiArgs),
     /// Add a source subscription through the live owner API.
@@ -830,6 +836,13 @@ pub struct OwnerApiArgs {
     /// Owner API bearer token.
     #[arg(long, env = "DAIS_OWNER_TOKEN")]
     pub owner_token: String,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerSearchArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub query: String,
 }
 
 #[derive(Subcommand)]

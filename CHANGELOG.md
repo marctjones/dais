@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.37] - 2026-06-15
+
+### Added
+- Added Dais Desk Search, DMs, and Stats views backed by the live owner API.
+- Added `dais owner search`, `dais owner dms`, and `dais owner stats`
+  commands for the same owner API surfaces.
+
+### Changed
+- Cleaned old project-account smoke posts and release-only public feed posts so
+  the public account stays limited to useful demonstrable updates.
+
 ## [1.28.36] - 2026-06-15
 
 ### Added

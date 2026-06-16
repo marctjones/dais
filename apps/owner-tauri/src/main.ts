@@ -238,18 +238,80 @@ type OwnerSources = {
   items: OwnerSnapshot["sources"];
 };
 
+type OwnerDirectMessage = {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  content: string;
+  published_at: string;
+  created_at?: string | null;
+};
+
+type OwnerSearchResult = {
+  posts: Array<{
+    id: string;
+    actor_id?: string | null;
+    content: string;
+    content_html?: string | null;
+    object_type?: string | null;
+    name?: string | null;
+    summary?: string | null;
+    visibility?: string | null;
+    protocol?: string | null;
+    published_at?: string | null;
+    in_reply_to?: string | null;
+    atproto_uri?: string | null;
+    encrypted_message?: string | null;
+    media_attachments?: string | null;
+  }>;
+  users: Array<{
+    actor_id: string;
+    relation: string;
+    status: string;
+    created_at?: string | null;
+  }>;
+};
+
+type OwnerStats = {
+  followers_total: number;
+  followers_approved: number;
+  followers_pending: number;
+  followers_rejected: number;
+  following_total: number;
+  posts_total: number;
+  activities_total: number;
+  deliveries_total: number;
+  deliveries_failed: number;
+  deliveries_queued: number;
+  deliveries_retry: number;
+  deliveries_delivered: number;
+  dual_protocol_posts: number;
+  public_posts: number;
+  private_posts: number;
+  direct_posts: number;
+  encrypted_posts: number;
+  media_posts: number;
+  notifications_unread: number;
+  blocks_total: number;
+  allowlist_hosts: number;
+  closed_network: boolean;
+};
+
 const sections = [
   "Home",
   "Following",
   "Discovery",
   "Compose",
   "Posts",
+  "Search",
   "Sources",
+  "DMs",
   "Notifications",
   "Followers",
   "Profile",
   "Moderation",
   "Deliveries",
+  "Stats",
   "Settings",
   "Diagnostics"
 ];
@@ -266,6 +328,10 @@ let deliveries: OwnerDelivery[] = [];
 let sourceSubscriptions: SourceSubscription[] = [];
 let sourceItems: OwnerSnapshot["sources"] = [];
 let moderationState: ModerationState | null = null;
+let directMessages: OwnerDirectMessage[] = [];
+let searchQuery = "";
+let searchResults: OwnerSearchResult = { posts: [], users: [] };
+let ownerStats: OwnerStats | null = null;
 
 async function load() {
   render();
@@ -341,6 +407,7 @@ function render() {
   app.querySelector<HTMLFormElement>("#follow-form")?.addEventListener("submit", followActor);
   app.querySelector<HTMLFormElement>("#discover-form")?.addEventListener("submit", discoverActor);
   app.querySelector<HTMLFormElement>("#source-form")?.addEventListener("submit", addSource);
+  app.querySelector<HTMLFormElement>("#search-form")?.addEventListener("submit", runSearch);
   app.querySelector<HTMLFormElement>("#block-actor-form")?.addEventListener("submit", blockActor);
   app.querySelector<HTMLFormElement>("#block-domain-form")?.addEventListener("submit", blockDomain);
   app.querySelector<HTMLFormElement>("#allow-host-form")?.addEventListener("submit", allowHost);
@@ -436,8 +503,12 @@ function view(section: string, data: OwnerSnapshot): string {
       return composeView(data);
     case "Posts":
       return postsView(data);
+    case "Search":
+      return searchView();
     case "Sources":
       return sourcesView(data);
+    case "DMs":
+      return directMessagesView();
     case "Moderation":
       return moderationView(data);
     case "Settings":
@@ -452,6 +523,8 @@ function view(section: string, data: OwnerSnapshot): string {
       return notificationsView();
     case "Deliveries":
       return deliveriesView();
+    case "Stats":
+      return statsView(data);
     default:
       return pendingLiveView(section);
   }
@@ -476,6 +549,52 @@ function notificationsView() {
 function deliveriesView() {
   return `<section>
     ${list(deliveries.map(deliveryCard), "No deliveries returned by the owner API.")}
+  </section>`;
+}
+
+function directMessagesView() {
+  return `<section>
+    ${list(directMessages.map(directMessageCard), "No direct messages returned by the owner API.")}
+  </section>`;
+}
+
+function searchView() {
+  return `<section class="split">
+    <article class="panel">
+      <h2>Search</h2>
+      <form id="search-form" class="inline-form">
+        <input name="query" value="${escapeAttr(searchQuery)}" placeholder="Search posts, followers, following" />
+        <button type="submit">Search</button>
+      </form>
+      <h2 class="section-label">Posts</h2>
+      ${list(searchResults.posts.map(searchPostCard), "No matching posts.")}
+    </article>
+    <article class="panel">
+      <h2>Actors</h2>
+      ${list(searchResults.users.map(searchUserCard), "No matching actors.")}
+    </article>
+  </section>`;
+}
+
+function statsView(data: OwnerSnapshot) {
+  const stats = ownerStats;
+  if (!stats) {
+    return `<section class="metrics">
+      <article><span>Posts</span><strong>${data.posts.length}</strong></article>
+      <article><span>Followers</span><strong>${data.followers.length}</strong></article>
+      <article><span>Following</span><strong>${data.following.length}</strong></article>
+      <article><span>Sources</span><strong>${data.sources.length}</strong></article>
+    </section>`;
+  }
+  return `<section class="metrics stats-grid">
+    ${metric("Followers", stats.followers_total, `${stats.followers_approved} approved, ${stats.followers_pending} pending`)}
+    ${metric("Following", stats.following_total, "")}
+    ${metric("Posts", stats.posts_total, `${stats.public_posts} public, ${stats.private_posts} private, ${stats.direct_posts} direct`)}
+    ${metric("Media", stats.media_posts, `${stats.encrypted_posts} encrypted, ${stats.dual_protocol_posts} dual-protocol`)}
+    ${metric("Deliveries", stats.deliveries_total, `${stats.deliveries_queued} queued, ${stats.deliveries_failed} failed`)}
+    ${metric("Notifications", stats.notifications_unread, "unread")}
+    ${metric("Moderation", stats.blocks_total, `${stats.allowlist_hosts} allowlist hosts`)}
+    ${metric("Network", stats.closed_network ? "closed" : "open", "federation mode")}
   </section>`;
 }
 
@@ -889,6 +1008,58 @@ function deliveryCard(row: OwnerDelivery) {
   </article>`;
 }
 
+function directMessageCard(row: OwnerDirectMessage) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(actorLabel(row.sender_id))}</h2>
+      <p>${escapeHtml(row.content)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(row.conversation_id)}</span>
+      <time>${escapeHtml(formatTime(row.published_at))}</time>
+    </footer>
+  </article>`;
+}
+
+function searchPostCard(row: OwnerSearchResult["posts"][number]) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.name || shortUrl(row.id))}</h2>
+      <p>${escapeHtml(row.content)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(row.visibility || "unknown")}</span>
+      <span>${escapeHtml(row.protocol || "activitypub")}</span>
+      ${row.encrypted_message ? "<span>E2EE</span>" : ""}
+      ${row.media_attachments ? "<span>media</span>" : ""}
+      ${row.published_at ? `<time>${escapeHtml(formatTime(row.published_at))}</time>` : ""}
+      <button type="button" data-post-detail="${escapeAttr(row.id)}">Detail</button>
+    </footer>
+  </article>`;
+}
+
+function searchUserCard(row: OwnerSearchResult["users"][number]) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(actorLabel(row.actor_id))}</h2>
+      <p>${escapeHtml(row.actor_id)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(row.relation)}</span>
+      <span>${escapeHtml(row.status)}</span>
+      ${row.created_at ? `<time>${escapeHtml(formatTime(row.created_at))}</time>` : ""}
+    </footer>
+  </article>`;
+}
+
+function metric(label: string, value: string | number, detail: string) {
+  return `<article>
+    <span>${escapeHtml(label)}</span>
+    <strong>${escapeHtml(String(value))}</strong>
+    ${detail ? `<small>${escapeHtml(detail)}</small>` : ""}
+  </article>`;
+}
+
 function followerCard(row: OwnerSnapshot["followers"][number]) {
   return `<article class="panel item follower">
     <div>
@@ -1297,6 +1468,12 @@ async function loadLiveSection(section: string) {
   } else if (section === "Deliveries") {
     deliveries = await invoke<OwnerDelivery[]>("owner_deliveries");
     render();
+  } else if (section === "DMs") {
+    directMessages = await invoke<OwnerDirectMessage[]>("owner_direct_messages");
+    render();
+  } else if (section === "Stats") {
+    ownerStats = await invoke<OwnerStats>("owner_stats");
+    render();
   } else if (section === "Sources") {
     const sources = await invoke<OwnerSources>("owner_sources");
     sourceSubscriptions = sources.subscriptions;
@@ -1306,6 +1483,18 @@ async function loadLiveSection(section: string) {
     moderationState = await invoke<ModerationState>("owner_moderation");
     render();
   }
+}
+
+async function runSearch(event: Event) {
+  event.preventDefault();
+  const form = event.currentTarget as HTMLFormElement;
+  const query = String(new FormData(form).get("query") || "").trim();
+  searchQuery = query;
+  searchResults = query
+    ? await invoke<OwnerSearchResult>("owner_search", { query })
+    : { posts: [], users: [] };
+  notice = query ? `Search returned ${searchResults.posts.length} posts and ${searchResults.users.length} actors.` : "";
+  render();
 }
 
 async function markNotificationRead(id: string) {

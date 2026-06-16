@@ -23,9 +23,9 @@ use cli::{
 use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
-    ModerationState, OwnerApiClient, OwnerDelivery, OwnerDiscoveredActor, OwnerFriend,
-    OwnerInteraction, OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate,
-    OwnerSnapshot, OwnerSourceAdd, OwnerSources,
+    ModerationState, OwnerApiClient, OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor,
+    OwnerFriend, OwnerInteraction, OwnerNotification, OwnerPostDetail, OwnerProfile,
+    OwnerProfileUpdate, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
@@ -1038,6 +1038,27 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_deliveries(&deliveries);
         }
+        OwnerCommand::Dms(args) => {
+            let messages = owner_api(&args)
+                .direct_messages()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_direct_messages(&messages);
+        }
+        OwnerCommand::Search(args) => {
+            let results = owner_api(&args.api)
+                .search(&args.query)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_search(&results);
+        }
+        OwnerCommand::Stats(args) => {
+            let stats = owner_api(&args)
+                .stats()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_stats(&stats);
+        }
         OwnerCommand::Sources(args) => {
             let sources = owner_api(&args)
                 .sources()
@@ -1366,6 +1387,72 @@ fn print_owner_deliveries(deliveries: &[OwnerDelivery]) {
         }
         println!();
     }
+}
+
+fn print_owner_direct_messages(messages: &[OwnerDirectMessage]) {
+    if messages.is_empty() {
+        println!("No direct messages found");
+        return;
+    }
+    for message in messages {
+        println!(
+            "{} [{}] {}",
+            message.id, message.conversation_id, message.published_at
+        );
+        println!("sender={}", message.sender_id);
+        println!("{}", message.content);
+        println!();
+    }
+}
+
+fn print_owner_search(results: &OwnerSearchResult) {
+    println!("posts={}", results.posts.len());
+    for post in &results.posts {
+        println!(
+            "{} [{}] {} {}",
+            post.id,
+            post.visibility.as_deref().unwrap_or("unknown"),
+            post.protocol.as_deref().unwrap_or("activitypub"),
+            post.published_at.as_deref().unwrap_or("")
+        );
+        println!("{}", post.content);
+        println!();
+    }
+    println!("users={}", results.users.len());
+    for user in &results.users {
+        println!(
+            "{} [{}] {} {}",
+            user.actor_id,
+            user.relation,
+            user.status,
+            user.created_at.as_deref().unwrap_or("")
+        );
+    }
+}
+
+fn print_owner_stats(stats: &OwnerStats) {
+    println!("followers_total={}", stats.followers_total);
+    println!("followers_approved={}", stats.followers_approved);
+    println!("followers_pending={}", stats.followers_pending);
+    println!("followers_rejected={}", stats.followers_rejected);
+    println!("following_total={}", stats.following_total);
+    println!("posts_total={}", stats.posts_total);
+    println!("posts_public={}", stats.public_posts);
+    println!("posts_private={}", stats.private_posts);
+    println!("posts_direct={}", stats.direct_posts);
+    println!("posts_encrypted={}", stats.encrypted_posts);
+    println!("posts_media={}", stats.media_posts);
+    println!("posts_dual_protocol={}", stats.dual_protocol_posts);
+    println!("activities_total={}", stats.activities_total);
+    println!("deliveries_total={}", stats.deliveries_total);
+    println!("deliveries_queued={}", stats.deliveries_queued);
+    println!("deliveries_retry={}", stats.deliveries_retry);
+    println!("deliveries_delivered={}", stats.deliveries_delivered);
+    println!("deliveries_failed={}", stats.deliveries_failed);
+    println!("notifications_unread={}", stats.notifications_unread);
+    println!("blocks_total={}", stats.blocks_total);
+    println!("allowlist_hosts={}", stats.allowlist_hosts);
+    println!("closed_network={}", stats.closed_network);
 }
 
 fn print_owner_sources(sources: &OwnerSources) {
