@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.54] - 2026-06-16
+
+### Added
+- Added inbound ActivityPub timeline ingestion parity for Mastodon-style
+  `Question` poll objects from accepted follows, including followed-actor
+  replies that are not replies to a local post and `Update(Question)` refreshes.
+
 ## [1.28.53] - 2026-06-16
 
 ### Added

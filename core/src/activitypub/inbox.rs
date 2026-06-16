@@ -292,15 +292,15 @@ pub async fn handle_create(
     our_actor_url: &str,
     moderator: Option<&dyn ContentModerator>,
 ) -> CoreResult<()> {
-    // Check if the object is a Note (post/reply)
+    // Check if the object is a timeline object (post/reply/poll)
     if let Some(object_type) = activity
         .object
         .as_ref()
         .and_then(|o| o.get("type"))
         .and_then(|v| v.as_str())
     {
-        if object_type != "Note" {
-            return Ok(()); // Not a Note, nothing to do
+        if !is_timeline_object_type(object_type) {
+            return Ok(());
         }
     } else {
         return Ok(());
@@ -330,9 +330,10 @@ pub async fn handle_create(
         return handle_direct_message(db, http, activity, our_actor_url).await;
     }
 
-    // Check if this is a reply to one of our posts
     if let Some(in_reply_to) = object.get("inReplyTo").and_then(|v| v.as_str()) {
-        return handle_reply(db, http, activity, in_reply_to, moderator).await;
+        if is_reply_to_our_post(db, in_reply_to).await? {
+            return handle_reply(db, http, activity, in_reply_to, moderator).await;
+        }
     }
 
     if is_accepted_following(db, &activity.actor).await? {
@@ -347,7 +348,10 @@ pub async fn handle_update(db: &dyn DatabaseProvider, activity: &Activity) -> Co
     let Some(object) = activity.object.as_ref() else {
         return Ok(());
     };
-    if object.get("type").and_then(|v| v.as_str()) != Some("Note") {
+    let Some(object_type) = object.get("type").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+    if !is_timeline_object_type(object_type) {
         return Ok(());
     }
     if !is_accepted_following(db, &activity.actor).await? {
@@ -437,6 +441,19 @@ async fn is_accepted_following(db: &dyn DatabaseProvider, actor_id: &str) -> Cor
         .and_then(|v| v.as_u64())
         .unwrap_or(0)
         > 0)
+}
+
+async fn is_reply_to_our_post(db: &dyn DatabaseProvider, in_reply_to: &str) -> CoreResult<bool> {
+    let our_post_query = "SELECT id FROM posts WHERE id = ?1";
+    let our_post_result = db
+        .execute(our_post_query, &[Value::String(in_reply_to.to_string())])
+        .await?;
+
+    Ok(!our_post_result.is_empty())
+}
+
+fn is_timeline_object_type(object_type: &str) -> bool {
+    matches!(object_type, "Note" | "Question")
 }
 
 async fn ingest_timeline_post(
@@ -703,16 +720,6 @@ async fn handle_reply(
         extract_actor_info(http, &activity.actor)
             .await
             .unwrap_or_else(|_| ("unknown".to_string(), "Unknown".to_string(), "".to_string()));
-
-    // Check if in_reply_to is one of our posts
-    let our_post_query = "SELECT id FROM posts WHERE id = ?1";
-    let our_post_result = db
-        .execute(our_post_query, &[Value::String(in_reply_to.to_string())])
-        .await?;
-
-    if our_post_result.is_empty() {
-        return Ok(()); // Not a reply to our post
-    }
 
     // Run moderation if available
     let (moderation_status, moderation_score, moderation_flags, hidden) =

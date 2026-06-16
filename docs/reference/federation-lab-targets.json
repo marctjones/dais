@@ -28,7 +28,7 @@
         },
         "update": {
           "status": "pass",
-          "detail": "Core inbox regression covers Mastodon-style Update(Note) modifying stored timeline rows."
+          "detail": "Core inbox regressions cover Mastodon-style Update(Note) and Update(Question) modifying stored timeline rows."
         },
         "delete": {
           "status": "pass",
@@ -36,7 +36,7 @@
         },
         "reply": {
           "status": "pass",
-          "detail": "Covered by the live toot inbound reply smoke gate and owner post-detail assertion."
+          "detail": "Covered by the live toot inbound reply smoke gate, owner post-detail assertion, and followed-actor reply timeline regression."
         },
         "like": {
           "status": "pass",
@@ -56,7 +56,7 @@
         },
         "content_shape": {
           "status": "pass",
-          "detail": "ActivityPub conformance and Mastodon API conformance cover Note basics, replies/likes/shares, media attachments, mentions, hashtags, and Question/poll rendering."
+          "detail": "ActivityPub conformance, Mastodon API conformance, and core inbox regressions cover Note basics, replies/likes/shares, media attachments, mentions, hashtags, and Question/poll rendering and ingestion."
         },
         "authorized_fetch": {
           "status": "pass",

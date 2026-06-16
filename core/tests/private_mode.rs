@@ -207,6 +207,17 @@ impl DatabaseProvider for FakeDb {
             return Ok(vec![count_row(count)]);
         }
 
+        if sql.contains("SELECT id FROM posts WHERE id = ?1") {
+            let post_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            return Ok(state
+                .posts
+                .iter()
+                .find(|row| row.get_string("id").as_deref() == Some(post_id))
+                .cloned()
+                .map(|row| vec![row])
+                .unwrap_or_default());
+        }
+
         if sql.contains("FROM posts") && sql.contains("ORDER BY published_at DESC") {
             let actor_id = params.first().and_then(Value::as_str).unwrap_or_default();
             let requires_public = sql.contains("visibility = 'public'");
@@ -625,6 +636,71 @@ async fn inbox_create_ingests_timeline_post_for_accepted_following() {
 }
 
 #[tokio::test]
+async fn inbox_create_ingests_question_reply_for_accepted_following() {
+    let db = FakeDb::default();
+    db.approve_following("https://remote.example/users/alice");
+    let http = FakeHttp {
+        actor_json: json!({
+            "preferredUsername": "alice",
+            "name": "Alice",
+            "icon": { "url": "https://remote.example/avatar.png" }
+        })
+        .to_string(),
+    };
+
+    let activity = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Create".to_string(),
+        id: "https://remote.example/activities/poll-1".to_string(),
+        actor: "https://remote.example/users/alice".to_string(),
+        object: Some(json!({
+            "type": "Question",
+            "id": "https://remote.example/users/alice/statuses/poll-1",
+            "content": "which client should ship next?",
+            "published": "2026-06-10T13:00:00Z",
+            "inReplyTo": "https://remote.example/users/bob/statuses/thread-root",
+            "to": ["https://www.w3.org/ns/activitystreams#Public"],
+            "oneOf": [
+                { "type": "Note", "name": "rust", "replies": { "type": "Collection", "totalItems": 2 } },
+                { "type": "Note", "name": "tauri", "replies": { "type": "Collection", "totalItems": 1 } }
+            ]
+        })),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T13:00:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::process_inbox_activity(
+        &db,
+        &http,
+        activity,
+        "https://social.dais.social/users/social",
+        "",
+        None,
+    )
+    .await
+    .expect("question reply from followed actor should ingest");
+
+    let row = db
+        .timeline_post("https://remote.example/users/alice/statuses/poll-1")
+        .expect("question timeline row should be stored");
+    assert_eq!(
+        row.get_string("in_reply_to").as_deref(),
+        Some("https://remote.example/users/bob/statuses/thread-root")
+    );
+    let raw_object: Value = serde_json::from_str(
+        row.get_string("raw_object")
+            .expect("raw question object should be stored")
+            .as_str(),
+    )
+    .unwrap();
+    assert_eq!(raw_object["type"], "Question");
+    assert_eq!(raw_object["oneOf"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn inbox_update_and_delete_modify_timeline_post() {
     let db = FakeDb::default();
     db.approve_following("https://remote.example/users/alice");
@@ -720,6 +796,88 @@ async fn inbox_update_and_delete_modify_timeline_post() {
         deleted.get_string("deleted_at").as_deref(),
         Some("2026-06-10T12:06:00Z")
     );
+}
+
+#[tokio::test]
+async fn inbox_update_refreshes_question_timeline_post() {
+    let db = FakeDb::default();
+    db.approve_following("https://remote.example/users/alice");
+
+    {
+        let mut row = Row::new();
+        row.insert("id".to_string(), Value::String("row-question".to_string()));
+        row.insert(
+            "object_id".to_string(),
+            Value::String("https://remote.example/users/alice/statuses/poll-1".to_string()),
+        );
+        row.insert(
+            "actor_id".to_string(),
+            Value::String("https://remote.example/users/alice".to_string()),
+        );
+        row.insert(
+            "content".to_string(),
+            Value::String("which client should ship next?".to_string()),
+        );
+        row.insert(
+            "content_html".to_string(),
+            Value::String("which client should ship next?".to_string()),
+        );
+        row.insert(
+            "visibility".to_string(),
+            Value::String("public".to_string()),
+        );
+        row.insert(
+            "published_at".to_string(),
+            Value::String("2026-06-10T13:00:00Z".to_string()),
+        );
+        db.state.lock().unwrap().timeline_posts.insert(
+            "https://remote.example/users/alice/statuses/poll-1".to_string(),
+            row,
+        );
+    }
+
+    let update = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Update".to_string(),
+        id: "https://remote.example/activities/poll-update-1".to_string(),
+        actor: "https://remote.example/users/alice".to_string(),
+        object: Some(json!({
+            "type": "Question",
+            "id": "https://remote.example/users/alice/statuses/poll-1",
+            "content": "which client shipped first?",
+            "updated": "2026-06-10T13:05:00Z",
+            "oneOf": [
+                { "type": "Note", "name": "rust", "replies": { "type": "Collection", "totalItems": 3 } },
+                { "type": "Note", "name": "tauri", "replies": { "type": "Collection", "totalItems": 1 } }
+            ]
+        })),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T13:05:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::inbox::handle_update(&db, &update)
+        .await
+        .expect("question update should apply");
+
+    let updated = db
+        .timeline_post("https://remote.example/users/alice/statuses/poll-1")
+        .expect("question timeline row should remain");
+    assert_eq!(
+        updated.get_string("content").as_deref(),
+        Some("which client shipped first?")
+    );
+    let raw_object: Value = serde_json::from_str(
+        updated
+            .get_string("raw_object")
+            .expect("raw question object should be refreshed")
+            .as_str(),
+    )
+    .unwrap();
+    assert_eq!(raw_object["type"], "Question");
+    assert_eq!(raw_object["oneOf"][0]["replies"]["totalItems"], 3);
 }
 
 #[tokio::test]
