@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.64] - 2026-06-16
+
+### Added
+- Added Mastodon followers-only partial follower synchronization support:
+  followers-only delivery now signs a `Collection-Synchronization` header with a
+  domain-scoped XOR SHA-256 digest.
+- Added a signed
+  `/users/:username/followers_synchronization?domain=...` ActivityPub collection
+  endpoint that returns only approved followers on the requesting signed actor's
+  domain.
+- Added `MASTODON-SYNC-01` ActivityPub conformance coverage and explicit
+  federation-lab tracking for Mastodon partial follower synchronization.
+
 ## [1.28.63] - 2026-06-16
 
 ### Added

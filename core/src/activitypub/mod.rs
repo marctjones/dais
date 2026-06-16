@@ -16,8 +16,8 @@ pub mod types;
 
 pub use actor::*;
 pub use delivery::{
-    create_follower_deliveries, deliver_to_inbox, get_follower_inboxes, update_delivery_status,
-    DeliveryJob,
+    create_follower_deliveries, deliver_to_inbox, deliver_to_inbox_with_extra_headers,
+    get_follower_inboxes, update_delivery_status, DeliveryJob,
 };
 pub use friends::{get_friends, Friend};
 pub use inbox::{create_notification, process_inbox_activity, ContentModerator, ModerationResult};

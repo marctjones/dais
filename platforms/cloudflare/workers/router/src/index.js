@@ -56,6 +56,11 @@ export default {
       return handleMedia(request, env, path);
     }
 
+    const followerSynchronization = path.match(/^\/users\/([^/]+)\/followers_synchronization$/);
+    if (request.method === 'GET' && followerSynchronization) {
+      return handleFollowersSynchronization(request, env, url, decodeURIComponent(followerSynchronization[1]));
+    }
+
     // Route to appropriate worker based on path
     let targetUrl;
 
@@ -1684,6 +1689,59 @@ async function authorizedPrivateMediaFetch(env, request, path) {
   }
 
   return { ok: true, actorId };
+}
+
+async function handleFollowersSynchronization(request, env, url, username) {
+  const signer = await signedRequestActor(request);
+  if (!signer.ok) return new Response(signer.error, { status: signer.status });
+  const actor = await ownerLocalActor(env);
+  if (username !== actor.username) return new Response('Not Found', { status: 404 });
+
+  const domain = String(url.searchParams.get('domain') || '').trim().toLowerCase();
+  if (!isValidDomainName(domain)) {
+    return new Response('domain query parameter is required', { status: 400 });
+  }
+  const signerDomain = actorDomain(signer.actorId);
+  if (signerDomain !== domain) {
+    return new Response('Signature actor must be on requested domain', { status: 403 });
+  }
+
+  const rows = await env.DB.prepare(
+    `SELECT follower_actor_id
+     FROM followers
+     WHERE actor_id = ?1 AND status = 'approved'
+     ORDER BY follower_actor_id ASC`,
+  ).bind(actor.id).all();
+  const orderedItems = (rows.results || [])
+    .map((row) => String(row.follower_actor_id || ''))
+    .filter((actorId) => actorDomain(actorId) === domain);
+  const uniqueItems = [...new Set(orderedItems)];
+  const body = {
+    '@context': 'https://www.w3.org/ns/activitystreams',
+    id: `${actor.id}/followers_synchronization?domain=${encodeURIComponent(domain)}`,
+    type: 'OrderedCollection',
+    totalItems: uniqueItems.length,
+    orderedItems: uniqueItems,
+  };
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/activity+json',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
+}
+
+function actorDomain(actorId) {
+  try {
+    return new URL(actorId).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isValidDomainName(value) {
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(value);
 }
 
 async function privateMediaAttachedPost(env, mediaUrl) {

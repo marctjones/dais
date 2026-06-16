@@ -51,6 +51,27 @@ pub async fn deliver_to_inbox(
     activity_json: &str,
     private_key_pem: &str,
 ) -> CoreResult<()> {
+    deliver_to_inbox_with_extra_headers(
+        http,
+        inbox_url,
+        actor_url,
+        activity_json,
+        private_key_pem,
+        &[],
+    )
+    .await
+}
+
+/// Deliver an activity to a remote inbox with HTTP signatures and additional
+/// signed headers such as Mastodon's Collection-Synchronization header.
+pub async fn deliver_to_inbox_with_extra_headers(
+    http: &dyn HttpProvider,
+    inbox_url: &str,
+    actor_url: &str,
+    activity_json: &str,
+    private_key_pem: &str,
+    extra_headers: &[(String, String)],
+) -> CoreResult<()> {
     // Parse inbox URL to get host and path
     let url = url::Url::parse(inbox_url)
         .map_err(|e| CoreError::InvalidActivity(format!("Invalid inbox URL: {}", e)))?;
@@ -77,14 +98,23 @@ pub async fn deliver_to_inbox(
     sign_headers.insert("host".to_string(), host.to_string());
     sign_headers.insert("date".to_string(), date.clone());
     sign_headers.insert("digest".to_string(), digest.clone());
+    for (name, value) in extra_headers {
+        sign_headers.insert(name.to_ascii_lowercase(), value.clone());
+    }
 
     // Headers to include in signature
-    let headers_to_sign = vec![
+    let mut headers_to_sign = vec![
         "(request-target)".to_string(),
         "host".to_string(),
         "date".to_string(),
         "digest".to_string(),
     ];
+    for (name, _) in extra_headers {
+        let normalized = name.to_ascii_lowercase();
+        if !headers_to_sign.iter().any(|header| header == &normalized) {
+            headers_to_sign.push(normalized);
+        }
+    }
 
     // Generate HTTP signature
     let key_id = format!("{}#main-key", actor_url);
@@ -110,6 +140,9 @@ pub async fn deliver_to_inbox(
         "application/activity+json".to_string(),
     );
     headers.insert("User-Agent".to_string(), "dais/1.1.0".to_string());
+    for (name, value) in extra_headers {
+        headers.insert(name.clone(), value.clone());
+    }
 
     // Make the HTTP POST request
     let request = crate::traits::Request {

@@ -140,6 +140,17 @@ function digestHeader(body) {
   return `SHA-256=${createHash("sha256").update(body).digest("base64")}`;
 }
 
+function xorSha256Hex(values) {
+  const digest = Buffer.alloc(32);
+  for (const value of values) {
+    const hash = createHash("sha256").update(value).digest();
+    for (let index = 0; index < digest.length; index += 1) {
+      digest[index] ^= hash[index];
+    }
+  }
+  return digest.toString("hex");
+}
+
 function signHttpSignature(privateKeyPem, signingString) {
   return createSign("RSA-SHA256").update(signingString).sign(privateKeyPem, "base64");
 }
@@ -365,6 +376,50 @@ async function signedPrivateMediaFixture() {
         body: JSON.stringify({ url: mediaUrl }),
       }).catch(() => {});
     }
+    await signedActivityPost(fixture, undo).catch(() => {});
+  }
+}
+
+async function followerSynchronizationFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live follower synchronization fixture" };
+  }
+  const fixture = generateFixtureActor();
+  const followId = `${fixture.actorUrl}#activities/follow-${Date.now()}`;
+  const follow = JSON.stringify({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: followId,
+    type: "Follow",
+    actor: fixture.actorUrl,
+    object: actorUrl,
+  });
+  const undo = JSON.stringify({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: `${fixture.actorUrl}#activities/undo-${Date.now()}`,
+    type: "Undo",
+    actor: fixture.actorUrl,
+    object: {
+      id: followId,
+      type: "Follow",
+      actor: fixture.actorUrl,
+      object: actorUrl,
+    },
+  });
+  try {
+    const followRes = await signedActivityPost(fixture, follow);
+    if (followRes.status < 200 || followRes.status >= 300) {
+      throw new Error(`signed Follow expected 2xx, got ${followRes.status}: ${followRes.text}`);
+    }
+    await ownerApi("/followers/status", {
+      method: "POST",
+      body: JSON.stringify({ follower_actor_id: fixture.actorUrl, status: "approved" }),
+    });
+    const domain = new URL(fixture.actorUrl).hostname;
+    const path = `${actorPath}/followers_synchronization?domain=${domain}`;
+    const unsigned = await request(path, { headers: { Accept: "application/activity+json" } });
+    const signed = await signedGetFixture(fixture, path);
+    return { unsigned, signed, fixture, domain };
+  } finally {
     await signedActivityPost(fixture, undo).catch(() => {});
   }
 }
@@ -596,6 +651,40 @@ const tests = [
       return t.fail(`signed media expected image/png, got ${result.signed.contentType || "none"}`);
     }
     t.pass("signed approved follower can fetch private media while unsigned fetch is denied");
+  }),
+
+  requirement("MASTODON-SYNC-01", "MASTODON", "Signed partial follower synchronization collection is available", async (t) => {
+    const result = await followerSynchronizationFixture();
+    if (result.skipped) return t.info(result.detail);
+    if (result.unsigned.status !== 401) {
+      return t.fail(`unsigned follower synchronization GET expected 401, got ${result.unsigned.status}: ${result.unsigned.text}`);
+    }
+    const res = result.signed;
+    if (res.status !== 200) {
+      return t.fail(`signed follower synchronization GET expected 200, got ${res.status}: ${res.text}`);
+    }
+    if (!hasContentType(res.contentType, "application/activity+json")) {
+      return t.fail(`expected ActivityPub JSON, got ${res.contentType || "none"}`);
+    }
+    const collection = res.json;
+    if (collection?.type !== "OrderedCollection") {
+      return t.fail(`expected OrderedCollection, got ${collection?.type}`);
+    }
+    if (!Array.isArray(collection.orderedItems)) {
+      return t.fail("orderedItems must be an array");
+    }
+    if (!collection.orderedItems.includes(result.fixture.actorUrl)) {
+      return t.fail(`partial collection did not include approved fixture follower: ${summarizeJson(collection)}`);
+    }
+    const crossDomain = collection.orderedItems.find((actor) => new URL(actor).hostname !== result.domain);
+    if (crossDomain) {
+      return t.fail(`partial collection leaked another domain actor: ${crossDomain}`);
+    }
+    const digest = xorSha256Hex([...collection.orderedItems].sort());
+    if (!/^[0-9a-f]{64}$/.test(digest)) {
+      return t.fail(`digest calculation failed: ${digest}`);
+    }
+    t.pass(`signed partial collection for ${result.domain} has ${collection.orderedItems.length} follower(s); digest=${digest}`);
   }),
 
   requirement("MASTODON-CONTENT-01", "MASTODON", "Mastodon status payload basics are present", async (t) => {

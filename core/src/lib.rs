@@ -254,6 +254,25 @@ impl DaisCore {
         .await
     }
 
+    /// Deliver activity to a remote inbox with additional signed headers.
+    pub async fn deliver_to_inbox_with_extra_headers(
+        &self,
+        inbox_url: String,
+        actor_url: String,
+        activity_json: String,
+        extra_headers: Vec<(String, String)>,
+    ) -> CoreResult<()> {
+        activitypub::deliver_to_inbox_with_extra_headers(
+            &*self.http,
+            &inbox_url,
+            &actor_url,
+            &activity_json,
+            &self.config.private_key,
+            &extra_headers,
+        )
+        .await
+    }
+
     /// Create delivery jobs for all followers
     pub async fn create_follower_deliveries(
         &self,

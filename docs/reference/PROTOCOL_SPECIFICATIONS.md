@@ -63,6 +63,10 @@ Mastodon publishes compatibility behavior beyond core ActivityPub:
   `attributedTo`, `to`, `cc`, `tag`, and `attachment` as applicable.
 - Mastodon commonly exposes `replies`, `likes`, and `shares` collections/counts
   for status context. This is currently tracked for dais in issue #86.
+- Followers-only delivery should include Mastodon's `Collection-Synchronization`
+  header when delivering to an approved follower's instance. The referenced
+  `/users/:username/followers_synchronization?domain=...` collection must require
+  a signed GET and return only approved followers on that requesting domain.
 
 ## Bluesky and AT Protocol Specifications
 
@@ -160,8 +164,9 @@ Bluesky parity requires substantially more than the existing endpoints:
 
 - `npm run test:activitypub-conformance` checks ActivityPub, Mastodon, dais
   privacy, and ATProto public-read behavior, including authenticated live
-  fixtures for authorized fetch and temporary rich public `Question` objects
-  with media, summary, mentions, hashtags, and poll options.
+  fixtures for authorized fetch, signed partial follower synchronization, and
+  temporary rich public `Question` objects with media, summary, mentions,
+  hashtags, and poll options.
 - `npm run test:bluesky-conformance` checks the current PDS/AppView
   compatibility floor for identity, repo metadata, public feed records,
   owner-token public post/like/repost/follow writes and deletes, public image

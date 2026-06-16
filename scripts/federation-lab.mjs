@@ -30,6 +30,7 @@ const requiredCapabilities = [
   "idempotency",
   "content_shape",
   "authorized_fetch",
+  "follower_synchronization",
   "private_visibility",
 ];
 
@@ -48,6 +49,7 @@ const capabilityLabels = {
   idempotency: "Inbox idempotency/dedupe",
   content_shape: "Content shape, media, mentions, and polls",
   authorized_fetch: "Authorized fetch",
+  follower_synchronization: "Mastodon partial follower synchronization",
   private_visibility: "Followers-only/private visibility",
 };
 

@@ -3,6 +3,7 @@ use dais_cloudflare::{D1Provider, WorkerHttpProvider};
 use dais_core::{CoreConfig, DaisCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 /// Refactored Delivery Queue worker using dais-core
 ///
 /// This is a thin shim that:
@@ -533,12 +534,17 @@ async fn process_delivery(
         )
         .map_err(worker::Error::RustError)?,
     };
+    let extra_headers =
+        mastodon_collection_synchronization_headers(core, actor_id, target_url, visibility)
+            .await
+            .map_err(worker::Error::RustError)?;
 
     let result = core
-        .deliver_to_inbox(
+        .deliver_to_inbox_with_extra_headers(
             target_url.to_string(),
             actor_id.to_string(),
             activity_json.to_string(),
+            extra_headers,
         )
         .await;
 
@@ -603,6 +609,71 @@ fn accept_suffix(value: &str) -> String {
         .take(24)
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+async fn mastodon_collection_synchronization_headers(
+    core: &DaisCore,
+    actor_id: &str,
+    target_url: &str,
+    visibility: &str,
+) -> Result<Vec<(String, String)>, String> {
+    if visibility != "followers" {
+        return Ok(Vec::new());
+    }
+    let target_host = url::Url::parse(target_url)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()));
+    let Some(target_host) = target_host else {
+        return Ok(Vec::new());
+    };
+    let rows = core
+        .db()
+        .execute(
+            r#"
+            SELECT follower_actor_id
+            FROM followers
+            WHERE actor_id = ?1 AND status = 'approved'
+            ORDER BY follower_actor_id ASC
+            "#,
+            &[Value::String(actor_id.to_string())],
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut actor_ids = rows
+        .iter()
+        .filter_map(|row| {
+            row.get("follower_actor_id")
+                .and_then(|value| value.as_str())
+        })
+        .filter(|actor| actor_host(actor).as_deref() == Some(target_host.as_str()))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    actor_ids.sort();
+    actor_ids.dedup();
+    if actor_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let digest = xor_sha256_hex(&actor_ids);
+    let url = format!("{actor_id}/followers_synchronization?domain={target_host}");
+    let value = format!(r#"collectionId="{actor_id}/followers", url="{url}", digest="{digest}""#);
+    Ok(vec![("Collection-Synchronization".to_string(), value)])
+}
+
+fn actor_host(actor_id: &str) -> Option<String> {
+    url::Url::parse(actor_id)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
+}
+
+fn xor_sha256_hex(values: &[String]) -> String {
+    let mut digest = [0_u8; 32];
+    for value in values {
+        let hash = Sha256::digest(value.as_bytes());
+        for (index, byte) in hash.iter().enumerate() {
+            digest[index] ^= byte;
+        }
+    }
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn build_create_activity_json(
@@ -765,7 +836,7 @@ fn poll_option_values(options: &[String]) -> Vec<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_delivery_id;
+    use super::{actor_host, is_delivery_id, xor_sha256_hex};
 
     #[test]
     fn delivery_id_accepts_owner_api_generated_ids() {
@@ -784,6 +855,29 @@ mod tests {
         assert!(!is_delivery_id(
             "delivery-123456789012345678901234567890123"
         ));
+    }
+
+    #[test]
+    fn actor_host_extracts_https_domain() {
+        assert_eq!(
+            actor_host("https://mastodon.social/users/alice").as_deref(),
+            Some("mastodon.social")
+        );
+        assert_eq!(actor_host("not a url"), None);
+    }
+
+    #[test]
+    fn xor_sha256_hex_is_order_independent_when_inputs_sorted() {
+        let mut actors = vec![
+            "https://mastodon.social/users/bob".to_string(),
+            "https://mastodon.social/users/alice".to_string(),
+        ];
+        actors.sort();
+        let first = xor_sha256_hex(&actors);
+        let second = xor_sha256_hex(&actors);
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 64);
+        assert!(first.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 }
 
