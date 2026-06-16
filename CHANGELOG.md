@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.46] - 2026-06-16
+
+### Added
+- Added owner-token AT Protocol session and public feed-post write/delete
+  compatibility endpoints to the PDS so existing ATProto clients can target
+  Dais for public post creation.
+- Expanded the Bluesky conformance gate with authenticated create-session,
+  create-record, readback, and delete-record coverage.
+
 ## [1.28.45] - 2026-06-16
 
 ### Added

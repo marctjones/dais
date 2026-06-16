@@ -9,12 +9,15 @@ use serde_json::Value;
 ///
 /// Endpoints:
 /// - GET /xrpc/com.atproto.server.describeServer
+/// - POST /xrpc/com.atproto.server.createSession
 /// - GET /xrpc/com.atproto.sync.getRepo
 /// - GET /xrpc/com.atproto.sync.getBlob
 /// - GET /xrpc/com.atproto.sync.getRepoStatus
 /// - GET /xrpc/com.atproto.sync.listRepos
 /// - GET /xrpc/com.atproto.repo.describeRepo
 /// - GET /xrpc/com.atproto.repo.getRecord
+/// - POST /xrpc/com.atproto.repo.createRecord
+/// - POST /xrpc/com.atproto.repo.deleteRecord
 /// - GET /xrpc/app.bsky.actor.getProfile
 /// - GET /xrpc/app.bsky.actor.getProfiles
 /// - GET /xrpc/app.bsky.feed.getAuthorFeed
@@ -101,6 +104,10 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "/xrpc/com.atproto.server.describeServer",
             handle_describe_server,
         )
+        .post_async(
+            "/xrpc/com.atproto.server.createSession",
+            handle_create_session,
+        )
         .get_async("/.well-known/did.json", handle_did_document)
         .get_async("/xrpc/com.atproto.sync.getRepo", handle_get_repo)
         .get_async("/xrpc/com.atproto.sync.getBlob", handle_get_blob)
@@ -111,6 +118,8 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/xrpc/com.atproto.sync.listRepos", handle_list_repos)
         .get_async("/xrpc/com.atproto.repo.describeRepo", handle_describe_repo)
         .get_async("/xrpc/com.atproto.repo.getRecord", handle_get_record)
+        .post_async("/xrpc/com.atproto.repo.createRecord", handle_create_record)
+        .post_async("/xrpc/com.atproto.repo.deleteRecord", handle_delete_record)
         .get_async("/xrpc/app.bsky.actor.getProfile", handle_get_profile)
         .get_async("/xrpc/app.bsky.actor.getProfiles", handle_get_profiles)
         .get_async("/xrpc/app.bsky.feed.getAuthorFeed", handle_get_author_feed)
@@ -147,6 +156,25 @@ async fn handle_describe_server(_req: Request, ctx: RouteContext<()>) -> Result<
     };
 
     Response::from_json(&description)
+}
+
+async fn handle_create_session(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let body: CreateSessionRequest = req.json().await?;
+    let identity = identity(&ctx.env);
+    if body.identifier != identity.did && body.identifier != identity.handle {
+        return Response::error("Account not found", 401);
+    }
+    let owner_token = owner_api_token(&ctx.env)?;
+    if body.password != owner_token {
+        return Response::error("Invalid identifier or password", 401);
+    }
+    json_response(serde_json::json!({
+        "accessJwt": owner_token,
+        "refreshJwt": stable_cid(&format!("{}:refresh", identity.did)),
+        "handle": identity.handle,
+        "did": identity.did,
+        "active": true
+    }))
 }
 
 async fn handle_did_document(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -280,6 +308,152 @@ async fn handle_get_record(req: Request, ctx: RouteContext<()>) -> Result<Respon
         return Response::error("Record not found", 404);
     };
     json_response(record_response(&identity, row))
+}
+
+async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    if !owner_bearer_matches(&req, &ctx.env)? {
+        return Response::error("Unauthorized", 401);
+    }
+    let body: CreateRecordRequest = req.json().await?;
+    let identity = identity(&ctx.env);
+    if body.repo != identity.did && body.repo != identity.handle {
+        return Response::error("Repo not found", 404);
+    }
+    if body.collection != "app.bsky.feed.post" {
+        return Response::error(
+            "Collection not writable in dais PDS compatibility mode",
+            400,
+        );
+    }
+    let record_type = body
+        .record
+        .get("$type")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if record_type != "app.bsky.feed.post" {
+        return Response::error("Record type mismatch", 400);
+    }
+    let text = body
+        .record
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if text.is_empty() {
+        return Response::error("Post text is required", 400);
+    }
+
+    let created_at = body
+        .record
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            js_sys::Date::new_0()
+                .to_iso_string()
+                .as_string()
+                .unwrap_or_default()
+        });
+    let rkey = body.rkey.unwrap_or_else(|| {
+        format!(
+            "{}-{}",
+            created_at
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .take(14)
+                .collect::<String>(),
+            stable_cid(&format!("{}\n{}", created_at, text))
+                .chars()
+                .skip(4)
+                .take(8)
+                .collect::<String>()
+        )
+    });
+    let actor_id = local_actor_id(&identity);
+    let post_id = format!("{actor_id}/posts/{rkey}");
+    let atproto_uri = format!("at://{}/app.bsky.feed.post/{rkey}", identity.did);
+    let record_json = serde_json::to_string(&body.record)
+        .map_err(|error| worker::Error::RustError(error.to_string()))?;
+    let cid = stable_cid(&record_json);
+    let content_html = format!("<p>{}</p>", html_escape(text).replace('\n', "<br>"));
+    let in_reply_to = body
+        .record
+        .get("reply")
+        .and_then(|reply| reply.get("parent"))
+        .and_then(|parent| parent.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    ctx.env
+        .d1("DB")?
+        .prepare(
+            r#"
+            INSERT INTO posts (
+              id, actor_id, content, content_html, object_type, visibility, protocol,
+              published_at, in_reply_to, atproto_uri, atproto_cid, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, 'Note', 'public', 'atproto', ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            "#,
+        )
+        .bind(&[
+            post_id.clone().into(),
+            actor_id.into(),
+            text.into(),
+            content_html.into(),
+            created_at.into(),
+            in_reply_to.into(),
+            atproto_uri.clone().into(),
+            cid.clone().into(),
+        ])?
+        .run()
+        .await?;
+
+    json_response(serde_json::json!({
+        "uri": atproto_uri,
+        "cid": cid,
+        "commit": {
+            "cid": stable_cid(&format!("commit:{}", post_id)),
+            "rev": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
+        }
+    }))
+}
+
+async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    if !owner_bearer_matches(&req, &ctx.env)? {
+        return Response::error("Unauthorized", 401);
+    }
+    let body: DeleteRecordRequest = req.json().await?;
+    let identity = identity(&ctx.env);
+    if body.repo != identity.did && body.repo != identity.handle {
+        return Response::error("Repo not found", 404);
+    }
+    if body.collection != "app.bsky.feed.post" {
+        return Response::error(
+            "Collection not writable in dais PDS compatibility mode",
+            400,
+        );
+    }
+    let atproto_uri = format!("at://{}/app.bsky.feed.post/{}", identity.did, body.rkey);
+    let id_suffix = format!("/{}", body.rkey);
+    ctx.env
+        .d1("DB")?
+        .prepare(
+            r#"
+            DELETE FROM posts
+            WHERE visibility = 'public'
+              AND encrypted_message IS NULL
+              AND (atproto_uri = ?1 OR id LIKE ?2)
+            "#,
+        )
+        .bind(&[atproto_uri.into(), format!("%{id_suffix}").into()])?
+        .run()
+        .await?;
+    json_response(serde_json::json!({
+        "commit": {
+            "cid": stable_cid(&format!("delete:{}", body.rkey)),
+            "rev": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
+        }
+    }))
 }
 
 async fn handle_get_profile(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -534,6 +708,27 @@ struct PublicMediaBlob {
     media_type: String,
 }
 
+#[derive(Deserialize)]
+struct CreateSessionRequest {
+    identifier: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct CreateRecordRequest {
+    repo: String,
+    collection: String,
+    record: Value,
+    rkey: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DeleteRecordRequest {
+    repo: String,
+    collection: String,
+    rkey: String,
+}
+
 fn identity(env: &Env) -> Identity {
     let handle = env
         .var("DOMAIN")
@@ -555,6 +750,22 @@ fn required_query(url: &Url, key: &str) -> Result<String> {
         .find(|(name, _)| name == key)
         .map(|(_, value)| value.to_string())
         .ok_or_else(|| worker::Error::RustError(format!("Missing '{key}' parameter")))
+}
+
+fn owner_api_token(env: &Env) -> Result<String> {
+    env.secret("OWNER_API_TOKEN")
+        .map(|secret| secret.to_string())
+        .or_else(|_| env.var("OWNER_API_TOKEN").map(|var| var.to_string()))
+        .map_err(|_| worker::Error::RustError("OWNER_API_TOKEN is not configured".to_string()))
+}
+
+fn owner_bearer_matches(req: &Request, env: &Env) -> Result<bool> {
+    let expected = owner_api_token(env)?;
+    let header = req.headers().get("Authorization")?.unwrap_or_default();
+    let Some(token) = header.strip_prefix("Bearer ") else {
+        return Ok(false);
+    };
+    Ok(token == expected)
 }
 
 fn query_limit(url: &Url) -> u32 {
@@ -943,12 +1154,25 @@ fn at_uri(identity: &Identity, row: &serde_json::Map<String, Value>) -> String {
         })
 }
 
+fn local_actor_id(identity: &Identity) -> String {
+    format!("https://{}/users/social", identity.handle)
+}
+
 fn stable_cid(value: &str) -> String {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
     format!("bafy{:016x}", hasher.finish())
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn media_attachments(row: &serde_json::Map<String, Value>) -> Vec<MediaAttachment> {

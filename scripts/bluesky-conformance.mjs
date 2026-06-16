@@ -262,6 +262,71 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-WRITE-01", "Owner-token ATProto session can create and delete a public feed post", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for write fixture" };
+    }
+
+    let createdUri = "";
+    let createdRkey = "";
+    const token = `dais Bluesky write conformance ${new Date().toISOString()}`;
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    if (session.json?.did !== did() || session.json?.handle !== config.acctDomain || !session.json?.accessJwt) {
+      throw new Error("createSession shape mismatch");
+    }
+
+    try {
+      const create = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.json.accessJwt}`,
+        },
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.feed.post",
+          record: {
+            $type: "app.bsky.feed.post",
+            text: token,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+      });
+      if (create.status !== 200) throw new Error(`createRecord expected 200, got ${create.status}: ${create.text}`);
+      createdUri = create.json?.uri || "";
+      createdRkey = rkeyFromAtUri(createdUri);
+      if (!createdUri.startsWith(`at://${did()}/app.bsky.feed.post/`) || !create.json?.cid) {
+        throw new Error("createRecord shape mismatch");
+      }
+
+      const record = await request(
+        `/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did())}&collection=app.bsky.feed.post&rkey=${encodeURIComponent(createdRkey)}`,
+      );
+      if (record.status !== 200) throw new Error(`getRecord after create expected 200, got ${record.status}: ${record.text}`);
+      if (record.json?.value?.text !== token) throw new Error("created record text did not round-trip");
+    } finally {
+      if (createdRkey) {
+        await request("/xrpc/com.atproto.repo.deleteRecord", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.json.accessJwt}`,
+          },
+          body: JSON.stringify({
+            repo: did(),
+            collection: "app.bsky.feed.post",
+            rkey: createdRkey,
+          }),
+        });
+      }
+    }
+  }),
+
   requirement("BLUESKY-PRIVACY-01", "PDS public feeds exclude private/E2EE fallback content", async () => {
     const feed = await request("/xrpc/app.bsky.feed.getTimeline?limit=20");
     if (feed.status !== 200) throw new Error(`timeline expected 200, got ${feed.status}`);

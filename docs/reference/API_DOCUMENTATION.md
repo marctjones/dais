@@ -432,10 +432,21 @@ ORDER BY created_at ASC;
 **Base URL:** `https://pds.dais.social`
 
 **Endpoints:**
-- `/xrpc/com.atproto.server.createSession` - Authentication
-- `/xrpc/com.atproto.repo.createRecord` - Create post
-- `/xrpc/chat.bsky.convo.sendMessage` - Send chat message
-- `/xrpc/chat.bsky.convo.createConvo` - Create conversation
+- `/xrpc/com.atproto.server.describeServer` - PDS identity metadata
+- `/xrpc/com.atproto.server.createSession` - Owner-token compatibility session
+- `/xrpc/com.atproto.repo.describeRepo` - Repository metadata
+- `/xrpc/com.atproto.repo.getRecord` - Public feed-post record read
+- `/xrpc/com.atproto.repo.createRecord` - Owner-token public feed-post create
+- `/xrpc/com.atproto.repo.deleteRecord` - Owner-token public feed-post delete
+- `/xrpc/com.atproto.sync.getRepo` - JSON compatibility repo floor
+- `/xrpc/com.atproto.sync.getRepoStatus` - Repo status metadata
+- `/xrpc/com.atproto.sync.listRepos` - Local repo listing
+- `/xrpc/com.atproto.sync.getBlob` - Public image blob read
+- `/xrpc/com.atproto.sync.subscribeRepos` - WebSocket availability guidance
+- `/xrpc/app.bsky.actor.getProfile` / `getProfiles` - Local profile reads
+- `/xrpc/app.bsky.feed.getAuthorFeed` / `getTimeline` / `searchPosts` - Public feed reads
+- `/xrpc/app.bsky.notification.listNotifications` - Notification reads
+- `/xrpc/app.bsky.graph.getFollowers` / `getFollows` - Graph reads
 
 ---
 
