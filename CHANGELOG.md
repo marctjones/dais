@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.66] - 2026-06-16
+
+### Added
+- Added owner actor discovery recent-public-post previews from remote
+  ActivityPub outboxes, exposed through the owner API, shared Rust client,
+  CLI, Rust TUI, and Dais Desk discovery preview.
+- Added `OWNER-DISCOVERY-01` ActivityPub conformance coverage using the local
+  signed fixture actor and public fixture outbox.
+
 ## [1.28.65] - 2026-06-16
 
 ### Added

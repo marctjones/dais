@@ -1817,6 +1817,23 @@ fn print_owner_discovered_actor(actor: &OwnerDiscoveredActor) {
         "following_status={}",
         actor.following_status.as_deref().unwrap_or("not-following")
     );
+    if !actor.recent_public_posts.is_empty() {
+        println!("recent_public_posts={}", actor.recent_public_posts.len());
+        for post in &actor.recent_public_posts {
+            println!();
+            println!("post={}", post.url.as_deref().unwrap_or(&post.id));
+            println!("type={}", post.kind);
+            if let Some(name) = post.name.as_deref() {
+                println!("name={name}");
+            }
+            if let Some(published) = post.published.as_deref() {
+                println!("published={published}");
+            }
+            if !post.content.is_empty() {
+                println!("content={}", post.content);
+            }
+        }
+    }
 }
 
 fn print_owner_post_detail(detail: &OwnerPostDetail) {

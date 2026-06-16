@@ -424,6 +424,18 @@ async function followerSynchronizationFixture() {
   }
 }
 
+async function ownerDiscoveryFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner discovery fixture" };
+  }
+  const fixture = generateFixtureActor();
+  const discovery = await ownerApi("/discovery/actor", {
+    method: "POST",
+    body: JSON.stringify({ target: fixture.actorUrl }),
+  });
+  return discovery.json;
+}
+
 function rkeyFromAtUri(uri) {
   return typeof uri === "string" ? uri.split("/").pop() : "";
 }
@@ -784,6 +796,23 @@ const tests = [
         }).catch(() => {});
       }
     }
+  }),
+
+  requirement("OWNER-DISCOVERY-01", "DAIS-OWNER", "Actor discovery returns recent public post previews when available", async (t) => {
+    const actor = await ownerDiscoveryFixture();
+    if (actor?.skipped) return t.info(actor.detail);
+    if (!actor?.id || !actor?.inbox) {
+      return t.fail(`discovery response missing actor shape: ${summarizeJson(actor)}`);
+    }
+    const posts = actor.recent_public_posts || [];
+    if (!Array.isArray(posts) || posts.length === 0) {
+      return t.fail(`discovery response missing recent_public_posts: ${summarizeJson(actor)}`);
+    }
+    const preview = posts[0];
+    if (preview.type !== "Note" || !preview.content.includes("Dais fixture public preview post")) {
+      return t.fail(`unexpected public preview post: ${summarizeJson(preview)}`);
+    }
+    t.pass("owner discovery returned fixture actor profile and recent public post preview");
   }),
 
   requirement("PDS-ATPROTO-01", "MASTODON-ADJACENT", "ATProto public read endpoints stay available", async (t) => {

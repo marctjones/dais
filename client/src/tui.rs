@@ -1835,8 +1835,27 @@ impl App {
                         "Press g to resolve an ActivityPub actor by @user@host or URL. Press f after resolving to follow.".to_string()
                     },
                     |actor| {
+                        let recent = if actor.recent_public_posts.is_empty() {
+                            "recent public posts: none returned".to_string()
+                        } else {
+                            actor
+                                .recent_public_posts
+                                .iter()
+                                .map(|post| {
+                                    format!(
+                                        "- {} · {}",
+                                        post.published.as_deref().unwrap_or("undated"),
+                                        post.name
+                                            .as_deref()
+                                            .filter(|value| !value.is_empty())
+                                            .unwrap_or(&post.content)
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        };
                         format!(
-                            "id: {}\nhandle: {}\ninbox: {}\nshared inbox: {}\nstatus: {}\nurl: {}\nicon: {}\n\n{}\n\nPress f to follow this actor.",
+                            "id: {}\nhandle: {}\ninbox: {}\nshared inbox: {}\nstatus: {}\nurl: {}\nicon: {}\n\n{}\n\nRecent public posts\n{}\n\nPress f to follow this actor.",
                             actor.id,
                             actor.handle.as_deref().unwrap_or(""),
                             actor.inbox,
@@ -1844,7 +1863,8 @@ impl App {
                             actor.following_status.as_deref().unwrap_or("not-following"),
                             actor.url.as_deref().unwrap_or(""),
                             actor.icon_url.as_deref().unwrap_or(""),
-                            actor.summary.as_deref().unwrap_or("")
+                            actor.summary.as_deref().unwrap_or(""),
+                            recent
                         )
                     },
                 );

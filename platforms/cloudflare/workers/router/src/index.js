@@ -26,6 +26,9 @@ export default {
     if (path === '/__dais-fixtures/activitypub/actor') {
       return fixtureActivityPubActor(url);
     }
+    if (path === '/__dais-fixtures/activitypub/outbox') {
+      return fixtureActivityPubOutbox(url);
+    }
 
     if (path.startsWith('/api/dais/owner/')) {
       return handleOwnerApi(request, env, url);
@@ -1823,8 +1826,14 @@ function fixtureActorFromKeyUrl(actorUrl) {
   const publicKeyPem = decodeFixturePublicKey(url.searchParams.get('pk') || '');
   if (!publicKeyPem) return null;
   const canonical = url.toString();
+  const name = optionalString(url.searchParams.get('name')) || 'dais-s2s-fixture';
   return {
     id: canonical,
+    type: 'Application',
+    preferredUsername: name,
+    name,
+    inbox: `${url.origin}/__dais-fixtures/activitypub/inbox`,
+    outbox: `${url.origin}/__dais-fixtures/activitypub/outbox`,
     publicKey: {
       id: `${canonical}#main-key`,
       owner: canonical,
@@ -1982,6 +1991,7 @@ async function ownerDiscoverActor(env, target) {
   const localActor = await ownerLocalActor(env);
   const remote = await resolveActivityPubActor(target);
   const following = await ownerFollowingRow(env, localActor.id, remote.id);
+  const recentPublicPosts = await fetchActorRecentPublicPosts(remote);
   return {
     id: remote.id,
     inbox: remote.inbox,
@@ -1993,6 +2003,67 @@ async function ownerDiscoverActor(env, target) {
     icon_url: remote.icon_url || null,
     handle: actorHandle(remote),
     following_status: following?.status || null,
+    recent_public_posts: recentPublicPosts,
+  };
+}
+
+async function fetchActorRecentPublicPosts(actor) {
+  if (!actor.outbox) return [];
+  let outboxUrl;
+  try {
+    outboxUrl = publicHttpsUrl(actor.outbox, 'actor outbox').toString();
+  } catch {
+    return [];
+  }
+
+  try {
+    const outbox = fixtureOutboxFromUrl(outboxUrl) || await fetchActivityJson(outboxUrl);
+    const pageUrl = typeof outbox.first === 'string'
+      ? outbox.first
+      : typeof outbox.first?.id === 'string'
+        ? outbox.first.id
+        : null;
+    const page = pageUrl ? await fetchActivityJson(publicHttpsUrl(pageUrl, 'actor outbox first page').toString()) : outbox;
+    const items = Array.isArray(page.orderedItems)
+      ? page.orderedItems
+      : Array.isArray(page.items)
+        ? page.items
+        : [];
+    return items
+      .map(normalizeDiscoveredPublicPost)
+      .filter(Boolean)
+      .slice(0, 3);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchActivityJson(url) {
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams", application/json',
+      'User-Agent': 'dais-owner-api/1.0',
+    },
+  });
+  if (!response.ok) throw new Error(`ActivityPub fetch failed: HTTP ${response.status}`);
+  return response.json();
+}
+
+function normalizeDiscoveredPublicPost(item) {
+  const object = item?.type === 'Create' ? item.object : item;
+  if (!object || !['Note', 'Question', 'Article'].includes(object.type)) return null;
+  const to = [].concat(object.to || [], item.to || []);
+  const cc = [].concat(object.cc || [], item.cc || []);
+  const recipients = [...to, ...cc].map((value) => String(value));
+  if (!recipients.includes('https://www.w3.org/ns/activitystreams#Public')) return null;
+  return {
+    id: String(object.id || item.id || '').trim(),
+    type: String(object.type || '').trim(),
+    url: typeof object.url === 'string' ? object.url : typeof item.url === 'string' ? item.url : null,
+    name: optionalString(object.name),
+    summary: optionalString(object.summary),
+    content: stripHtml(String(object.content || object.name || object.summary || '')).slice(0, 280),
+    published: optionalString(object.published || item.published),
   };
 }
 
@@ -2120,6 +2191,20 @@ async function resolveActivityPubActor(target) {
   const actorUrl = target.startsWith('http://') || target.startsWith('https://')
     ? publicHttpsUrl(target, 'target').toString()
     : await resolveWebfingerActor(target);
+  const fixture = fixtureActorFromKeyUrl(actorUrl);
+  if (fixture) {
+    return {
+      id: fixture.id,
+      inbox: fixture.inbox,
+      shared_inbox: null,
+      preferred_username: fixture.preferredUsername || null,
+      name: fixture.name || null,
+      summary: null,
+      icon_url: null,
+      url: fixture.id,
+      outbox: fixture.outbox || null,
+    };
+  }
   const response = await fetch(actorUrl, {
     headers: {
       Accept: 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams"',
@@ -2140,6 +2225,7 @@ async function resolveActivityPubActor(target) {
     summary: actor.summary || null,
     icon_url: actor.icon?.url || null,
     url: actor.url || actorUrl,
+    outbox: actor.outbox || null,
   };
 }
 
@@ -2268,6 +2354,7 @@ function fixtureActivityPubActor(url) {
     type: 'Application',
     preferredUsername: name,
     inbox: `${url.origin}/__dais-fixtures/activitypub/inbox`,
+    outbox: `${url.origin}/__dais-fixtures/activitypub/outbox`,
     publicKey: {
       id: `${actorUrl}#main-key`,
       owner: actorUrl,
@@ -2280,6 +2367,55 @@ function fixtureActivityPubActor(url) {
       'Cache-Control': 'no-store',
     },
   });
+}
+
+function fixtureActivityPubOutbox(url) {
+  return new Response(JSON.stringify(fixtureActivityPubOutboxJson(url)), {
+    headers: {
+      'Content-Type': 'application/activity+json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+function fixtureOutboxFromUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.pathname !== '/__dais-fixtures/activitypub/outbox') return null;
+    return fixtureActivityPubOutboxJson(url);
+  } catch {
+    return null;
+  }
+}
+
+function fixtureActivityPubOutboxJson(url) {
+  const postId = `${url.origin}/__dais-fixtures/activitypub/posts/public-preview`;
+  const note = {
+    '@context': 'https://www.w3.org/ns/activitystreams',
+    id: postId,
+    type: 'Note',
+    attributedTo: `${url.origin}/__dais-fixtures/activitypub/actor`,
+    to: ['https://www.w3.org/ns/activitystreams#Public'],
+    content: '<p>Dais fixture public preview post</p>',
+    published: '2026-06-16T00:00:00Z',
+    url: postId,
+  };
+  const collection = {
+    '@context': 'https://www.w3.org/ns/activitystreams',
+    id: url.toString(),
+    type: 'OrderedCollection',
+    totalItems: 1,
+    orderedItems: [
+      {
+        id: `${postId}#create`,
+        type: 'Create',
+        actor: note.attributedTo,
+        to: note.to,
+        object: note,
+      },
+    ],
+  };
+  return collection;
 }
 
 function decodeFixturePublicKey(value) {
@@ -2943,6 +3079,10 @@ function normalizeProtocol(value) {
 function optionalString(value) {
   const trimmed = String(value || '').trim();
   return trimmed ? trimmed : null;
+}
+
+function stripHtml(value) {
+  return String(value || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function optionalUrl(value, field) {

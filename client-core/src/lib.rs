@@ -532,6 +532,20 @@ pub struct OwnerDiscoveredActor {
     pub icon_url: Option<String>,
     pub handle: Option<String>,
     pub following_status: Option<String>,
+    #[serde(default)]
+    pub recent_public_posts: Vec<OwnerDiscoveredPost>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerDiscoveredPost {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub url: Option<String>,
+    pub name: Option<String>,
+    pub summary: Option<String>,
+    pub content: String,
+    pub published: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
