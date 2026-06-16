@@ -143,6 +143,14 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Delete, _) if owner_path.starts_with("/sources/") => {
+            let id = decode_component(owner_path.trim_start_matches("/sources/"));
+            if id.trim().is_empty() {
+                return api_json(&serde_json::json!({ "error": "id is required" }), 400);
+            }
+            owner_delete_source(&env, &id).await?;
+            api_json(&serde_json::json!({ "ok": true }), 200)
+        }
         (worker::Method::Get, "/moderation") => api_json(&owner_moderation(&env).await?, 200),
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
@@ -1086,6 +1094,16 @@ async fn owner_source_items(env: &Env, limit: i32) -> Result<Vec<Map<String, Val
         .await?
         .results::<Map<String, Value>>()?;
     Ok(rows.into_iter().map(normalize_source_item).collect())
+}
+
+async fn owner_delete_source(env: &Env, id: &str) -> Result<()> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare("DELETE FROM source_subscriptions WHERE id = ?1")
+        .bind_refs(&id_arg)?
+        .run()
+        .await?;
+    Ok(())
 }
 
 fn normalize_source_item(row: Map<String, Value>) -> Map<String, Value> {
