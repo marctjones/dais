@@ -13,6 +13,8 @@ mod sources;
 mod tui;
 
 use anyhow::Result;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use clap::{CommandFactory, Parser};
 use cli::{
     ActorsCommand, BlueskyCommand, Cli, Command, DeliveriesCommand, E2eeCommand, EventsCommand,
@@ -23,17 +25,18 @@ use cli::{
 use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
-    DiagnosticStatus, ModerationState, OwnerApiClient, OwnerDelivery, OwnerDirectMessage,
-    OwnerDiscoveredActor, OwnerFriend, OwnerInteraction, OwnerNotification, OwnerPostDetail,
-    OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd,
-    OwnerSources, OwnerStats,
+    ComposeDraft as OwnerComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient,
+    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerFriend, OwnerInteraction,
+    OwnerMediaUpload, OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate,
+    OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats,
+    ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
     ActivityOutcome, PostDraft, PostOutcome,
 };
 use rand::RngCore;
-use routing::Protocol;
+use routing::{Protocol, Visibility};
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -1078,12 +1081,75 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_diagnostics(&diagnostics);
         }
+        OwnerCommand::PostCreate(args) => {
+            let visibility = if args.public {
+                Visibility::Public
+            } else {
+                args.visibility
+            };
+            let created = owner_api(&args.api)
+                .create_post(&OwnerComposeDraft {
+                    text: args.text,
+                    visibility: owner_visibility(visibility),
+                    protocol: owner_protocol(args.protocol),
+                    encrypt: args.encrypt,
+                    in_reply_to: args.reply_to,
+                    recipients: args.recipients,
+                    attachments: args.attachments,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Created owner API post");
+            println!("id={}", created.id);
+            println!("visibility={}", created.visibility);
+            println!("protocol={}", created.protocol);
+            println!("published_at={}", created.published_at);
+            if let Some(reply) = created.in_reply_to {
+                println!("in_reply_to={reply}");
+            }
+            if !created.delivery_ids.is_empty() {
+                println!("delivery_ids={}", created.delivery_ids.join(","));
+            }
+        }
         OwnerCommand::Sources(args) => {
             let sources = owner_api(&args)
                 .sources()
                 .await
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_sources(&sources);
+        }
+        OwnerCommand::MediaUpload(args) => {
+            let data = fs::read(&args.path)?;
+            let filename = args
+                .filename
+                .or_else(|| {
+                    args.path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(ToString::to_string)
+                })
+                .ok_or_else(|| anyhow::anyhow!("media path has no filename"))?;
+            let media_type = args
+                .media_type
+                .or_else(|| Some(media_type_for_path(&args.path).to_string()));
+            let uploaded = owner_api(&args.api)
+                .upload_media(&OwnerMediaUpload {
+                    filename,
+                    media_type,
+                    access: args.access,
+                    data_base64: STANDARD.encode(data),
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Uploaded owner API media");
+            println!("url={}", uploaded.url);
+            if let Some(media_type) = uploaded.media_type {
+                println!("media_type={media_type}");
+            }
+            println!(
+                "attachment={}",
+                serde_json::to_string(&uploaded.attachment)?
+            );
         }
         OwnerCommand::SourceAdd(args) => {
             let result = owner_api(&args.api)
@@ -1276,6 +1342,41 @@ async fn owner_interact(
 
 fn owner_api(args: &cli::OwnerApiArgs) -> OwnerApiClient {
     OwnerApiClient::new(&args.instance_url, &args.owner_token)
+}
+
+fn owner_visibility(value: Visibility) -> OwnerVisibility {
+    match value {
+        Visibility::Public => OwnerVisibility::Public,
+        Visibility::Unlisted => OwnerVisibility::Unlisted,
+        Visibility::Followers => OwnerVisibility::Followers,
+        Visibility::Direct => OwnerVisibility::Direct,
+    }
+}
+
+fn owner_protocol(value: Protocol) -> OwnerProtocolRoute {
+    match value {
+        Protocol::ActivityPub => OwnerProtocolRoute::ActivityPub,
+        Protocol::Atproto => OwnerProtocolRoute::AtProto,
+        Protocol::Both => OwnerProtocolRoute::Both,
+    }
+}
+
+fn media_type_for_path(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        _ => "application/octet-stream",
+    }
 }
 
 fn print_owner_snapshot(snapshot: &OwnerSnapshot) {

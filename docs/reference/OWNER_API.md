@@ -28,7 +28,8 @@ Implemented endpoints:
 | `GET` | `/profile` | Public actor/account profile metadata. |
 | `POST` | `/profile` | Update display name, actor type, summary, avatar/icon URL, and header image URL. |
 | `GET` | `/posts` | Recent local owner posts, including private and encrypted metadata. |
-| `POST` | `/posts` | Create a private-by-default ActivityPub owner post. |
+| `POST` | `/posts` | Create a private-by-default ActivityPub owner post, with optional direct recipients, reply target, encryption flag, and ActivityStreams attachments. |
+| `POST` | `/media` | Upload public or private media and return attachment JSON for post creation. |
 | `GET` | `/timeline/home` | Signed-in home timeline from accepted follows. |
 | `GET` | `/followers` | Local follower rows. |
 | `POST` | `/followers/status` | Mark a follower `approved`, `pending`, or `rejected`. |
@@ -44,9 +45,12 @@ Known gaps:
 
 - Tokens are currently a single Cloudflare Worker secret. Scoped tokens,
   revocation, rotation UI, and per-scope enforcement are still planned.
-- Compose creates plain text posts and queues ActivityPub deliveries for
-  followers-only and direct posts. Rich objects, media attachments, and E2EE
-  compose remain CLI/TUI-first until the owner API surface is expanded.
+- Compose creates text posts, queues ActivityPub deliveries for followers-only
+  and direct posts, and accepts ActivityStreams attachment JSON from the owner
+  media upload endpoint. Rich non-`Note` objects and poll creation remain
+  Mastodon API or local CLI surfaces.
+- The Rust CLI can exercise live owner API compose with
+  `dais owner post-create` and media uploads with `dais owner media-upload`.
 - Profile updates currently cover the fields reflected in ActivityPub actor
   JSON, the HTML profile page, and Mastodon account reads. Custom profile
   fields and per-field visibility controls remain future work.

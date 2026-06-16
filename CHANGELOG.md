@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.52] - 2026-06-16
+
+### Added
+- Added live owner API CLI post creation with `dais owner post-create`,
+  including visibility, protocol, reply target, direct recipients, encryption,
+  and ActivityStreams attachment arguments.
+- Added live owner API media upload with `dais owner media-upload`, returning
+  attachment JSON that can be reused with `dais owner post-create --attachment`.
+
 ## [1.28.51] - 2026-06-16
 
 ### Added

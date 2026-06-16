@@ -798,8 +798,12 @@ pub enum OwnerCommand {
     Stats(OwnerApiArgs),
     /// Show live owner API diagnostics.
     Diagnostics(OwnerApiArgs),
+    /// Create a post through the live owner API.
+    PostCreate(OwnerPostCreateArgs),
     /// List live owner API source subscriptions and reader items.
     Sources(OwnerApiArgs),
+    /// Upload media through the live owner API and print attachment JSON.
+    MediaUpload(OwnerMediaUploadArgs),
     /// Add a source subscription through the live owner API.
     SourceAdd(OwnerSourceAddArgs),
     /// Remove a live owner API source subscription.
@@ -889,6 +893,47 @@ pub struct OwnerTimelineArgs {
     pub api: OwnerApiArgs,
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerPostCreateArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub text: String,
+    #[arg(long, value_enum, default_value_t = Visibility::Followers)]
+    pub visibility: Visibility,
+    /// Shortcut for `--visibility public`.
+    #[arg(long)]
+    pub public: bool,
+    #[arg(long, value_enum, default_value_t = Protocol::ActivityPub)]
+    pub protocol: Protocol,
+    #[arg(long)]
+    pub encrypt: bool,
+    /// ActivityPub object URL this post replies to.
+    #[arg(long)]
+    pub reply_to: Option<String>,
+    /// Direct ActivityPub recipient actor URL. Repeat for multiple recipients.
+    #[arg(long = "to")]
+    pub recipients: Vec<String>,
+    /// ActivityStreams attachment URL or JSON object. Repeat for multiple attachments.
+    #[arg(long = "attachment")]
+    pub attachments: Vec<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerMediaUploadArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub path: PathBuf,
+    /// Filename stored in media metadata. Defaults to the local file name.
+    #[arg(long)]
+    pub filename: Option<String>,
+    /// MIME type such as image/png or video/mp4. Guessed from filename when omitted.
+    #[arg(long)]
+    pub media_type: Option<String>,
+    /// Media access mode: public or private.
+    #[arg(long)]
+    pub access: Option<String>,
 }
 
 #[derive(Args, Clone, Debug)]
