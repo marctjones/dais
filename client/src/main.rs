@@ -1268,6 +1268,21 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_post_detail(&detail);
         }
+        OwnerCommand::Link(args) => {
+            let detail = owner_api(&args.api)
+                .post_detail(&args.object_id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("{}", detail.post.id);
+        }
+        OwnerCommand::Open(args) => {
+            let detail = owner_api(&args.api)
+                .post_detail(&args.object_id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            open_url(&detail.post.id)?;
+            println!("Opened {}", detail.post.id);
+        }
         OwnerCommand::Follow(args) => {
             let result = owner_api(&args.api)
                 .follow_actor(&args.target)
@@ -1303,6 +1318,30 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn open_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(url).status()?;
+
+    #[cfg(target_os = "linux")]
+    let status = std::process::Command::new("xdg-open").arg(url).status()?;
+
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .status()?;
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    return Err(anyhow::anyhow!(
+        "opening URLs is not supported on this platform"
+    ));
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("failed to open {url}"))
+    }
 }
 
 async fn handle_owner_profile(command: cli::OwnerProfileCommand) -> Result<()> {

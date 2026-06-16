@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.55] - 2026-06-16
+
+### Added
+- Added Rust CLI `dais owner link` and `dais owner open` commands for live owner
+  API reader posts.
+- Added Rust TUI reader actions to show the selected post link and open it in
+  the default browser.
+
 ## [1.28.54] - 2026-06-16
 
 ### Added

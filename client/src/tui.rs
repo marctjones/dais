@@ -602,6 +602,8 @@ impl App {
             KeyCode::Char('l') => self.reader_interaction("like"),
             KeyCode::Char('o') => self.reader_interaction("boost"),
             KeyCode::Char('y') => self.reply_to_selected_reader_post(),
+            KeyCode::Char('i') => self.show_selected_reader_link(),
+            KeyCode::Char('n') => self.open_selected_reader_post(),
             KeyCode::Char('b') => {
                 self.compose.reset();
                 self.compose.visibility = Visibility::Public;
@@ -1323,6 +1325,33 @@ impl App {
         self.status = format!("Replying to {object_id}");
     }
 
+    fn show_selected_reader_link(&mut self) {
+        if self.active != Tab::Reader {
+            return;
+        }
+        let Some(object_id) = self.selected_reader_object_id() else {
+            return;
+        };
+        self.status = format!("Link: {object_id}");
+    }
+
+    fn open_selected_reader_post(&mut self) {
+        if self.active != Tab::Reader {
+            return;
+        }
+        let Some(object_id) = self.selected_reader_object_id() else {
+            return;
+        };
+        match open_url(&object_id) {
+            Ok(()) => {
+                self.status = format!("Opened {object_id}");
+            }
+            Err(error) => {
+                self.status = error.to_string();
+            }
+        }
+    }
+
     fn follow_discovered_actor(&mut self) {
         if self.active != Tab::Discovery {
             return;
@@ -1561,7 +1590,7 @@ impl App {
 
     fn draw_footer(&self, frame: &mut Frame<'_>, area: Rect) {
         let left = match self.mode {
-            Mode::Normal => "q quit · tab switch · r refresh · g discover · f follow · w unfollow · enter detail · y/l/o actions",
+            Mode::Normal => "q quit · tab switch · r refresh · g discover · f follow · w unfollow · enter detail · y/l/o actions · i link · n open",
             Mode::Compose => "ctrl+s send · tab field · v visibility · p protocol · e e2ee · esc cancel",
             Mode::Search => "enter search · esc cancel · backspace edit",
             Mode::Discovery => "enter lookup actor · esc cancel · backspace edit",
@@ -2510,6 +2539,28 @@ fn optional_trimmed(value: String) -> Option<String> {
         None
     } else {
         Some(value)
+    }
+}
+
+fn open_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(url).status()?;
+
+    #[cfg(target_os = "linux")]
+    let status = std::process::Command::new("xdg-open").arg(url).status()?;
+
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .status()?;
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    return Err(anyhow!("opening URLs is not supported on this platform"));
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("failed to open {url}"))
     }
 }
 

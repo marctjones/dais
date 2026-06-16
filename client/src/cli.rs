@@ -828,6 +828,10 @@ pub enum OwnerCommand {
     Discover(OwnerFollowArgs),
     /// Show a live owner API post detail and interaction counts.
     Post(OwnerObjectArgs),
+    /// Print the canonical URL for a live owner API post.
+    Link(OwnerObjectArgs),
+    /// Open a live owner API post URL in the default browser.
+    Open(OwnerObjectArgs),
     /// Follow an ActivityPub actor by URL or @user@domain handle.
     Follow(OwnerFollowArgs),
     /// Unfollow an ActivityPub actor by URL or @user@domain handle.
