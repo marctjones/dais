@@ -63,6 +63,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
             }
         }
+        (worker::Method::Post, "/media/revoke") => {
+            let body = read_json(&mut req).await;
+            match owner_revoke_media(&env, &body).await {
+                Ok(result) => api_json(&result, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, "/stats") => api_json(&owner_stats(&env).await?, 200),
         (worker::Method::Get, "/diagnostics") => api_json(
             &serde_json::json!({ "items": owner_diagnostics(&env).await? }),
@@ -365,6 +372,27 @@ async fn owner_update_profile(
     .map_err(|error| error.to_string())?;
 
     owner_profile(env).await.map_err(|error| error.to_string())
+}
+
+async fn owner_revoke_media(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let url = body_string_any(body, &["url", "media_url", "id"]).unwrap_or_default();
+    let Some(key) = media_r2_key_from_url(&url) else {
+        return Err("valid media url is required".to_string());
+    };
+    env.bucket("MEDIA_BUCKET")
+        .map_err(|error| error.to_string())?
+        .delete(key.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut response = Map::new();
+    response.insert("ok".to_string(), Value::Bool(true));
+    response.insert("url".to_string(), Value::String(url));
+    response.insert("key".to_string(), Value::String(key));
+    Ok(response)
 }
 
 async fn owner_stats(env: &Env) -> Result<OwnerStats> {
@@ -1890,6 +1918,24 @@ fn optional_url_field(
         return Err(format!("{field} must be an absolute https URL"));
     }
     Ok(Some(value))
+}
+
+fn media_r2_key_from_url(value: &str) -> Option<String> {
+    let parsed = worker::Url::parse(value).ok()?;
+    if parsed.host_str()? != "social.dais.social" {
+        return None;
+    }
+    let path = parsed.path();
+    if let Some(rest) = path.strip_prefix("/media/_private/") {
+        return Some(format!("private/{}", decode_component(rest)));
+    }
+    if let Some(rest) = path.strip_prefix("/media/_private_signed/") {
+        return Some(format!("private/{}", decode_component(rest)));
+    }
+    if let Some(rest) = path.strip_prefix("/media/uploads/") {
+        return Some(decode_component(&format!("uploads/{rest}")));
+    }
+    None
 }
 
 fn clamp_cadence_minutes(value: Option<String>) -> i32 {
