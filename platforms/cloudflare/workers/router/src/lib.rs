@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use worker::{event, Context, Env, Headers, Request, Response, Result};
 
@@ -53,6 +53,10 @@ async fn handle_owner_api(req: Request, env: Env, path: &str) -> Result<Response
     match (req.method(), owner_path) {
         (worker::Method::Get, "/profile") => api_json(&owner_profile(&env).await?, 200),
         (worker::Method::Get, "/stats") => api_json(&owner_stats(&env).await?, 200),
+        (worker::Method::Get, "/diagnostics") => api_json(
+            &serde_json::json!({ "items": owner_diagnostics(&env).await? }),
+            200,
+        ),
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
             501,
@@ -173,6 +177,75 @@ async fn owner_stats(env: &Env) -> Result<OwnerStats> {
         allowlist_hosts: integer_field(row.as_ref(), "allowlist_hosts"),
         closed_network: integer_field(row.as_ref(), "closed_network") != 0,
     })
+}
+
+async fn owner_diagnostics(env: &Env) -> Result<Vec<OwnerDiagnostic>> {
+    let db = env.d1("DB")?;
+    let settings = db
+        .prepare(
+            r#"
+            SELECT default_visibility
+            FROM instance_settings
+            WHERE id = 1
+            "#,
+        )
+        .first::<Map<String, Value>>(None)
+        .await?;
+    let posts = db
+        .prepare("SELECT COUNT(*) AS count FROM posts")
+        .first::<Map<String, Value>>(None)
+        .await?;
+    let followers = db
+        .prepare("SELECT COUNT(*) AS count FROM followers WHERE status = 'approved'")
+        .first::<Map<String, Value>>(None)
+        .await?;
+    let deliveries = db
+        .prepare("SELECT status, COUNT(*) AS count FROM deliveries GROUP BY status")
+        .all()
+        .await?
+        .results::<DeliveryCount>()?;
+    let default_visibility = string_field(settings.as_ref(), "default_visibility")
+        .unwrap_or_else(|| "followers".to_string());
+    let failed_deliveries = deliveries
+        .iter()
+        .find(|row| row.status == "failed")
+        .map(|row| row.count)
+        .unwrap_or(0);
+    let delivery_detail = if deliveries.is_empty() {
+        "no deliveries".to_string()
+    } else {
+        deliveries
+            .iter()
+            .map(|row| format!("{}={}", row.status, row.count))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    Ok(vec![
+        OwnerDiagnostic {
+            key: "owner-api",
+            ok: true,
+            detail: "Authenticated owner API is available.".to_string(),
+        },
+        OwnerDiagnostic {
+            key: "private-default",
+            ok: default_visibility == "followers",
+            detail: format!("default visibility is {default_visibility}"),
+        },
+        OwnerDiagnostic {
+            key: "activitypub",
+            ok: true,
+            detail: format!(
+                "posts={} approved_followers={}",
+                integer_field(posts.as_ref(), "count"),
+                integer_field(followers.as_ref(), "count")
+            ),
+        },
+        OwnerDiagnostic {
+            key: "deliveries",
+            ok: failed_deliveries == 0,
+            detail: delivery_detail,
+        },
+    ])
 }
 
 fn string_field(row: Option<&Map<String, Value>>, key: &str) -> Option<String> {
@@ -337,9 +410,22 @@ fn owner_token_has_scopes(scopes: &[String], required_scopes: &[&str]) -> bool {
 }
 
 fn api_json<T: Serialize>(value: &T, status: u16) -> Result<Response> {
-    let mut response = Response::from_json(value)?.with_status(status);
     let headers = Headers::new();
     headers.set("Content-Type", "application/json; charset=utf-8")?;
+    headers.set("Access-Control-Allow-Origin", "*")?;
+    headers.set(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type",
+    )?;
+    headers.set(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    )?;
+    let mut response = if status == 204 {
+        Response::empty()?.with_status(status)
+    } else {
+        Response::from_json(value)?.with_status(status)
+    };
     response = response.with_headers(headers);
     Ok(response)
 }
@@ -582,6 +668,19 @@ struct OwnerStats {
     blocks_total: i64,
     allowlist_hosts: i64,
     closed_network: bool,
+}
+
+#[derive(Serialize)]
+struct OwnerDiagnostic {
+    key: &'static str,
+    ok: bool,
+    detail: String,
+}
+
+#[derive(Deserialize)]
+struct DeliveryCount {
+    status: String,
+    count: i64,
 }
 
 struct OwnerToken {
