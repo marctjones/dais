@@ -109,6 +109,74 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Post, "/posts") => {
+            let body = read_json(&mut req).await;
+            let Some(text) = body_string_any(&body, &["text", "content"]) else {
+                return api_json(&serde_json::json!({ "error": "text is required" }), 400);
+            };
+            let Some(visibility) = normalize_visibility(
+                string_like_any(&body, &["visibility"])
+                    .unwrap_or_else(|| "followers".to_string())
+                    .as_str(),
+            ) else {
+                return api_json(
+                    &serde_json::json!({ "error": "unsupported visibility" }),
+                    400,
+                );
+            };
+            let Some(protocol) = normalize_protocol(
+                string_like_any(&body, &["protocol"])
+                    .unwrap_or_else(|| "activitypub".to_string())
+                    .as_str(),
+            ) else {
+                return api_json(&serde_json::json!({ "error": "unsupported protocol" }), 400);
+            };
+            if matches!(visibility.as_str(), "followers" | "direct") && protocol == "atproto" {
+                return api_json(
+                    &serde_json::json!({ "error": "private posts cannot route only to atproto" }),
+                    400,
+                );
+            }
+            let recipients = body
+                .get("recipients")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|value| optional_body_string(value))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let attachments = body
+                .get("attachments")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let encrypt = body.get("encrypt").map(js_truthy).unwrap_or(false);
+            let in_reply_to =
+                body_string_any(&body, &["in_reply_to", "inReplyTo", "in_reply_to_id"]);
+            if visibility == "direct" && recipients.is_empty() {
+                return api_json(
+                    &serde_json::json!({ "error": "direct posts require at least one recipient" }),
+                    400,
+                );
+            }
+            match owner_create_post(
+                &env,
+                &text,
+                &visibility,
+                &protocol,
+                recipients,
+                attachments,
+                encrypt,
+                in_reply_to,
+            )
+            .await
+            {
+                Ok(created) => api_json(&created, 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, _) if owner_path.starts_with("/posts/") => {
             let post_id = decode_component(owner_path.trim_start_matches("/posts/"));
             match owner_post_detail(&env, &post_id).await? {
@@ -1237,6 +1305,227 @@ async fn owner_delete_post(env: &Env, id: &str) -> Result<Option<Map<String, Val
     Ok(Some(response))
 }
 
+async fn owner_create_post(
+    env: &Env,
+    text: &str,
+    visibility: &str,
+    protocol: &str,
+    recipients: Vec<String>,
+    attachments: Vec<Value>,
+    encrypt: bool,
+    in_reply_to: Option<String>,
+) -> std::result::Result<Map<String, Value>, String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let actor = db
+        .prepare("SELECT id FROM actors WHERE username = 'social' LIMIT 1")
+        .first::<Map<String, Value>>(None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let actor_id = string_field(actor.as_ref(), "id")
+        .unwrap_or_else(|| "https://social.dais.social/users/social".to_string());
+    let direct_targets = if visibility == "direct" {
+        owner_direct_delivery_targets(env, &recipients).await?
+    } else {
+        Vec::new()
+    };
+    let now = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let local_id = format!(
+        "{}-{}",
+        timestamp_for_local_id(&now),
+        stable_id(&format!("{now}\n{text}"))
+            .chars()
+            .take(8)
+            .collect::<String>()
+    );
+    let post_id = format!("{actor_id}/posts/{local_id}");
+    let content_html = format!("<p>{}</p>", escape_html(text).replace('\n', "<br>"));
+    let media_attachments = normalize_attachments(&attachments)?;
+    if !media_attachments.is_empty() && protocol != "activitypub" {
+        return Err("media attachments currently require ActivityPub routing; AT Protocol media upload is not implemented yet".to_string());
+    }
+    if !media_attachments.is_empty() && encrypt {
+        return Err(
+            "E2EE media attachments require encrypted media support and are not implemented yet"
+                .to_string(),
+        );
+    }
+    if !media_attachments.is_empty()
+        && matches!(visibility, "followers" | "direct")
+        && !media_attachments.iter().all(is_private_media_attachment)
+    {
+        return Err(
+            "private and direct media attachments must use private media upload URLs".to_string(),
+        );
+    }
+
+    let mut reply_target_inbox = None;
+    if let Some(in_reply_to) = in_reply_to.as_deref() {
+        public_https_url(in_reply_to, "in_reply_to")?;
+        if !is_local_object_url(in_reply_to) {
+            reply_target_inbox = Some(resolve_activitypub_object_inbox(in_reply_to).await?);
+        }
+    }
+
+    let media_attachments_json = if media_attachments.is_empty() {
+        None
+    } else {
+        Some(Value::Array(media_attachments.clone()).to_string())
+    };
+    let actor_arg = D1Type::Text(&actor_id);
+    let post_arg = D1Type::Text(&post_id);
+    let text_arg = D1Type::Text(text);
+    let content_arg = D1Type::Text(&content_html);
+    let object_type_arg = D1Type::Text("Note");
+    let summary_arg = D1Type::Null;
+    let visibility_arg = D1Type::Text(visibility);
+    let protocol_arg = D1Type::Text(protocol);
+    let now_arg = D1Type::Text(&now);
+    let media_arg = media_attachments_json
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let reply_arg = in_reply_to
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let poll_arg = D1Type::Null;
+    db.prepare(
+        r#"
+        INSERT INTO posts (
+          id, actor_id, content, content_html, object_type, summary, visibility, protocol,
+          published_at, media_attachments, in_reply_to, poll_options, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        "#,
+    )
+    .bind_refs([
+        &post_arg,
+        &actor_arg,
+        &text_arg,
+        &content_arg,
+        &object_type_arg,
+        &summary_arg,
+        &visibility_arg,
+        &protocol_arg,
+        &now_arg,
+        &media_arg,
+        &reply_arg,
+        &poll_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let delivery_ids = if matches!(protocol, "activitypub" | "both") {
+        owner_create_post_deliveries(
+            env,
+            &post_id,
+            visibility,
+            direct_targets,
+            reply_target_inbox.into_iter().collect(),
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+
+    let mut response = Map::new();
+    response.insert("id".to_string(), Value::String(post_id));
+    response.insert("actor_id".to_string(), Value::String(actor_id));
+    response.insert("content".to_string(), Value::String(text.to_string()));
+    response.insert("content_html".to_string(), Value::String(content_html));
+    response.insert("object_type".to_string(), Value::String("Note".to_string()));
+    response.insert("summary".to_string(), Value::Null);
+    response.insert(
+        "visibility".to_string(),
+        Value::String(visibility.to_string()),
+    );
+    response.insert("protocol".to_string(), Value::String(protocol.to_string()));
+    response.insert("published_at".to_string(), Value::String(now));
+    response.insert(
+        "in_reply_to".to_string(),
+        in_reply_to.map(Value::String).unwrap_or(Value::Null),
+    );
+    response.insert("poll_options".to_string(), Value::Null);
+    response.insert(
+        "recipients".to_string(),
+        Value::Array(recipients.into_iter().map(Value::String).collect()),
+    );
+    response.insert("attachments".to_string(), Value::Array(media_attachments));
+    response.insert(
+        "delivery_ids".to_string(),
+        Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
+    );
+    Ok(response)
+}
+
+async fn owner_create_post_deliveries(
+    env: &Env,
+    post_id: &str,
+    visibility: &str,
+    direct_targets: Vec<String>,
+    extra_targets: Vec<String>,
+) -> std::result::Result<Vec<String>, String> {
+    if visibility == "direct" {
+        let mut targets = direct_targets;
+        targets.extend(extra_targets);
+        return insert_delivery_rows(env, post_id, targets, "Create", None).await;
+    }
+    let mut deliveries = insert_delivery_rows(
+        env,
+        post_id,
+        owner_approved_follower_inboxes(env)
+            .await
+            .map_err(|error| error.to_string())?,
+        "Create",
+        None,
+    )
+    .await?;
+    deliveries.extend(insert_delivery_rows(env, post_id, extra_targets, "Create", None).await?);
+    Ok(deliveries)
+}
+
+async fn owner_direct_delivery_targets(
+    env: &Env,
+    recipients: &[String],
+) -> std::result::Result<Vec<String>, String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let mut inboxes = Vec::new();
+    let mut missing = Vec::new();
+    for recipient in recipients {
+        let recipient_arg = D1Type::Text(recipient);
+        let row = db
+            .prepare(
+                r#"
+                SELECT follower_actor_id, follower_inbox
+                FROM followers
+                WHERE status = 'approved'
+                  AND follower_actor_id = ?1
+                LIMIT 1
+                "#,
+            )
+            .bind_refs(&recipient_arg)
+            .map_err(|error| error.to_string())?
+            .first::<Map<String, Value>>(None)
+            .await
+            .map_err(|error| error.to_string())?;
+        match row.and_then(|row| string_field(Some(&row), "follower_inbox")) {
+            Some(inbox) => inboxes.push(inbox),
+            None => missing.push(recipient.clone()),
+        }
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "direct recipients must be approved followers with known inboxes: {}",
+            missing.join(", ")
+        ));
+    }
+    Ok(inboxes)
+}
+
 async fn owner_post_replies(env: &Env, id: &str) -> Result<Vec<Map<String, Value>>> {
     let db = env.d1("DB")?;
     let id_arg = D1Type::Text(id);
@@ -2315,6 +2604,140 @@ fn media_r2_key_from_url(value: &str) -> Option<String> {
         return Some(decode_component(&format!("uploads/{rest}")));
     }
     None
+}
+
+fn normalize_visibility(value: &str) -> Option<String> {
+    let normalized = value.to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        "public" | "unlisted" | "followers" | "direct"
+    ) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn normalize_protocol(value: &str) -> Option<String> {
+    let normalized = value.to_ascii_lowercase().replace('_', "").replace('-', "");
+    match normalized.as_str() {
+        "activitypub" => Some("activitypub".to_string()),
+        "atproto" => Some("atproto".to_string()),
+        "both" => Some("both".to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_attachments(values: &[Value]) -> std::result::Result<Vec<Value>, String> {
+    let mut attachments = Vec::new();
+    for value in values {
+        let attachment = match value {
+            Value::String(text) if text.trim().starts_with('{') => {
+                serde_json::from_str::<Value>(text)
+                    .map_err(|_| "attachment JSON is invalid".to_string())?
+            }
+            Value::String(text) => {
+                serde_json::json!({ "type": "Document", "url": text.trim() })
+            }
+            Value::Object(_) => value.clone(),
+            _ => return Err("attachment must be a URL or object".to_string()),
+        };
+        let Some(object) = attachment.as_object() else {
+            return Err("attachment must be a URL or object".to_string());
+        };
+        let url = optional_https_url(object.get("url"), "attachment url")?;
+        let media_type = object.get("mediaType").and_then(optional_body_string);
+        if let Some(media_type) = media_type.as_deref() {
+            if !allowed_media_type(media_type) {
+                return Err("unsupported attachment media type".to_string());
+            }
+        }
+        let mut normalized = Map::new();
+        normalized.insert(
+            "type".to_string(),
+            Value::String(
+                object
+                    .get("type")
+                    .and_then(optional_body_string)
+                    .unwrap_or_else(|| {
+                        if media_type
+                            .as_deref()
+                            .map(|value| value.starts_with("image/"))
+                            .unwrap_or(false)
+                        {
+                            "Image".to_string()
+                        } else {
+                            "Document".to_string()
+                        }
+                    }),
+            ),
+        );
+        normalized.insert(
+            "url".to_string(),
+            url.map(Value::String).unwrap_or(Value::Null),
+        );
+        if let Some(media_type) = media_type {
+            normalized.insert("mediaType".to_string(), Value::String(media_type));
+        }
+        if let Some(name) = object.get("name").and_then(optional_body_string) {
+            normalized.insert("name".to_string(), Value::String(name));
+        }
+        attachments.push(Value::Object(normalized));
+    }
+    Ok(attachments)
+}
+
+fn optional_https_url(
+    value: Option<&Value>,
+    field: &str,
+) -> std::result::Result<Option<String>, String> {
+    let Some(value) = value.and_then(optional_body_string) else {
+        return Ok(None);
+    };
+    let url =
+        worker::Url::parse(&value).map_err(|_| format!("{field} must be an absolute https URL"))?;
+    if url.scheme() != "https" {
+        return Err(format!("{field} must be an absolute https URL"));
+    }
+    Ok(Some(value))
+}
+
+fn is_private_media_attachment(value: &Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get("url"))
+        .and_then(Value::as_str)
+        .and_then(|url| worker::Url::parse(url).ok())
+        .map(|url| {
+            url.host_str() == Some("social.dais.social")
+                && (url.path().starts_with("/media/_private/")
+                    || url.path().starts_with("/media/_private_signed/"))
+        })
+        .unwrap_or(false)
+}
+
+fn is_local_object_url(value: &str) -> bool {
+    worker::Url::parse(value)
+        .ok()
+        .map(|url| {
+            url.host_str() == Some("social.dais.social") && url.path().starts_with("/users/social/")
+        })
+        .unwrap_or(false)
+}
+
+fn timestamp_for_local_id(iso: &str) -> String {
+    iso.chars()
+        .filter(|ch| !matches!(ch, '-' | ':' | 'T' | 'Z' | '.'))
+        .take(14)
+        .collect()
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn media_type_for_filename(filename: &str) -> String {
