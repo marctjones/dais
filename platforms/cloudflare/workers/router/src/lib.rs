@@ -83,6 +83,13 @@ async fn handle_owner_api(req: Request, env: Env, url: &worker::Url) -> Result<R
             },
             200,
         ),
+        (worker::Method::Get, _) if owner_path.starts_with("/posts/") => {
+            let post_id = decode_component(owner_path.trim_start_matches("/posts/"));
+            match owner_post_detail(&env, &post_id).await? {
+                Some(post) => api_json(&post, 200),
+                None => api_json(&serde_json::json!({ "error": "post not found" }), 404),
+            }
+        }
         (worker::Method::Get, "/timeline/home") => api_json(
             &OwnerItems {
                 items: owner_home_timeline(
@@ -478,6 +485,192 @@ async fn owner_posts(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
     .results::<Map<String, Value>>()
 }
 
+async fn owner_post_detail(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    let post = db
+        .prepare(
+            r#"
+            SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+                   name, summary, visibility, COALESCE(protocol, 'activitypub') AS protocol,
+                   atproto_uri, atproto_cid, encrypted_message, media_attachments,
+                   published_at, created_at, updated_at, in_reply_to,
+                   (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+                   (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+                   (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
+            FROM posts
+            WHERE id = ?1
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&id_arg)?
+        .first::<Map<String, Value>>(None)
+        .await?;
+    let Some(post) = post else {
+        return Ok(None);
+    };
+    let replies = owner_post_replies(env, id).await?;
+    let likes = owner_post_interactions(env, id, "like").await?;
+    let boosts = owner_post_interactions(env, id, "boost").await?;
+    Ok(Some(shape_owner_post_detail(post, replies, likes, boosts)))
+}
+
+async fn owner_post_replies(env: &Env, id: &str) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare(
+        r#"
+        SELECT id, actor_id, actor_username, actor_display_name, actor_avatar_url,
+               content, published_at, created_at
+        FROM replies
+        WHERE post_id = ?1 AND (hidden IS NULL OR hidden = 0)
+        ORDER BY published_at ASC
+        "#,
+    )
+    .bind_refs(&id_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_post_interactions(
+    env: &Env,
+    id: &str,
+    interaction_type: &str,
+) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    let type_arg = D1Type::Text(interaction_type);
+    db.prepare(
+        r#"
+        SELECT id, actor_id, actor_username, actor_display_name, actor_avatar_url,
+               object_url, created_at
+        FROM interactions
+        WHERE (post_id = ?1 OR object_url = ?1) AND type = ?2
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind_refs([&id_arg, &type_arg])?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+fn shape_owner_post_detail(
+    post: Map<String, Value>,
+    replies: Vec<Map<String, Value>>,
+    likes: Vec<Map<String, Value>>,
+    boosts: Vec<Map<String, Value>>,
+) -> Map<String, Value> {
+    let mut detail = Map::new();
+    detail.insert("id".to_string(), row_value_or_null(&post, "id"));
+    detail.insert("actor_id".to_string(), row_value_or_null(&post, "actor_id"));
+    detail.insert("title".to_string(), row_value_or_null(&post, "name"));
+    detail.insert(
+        "content".to_string(),
+        string_value_or_default(&post, "content"),
+    );
+    detail.insert(
+        "content_html".to_string(),
+        row_value_or_null(&post, "content_html"),
+    );
+    detail.insert(
+        "visibility".to_string(),
+        Value::String(title_visibility(
+            string_field(Some(&post), "visibility").as_deref(),
+        )),
+    );
+    detail.insert(
+        "protocol".to_string(),
+        Value::String(title_protocol(
+            string_field(Some(&post), "protocol").as_deref(),
+        )),
+    );
+    detail.insert(
+        "encrypted".to_string(),
+        Value::Bool(non_empty_value(&post, "encrypted_message").is_some()),
+    );
+    detail.insert(
+        "attachments".to_string(),
+        Value::Array(parse_attachment_array(post.get("media_attachments"))),
+    );
+    detail.insert(
+        "in_reply_to".to_string(),
+        row_value_or_null(&post, "in_reply_to"),
+    );
+    detail.insert(
+        "published_at".to_string(),
+        row_value_or_null(&post, "published_at"),
+    );
+    detail.insert(
+        "reply_count".to_string(),
+        Value::from(integer_field(Some(&post), "reply_count")),
+    );
+    detail.insert(
+        "like_count".to_string(),
+        Value::from(integer_field(Some(&post), "like_count")),
+    );
+    detail.insert(
+        "boost_count".to_string(),
+        Value::from(integer_field(Some(&post), "boost_count")),
+    );
+    detail.insert(
+        "replies".to_string(),
+        Value::Array(replies.into_iter().map(Value::Object).collect()),
+    );
+    detail.insert(
+        "likes".to_string(),
+        Value::Array(likes.into_iter().map(Value::Object).collect()),
+    );
+    detail.insert(
+        "boosts".to_string(),
+        Value::Array(boosts.into_iter().map(Value::Object).collect()),
+    );
+    detail
+}
+
+fn title_visibility(value: Option<&str>) -> String {
+    match value {
+        Some("public") => "Public",
+        Some("unlisted") => "Unlisted",
+        Some("direct") => "Direct",
+        _ => "Followers",
+    }
+    .to_string()
+}
+
+fn title_protocol(value: Option<&str>) -> String {
+    match value {
+        Some("atproto") => "AtProto",
+        Some("both") => "Both",
+        _ => "ActivityPub",
+    }
+    .to_string()
+}
+
+fn parse_attachment_array(value: Option<&Value>) -> Vec<Value> {
+    let parsed = match value {
+        Some(Value::Array(items)) => Some(items.clone()),
+        Some(Value::String(text)) if !text.trim().is_empty() => serde_json::from_str::<Value>(text)
+            .ok()
+            .and_then(|value| match value {
+                Value::Array(items) => Some(items),
+                _ => None,
+            }),
+        _ => None,
+    };
+    parsed
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| {
+            item.as_object()
+                .and_then(|object| object.get("url"))
+                .and_then(Value::as_str)
+                .is_some()
+        })
+        .collect()
+}
+
 async fn owner_home_timeline(
     env: &Env,
     limit: i32,
@@ -752,6 +945,12 @@ fn query_param(url: &worker::Url, key: &str) -> Option<String> {
         .map(|(_, value)| value.into_owned())
 }
 
+fn decode_component(value: &str) -> String {
+    urlencoding::decode(value)
+        .map(|decoded| decoded.into_owned())
+        .unwrap_or_else(|_| value.to_string())
+}
+
 fn clamp_limit(value: Option<String>) -> i32 {
     value
         .and_then(|value| value.parse::<i32>().ok())
@@ -797,6 +996,12 @@ fn bool_field(row: Option<&Map<String, Value>>, key: &str) -> bool {
 
 fn row_value_or_null(row: &Map<String, Value>, key: &str) -> Value {
     non_empty_value(row, key).unwrap_or(Value::Null)
+}
+
+fn string_value_or_default(row: &Map<String, Value>, key: &str) -> Value {
+    string_field(Some(row), key)
+        .map(Value::String)
+        .unwrap_or_else(|| Value::String(String::new()))
 }
 
 fn row_value_or_fallback_null(row: &Map<String, Value>, key: &str, fallback: &str) -> Value {
