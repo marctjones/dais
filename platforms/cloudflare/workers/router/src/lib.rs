@@ -103,6 +103,30 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Post, "/discovery/actor") => {
+            let body = read_json(&mut req).await;
+            let target = string_like_any(&body, &["target"]).unwrap_or_default();
+            match owner_discover_actor(&env, target.trim()).await {
+                Ok(result) => api_json(&result, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Post, "/following/follow") => {
+            let body = read_json(&mut req).await;
+            let target = string_like_any(&body, &["target"]).unwrap_or_default();
+            match owner_follow_actor(&env, target.trim()).await {
+                Ok(result) => api_json(&result, 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Post, "/following/unfollow") => {
+            let body = read_json(&mut req).await;
+            let target = string_like_any(&body, &["target"]).unwrap_or_default();
+            match owner_unfollow_actor(&env, target.trim()).await {
+                Ok(result) => api_json(&result, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, "/posts") => api_json(
             &OwnerItems {
                 items: owner_posts(&env, limit).await?,
@@ -2321,6 +2345,285 @@ async fn owner_publish_interaction(
     Ok(response)
 }
 
+async fn owner_follow_actor(
+    env: &Env,
+    target: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    if target.is_empty() {
+        return Err("target is required".to_string());
+    }
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let remote = resolve_activitypub_actor(target).await?;
+    if remote.id.is_empty() || remote.inbox.is_empty() {
+        return Err("target actor must expose id and inbox".to_string());
+    }
+    if remote.id == local_actor.id {
+        return Err("cannot follow the local actor".to_string());
+    }
+    let now = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let follow_id = format!(
+        "{}#follows/{}",
+        local_actor.id,
+        stable_id(&format!("{}\n{now}", remote.id))
+            .chars()
+            .take(16)
+            .collect::<String>()
+    );
+    let activity = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "type": "Follow",
+        "id": follow_id,
+        "actor": local_actor.id,
+        "object": remote.id,
+        "to": [remote.id],
+        "published": now,
+    });
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let follow_arg = D1Type::Text(&follow_id);
+    let local_arg = D1Type::Text(&local_actor.id);
+    let remote_arg = D1Type::Text(&remote.id);
+    let inbox_arg = D1Type::Text(&remote.inbox);
+    let now_arg = D1Type::Text(&now);
+    db.prepare(
+        r#"
+        INSERT INTO following (
+          id, actor_id, target_actor_id, target_inbox, status, created_at, accepted_at
+        ) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, NULL)
+        ON CONFLICT(actor_id, target_actor_id) DO UPDATE SET
+          id = excluded.id,
+          target_inbox = excluded.target_inbox,
+          status = 'pending',
+          created_at = excluded.created_at,
+          accepted_at = NULL
+        "#,
+    )
+    .bind_refs([&follow_arg, &local_arg, &remote_arg, &inbox_arg, &now_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let delivery_ids = insert_delivery_rows(
+        env,
+        &follow_id,
+        vec![remote.inbox.clone()],
+        "Follow",
+        Some(activity.to_string()),
+    )
+    .await?;
+    let following = owner_following_row(env, &local_actor.id, &remote.id)
+        .await
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let mut response = Map::new();
+    response.insert("ok".to_string(), Value::Bool(true));
+    response.insert("following".to_string(), Value::Object(following));
+    response.insert(
+        "delivery_ids".to_string(),
+        Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
+    );
+    Ok(response)
+}
+
+async fn owner_discover_actor(
+    env: &Env,
+    target: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    if target.is_empty() {
+        return Err("target is required".to_string());
+    }
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let target_public_post = discover_public_post_target(target).await;
+    let actor_target = target_public_post
+        .as_ref()
+        .and_then(|post| string_field(Some(post), "actor_id"))
+        .unwrap_or_else(|| target.to_string());
+    let remote = resolve_activitypub_actor(&actor_target).await?;
+    if remote.inbox.is_empty() {
+        return Err("target actor must expose inbox".to_string());
+    }
+    let following = owner_following_row(env, &local_actor.id, &remote.id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let recent_public_posts = fetch_actor_recent_public_posts(&remote).await;
+    let handle = actor_handle(&remote);
+
+    let mut response = Map::new();
+    response.insert("id".to_string(), Value::String(remote.id));
+    response.insert(
+        "actor_type".to_string(),
+        remote.actor_type.map(Value::String).unwrap_or(Value::Null),
+    );
+    response.insert("inbox".to_string(), Value::String(remote.inbox));
+    response.insert(
+        "shared_inbox".to_string(),
+        remote
+            .shared_inbox
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "preferred_username".to_string(),
+        remote
+            .preferred_username
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "name".to_string(),
+        remote.name.map(Value::String).unwrap_or(Value::Null),
+    );
+    response.insert(
+        "summary".to_string(),
+        remote.summary.map(Value::String).unwrap_or(Value::Null),
+    );
+    response.insert(
+        "url".to_string(),
+        remote.url.clone().map(Value::String).unwrap_or(Value::Null),
+    );
+    response.insert(
+        "icon_url".to_string(),
+        remote
+            .icon_url
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "handle".to_string(),
+        handle.map(Value::String).unwrap_or(Value::Null),
+    );
+    response.insert(
+        "following_status".to_string(),
+        following
+            .as_ref()
+            .and_then(|row| string_field(Some(row), "status"))
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "target_public_post".to_string(),
+        target_public_post.map(Value::Object).unwrap_or(Value::Null),
+    );
+    response.insert(
+        "recent_public_posts".to_string(),
+        Value::Array(recent_public_posts.into_iter().map(Value::Object).collect()),
+    );
+    Ok(response)
+}
+
+async fn owner_unfollow_actor(
+    env: &Env,
+    target: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    if target.is_empty() {
+        return Err("target is required".to_string());
+    }
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let remote = resolve_activitypub_actor(target).await?;
+    let existing = owner_following_row(env, &local_actor.id, &remote.id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "not currently following target".to_string())?;
+    let now = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let undo_id = format!(
+        "{}#undos/{}",
+        local_actor.id,
+        stable_id(&format!("{}\n{now}", remote.id))
+            .chars()
+            .take(16)
+            .collect::<String>()
+    );
+    let existing_id = string_field(Some(&existing), "id").unwrap_or_default();
+    let activity = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "type": "Undo",
+        "id": undo_id,
+        "actor": local_actor.id,
+        "object": {
+            "type": "Follow",
+            "id": existing_id,
+            "actor": local_actor.id,
+            "object": remote.id,
+        },
+        "to": [remote.id],
+        "published": now,
+    });
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let local_arg = D1Type::Text(&local_actor.id);
+    let remote_arg = D1Type::Text(&remote.id);
+    db.prepare(
+        r#"
+        UPDATE following
+        SET status = 'rejected', accepted_at = NULL
+        WHERE actor_id = ?1 AND target_actor_id = ?2
+        "#,
+    )
+    .bind_refs([&local_arg, &remote_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let inbox = string_field(Some(&existing), "target_inbox").unwrap_or(remote.inbox);
+    let delivery_ids = insert_delivery_rows(
+        env,
+        &undo_id,
+        vec![inbox],
+        "Undo",
+        Some(activity.to_string()),
+    )
+    .await?;
+    let following = owner_following_row(env, &local_actor.id, &remote.id)
+        .await
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let mut response = Map::new();
+    response.insert("ok".to_string(), Value::Bool(true));
+    response.insert("following".to_string(), Value::Object(following));
+    response.insert(
+        "delivery_ids".to_string(),
+        Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
+    );
+    Ok(response)
+}
+
+async fn owner_following_row(
+    env: &Env,
+    actor_id: &str,
+    target_actor_id: &str,
+) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let actor_arg = D1Type::Text(actor_id);
+    let target_arg = D1Type::Text(target_actor_id);
+    db.prepare(
+        r#"
+        SELECT id, actor_id, target_actor_id, target_inbox, status, created_at, accepted_at
+        FROM following
+        WHERE actor_id = ?1 AND target_actor_id = ?2
+        LIMIT 1
+        "#,
+    )
+    .bind_refs([&actor_arg, &target_arg])?
+    .first::<Map<String, Value>>(None)
+    .await
+}
+
 async fn resolve_activitypub_object_inbox(object_id: &str) -> std::result::Result<String, String> {
     let object_url = public_https_url(object_id, "object_id")?;
     if let Some(inbox) = local_object_inbox(&object_url) {
@@ -2349,13 +2652,160 @@ async fn resolve_activitypub_object_inbox(object_id: &str) -> std::result::Resul
     Ok(shared_inbox.unwrap_or(inbox))
 }
 
+async fn resolve_activitypub_actor(target: &str) -> std::result::Result<RemoteActor, String> {
+    let actor_url = if target.starts_with("http://") || target.starts_with("https://") {
+        public_https_url(target, "target")?
+    } else {
+        resolve_webfinger_actor(target).await?
+    };
+    let actor = fetch_activitypub_json(&actor_url, "actor").await?;
+    let endpoints = actor.get("endpoints").and_then(Value::as_object);
+    Ok(RemoteActor {
+        id: actor
+            .get("id")
+            .and_then(optional_body_string)
+            .unwrap_or_else(|| actor_url.clone()),
+        actor_type: actor.get("type").and_then(optional_body_string),
+        inbox: actor
+            .get("inbox")
+            .and_then(optional_body_string)
+            .unwrap_or_default(),
+        shared_inbox: endpoints
+            .and_then(|value| value.get("sharedInbox"))
+            .and_then(optional_body_string),
+        preferred_username: actor
+            .get("preferredUsername")
+            .and_then(optional_body_string),
+        name: actor
+            .get("name")
+            .and_then(optional_body_string)
+            .or_else(|| {
+                actor
+                    .get("preferredUsername")
+                    .and_then(optional_body_string)
+            }),
+        summary: actor.get("summary").and_then(optional_body_string),
+        icon_url: actor
+            .get("icon")
+            .and_then(Value::as_object)
+            .and_then(|icon| icon.get("url"))
+            .and_then(optional_body_string),
+        url: actor
+            .get("url")
+            .and_then(optional_body_string)
+            .or(Some(actor_url)),
+        outbox: actor.get("outbox").and_then(optional_body_string),
+    })
+}
+
+async fn resolve_webfinger_actor(target: &str) -> std::result::Result<String, String> {
+    let handle = target.trim().trim_start_matches('@');
+    if !handle.contains('@') {
+        return Err("target must be an actor URL or @user@domain handle".to_string());
+    }
+    let domain = handle.rsplit('@').next().unwrap_or_default().trim();
+    public_https_url(&format!("https://{domain}/"), "target domain")?;
+    let resource = format!("acct:{handle}");
+    let url = format!(
+        "https://{}/.well-known/webfinger?resource={}",
+        domain,
+        urlencoding::encode(&resource)
+    );
+    let jrd =
+        fetch_json_with_accept(&url, "application/jrd+json, application/json", "webfinger").await?;
+    let links = jrd
+        .get("links")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("no ActivityPub self link found for {target}"))?;
+    for link in links {
+        let Some(object) = link.as_object() else {
+            continue;
+        };
+        let rel = object
+            .get("rel")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let link_type = object
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let href = object
+            .get("href")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if rel == "self" && link_type.contains("activity+json") && !href.is_empty() {
+            return public_https_url(href, "actor link");
+        }
+    }
+    Err(format!("no ActivityPub self link found for {target}"))
+}
+
+async fn discover_public_post_target(target: &str) -> Option<Map<String, Value>> {
+    if !target.starts_with("http://") && !target.starts_with("https://") {
+        return None;
+    }
+    let object_url = public_https_url(target, "target public post").ok()?;
+    let item = fetch_activitypub_json(&object_url, "object").await.ok()?;
+    normalize_discovered_public_post(&item)
+}
+
+async fn fetch_actor_recent_public_posts(actor: &RemoteActor) -> Vec<Map<String, Value>> {
+    let Some(outbox) = actor.outbox.as_deref() else {
+        return Vec::new();
+    };
+    let Ok(outbox_url) = public_https_url(outbox, "actor outbox") else {
+        return Vec::new();
+    };
+    let Ok(outbox) = fetch_activitypub_json(&outbox_url, "object").await else {
+        return Vec::new();
+    };
+    let page = match outbox.get("first").and_then(|value| {
+        value.as_str().map(ToOwned::to_owned).or_else(|| {
+            value
+                .as_object()
+                .and_then(|object| object.get("id"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+    }) {
+        Some(page_url) => match public_https_url(&page_url, "actor outbox first page") {
+            Ok(url) => fetch_activitypub_json(&url, "object")
+                .await
+                .unwrap_or_else(|_| outbox.clone()),
+            Err(_) => outbox.clone(),
+        },
+        None => outbox.clone(),
+    };
+    let items = page
+        .get("orderedItems")
+        .or_else(|| page.get("items"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    items
+        .iter()
+        .filter_map(normalize_discovered_public_post)
+        .take(3)
+        .collect()
+}
+
 async fn fetch_activitypub_json(url: &str, label: &str) -> std::result::Result<Value, String> {
+    fetch_json_with_accept(
+        url,
+        "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
+        label,
+    )
+    .await
+}
+
+async fn fetch_json_with_accept(
+    url: &str,
+    accept: &str,
+    label: &str,
+) -> std::result::Result<Value, String> {
     let headers = Headers::new();
     headers
-        .set(
-            "Accept",
-            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
-        )
+        .set("Accept", accept)
         .map_err(|error| error.to_string())?;
     headers
         .set("User-Agent", "dais-owner-api/1.0")
@@ -2395,6 +2845,145 @@ fn local_object_inbox(object_id: &str) -> Option<String> {
         url.scheme(),
         url.host_str()?,
         username
+    ))
+}
+
+fn normalize_discovered_public_post(item: &Value) -> Option<Map<String, Value>> {
+    let object = if item.get("type").and_then(Value::as_str) == Some("Create") {
+        item.get("object").unwrap_or(item)
+    } else {
+        item
+    };
+    let object_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(object_type, "Note" | "Question" | "Article") {
+        return None;
+    }
+    let mut recipients = Vec::new();
+    collect_recipients(object.get("to"), &mut recipients);
+    collect_recipients(item.get("to"), &mut recipients);
+    collect_recipients(object.get("cc"), &mut recipients);
+    collect_recipients(item.get("cc"), &mut recipients);
+    if !recipients.iter().any(|value| value == PUBLIC_COLLECTION) {
+        return None;
+    }
+    let mut post = Map::new();
+    post.insert(
+        "id".to_string(),
+        Value::String(
+            object
+                .get("id")
+                .or_else(|| item.get("id"))
+                .and_then(optional_body_string)
+                .unwrap_or_default(),
+        ),
+    );
+    post.insert("type".to_string(), Value::String(object_type.to_string()));
+    post.insert(
+        "actor_id".to_string(),
+        public_post_actor_id(item, object)
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    post.insert(
+        "url".to_string(),
+        object
+            .get("url")
+            .or_else(|| item.get("url"))
+            .and_then(optional_body_string)
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    post.insert(
+        "name".to_string(),
+        object
+            .get("name")
+            .and_then(optional_body_string)
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    post.insert(
+        "summary".to_string(),
+        object
+            .get("summary")
+            .and_then(optional_body_string)
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    let content = object
+        .get("content")
+        .or_else(|| object.get("name"))
+        .or_else(|| object.get("summary"))
+        .and_then(|value| {
+            value
+                .as_str()
+                .map(ToOwned::to_owned)
+                .or_else(|| optional_body_string(value))
+        })
+        .unwrap_or_default();
+    post.insert(
+        "content".to_string(),
+        Value::String(strip_html(&content).chars().take(280).collect()),
+    );
+    post.insert(
+        "published".to_string(),
+        object
+            .get("published")
+            .or_else(|| item.get("published"))
+            .and_then(optional_body_string)
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    Some(post)
+}
+
+fn collect_recipients(value: Option<&Value>, recipients: &mut Vec<String>) {
+    match value {
+        Some(Value::Array(items)) => {
+            for item in items {
+                if let Some(text) = optional_body_string(item) {
+                    recipients.push(text);
+                }
+            }
+        }
+        Some(value) => {
+            if let Some(text) = optional_body_string(value) {
+                recipients.push(text);
+            }
+        }
+        None => {}
+    }
+}
+
+fn public_post_actor_id(item: &Value, object: &Value) -> Option<String> {
+    let actor = object
+        .get("attributedTo")
+        .or_else(|| object.get("actor"))
+        .or_else(|| item.get("actor"))
+        .or_else(|| item.get("attributedTo"))?;
+    match actor {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Array(items) => items.iter().find_map(optional_body_string),
+        _ => None,
+    }
+}
+
+fn actor_handle(actor: &RemoteActor) -> Option<String> {
+    let preferred_username = actor.preferred_username.as_deref()?;
+    let url = worker::Url::parse(actor.url.as_deref().unwrap_or(&actor.id)).ok()?;
+    Some(format!(
+        "@{}@{}",
+        preferred_username,
+        url.host_str().unwrap_or_default()
     ))
 }
 
@@ -2738,6 +3327,36 @@ fn escape_html(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+fn strip_html(value: &str) -> String {
+    let mut output = String::new();
+    let mut in_tag = false;
+    let mut previous_space = false;
+    for ch in value.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                if !previous_space && !output.is_empty() {
+                    output.push(' ');
+                    previous_space = true;
+                }
+            }
+            '>' => in_tag = false,
+            _ if in_tag => {}
+            _ if ch.is_whitespace() => {
+                if !previous_space && !output.is_empty() {
+                    output.push(' ');
+                    previous_space = true;
+                }
+            }
+            _ => {
+                output.push(ch);
+                previous_space = false;
+            }
+        }
+    }
+    output.trim().to_string()
 }
 
 fn media_type_for_filename(filename: &str) -> String {
@@ -3515,6 +4134,19 @@ struct DeliveryCount {
 
 struct LocalActor {
     id: String,
+}
+
+struct RemoteActor {
+    id: String,
+    actor_type: Option<String>,
+    inbox: String,
+    shared_inbox: Option<String>,
+    preferred_username: Option<String>,
+    name: Option<String>,
+    summary: Option<String>,
+    icon_url: Option<String>,
+    url: Option<String>,
+    outbox: Option<String>,
 }
 
 struct OwnerToken {
