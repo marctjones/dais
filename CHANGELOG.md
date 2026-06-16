@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.40] - 2026-06-16
+
+### Added
+- Added first-class live owner API diagnostics to the shared Rust client, `dais
+  owner diagnostics`, and Dais Desk diagnostics refreshes.
+
 ## [1.28.39] - 2026-06-16
 
 ### Changed

@@ -786,6 +786,8 @@ pub enum OwnerCommand {
     Search(OwnerSearchArgs),
     /// Show live owner API server stats.
     Stats(OwnerApiArgs),
+    /// Show live owner API diagnostics.
+    Diagnostics(OwnerApiArgs),
     /// List live owner API source subscriptions and reader items.
     Sources(OwnerApiArgs),
     /// Add a source subscription through the live owner API.

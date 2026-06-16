@@ -1474,6 +1474,10 @@ async function loadLiveSection(section: string) {
   } else if (section === "Stats") {
     ownerStats = await invoke<OwnerStats>("owner_stats");
     render();
+  } else if (section === "Diagnostics") {
+    const diagnostics = await invoke<OwnerSnapshot["diagnostics"]>("owner_diagnostics");
+    snapshot = snapshot ? { ...snapshot, diagnostics } : snapshot;
+    render();
   } else if (section === "Sources") {
     const sources = await invoke<OwnerSources>("owner_sources");
     sourceSubscriptions = sources.subscriptions;

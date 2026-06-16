@@ -23,9 +23,10 @@ use cli::{
 use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
-    ModerationState, OwnerApiClient, OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor,
-    OwnerFriend, OwnerInteraction, OwnerNotification, OwnerPostDetail, OwnerProfile,
-    OwnerProfileUpdate, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats,
+    DiagnosticStatus, ModerationState, OwnerApiClient, OwnerDelivery, OwnerDirectMessage,
+    OwnerDiscoveredActor, OwnerFriend, OwnerInteraction, OwnerNotification, OwnerPostDetail,
+    OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd,
+    OwnerSources, OwnerStats,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
@@ -1059,6 +1060,13 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_stats(&stats);
         }
+        OwnerCommand::Diagnostics(args) => {
+            let diagnostics = owner_api(&args)
+                .diagnostics()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_diagnostics(&diagnostics);
+        }
         OwnerCommand::Sources(args) => {
             let sources = owner_api(&args)
                 .sources()
@@ -1453,6 +1461,21 @@ fn print_owner_stats(stats: &OwnerStats) {
     println!("blocks_total={}", stats.blocks_total);
     println!("allowlist_hosts={}", stats.allowlist_hosts);
     println!("closed_network={}", stats.closed_network);
+}
+
+fn print_owner_diagnostics(diagnostics: &[DiagnosticStatus]) {
+    if diagnostics.is_empty() {
+        println!("No diagnostics found");
+        return;
+    }
+    for diagnostic in diagnostics {
+        println!(
+            "{}={} {}",
+            diagnostic.key,
+            if diagnostic.ok { "ok" } else { "warn" },
+            diagnostic.detail
+        );
+    }
 }
 
 fn print_owner_sources(sources: &OwnerSources) {

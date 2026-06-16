@@ -203,6 +203,21 @@ async fn owner_stats(app: tauri::AppHandle) -> Result<OwnerStats, String> {
 }
 
 #[tauri::command]
+async fn owner_diagnostics(app: tauri::AppHandle) -> Result<Vec<DiagnosticStatus>, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .diagnostics()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn owner_sources(app: tauri::AppHandle) -> Result<OwnerSources, String> {
     let stored = load_settings(&app)?;
     let token = stored
@@ -649,6 +664,7 @@ fn main() {
             owner_direct_messages,
             owner_search,
             owner_stats,
+            owner_diagnostics,
             owner_sources,
             add_owner_source,
             remove_owner_source,

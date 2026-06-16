@@ -109,6 +109,12 @@ impl OwnerApiClient {
         self.get("/api/dais/owner/stats").await
     }
 
+    pub async fn diagnostics(&self) -> ClientResult<Vec<DiagnosticStatus>> {
+        let response: OwnerItems<DiagnosticStatus> =
+            self.get("/api/dais/owner/diagnostics").await?;
+        Ok(response.items)
+    }
+
     pub async fn sources(&self) -> ClientResult<OwnerSources> {
         self.get("/api/dais/owner/sources").await
     }
