@@ -755,7 +755,8 @@ async fn mastodon_status(env: &Env, id: &str) -> Result<Option<Value>> {
 
 async fn mastodon_status_row(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
     let db = env.d1("DB")?;
-    let id_arg = D1Type::Text(id);
+    let canonical_id = canonical_mastodon_status_id(id);
+    let id_arg = D1Type::Text(&canonical_id);
     db.prepare(
         r#"
         SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
@@ -779,12 +780,13 @@ async fn mastodon_status_row(env: &Env, id: &str) -> Result<Option<Map<String, V
 }
 
 async fn mastodon_status_context(env: &Env, id: &str) -> Result<Option<Value>> {
-    let Some(status) = mastodon_status(env, id).await? else {
+    let canonical_id = canonical_mastodon_status_id(id);
+    let Some(status) = mastodon_status(env, &canonical_id).await? else {
         return Ok(None);
     };
 
     let mut ancestors = Vec::new();
-    let mut seen = vec![id.to_string()];
+    let mut seen = vec![canonical_id.clone()];
     let mut parent_id = status
         .get("in_reply_to_id")
         .and_then(Value::as_str)
@@ -805,7 +807,7 @@ async fn mastodon_status_context(env: &Env, id: &str) -> Result<Option<Value>> {
     }
 
     let db = env.d1("DB")?;
-    let id_arg = D1Type::Text(id);
+    let id_arg = D1Type::Text(&canonical_id);
     let rows = db
         .prepare(
             r#"
@@ -895,14 +897,15 @@ async fn mastodon_create_status(env: &Env, body: &Value) -> Result<Response> {
 }
 
 async fn mastodon_update_status(env: &Env, id: &str, body: &Value) -> Result<Response> {
-    if mastodon_status(env, id).await?.is_none() {
+    let canonical_id = canonical_mastodon_status_id(id);
+    if mastodon_status(env, &canonical_id).await?.is_none() {
         return api_json(&serde_json::json!({ "error": "Record not found" }), 404);
     }
     let text = body_string_any(body, &["status", "text"]).unwrap_or_default();
     let summary = body.get("spoiler_text").and_then(optional_body_string);
 
     let db = env.d1("DB")?;
-    let id_arg = D1Type::Text(id);
+    let id_arg = D1Type::Text(&canonical_id);
     if text.trim().is_empty() {
         let summary_arg = summary.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
         db.prepare("UPDATE posts SET updated_at = CURRENT_TIMESTAMP, summary = ?1 WHERE id = ?2")
@@ -922,17 +925,18 @@ async fn mastodon_update_status(env: &Env, id: &str, body: &Value) -> Result<Res
         .await?;
     }
 
-    match mastodon_status(env, id).await? {
+    match mastodon_status(env, &canonical_id).await? {
         Some(value) => api_json(&value, 200),
         None => api_json(&serde_json::json!({ "error": "Record not found" }), 404),
     }
 }
 
 async fn mastodon_delete_status(env: &Env, id: &str) -> Result<Response> {
-    let Some(existing) = mastodon_status(env, id).await? else {
+    let canonical_id = canonical_mastodon_status_id(id);
+    let Some(existing) = mastodon_status(env, &canonical_id).await? else {
         return api_json(&serde_json::json!({ "error": "Record not found" }), 404);
     };
-    owner_delete_post(env, id).await?;
+    owner_delete_post(env, &canonical_id).await?;
     api_json(&existing, 200)
 }
 
@@ -1319,11 +1323,14 @@ fn array_from_body_value(value: &Value) -> Vec<String> {
 }
 
 async fn mastodon_status_action(env: &Env, status_id: &str, action: &str) -> Result<Response> {
-    let Some(existing) = mastodon_status(env, status_id).await? else {
+    let canonical_id = canonical_mastodon_status_id(status_id);
+    let Some(existing) = mastodon_status(env, &canonical_id).await? else {
         return api_json(&serde_json::json!({ "error": "Record not found" }), 404);
     };
-    mastodon_toggle_status_interaction(env, status_id, action).await?;
-    let value = mastodon_status(env, status_id).await?.unwrap_or(existing);
+    mastodon_toggle_status_interaction(env, &canonical_id, action).await?;
+    let value = mastodon_status(env, &canonical_id)
+        .await?
+        .unwrap_or(existing);
     api_json(&value, 200)
 }
 
@@ -6308,6 +6315,17 @@ fn is_local_object_url(value: &str) -> bool {
             url.host_str() == Some("social.dais.social") && url.path().starts_with("/users/social/")
         })
         .unwrap_or(false)
+}
+
+fn canonical_mastodon_status_id(value: &str) -> String {
+    worker::Url::parse(value)
+        .ok()
+        .and_then(|url| {
+            let path = url.path();
+            (path.starts_with("/users/social/posts/") && !path.ends_with('/'))
+                .then(|| format!("https://social.dais.social{path}"))
+        })
+        .unwrap_or_else(|| value.to_string())
 }
 
 fn timestamp_for_local_id(iso: &str) -> String {
