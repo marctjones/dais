@@ -29,6 +29,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         "/__dais-fixtures/activitypub/actor" => fixture_actor_response(&url),
         "/__dais-fixtures/activitypub/outbox" => fixture_outbox_response(&url),
         "/__dais-fixtures/activitypub/posts/public-preview" => fixture_post_response(&url),
+        "/__dais-fixtures/sources/rss" => fixture_rss_response(&url),
         "/health" => Response::ok("OK"),
         _ => Response::error(
             "Rust router migration scaffold: route not migrated yet",
@@ -271,6 +272,14 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             let body = read_json(&mut req).await;
             match owner_add_source(&env, &body).await {
                 Ok(source) => api_json(&serde_json::json!({ "ok": true, "source": source }), 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Post, "/sources/refresh") => {
+            let body = read_json(&mut req).await;
+            let id = body.get("id").and_then(optional_body_string);
+            match owner_refresh_sources(&env, id.as_deref()).await {
+                Ok(result) => api_json(&result, 200),
                 Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
             }
         }
@@ -2018,6 +2027,312 @@ async fn owner_source_by_id(env: &Env, id: &str) -> Result<Option<Map<String, Va
     .await
 }
 
+async fn owner_refresh_sources(env: &Env, id: Option<&str>) -> std::result::Result<Value, String> {
+    let rows = if let Some(id) = id.filter(|value| !value.trim().is_empty()) {
+        match owner_source_by_id(env, id)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            Some(source) => vec![source],
+            None => return Err(format!("source not found: {id}")),
+        }
+    } else {
+        owner_active_sources(env)
+            .await
+            .map_err(|error| error.to_string())?
+    };
+
+    let mut items = Vec::new();
+    for source in rows {
+        let source_id = string_field(Some(&source), "id").unwrap_or_default();
+        match refresh_feed_source(env, &source).await {
+            Ok(()) => {
+                let status = owner_source_by_id(env, &source_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|row| string_field(Some(&row), "status"))
+                    .unwrap_or_else(|| "active".to_string());
+                items.push(serde_json::json!({ "id": source_id, "ok": true, "status": status }));
+            }
+            Err(message) => {
+                let message = truncate_chars(&message, 500);
+                mark_source_error(env, &source_id, &message).await?;
+                items.push(serde_json::json!({ "id": source_id, "ok": false, "error": message }));
+            }
+        }
+    }
+    let ok = items
+        .iter()
+        .all(|item| item.get("ok").and_then(Value::as_bool).unwrap_or(false));
+    Ok(serde_json::json!({ "ok": ok, "items": items }))
+}
+
+async fn owner_active_sources(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+               policy_json, api_secret_name, created_at, updated_at
+        FROM source_subscriptions
+        WHERE status = 'active'
+          AND source_type IN ('rss', 'atom', 'api')
+        ORDER BY COALESCE(next_fetch_at, created_at) ASC
+        LIMIT 20
+        "#,
+    )
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn refresh_feed_source(
+    env: &Env,
+    source: &Map<String, Value>,
+) -> std::result::Result<(), String> {
+    let source_id =
+        string_field(Some(source), "id").ok_or_else(|| "source id is missing".to_string())?;
+    let source_type =
+        string_field(Some(source), "source_type").unwrap_or_else(|| "rss".to_string());
+    let url =
+        string_field(Some(source), "url").ok_or_else(|| "source url is missing".to_string())?;
+    let cadence = row_int(source, "refresh_cadence_minutes")
+        .unwrap_or(60)
+        .max(5);
+    let next_fetch_at = js_sys::Date::new(&JsValue::from_f64(
+        js_sys::Date::now() + (cadence as f64) * 60.0 * 1000.0,
+    ))
+    .to_iso_string()
+    .as_string()
+    .unwrap_or_default();
+
+    let mut response = fetch_source(env, source, &url).await?;
+    let status = response.status_code();
+    if status == 304 {
+        mark_source_refreshed(
+            env,
+            &source_id,
+            &next_fetch_at,
+            string_field(Some(source), "etag").as_deref(),
+            string_field(Some(source), "last_modified").as_deref(),
+        )
+        .await?;
+        return Ok(());
+    }
+    if !(200..=299).contains(&status) {
+        return Err(format!("source fetch failed with HTTP {status}"));
+    }
+
+    let etag = response
+        .headers()
+        .get("ETag")
+        .map_err(|error| error.to_string())?
+        .or_else(|| string_field(Some(source), "etag"));
+    let last_modified = response
+        .headers()
+        .get("Last-Modified")
+        .map_err(|error| error.to_string())?
+        .or_else(|| string_field(Some(source), "last_modified"));
+    let body = response.text().await.map_err(|error| error.to_string())?;
+    let policy = source_policy_from_row(source);
+    let mut items = if source_type == "api" {
+        parse_api_items(&body, source, &policy)?
+    } else {
+        parse_feed_items(&body, source, &policy)
+    };
+    items.truncate(50);
+    for item in items {
+        insert_source_item(env, &source_id, &source_type, &policy, &item).await?;
+    }
+    mark_source_refreshed(
+        env,
+        &source_id,
+        &next_fetch_at,
+        etag.as_deref(),
+        last_modified.as_deref(),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn fetch_source(
+    env: &Env,
+    env_source: &Map<String, Value>,
+    url: &str,
+) -> std::result::Result<worker::Response, String> {
+    let headers = Headers::new();
+    headers
+        .set("User-Agent", "dais-source-refresh/1.0")
+        .map_err(|error| error.to_string())?;
+    if let Some(etag) = string_field(Some(env_source), "etag") {
+        headers
+            .set("If-None-Match", &etag)
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(last_modified) = string_field(Some(env_source), "last_modified") {
+        headers
+            .set("If-Modified-Since", &last_modified)
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(secret_name) = string_field(Some(env_source), "api_secret_name") {
+        if let Ok(secret) = env.var(&secret_name) {
+            headers
+                .set("Authorization", &format!("Bearer {}", secret.to_string()))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    let mut init = RequestInit::new();
+    init.with_method(worker::Method::Get).with_headers(headers);
+    let request = Request::new_with_init(url, &init).map_err(|error| error.to_string())?;
+    Fetch::Request(request)
+        .send()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn insert_source_item(
+    env: &Env,
+    source_id: &str,
+    source_type: &str,
+    policy: &SourcePolicy,
+    item: &SourceRefreshItem,
+) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let policy_json =
+        serde_json::to_string(&policy.to_value()).map_err(|error| error.to_string())?;
+    let metadata_json = serde_json::json!({ "scheduled": true }).to_string();
+    let item_id_arg = D1Type::Text(&item.id);
+    let source_id_arg = D1Type::Text(source_id);
+    let source_type_arg = D1Type::Text(source_type);
+    let title_arg = D1Type::Text(&item.title);
+    let canonical_arg = item
+        .canonical_url
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let external_arg = item
+        .external_id
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let author_arg = item
+        .author
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let published_arg = item
+        .published_at
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let excerpt_arg = item
+        .excerpt
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let content_type_arg = D1Type::Text("text/html");
+    let hash_arg = D1Type::Text(&item.hash);
+    let thumbnail_arg = item
+        .thumbnail_url
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let policy_arg = D1Type::Text(&policy_json);
+    let metadata_arg = D1Type::Text(&metadata_json);
+    db.prepare(
+        r#"
+        INSERT OR IGNORE INTO source_items (
+          id, source_id, source_type, title, canonical_url, external_id, author,
+          published_at, excerpt, content_type, hash, thumbnail_url, rights_policy_json,
+          raw_metadata_json, fetched_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        "#,
+    )
+    .bind_refs([
+        &item_id_arg,
+        &source_id_arg,
+        &source_type_arg,
+        &title_arg,
+        &canonical_arg,
+        &external_arg,
+        &author_arg,
+        &published_arg,
+        &excerpt_arg,
+        &content_type_arg,
+        &hash_arg,
+        &thumbnail_arg,
+        &policy_arg,
+        &metadata_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+async fn mark_source_refreshed(
+    env: &Env,
+    source_id: &str,
+    next_fetch_at: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let next_arg = D1Type::Text(next_fetch_at);
+    let etag_arg = etag.map(D1Type::Text).unwrap_or(D1Type::Null);
+    let modified_arg = last_modified.map(D1Type::Text).unwrap_or(D1Type::Null);
+    let id_arg = D1Type::Text(source_id);
+    db.prepare(
+        r#"
+        UPDATE source_subscriptions
+        SET status = 'active',
+            last_fetched_at = CURRENT_TIMESTAMP,
+            next_fetch_at = ?1,
+            etag = COALESCE(?2, etag),
+            last_modified = COALESCE(?3, last_modified),
+            last_error = NULL,
+            error_count = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?4
+        "#,
+    )
+    .bind_refs([&next_arg, &etag_arg, &modified_arg, &id_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn mark_source_error(
+    env: &Env,
+    source_id: &str,
+    message: &str,
+) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let message_arg = D1Type::Text(message);
+    let id_arg = D1Type::Text(source_id);
+    db.prepare(
+        r#"
+        UPDATE source_subscriptions
+        SET status = 'error',
+            last_error = ?1,
+            error_count = error_count + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?2
+        "#,
+    )
+    .bind_refs([&message_arg, &id_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 async fn owner_delete_source(env: &Env, id: &str) -> Result<()> {
     let db = env.d1("DB")?;
     let id_arg = D1Type::Text(id);
@@ -3195,6 +3510,382 @@ fn media_r2_key_from_url(value: &str) -> Option<String> {
     None
 }
 
+#[derive(Clone)]
+struct SourcePolicy {
+    private_reader_only: bool,
+    excerpt_only: bool,
+    link_required: bool,
+    attribution_required: bool,
+    no_image: bool,
+    full_text_allowed: bool,
+}
+
+impl SourcePolicy {
+    fn default() -> Self {
+        Self {
+            private_reader_only: true,
+            excerpt_only: true,
+            link_required: true,
+            attribution_required: true,
+            no_image: false,
+            full_text_allowed: false,
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        serde_json::json!({
+            "private_reader_only": self.private_reader_only,
+            "excerpt_only": self.excerpt_only,
+            "link_required": self.link_required,
+            "attribution_required": self.attribution_required,
+            "no_image": self.no_image,
+            "full_text_allowed": self.full_text_allowed,
+        })
+    }
+}
+
+struct SourceRefreshItem {
+    id: String,
+    title: String,
+    canonical_url: Option<String>,
+    external_id: Option<String>,
+    author: Option<String>,
+    published_at: Option<String>,
+    excerpt: Option<String>,
+    thumbnail_url: Option<String>,
+    hash: String,
+}
+
+fn source_policy_from_row(row: &Map<String, Value>) -> SourcePolicy {
+    let mut policy = SourcePolicy::default();
+    let Some(value) = string_field(Some(row), "policy_json") else {
+        return policy;
+    };
+    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(&value) else {
+        return policy;
+    };
+    if let Some(value) = object.get("private_reader_only").and_then(Value::as_bool) {
+        policy.private_reader_only = value;
+    }
+    if let Some(value) = object.get("excerpt_only").and_then(Value::as_bool) {
+        policy.excerpt_only = value;
+    }
+    if let Some(value) = object.get("link_required").and_then(Value::as_bool) {
+        policy.link_required = value;
+    }
+    if let Some(value) = object.get("attribution_required").and_then(Value::as_bool) {
+        policy.attribution_required = value;
+    }
+    if let Some(value) = object.get("no_image").and_then(Value::as_bool) {
+        policy.no_image = value;
+    }
+    if let Some(value) = object.get("full_text_allowed").and_then(Value::as_bool) {
+        policy.full_text_allowed = value;
+    }
+    policy
+}
+
+fn parse_feed_items(
+    xml: &str,
+    source: &Map<String, Value>,
+    policy: &SourcePolicy,
+) -> Vec<SourceRefreshItem> {
+    let rss_items = xml_blocks(xml, "item");
+    if !rss_items.is_empty() {
+        return rss_items
+            .into_iter()
+            .map(|block| normalize_feed_block(&block, source, policy, "rss"))
+            .collect();
+    }
+    xml_blocks(xml, "entry")
+        .into_iter()
+        .map(|block| normalize_feed_block(&block, source, policy, "atom"))
+        .collect()
+}
+
+fn parse_api_items(
+    body: &str,
+    source: &Map<String, Value>,
+    policy: &SourcePolicy,
+) -> std::result::Result<Vec<SourceRefreshItem>, String> {
+    let value = serde_json::from_str::<Value>(body).map_err(|error| error.to_string())?;
+    let rows = value
+        .get("articles")
+        .or_else(|| value.get("items"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(rows
+        .iter()
+        .map(|row| normalize_api_item(row, source, policy))
+        .collect())
+}
+
+fn normalize_api_item(
+    row: &Value,
+    source: &Map<String, Value>,
+    policy: &SourcePolicy,
+) -> SourceRefreshItem {
+    let title = value_string(row.get("title"))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "(untitled source item)".to_string());
+    let canonical_url = value_string(row.get("url").or_else(|| row.get("external_url")));
+    let external_id = value_string(row.get("id").or_else(|| row.get("guid")))
+        .or_else(|| canonical_url.clone())
+        .or_else(|| Some(title.clone()));
+    let author = value_string(row.get("author").or_else(|| row.get("byline"))).or_else(|| {
+        row.get("source")
+            .and_then(|source| source.get("name"))
+            .and_then(|value| value_string(Some(value)))
+    });
+    let published_at = normalize_source_date(value_string(
+        row.get("publishedAt")
+            .or_else(|| row.get("date_published"))
+            .or_else(|| row.get("published_at")),
+    ));
+    let excerpt = value_string(
+        row.get("description")
+            .or_else(|| row.get("summary"))
+            .or_else(|| row.get("excerpt")),
+    )
+    .and_then(|value| source_excerpt(&value, excerpt_limit(policy)));
+    let thumbnail_url = if policy.no_image {
+        None
+    } else {
+        value_string(row.get("urlToImage").or_else(|| row.get("image")))
+    };
+    source_refresh_item(
+        source,
+        title,
+        canonical_url,
+        external_id,
+        author,
+        published_at,
+        excerpt,
+        thumbnail_url,
+    )
+}
+
+fn normalize_feed_block(
+    block: &str,
+    source: &Map<String, Value>,
+    policy: &SourcePolicy,
+    kind: &str,
+) -> SourceRefreshItem {
+    let title =
+        xml_text_tag(block, "title").unwrap_or_else(|| "(untitled source item)".to_string());
+    let canonical_url = if kind == "atom" {
+        xml_attr_tag(block, "link", "href").or_else(|| xml_text_tag(block, "link"))
+    } else {
+        xml_text_tag(block, "link")
+    };
+    let external_id = xml_text_tag(block, "guid")
+        .or_else(|| xml_text_tag(block, "id"))
+        .or_else(|| canonical_url.clone())
+        .or_else(|| Some(title.clone()));
+    let author = xml_text_tag(block, "author")
+        .or_else(|| xml_text_tag(block, "dc:creator"))
+        .or_else(|| xml_text_tag(block, "name"));
+    let published_at = normalize_source_date(
+        xml_text_tag(block, "pubDate")
+            .or_else(|| xml_text_tag(block, "published"))
+            .or_else(|| xml_text_tag(block, "updated")),
+    );
+    let excerpt = xml_text_tag(block, "description")
+        .or_else(|| xml_text_tag(block, "summary"))
+        .and_then(|value| source_excerpt(&value, excerpt_limit(policy)));
+    let thumbnail_url = if policy.no_image {
+        None
+    } else {
+        xml_attr_tag(block, "media:thumbnail", "url")
+    };
+    source_refresh_item(
+        source,
+        title,
+        canonical_url,
+        external_id,
+        author,
+        published_at,
+        excerpt,
+        thumbnail_url,
+    )
+}
+
+fn source_refresh_item(
+    source: &Map<String, Value>,
+    title: String,
+    canonical_url: Option<String>,
+    external_id: Option<String>,
+    author: Option<String>,
+    published_at: Option<String>,
+    excerpt: Option<String>,
+    thumbnail_url: Option<String>,
+) -> SourceRefreshItem {
+    let source_id = string_field(Some(source), "id").unwrap_or_default();
+    let external_seed = external_id.clone().unwrap_or_default();
+    let canonical_seed = canonical_url.clone().unwrap_or_default();
+    let seed = format!("{source_id}\n{external_seed}\n{canonical_seed}\n{title}");
+    let hash = stable_id(&seed);
+    SourceRefreshItem {
+        id: format!("src-{}", hash.chars().take(24).collect::<String>()),
+        title,
+        canonical_url,
+        external_id,
+        author,
+        published_at,
+        excerpt,
+        thumbnail_url,
+        hash,
+    }
+}
+
+fn xml_blocks(xml: &str, tag: &str) -> Vec<String> {
+    let lower_xml = xml.to_ascii_lowercase();
+    let open_prefix = format!("<{}", tag.to_ascii_lowercase());
+    let close_tag = format!("</{}>", tag.to_ascii_lowercase());
+    let mut blocks = Vec::new();
+    let mut offset = 0;
+    while let Some(open_rel) = lower_xml[offset..].find(&open_prefix) {
+        let open = offset + open_rel;
+        let Some(open_end_rel) = lower_xml[open..].find('>') else {
+            break;
+        };
+        let content_start = open + open_end_rel + 1;
+        let Some(close_rel) = lower_xml[content_start..].find(&close_tag) else {
+            break;
+        };
+        let close = content_start + close_rel;
+        blocks.push(xml[content_start..close].to_string());
+        offset = close + close_tag.len();
+    }
+    blocks
+}
+
+fn xml_text_tag(xml: &str, tag: &str) -> Option<String> {
+    let lower_xml = xml.to_ascii_lowercase();
+    let open_prefix = format!("<{}", tag.to_ascii_lowercase());
+    let open = lower_xml.find(&open_prefix)?;
+    let open_end = open + lower_xml[open..].find('>')?;
+    let content_start = open_end + 1;
+    let close_tag = format!("</{}>", tag.to_ascii_lowercase());
+    let close = content_start + lower_xml[content_start..].find(&close_tag)?;
+    let value = strip_xml_tags(&strip_cdata(&xml[content_start..close]));
+    let decoded = decode_xml(value.trim());
+    if decoded.is_empty() {
+        None
+    } else {
+        Some(decoded)
+    }
+}
+
+fn xml_attr_tag(xml: &str, tag: &str, attr: &str) -> Option<String> {
+    let lower_xml = xml.to_ascii_lowercase();
+    let open_prefix = format!("<{}", tag.to_ascii_lowercase());
+    let open = lower_xml.find(&open_prefix)?;
+    let end = open + lower_xml[open..].find('>')?;
+    let raw_attrs = &xml[open..end];
+    let lower_attrs = raw_attrs.to_ascii_lowercase();
+    let attr_prefix = format!("{}=", attr.to_ascii_lowercase());
+    let attr_start = lower_attrs.find(&attr_prefix)? + attr_prefix.len();
+    let quote = raw_attrs[attr_start..].chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let value_start = attr_start + quote.len_utf8();
+    let value_end = value_start + raw_attrs[value_start..].find(quote)?;
+    Some(decode_xml(&raw_attrs[value_start..value_end])).filter(|value| !value.trim().is_empty())
+}
+
+fn strip_cdata(value: &str) -> String {
+    value
+        .strip_prefix("<![CDATA[")
+        .and_then(|inner| inner.strip_suffix("]]>"))
+        .unwrap_or(value)
+        .to_string()
+}
+
+fn strip_xml_tags(value: &str) -> String {
+    let mut output = String::new();
+    let mut in_tag = false;
+    for ch in value.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                output.push(' ');
+            }
+            '>' => in_tag = false,
+            _ if !in_tag => output.push(ch),
+            _ => {}
+        }
+    }
+    output
+}
+
+fn decode_xml(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+}
+
+fn source_excerpt(value: &str, max_chars: usize) -> Option<String> {
+    let text = collapse_whitespace(&strip_xml_tags(&decode_xml(value)));
+    let excerpt: String = text.chars().take(max_chars).collect();
+    if excerpt.trim().is_empty() {
+        None
+    } else {
+        Some(excerpt)
+    }
+}
+
+fn excerpt_limit(policy: &SourcePolicy) -> usize {
+    if policy.full_text_allowed && !policy.excerpt_only {
+        2000
+    } else {
+        800
+    }
+}
+
+fn normalize_source_date(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let date = js_sys::Date::new(&JsValue::from_str(&value));
+    let millis = date.get_time();
+    if millis.is_nan() {
+        None
+    } else {
+        date.to_iso_string().as_string()
+    }
+}
+
+fn value_string(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(text) => Some(text.to_string()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn row_int(row: &Map<String, Value>, key: &str) -> Option<i32> {
+    match row.get(key)? {
+        Value::Number(number) => number.as_i64().and_then(|value| i32::try_from(value).ok()),
+        Value::String(text) => text.parse::<i32>().ok(),
+        Value::Bool(value) => Some(if *value { 1 } else { 0 }),
+        _ => None,
+    }
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
 fn normalize_visibility(value: &str) -> Option<String> {
     let normalized = value.to_ascii_lowercase();
     if matches!(
@@ -3901,6 +4592,49 @@ fn fixture_outbox_response(url: &worker::Url) -> Result<Response> {
 
 fn fixture_post_response(url: &worker::Url) -> Result<Response> {
     activity_json(&fixture_post(url))
+}
+
+fn fixture_rss_response(url: &worker::Url) -> Result<Response> {
+    let id = url
+        .query_pairs()
+        .find(|(key, _)| key == "id")
+        .map(|(_, value)| value.to_string())
+        .filter(|value| {
+            !value.is_empty()
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        })
+        .unwrap_or_else(|| "source-fixture".to_string());
+    let item_url = format!(
+        "{}://{}/__dais-fixtures/sources/items/{}",
+        url.scheme(),
+        url.host_str().unwrap_or_default(),
+        id
+    );
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Dais Source Fixture</title>
+    <link>{item_url}</link>
+    <description>Dais deterministic RSS fixture</description>
+    <item>
+      <title>Dais source fixture {id}</title>
+      <link>{item_url}</link>
+      <guid>{item_url}</guid>
+      <author>fixtures@dais.social</author>
+      <pubDate>Tue, 16 Jun 2026 12:00:00 GMT</pubDate>
+      <description><![CDATA[<p>Deterministic source refresh fixture for Dais parity smoke.</p>]]></description>
+    </item>
+  </channel>
+</rss>
+"#
+    );
+    let headers = Headers::new();
+    headers.set("Content-Type", "application/rss+xml; charset=utf-8")?;
+    headers.set("Cache-Control", "no-store")?;
+    Ok(Response::ok(xml)?.with_headers(headers))
 }
 
 fn fixture_post(url: &worker::Url) -> FixturePost {
