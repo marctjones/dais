@@ -75,6 +75,53 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
             mastodon_oauth_token(&body)
         }
         (worker::Method::Post, "/oauth/revoke") => api_json(&serde_json::json!({}), 200),
+        (worker::Method::Get, "/api/v1/preferences") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(&mastodon_preferences(&env).await?, 200)
+        }
+        (worker::Method::Get, "/api/v1/custom_emojis")
+        | (worker::Method::Get, "/api/v1/announcements")
+        | (worker::Method::Get, "/api/v1/directory")
+        | (worker::Method::Get, "/api/v1/trends")
+        | (worker::Method::Get, "/api/v1/trends/statuses")
+        | (worker::Method::Get, "/api/v1/trends/tags")
+        | (worker::Method::Get, "/api/v1/trends/links") => api_json(&Vec::<Value>::new(), 200),
+        (worker::Method::Get, "/api/v1/markers") | (worker::Method::Post, "/api/v1/markers") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(&serde_json::json!({}), 200)
+        }
+        (worker::Method::Get, "/api/v1/follow_requests")
+        | (worker::Method::Get, "/api/v1/suggestions")
+        | (worker::Method::Get, "/api/v1/endorsements")
+        | (worker::Method::Get, "/api/v1/featured_tags")
+        | (worker::Method::Get, "/api/v1/followed_tags")
+        | (worker::Method::Get, "/api/v1/scheduled_statuses")
+        | (worker::Method::Get, "/api/v1/mutes")
+        | (worker::Method::Get, "/api/v1/bookmarks")
+        | (worker::Method::Get, "/api/v1/filters")
+        | (worker::Method::Get, "/api/v2/filters")
+        | (worker::Method::Get, "/api/v1/lists") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(&Vec::<Value>::new(), 200)
+        }
+        (worker::Method::Post, _) if mastodon_follow_request_action(path) => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(&serde_json::json!({}), 200)
+        }
+        (worker::Method::Delete, _) if mastodon_suggestion_dismiss(path) => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(&serde_json::json!({}), 200)
+        }
         _ => api_json(
             &serde_json::json!({ "error": "Not implemented in dais Mastodon compatibility API" }),
             404,
@@ -265,6 +312,45 @@ fn mastodon_oauth_token(body: &Value) -> Result<Response> {
         }),
         200,
     )
+}
+
+async fn mastodon_preferences(env: &Env) -> Result<Value> {
+    let settings = owner_settings(env).await?;
+    let visibility = string_field(Some(&settings), "default_visibility")
+        .unwrap_or_else(|| "followers".to_string());
+    Ok(serde_json::json!({
+        "posting:default:visibility": mastodon_visibility(&visibility),
+        "posting:default:sensitive": false,
+        "posting:default:language": "en",
+        "reading:expand:media": "default",
+        "reading:expand:spoilers": false,
+    }))
+}
+
+fn mastodon_visibility(value: &str) -> &'static str {
+    match value {
+        "public" => "public",
+        "unlisted" => "unlisted",
+        "direct" => "direct",
+        _ => "private",
+    }
+}
+
+fn mastodon_follow_request_action(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/api/v1/follow_requests/") else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    let Some(id) = parts.next() else {
+        return false;
+    };
+    !id.is_empty() && matches!(parts.next(), Some("authorize" | "reject")) && parts.next().is_none()
+}
+
+fn mastodon_suggestion_dismiss(path: &str) -> bool {
+    path.strip_prefix("/api/v1/suggestions/")
+        .map(|rest| !rest.is_empty() && !rest.contains('/'))
+        .unwrap_or(false)
 }
 
 async fn public_status_count(env: &Env) -> Result<i64> {
@@ -4710,6 +4796,40 @@ fn require_owner_bearer(
             401,
         )?)),
     }
+}
+
+fn require_mastodon_bearer(req: &Request, env: &Env) -> Result<Option<Response>> {
+    let configured = env
+        .var("OWNER_API_TOKEN")
+        .or_else(|_| env.var("DAIS_OWNER_TOKEN"))
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let is_production = env
+        .var("ENVIRONMENT")
+        .map(|value| value.to_string() == "production")
+        .unwrap_or(false);
+    if configured.is_empty() && is_production {
+        return Ok(Some(api_json(
+            &serde_json::json!({ "error": "OWNER_API_TOKEN is not configured" }),
+            503,
+        )?));
+    }
+
+    let expected = if configured.is_empty() {
+        "dais-local-owner-token".to_string()
+    } else {
+        configured
+    };
+    let auth = req.headers().get("Authorization")?.unwrap_or_default();
+    let provided = auth.strip_prefix("Bearer ").map(str::trim).unwrap_or("");
+    if !provided.is_empty() && provided == expected {
+        return Ok(None);
+    }
+
+    Ok(Some(api_json(
+        &serde_json::json!({ "error": "Bearer token required" }),
+        401,
+    )?))
 }
 
 fn owner_bearer_tokens(env: &Env) -> Vec<OwnerToken> {
