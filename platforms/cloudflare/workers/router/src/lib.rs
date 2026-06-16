@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
-use worker::{event, Context, D1Type, Env, Headers, Request, Response, Result};
+use worker::{event, Context, D1Type, Env, Fetch, Headers, Request, RequestInit, Response, Result};
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
 
@@ -244,6 +244,17 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             ))?;
             owner_delete_allowlist_host(&env, &host).await?;
             api_json(&serde_json::json!({ "ok": true }), 200)
+        }
+        (worker::Method::Post, "/interactions") => {
+            let body = read_json(&mut req).await;
+            let object_id = body_string_any(&body, &["object_id", "objectId"]).unwrap_or_default();
+            let interaction = body_string_any(&body, &["interaction", "action"])
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            match owner_publish_interaction(&env, &object_id, &interaction).await {
+                Ok(result) => api_json(&result, 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
         }
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
@@ -1880,6 +1891,222 @@ async fn insert_delivery_rows(
         delivery_ids.push(delivery_id);
     }
     Ok(delivery_ids)
+}
+
+async fn owner_publish_interaction(
+    env: &Env,
+    object_id: &str,
+    interaction: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    if object_id.is_empty() {
+        return Err("object_id is required".to_string());
+    }
+    let object_id = public_https_url(object_id, "object_id")?;
+    let undo = matches!(interaction, "unlike" | "unboost");
+    let normalized = match interaction {
+        "unlike" => "like",
+        "unboost" => "boost",
+        "like" | "boost" => interaction,
+        _ => return Err("interaction must be like, unlike, boost, or unboost".to_string()),
+    };
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let target_inbox = resolve_activitypub_object_inbox(&object_id).await?;
+    let now = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let activity_type = if normalized == "like" {
+        "Like"
+    } else {
+        "Announce"
+    };
+    let activity_id = format!(
+        "{}#{}s/{}",
+        local_actor.id,
+        normalized,
+        stable_id(&object_id).chars().take(16).collect::<String>()
+    );
+    let outgoing_id = if undo {
+        format!(
+            "{}#undos/{}/{}",
+            local_actor.id,
+            normalized,
+            stable_id(&format!("{object_id}\n{now}"))
+                .chars()
+                .take(16)
+                .collect::<String>()
+        )
+    } else {
+        activity_id.clone()
+    };
+    let activity = if undo {
+        serde_json::json!({
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": outgoing_id,
+            "type": "Undo",
+            "actor": local_actor.id,
+            "published": now,
+            "to": [PUBLIC_COLLECTION],
+            "cc": [format!("{}/followers", local_actor.id)],
+            "object": {
+                "id": activity_id,
+                "type": activity_type,
+                "actor": local_actor.id,
+                "object": object_id,
+            },
+        })
+    } else {
+        serde_json::json!({
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": outgoing_id,
+            "type": activity_type,
+            "actor": local_actor.id,
+            "published": now,
+            "to": [PUBLIC_COLLECTION],
+            "cc": [format!("{}/followers", local_actor.id)],
+            "object": object_id,
+        })
+    };
+    let delivery_ids = insert_delivery_rows(
+        env,
+        &object_id,
+        vec![target_inbox],
+        if undo { "Undo" } else { activity_type },
+        Some(activity.to_string()),
+    )
+    .await?;
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    if undo {
+        let activity_id_arg = D1Type::Text(&activity_id);
+        db.prepare("DELETE FROM interactions WHERE id = ?1")
+            .bind_refs(&activity_id_arg)
+            .map_err(|error| error.to_string())?
+            .run()
+            .await
+            .map_err(|error| error.to_string())?;
+    } else {
+        let activity_id_arg = D1Type::Text(&activity_id);
+        let normalized_arg = D1Type::Text(normalized);
+        let actor_arg = D1Type::Text(&local_actor.id);
+        let object_arg = D1Type::Text(&object_id);
+        let now_arg = D1Type::Text(&now);
+        db.prepare(
+            r#"
+            INSERT OR REPLACE INTO interactions (
+              id, type, actor_id, object_url, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+        )
+        .bind_refs([
+            &activity_id_arg,
+            &normalized_arg,
+            &actor_arg,
+            &object_arg,
+            &now_arg,
+        ])
+        .map_err(|error| error.to_string())?
+        .run()
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+
+    let mut response = Map::new();
+    response.insert("ok".to_string(), Value::Bool(true));
+    response.insert("activity_id".to_string(), Value::String(outgoing_id));
+    response.insert(
+        "interaction".to_string(),
+        Value::String(if undo {
+            format!("undo-{normalized}")
+        } else {
+            normalized.to_string()
+        }),
+    );
+    response.insert("object_id".to_string(), Value::String(object_id));
+    response.insert(
+        "delivery_ids".to_string(),
+        Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
+    );
+    Ok(response)
+}
+
+async fn resolve_activitypub_object_inbox(object_id: &str) -> std::result::Result<String, String> {
+    let object_url = public_https_url(object_id, "object_id")?;
+    if let Some(inbox) = local_object_inbox(&object_url) {
+        return Ok(inbox);
+    }
+    let object = fetch_activitypub_json(&object_url, "object").await?;
+    let actor_id = object
+        .get("attributedTo")
+        .or_else(|| object.get("actor"))
+        .and_then(optional_body_string)
+        .ok_or_else(|| "object does not expose attributedTo or actor".to_string())?;
+    let actor_url = public_https_url(&actor_id, "target")?;
+    let actor = fetch_activitypub_json(&actor_url, "actor").await?;
+    let inbox = actor
+        .get("inbox")
+        .and_then(optional_body_string)
+        .unwrap_or_default();
+    if inbox.is_empty() {
+        return Err("object actor does not expose inbox".to_string());
+    }
+    let shared_inbox = actor
+        .get("endpoints")
+        .and_then(Value::as_object)
+        .and_then(|endpoints| endpoints.get("sharedInbox"))
+        .and_then(optional_body_string);
+    Ok(shared_inbox.unwrap_or(inbox))
+}
+
+async fn fetch_activitypub_json(url: &str, label: &str) -> std::result::Result<Value, String> {
+    let headers = Headers::new();
+    headers
+        .set(
+            "Accept",
+            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
+        )
+        .map_err(|error| error.to_string())?;
+    headers
+        .set("User-Agent", "dais-owner-api/1.0")
+        .map_err(|error| error.to_string())?;
+    let mut init = RequestInit::new();
+    init.with_method(worker::Method::Get).with_headers(headers);
+    let request = Request::new_with_init(url, &init).map_err(|error| error.to_string())?;
+    let mut response = Fetch::Request(request)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status_code();
+    if !(200..=299).contains(&status) {
+        return Err(format!("could not fetch {label} {url}: HTTP {status}"));
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn local_object_inbox(object_id: &str) -> Option<String> {
+    let url = worker::Url::parse(object_id).ok()?;
+    if url.host_str()? != "social.dais.social" {
+        return None;
+    }
+    let mut parts = url.path().split('/').filter(|part| !part.is_empty());
+    if parts.next()? != "users" {
+        return None;
+    }
+    let username = parts.next()?;
+    if parts.next()? != "posts" || parts.next().is_none() {
+        return None;
+    }
+    Some(format!(
+        "{}://{}/users/{}/inbox",
+        url.scheme(),
+        url.host_str()?,
+        username
+    ))
 }
 
 async fn owner_federation_target_allowed(
