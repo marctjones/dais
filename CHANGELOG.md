@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.58] - 2026-06-16
+
+### Fixed
+- Hardened the Mastodon OAuth compatibility placeholder so invalid
+  authorization codes fail explicitly and the placeholder token is covered by
+  tests proving it cannot authenticate.
+
 ## [1.28.57] - 2026-06-16
 
 ### Added

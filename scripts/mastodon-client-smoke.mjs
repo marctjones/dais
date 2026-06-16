@@ -108,6 +108,12 @@ async function main() {
     });
     assert(token.status === 200, `token expected 200, got ${token.status}: ${token.text}`);
     assert(token.json?.access_token === "owner-token-required", "token endpoint leaked or changed placeholder token");
+    assert(token.json?.dais_owner_token_required === true, "token endpoint did not mark owner-token requirement");
+
+    const placeholderAuth = await request("/api/v1/accounts/verify_credentials", {
+      headers: { Authorization: "Bearer owner-token-required" },
+    });
+    assert(placeholderAuth.status === 401, "placeholder token unexpectedly authenticated");
 
     const account = await request("/api/v1/accounts/verify_credentials", { auth: true });
     assert(account.status === 200, `verify_credentials expected 200, got ${account.status}`);

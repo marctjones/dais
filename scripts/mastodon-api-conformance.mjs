@@ -3,6 +3,7 @@
 const config = {
   baseUrl: process.env.DAIS_SOCIAL_BASE_URL || "https://social.dais.social",
   token: process.env.DAIS_MASTODON_BEARER_TOKEN || "",
+  publicPostPath: process.env.DAIS_PUBLIC_POST_PATH || "/users/social/posts/20260615220558-6fc8b18f",
 };
 
 const tinyPngBase64 =
@@ -50,6 +51,10 @@ function expectArray(value, label) {
   if (!Array.isArray(value)) throw new Error(`${label} is not an array`);
 }
 
+function publicFixtureStatusId() {
+  return `${config.baseUrl}${config.publicPostPath}`;
+}
+
 const tests = [
   requirement("MASTODON-API-INSTANCE-01", false, "Instance v1/v2 endpoints expose compatible JSON", async () => {
     const v1 = await request("/api/v1/instance");
@@ -63,11 +68,36 @@ const tests = [
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ client_name: "dais conformance", redirect_uris: "urn:ietf:wg:oauth:2.0:oob" }),
     });
-    const token = await request("/oauth/token", { method: "POST" });
-    if (app.status !== 200 || token.status !== 200) throw new Error(`expected 200/200, got ${app.status}/${token.status}`);
-    if (!app.json?.client_id || token.json?.access_token !== "owner-token-required") {
+    const token = await request("/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "authorization_code",
+        code: "dais-local-owner",
+        client_id: app.json?.client_id,
+        client_secret: app.json?.client_secret,
+      }),
+    });
+    const invalid = await request("/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "authorization_code",
+        code: "not-a-valid-code",
+        client_id: app.json?.client_id,
+        client_secret: app.json?.client_secret,
+      }),
+    });
+    const placeholderAuth = await request("/api/v1/accounts/verify_credentials", {
+      headers: { Authorization: "Bearer owner-token-required" },
+    });
+    if (app.status !== 200 || token.status !== 200 || invalid.status !== 400 || placeholderAuth.status !== 401) {
+      throw new Error(`expected 200/200/400/401, got ${app.status}/${token.status}/${invalid.status}/${placeholderAuth.status}`);
+    }
+    if (!app.json?.client_id || token.json?.access_token !== "owner-token-required" || token.json?.dais_owner_token_required !== true) {
       throw new Error("OAuth compatibility shape incomplete or leaked a non-placeholder token");
     }
+    if (invalid.json?.error !== "invalid_grant") throw new Error("invalid OAuth code did not fail explicitly");
   }),
   requirement("MASTODON-API-DISCOVERY-01", false, "OAuth and NodeInfo discovery metadata expose client-safe shapes", async () => {
     const oauth = await request("/.well-known/oauth-authorization-server");
@@ -140,8 +170,7 @@ const tests = [
   requirement("MASTODON-API-READ-02", true, "Account graph, status context, favourites, moderation, and streaming shapes work", async () => {
     const account = await request("/api/v1/accounts/verify_credentials", { auth: true });
     const accountId = encodeURIComponent(account.json.id);
-    const timeline = await request("/api/v1/timelines/public?limit=1");
-    const statusId = timeline.json?.[0]?.id ? encodeURIComponent(timeline.json[0].id) : "";
+    const statusId = encodeURIComponent(publicFixtureStatusId());
     const checks = await Promise.all([
       request(`/api/v1/accounts/${accountId}`, { auth: true }),
       request(`/api/v1/accounts/${accountId}/statuses?limit=1`, { auth: true }),
@@ -157,7 +186,7 @@ const tests = [
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account_id: account.json.id, comment: "dais conformance compatibility report" }),
       }),
-      statusId ? request(`/api/v1/statuses/${statusId}/context`, { auth: true }) : Promise.resolve({ status: 200, json: { ancestors: [], descendants: [] } }),
+      request(`/api/v1/statuses/${statusId}/context`, { auth: true }),
     ]);
     if (checks.some((res) => res.status !== 200 && res.status !== 201)) {
       throw new Error(`expected 200/201, got ${checks.map((res) => res.status).join("/")}`);
@@ -179,8 +208,7 @@ const tests = [
     }
   }),
   requirement("MASTODON-API-READ-04", true, "Common Mastodon client probe endpoints return safe compatible shapes", async () => {
-    const publicTimeline = await request("/api/v1/timelines/public?limit=1");
-    const statusId = publicTimeline.json?.[0]?.id ? encodeURIComponent(publicTimeline.json[0].id) : "";
+    const statusId = encodeURIComponent(publicFixtureStatusId());
     const checks = await Promise.all([
       request("/api/v1/custom_emojis"),
       request("/api/v1/announcements"),
@@ -196,7 +224,7 @@ const tests = [
       request("/api/v1/followed_tags", { auth: true }),
       request("/api/v1/scheduled_statuses", { auth: true }),
       request("/api/v1/domain_blocks", { auth: true }),
-      statusId ? request(`/api/v1/statuses/${statusId}/source`, { auth: true }) : Promise.resolve({ status: 200, json: { id: "", text: "", spoiler_text: "" } }),
+      request(`/api/v1/statuses/${statusId}/source`, { auth: true }),
     ]);
     if (checks.some((res) => res.status !== 200)) {
       throw new Error(`expected all 200, got ${checks.map((res) => res.status).join("/")}`);

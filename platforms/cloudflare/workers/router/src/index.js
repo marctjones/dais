@@ -453,6 +453,15 @@ async function handleMastodonApi(request, env, url) {
   }
 
   if (request.method === 'POST' && path === '/oauth/token') {
+    const body = await readRequestBody(request);
+    const grantType = optionalString(body.grant_type);
+    const code = optionalString(body.code);
+    if (grantType === 'authorization_code' && code && code !== 'dais-local-owner') {
+      return apiJson({
+        error: 'invalid_grant',
+        error_description: 'authorization code is not valid for this single-user dais server',
+      }, 400);
+    }
     // Do not mint or reveal the production owner API token. Until dais has a
     // real user-consent OAuth screen, Mastodon clients authenticate with an
     // owner-provisioned bearer token.
@@ -461,6 +470,7 @@ async function handleMastodonApi(request, env, url) {
       token_type: 'Bearer',
       scope: 'read write follow push',
       created_at: Math.floor(Date.now() / 1000),
+      dais_owner_token_required: true,
     });
   }
 
