@@ -52,7 +52,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 }
 
-async fn handle_mastodon_api(req: Request, env: Env, url: &worker::Url) -> Result<Response> {
+async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> Result<Response> {
     if req.method() == worker::Method::Options {
         return api_json(&serde_json::json!({}), 204);
     }
@@ -65,6 +65,16 @@ async fn handle_mastodon_api(req: Request, env: Env, url: &worker::Url) -> Resul
                 200,
             )
         }
+        (worker::Method::Post, "/api/v1/apps") => {
+            let body = read_mastodon_body(&mut req).await;
+            api_json(&mastodon_create_app(&body), 200)
+        }
+        (worker::Method::Get, "/oauth/authorize") => oauth_authorize(url),
+        (worker::Method::Post, "/oauth/token") => {
+            let body = read_mastodon_body(&mut req).await;
+            mastodon_oauth_token(&body)
+        }
+        (worker::Method::Post, "/oauth/revoke") => api_json(&serde_json::json!({}), 200),
         _ => api_json(
             &serde_json::json!({ "error": "Not implemented in dais Mastodon compatibility API" }),
             404,
@@ -191,6 +201,70 @@ async fn mastodon_instance(env: &Env, v2: bool) -> Result<Value> {
         }
     }
     Ok(instance)
+}
+
+fn mastodon_create_app(body: &Value) -> Value {
+    let name = body_string_any(body, &["client_name", "name"])
+        .unwrap_or_else(|| "dais client".to_string());
+    let redirect_uri = body_string_any(body, &["redirect_uris", "redirect_uri"])
+        .unwrap_or_else(|| "urn:ietf:wg:oauth:2.0:oob".to_string());
+    serde_json::json!({
+        "id": stable_id(&name),
+        "name": name,
+        "website": body.get("website").and_then(optional_body_string),
+        "redirect_uri": redirect_uri,
+        "client_id": format!("dais-{}", stable_id(&name)),
+        "client_secret": format!("dais-secret-{}", stable_id(&redirect_uri)),
+        "vapid_key": "",
+    })
+}
+
+fn oauth_authorize(url: &worker::Url) -> Result<Response> {
+    let redirect_uri = query_param(url, "redirect_uri");
+    let state = query_param(url, "state");
+    let code = "dais-local-owner";
+    if let Some(redirect_uri) = redirect_uri.filter(|value| value != "urn:ietf:wg:oauth:2.0:oob") {
+        let mut redirect = worker::Url::parse(&redirect_uri)?;
+        redirect.query_pairs_mut().append_pair("code", code);
+        if let Some(state) = state {
+            redirect.query_pairs_mut().append_pair("state", &state);
+        }
+        return Response::redirect(redirect);
+    }
+    text_response(
+        &format!("Authorization code: {code}\n"),
+        "text/plain; charset=utf-8",
+    )
+}
+
+fn mastodon_oauth_token(body: &Value) -> Result<Response> {
+    let grant_type = body.get("grant_type").and_then(optional_body_string);
+    let code = body.get("code").and_then(optional_body_string);
+    if grant_type.as_deref() == Some("authorization_code")
+        && code
+            .as_deref()
+            .map(|value| value != "dais-local-owner")
+            .unwrap_or(false)
+    {
+        return api_json(
+            &serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "authorization code is not valid for this single-user dais server",
+            }),
+            400,
+        );
+    }
+    let created_at = (js_sys::Date::now() / 1000.0).floor() as i64;
+    api_json(
+        &serde_json::json!({
+            "access_token": "owner-token-required",
+            "token_type": "Bearer",
+            "scope": "read write follow push",
+            "created_at": created_at,
+            "dais_owner_token_required": true,
+        }),
+        200,
+    )
 }
 
 async fn public_status_count(env: &Env) -> Result<i64> {
@@ -3607,6 +3681,51 @@ async fn read_json(req: &mut Request) -> Value {
         .unwrap_or_else(|_| serde_json::json!({}))
 }
 
+async fn read_mastodon_body(req: &mut Request) -> Value {
+    let content_type = req
+        .headers()
+        .get("Content-Type")
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if content_type.contains("application/json") {
+        return read_json(req).await;
+    }
+    if content_type.contains("application/x-www-form-urlencoded") {
+        let text = req.text().await.unwrap_or_default();
+        let mut body = Map::new();
+        for pair in text.split('&').filter(|part| !part.is_empty()) {
+            let mut parts = pair.splitn(2, '=');
+            let key = parts.next().map(decode_form_component).unwrap_or_default();
+            if key.is_empty() {
+                continue;
+            }
+            let value = parts.next().map(decode_form_component).unwrap_or_default();
+            insert_repeating_body_value(&mut body, key, Value::String(value));
+        }
+        return Value::Object(body);
+    }
+    serde_json::json!({})
+}
+
+fn decode_form_component(value: &str) -> String {
+    decode_component(&value.replace('+', " "))
+}
+
+fn insert_repeating_body_value(body: &mut Map<String, Value>, key: String, value: Value) {
+    match body.get_mut(&key) {
+        Some(Value::Array(items)) => items.push(value),
+        Some(existing) => {
+            let previous = existing.clone();
+            *existing = Value::Array(vec![previous, value]);
+        }
+        None => {
+            body.insert(key, value);
+        }
+    }
+}
+
 fn required_body_string(value: Option<&Value>) -> Option<String> {
     match value {
         Some(Value::String(text)) => {
@@ -4717,6 +4836,13 @@ fn api_json<T: Serialize>(value: &T, status: u16) -> Result<Response> {
     };
     response = response.with_headers(headers);
     Ok(response)
+}
+
+fn text_response(body: &str, content_type: &str) -> Result<Response> {
+    let headers = Headers::new();
+    headers.set("Content-Type", content_type)?;
+    headers.set("Access-Control-Allow-Origin", "*")?;
+    Ok(Response::ok(body.to_string())?.with_headers(headers))
 }
 
 fn fixture_actor_response(url: &worker::Url) -> Result<Response> {
