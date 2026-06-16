@@ -92,6 +92,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 None => api_json(&serde_json::json!({ "error": "post not found" }), 404),
             }
         }
+        (worker::Method::Delete, _) if owner_path.starts_with("/posts/") => {
+            let post_id = decode_component(owner_path.trim_start_matches("/posts/"));
+            match owner_delete_post(&env, &post_id).await? {
+                Some(deleted) => api_json(&deleted, 200),
+                None => api_json(&serde_json::json!({ "error": "post not found" }), 404),
+            }
+        }
         (worker::Method::Get, "/timeline/home") => api_json(
             &OwnerItems {
                 items: owner_home_timeline(
@@ -876,6 +883,87 @@ async fn owner_post_detail(env: &Env, id: &str) -> Result<Option<Map<String, Val
     Ok(Some(shape_owner_post_detail(post, replies, likes, boosts)))
 }
 
+async fn owner_delete_post(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    let existing = db
+        .prepare(
+            r#"
+            SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+                   name, summary, visibility, COALESCE(protocol, 'activitypub') AS protocol,
+                   atproto_uri, atproto_cid, encrypted_message, media_attachments,
+                   published_at, created_at, updated_at, in_reply_to
+            FROM posts
+            WHERE id = ?1
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&id_arg)?
+        .first::<Map<String, Value>>(None)
+        .await?;
+    let Some(existing) = existing else {
+        return Ok(None);
+    };
+
+    let protocol =
+        string_field(Some(&existing), "protocol").unwrap_or_else(|| "activitypub".to_string());
+    let visibility = string_field(Some(&existing), "visibility").unwrap_or_default();
+    let actor_id = string_field(Some(&existing), "actor_id").unwrap_or_default();
+    let delivery_ids =
+        if (protocol == "activitypub" || protocol == "both") && visibility != "direct" {
+            let now = js_sys::Date::new_0()
+                .to_iso_string()
+                .as_string()
+                .unwrap_or_default();
+            let delete_id = format!(
+                "{actor_id}#deletes/{}",
+                stable_id(&format!("{id}\n{now}"))
+                    .chars()
+                    .take(16)
+                    .collect::<String>()
+            );
+            let activity = serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": delete_id,
+                "type": "Delete",
+                "actor": actor_id,
+                "published": now,
+                "to": [PUBLIC_COLLECTION],
+                "cc": [format!("{actor_id}/followers")],
+                "object": {
+                    "id": id,
+                    "type": "Tombstone",
+                },
+            });
+            insert_delivery_rows(
+                env,
+                id,
+                owner_approved_follower_inboxes(env).await?,
+                "Delete",
+                Some(activity.to_string()),
+            )
+            .await
+            .map_err(worker::Error::RustError)?
+        } else {
+            Vec::new()
+        };
+
+    db.prepare("DELETE FROM posts WHERE id = ?1")
+        .bind_refs(&id_arg)?
+        .run()
+        .await?;
+
+    let mut response = Map::new();
+    response.insert("ok".to_string(), Value::Bool(true));
+    response.insert("id".to_string(), Value::String(id.to_string()));
+    response.insert("deleted".to_string(), Value::Bool(true));
+    response.insert(
+        "delivery_ids".to_string(),
+        Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
+    );
+    Ok(Some(response))
+}
+
 async fn owner_post_replies(env: &Env, id: &str) -> Result<Vec<Map<String, Value>>> {
     let db = env.d1("DB")?;
     let id_arg = D1Type::Text(id);
@@ -1562,6 +1650,25 @@ async fn owner_federation_target_allowed(
         .await
         .map_err(|error| error.to_string())?;
     Ok(row.is_some())
+}
+
+async fn owner_approved_follower_inboxes(env: &Env) -> Result<Vec<String>> {
+    let db = env.d1("DB")?;
+    let rows = db
+        .prepare(
+            r#"
+            SELECT COALESCE(NULLIF(follower_shared_inbox, ''), follower_inbox) AS inbox
+            FROM followers
+            WHERE status = 'approved'
+            "#,
+        )
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| string_field(Some(&row), "inbox"))
+        .collect())
 }
 
 fn normalize_source_item(row: Map<String, Value>) -> Map<String, Value> {
