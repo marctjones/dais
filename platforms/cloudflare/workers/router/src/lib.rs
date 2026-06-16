@@ -81,6 +81,13 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
             }
             api_json(&mastodon_account(&env).await?, 200)
         }
+        (worker::Method::Patch, "/api/v1/accounts/update_credentials") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let body = read_mastodon_body(&mut req).await;
+            mastodon_update_credentials(&env, &body).await
+        }
         (worker::Method::Get, "/api/v1/accounts/relationships") => {
             if let Some(response) = require_mastodon_bearer(&req, &env)? {
                 return Ok(response);
@@ -174,6 +181,20 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
                 200,
             )
         }
+        (worker::Method::Post, "/api/v1/domain_blocks") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let body = read_mastodon_body(&mut req).await;
+            mastodon_set_domain_block(&env, &body, url, true).await
+        }
+        (worker::Method::Delete, "/api/v1/domain_blocks") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let body = read_mastodon_body(&mut req).await;
+            mastodon_set_domain_block(&env, &body, url, false).await
+        }
         (worker::Method::Get, "/api/v1/conversations") => {
             if let Some(response) = require_mastodon_bearer(&req, &env)? {
                 return Ok(response);
@@ -222,6 +243,13 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
         (worker::Method::Get, _) if mastodon_account_path(path) => {
             api_json(&mastodon_account(&env).await?, 200)
         }
+        (worker::Method::Post, _) if mastodon_account_action_path(path).is_some() => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let (id, action) = mastodon_account_action_path(path).unwrap_or_default();
+            mastodon_account_action(&env, &decode_component(&id), &action).await
+        }
         (worker::Method::Get, _) if mastodon_status_context_path(path).is_some() => {
             let id = mastodon_status_context_path(path).unwrap_or_default();
             match mastodon_status_context(&env, &decode_component(&id)).await? {
@@ -248,6 +276,13 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
         }
         (worker::Method::Get, _) if path.starts_with("/api/v1/streaming") => {
             mastodon_streaming_response()
+        }
+        (worker::Method::Post, "/api/v1/reports") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let body = read_mastodon_body(&mut req).await;
+            api_json(&mastodon_report(&body), 201)
         }
         (worker::Method::Delete, _) if mastodon_suggestion_dismiss(path) => {
             if let Some(response) = require_mastodon_bearer(&req, &env)? {
@@ -511,6 +546,22 @@ async fn mastodon_account(env: &Env) -> Result<Value> {
     }))
 }
 
+async fn mastodon_update_credentials(env: &Env, body: &Value) -> Result<Response> {
+    let mut profile = Map::new();
+    if let Some(value) = body.get("display_name") {
+        profile.insert("display_name".to_string(), value.clone());
+    }
+    if let Some(value) = body.get("note") {
+        profile.insert("summary".to_string(), value.clone());
+    }
+    if !profile.is_empty() {
+        if let Err(message) = owner_update_profile(env, &Value::Object(profile)).await {
+            return api_json(&serde_json::json!({ "error": message }), 400);
+        }
+    }
+    api_json(&mastodon_account(env).await?, 200)
+}
+
 async fn mastodon_statuses(env: &Env, limit: i32, url: &worker::Url) -> Result<Value> {
     let rows = mastodon_status_rows(env, "posts", limit, url).await?;
     mastodon_status_values(env, rows).await
@@ -755,6 +806,92 @@ async fn mastodon_domain_blocks(env: &Env, limit: i32) -> Result<Value> {
     ))
 }
 
+async fn mastodon_set_domain_block(
+    env: &Env,
+    body: &Value,
+    url: &worker::Url,
+    enabled: bool,
+) -> Result<Response> {
+    let domain = body
+        .get("domain")
+        .and_then(optional_body_string)
+        .or_else(|| query_param(url, "domain"))
+        .unwrap_or_default();
+    let domain = match normalize_host_value(&domain) {
+        Ok(domain) => domain,
+        Err(_) => return api_json(&serde_json::json!({ "error": "domain is required" }), 400),
+    };
+
+    if enabled {
+        let id = format!("domain-block-{}", stable_id(&domain));
+        insert_block(
+            env,
+            &id,
+            &format!("domain:{domain}"),
+            Some(&domain),
+            Some("Mastodon API domain block"),
+        )
+        .await
+        .map_err(worker::Error::RustError)?;
+    } else {
+        let db = env.d1("DB")?;
+        let domain_arg = D1Type::Text(&domain);
+        db.prepare("DELETE FROM blocks WHERE blocked_domain = ?1")
+            .bind_refs(&domain_arg)?
+            .run()
+            .await?;
+    }
+
+    api_json(&serde_json::json!({}), 200)
+}
+
+async fn mastodon_account_action(env: &Env, id: &str, action: &str) -> Result<Response> {
+    match action {
+        "follow" => {
+            if let Err(message) = owner_follow_actor(env, id).await {
+                return api_json(&serde_json::json!({ "error": message }), 400);
+            }
+        }
+        "unfollow" => {
+            let _ = owner_unfollow_actor(env, id).await;
+        }
+        "block" => {
+            mastodon_set_account_block(env, id, true).await?;
+        }
+        "unblock" => {
+            mastodon_set_account_block(env, id, false).await?;
+        }
+        "mute" | "unmute" => {}
+        _ => {}
+    }
+    let relationship = mastodon_relationship(env, id).await?;
+    api_json(&relationship, 200)
+}
+
+async fn mastodon_set_account_block(env: &Env, actor_id: &str, enabled: bool) -> Result<()> {
+    let db = env.d1("DB")?;
+    let actor_arg = D1Type::Text(actor_id);
+    if enabled {
+        let id = format!("block-{}", stable_id(actor_id));
+        let id_arg = D1Type::Text(&id);
+        db.prepare(
+            r#"
+            INSERT OR REPLACE INTO blocks (id, actor_id, reason, created_at)
+            VALUES (?1, ?2, 'Mastodon API block', CURRENT_TIMESTAMP)
+            "#,
+        )
+        .bind_refs([&id_arg, &actor_arg])?
+        .run()
+        .await?;
+    } else {
+        db.prepare("DELETE FROM blocks WHERE actor_id = ?1")
+            .bind_refs(&actor_arg)?
+            .run()
+            .await?;
+    }
+    Ok(())
+}
+
 async fn mastodon_search(env: &Env, query: &str, limit: i32, url: &worker::Url) -> Result<Value> {
     let term = query.trim();
     if term.is_empty() {
@@ -884,6 +1021,53 @@ fn mastodon_streaming_response() -> Result<Response> {
         "retry: 30000\nevent: connected\ndata: {\"stream\":\"polling-recommended\"}\n\n",
     )?
     .with_headers(headers))
+}
+
+fn mastodon_report(body: &Value) -> Value {
+    let account_id = body.get("account_id").and_then(optional_body_string);
+    let now = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let id = format!(
+        "report-{}",
+        stable_id(&format!(
+            "{}\n{}",
+            account_id.as_deref().unwrap_or_default(),
+            js_sys::Date::now()
+        ))
+    );
+    let status_ids = request_body_array(body, "status_ids");
+    serde_json::json!({
+        "id": id,
+        "action_taken": false,
+        "action_taken_at": Value::Null,
+        "category": body.get("category").and_then(optional_body_string).unwrap_or_else(|| "other".to_string()),
+        "comment": body.get("comment").and_then(optional_body_string).unwrap_or_default(),
+        "forwarded": false,
+        "created_at": now,
+        "status_ids": status_ids,
+        "rules": [],
+        "target_account": account_id.map(|id| {
+            let mut row = Map::new();
+            row.insert("actor_id".to_string(), Value::String(id.clone()));
+            row.insert("url".to_string(), Value::String(id));
+            remote_account_json(&row)
+        }).unwrap_or(Value::Null),
+    })
+}
+
+fn request_body_array(body: &Value, key: &str) -> Vec<String> {
+    let bracket = format!("{key}[]");
+    let value = body.get(&bracket).or_else(|| body.get(key));
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(optional_body_string)
+            .collect::<Vec<_>>(),
+        Some(value) => optional_body_string(value).into_iter().collect(),
+        None => Vec::new(),
+    }
 }
 
 struct MastodonCursorOptions {
@@ -1376,6 +1560,23 @@ fn mastodon_account_path(path: &str) -> bool {
         return false;
     };
     !rest.is_empty() && !rest.contains('/')
+}
+
+fn mastodon_account_action_path(path: &str) -> Option<(String, String)> {
+    let rest = path.strip_prefix("/api/v1/accounts/")?;
+    let mut parts = rest.split('/');
+    let id = parts.next()?;
+    let action = parts.next()?;
+    if id.is_empty()
+        || parts.next().is_some()
+        || !matches!(
+            action,
+            "follow" | "unfollow" | "block" | "unblock" | "mute" | "unmute"
+        )
+    {
+        return None;
+    }
+    Some((id.to_string(), action.to_string()))
 }
 
 fn mastodon_status_context_path(path: &str) -> Option<String> {
