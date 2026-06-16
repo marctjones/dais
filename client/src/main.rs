@@ -678,6 +678,27 @@ async fn handle_media(command: MediaCommand) -> Result<()> {
             }
             println!("{}", serde_json::to_string_pretty(&value)?);
         }
+        MediaCommand::EncryptedAttachment(args) => {
+            let data = fs::read(&args.path)?;
+            let media_type = args
+                .media_type
+                .unwrap_or_else(|| media_type_for_path(&args.path).to_string());
+            let name = args.name.or_else(|| {
+                args.path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .map(ToString::to_string)
+            });
+            let mut value = serde_json::json!({
+                "type": args.kind,
+                "mediaType": media_type,
+                "data_base64": STANDARD.encode(data)
+            });
+            if let Some(name) = name {
+                value["name"] = serde_json::json!(name);
+            }
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        }
     }
 
     Ok(())

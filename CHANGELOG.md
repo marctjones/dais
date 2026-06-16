@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.60] - 2026-06-16
+
+### Added
+- Added Rust client support for E2EE ActivityPub media attachments by
+  encrypting inline attachment bytes into `encryptedMedia` payloads that share
+  the post content key.
+- Added `dais media encrypted-attachment <path>` to generate attachment JSON
+  for encrypted ActivityPub posts.
+
 ## [1.28.59] - 2026-06-16
 
 ### Fixed

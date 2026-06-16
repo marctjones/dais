@@ -338,6 +338,8 @@ pub enum MediaCommand {
     Upload(UploadMediaArgs),
     /// Create an ActivityStreams attachment JSON object from a media URL.
     Attachment(MediaAttachmentArgs),
+    /// Create an inline attachment JSON object for encrypted ActivityPub posts.
+    EncryptedAttachment(EncryptedMediaAttachmentArgs),
 }
 
 #[derive(Args)]
@@ -360,6 +362,17 @@ pub struct UploadMediaArgs {
 #[derive(Args)]
 pub struct MediaAttachmentArgs {
     pub url: String,
+    #[arg(long, default_value = "Document")]
+    pub kind: String,
+    #[arg(long)]
+    pub media_type: Option<String>,
+    #[arg(long)]
+    pub name: Option<String>,
+}
+
+#[derive(Args)]
+pub struct EncryptedMediaAttachmentArgs {
+    pub path: PathBuf,
     #[arg(long, default_value = "Document")]
     pub kind: String,
     #[arg(long)]

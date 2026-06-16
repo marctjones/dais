@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use anyhow::{anyhow, Result};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use reqwest::Url;
 
 use crate::atproto::{AtprotoClient, ImageUpload};
@@ -323,7 +325,7 @@ pub async fn publish_post(
     db: &D1Client,
 ) -> Result<PostOutcome> {
     let effective = effective_protocol(draft.protocol, draft.visibility);
-    validate_media_attachments(&draft.attachments, draft.visibility)?;
+    validate_media_attachments(&draft.attachments, draft.visibility, draft.encrypt)?;
     validate_poll(&draft)?;
     if draft.visibility == Visibility::Direct && draft.to.is_empty() {
         anyhow::bail!("direct posts require at least one --to actor URL");
@@ -348,6 +350,16 @@ pub async fn publish_post(
             &draft.recipients,
             Some(&read_url),
         )?;
+        let encrypted_attachments = encrypted_attachment_values(&draft.attachments, &content_key)?;
+        let encrypted_attachment_json = if encrypted_attachments.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&encrypted_attachments)?)
+        };
+        let encrypted_attachment_strings = encrypted_attachments
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let split_key_url = format!("{read_url}#cek={content_key}");
         let fallback_content = match draft.e2ee_fallback {
             E2eeFallbackMode::Strict | E2eeFallbackMode::SplitChannel => payload.content.clone(),
@@ -364,6 +376,7 @@ pub async fn publish_post(
             published_at: &published_at,
             encrypted_message_json: &encrypted_json,
             in_reply_to: draft.reply_to.as_deref(),
+            media_attachments: encrypted_attachment_json.as_deref(),
         })
         .await?;
 
@@ -384,7 +397,7 @@ pub async fn publish_post(
             location: None,
             poll_options: &[],
             poll_multiple: false,
-            attachments: &[],
+            attachments: &encrypted_attachment_strings,
         })?;
         let delivery_ids =
             create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
@@ -759,6 +772,61 @@ fn attachment_values(attachments: &[String]) -> Result<Vec<serde_json::Value>> {
         .collect()
 }
 
+fn encrypted_attachment_values(
+    attachments: &[String],
+    content_key: &str,
+) -> Result<Vec<serde_json::Value>> {
+    attachment_values(attachments)?
+        .into_iter()
+        .map(|attachment| encrypted_attachment_value(&attachment, content_key))
+        .collect()
+}
+
+fn encrypted_attachment_value(
+    attachment: &serde_json::Value,
+    content_key: &str,
+) -> Result<serde_json::Value> {
+    let data_base64 = attachment
+        .get("data_base64")
+        .or_else(|| attachment.get("dataBase64"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("encrypted media attachments require data_base64 or dataBase64"))?;
+    let bytes = STANDARD
+        .decode(data_base64)
+        .map_err(|error| anyhow!("encrypted media data is not valid base64: {error}"))?;
+    if bytes.is_empty() {
+        anyhow::bail!("encrypted media data must not be empty");
+    }
+
+    let media_type = attachment
+        .get("mediaType")
+        .or_else(|| attachment.get("media_type"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("application/octet-stream");
+    let name = attachment
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let encrypted =
+        e2ee::encrypt_media_bytes_with_content_key(&bytes, content_key, media_type, name)?;
+
+    let mut value = serde_json::json!({
+        "type": attachment
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Document"),
+        "mediaType": media_type,
+        "encryptedMedia": encrypted
+    });
+    if let Some(name) = name {
+        value["name"] = serde_json::json!(name);
+    }
+    Ok(value)
+}
+
 fn media_type_for_url(url: &str) -> &'static str {
     let path = Url::parse(url)
         .ok()
@@ -791,12 +859,25 @@ fn poll_option_values(options: &[String]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn validate_media_attachments(attachments: &[String], visibility: Visibility) -> Result<()> {
+fn validate_media_attachments(
+    attachments: &[String],
+    visibility: Visibility,
+    encrypt: bool,
+) -> Result<()> {
     if attachments.is_empty() {
         return Ok(());
     }
 
     let values = attachment_values(attachments)?;
+    if encrypt {
+        if !values.iter().all(is_encryptable_media_attachment) {
+            anyhow::bail!(
+                "encrypted media attachments must be JSON objects with data_base64 or dataBase64"
+            );
+        }
+        return Ok(());
+    }
+
     if matches!(visibility, Visibility::Followers | Visibility::Direct)
         && !values.iter().all(is_private_media_attachment)
     {
@@ -810,6 +891,14 @@ fn validate_media_attachments(attachments: &[String], visibility: Visibility) ->
     }
 
     Ok(())
+}
+
+fn is_encryptable_media_attachment(attachment: &serde_json::Value) -> bool {
+    attachment
+        .get("data_base64")
+        .or_else(|| attachment.get("dataBase64"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn is_private_media_attachment(attachment: &serde_json::Value) -> bool {
@@ -899,8 +988,8 @@ fn activity_suffix(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        activity_tags, build_create_activity_json, validate_media_attachments, validate_poll,
-        CreateActivityInput, PostDraft,
+        activity_tags, build_create_activity_json, encrypted_attachment_values,
+        validate_media_attachments, validate_poll, CreateActivityInput, PostDraft,
     };
     use crate::cli::{ActivityObjectType, E2eeFallbackMode};
     use crate::routing::{Protocol, Visibility};
@@ -908,7 +997,7 @@ mod tests {
     #[test]
     fn followers_media_requires_private_capability_url() {
         let attachments = vec!["https://social.dais.social/media/uploads/public.png".to_string()];
-        let error = validate_media_attachments(&attachments, Visibility::Followers)
+        let error = validate_media_attachments(&attachments, Visibility::Followers, false)
             .expect_err("public media must not be valid for followers posts");
         assert!(error
             .to_string()
@@ -919,7 +1008,43 @@ mod tests {
     fn followers_media_allows_private_capability_url() {
         let attachments =
             vec!["https://social.dais.social/media/_private/token/image.png".to_string()];
-        validate_media_attachments(&attachments, Visibility::Followers).unwrap();
+        validate_media_attachments(&attachments, Visibility::Followers, false).unwrap();
+    }
+
+    #[test]
+    fn encrypted_media_requires_inline_base64_payload() {
+        let attachments =
+            vec!["https://social.dais.social/media/_private/token/image.png".to_string()];
+        let error = validate_media_attachments(&attachments, Visibility::Followers, true)
+            .expect_err("encrypted media must require bytes to encrypt");
+        assert!(error.to_string().contains("data_base64"));
+    }
+
+    #[test]
+    fn encrypted_media_attachment_serializes_ciphertext_only() {
+        let plaintext_base64 = "c2VjcmV0IGltYWdlIGJ5dGVz";
+        let attachments = vec![serde_json::json!({
+            "type": "Document",
+            "mediaType": "image/png",
+            "name": "secret.png",
+            "data_base64": plaintext_base64
+        })
+        .to_string()];
+        validate_media_attachments(&attachments, Visibility::Followers, true).unwrap();
+
+        let encrypted = encrypted_attachment_values(
+            &attachments,
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        )
+        .unwrap();
+        let json = serde_json::to_string(&encrypted).unwrap();
+
+        assert!(json.contains("encryptedMedia"));
+        assert!(json.contains("image/png"));
+        assert!(json.contains("secret.png"));
+        assert!(!json.contains("secret image bytes"));
+        assert!(!json.contains(plaintext_base64));
+        assert!(!json.contains("data_base64"));
     }
 
     #[test]
