@@ -94,6 +94,24 @@ async fn handle_owner_api(req: Request, env: Env, url: &worker::Url) -> Result<R
             },
             200,
         ),
+        (worker::Method::Get, "/notifications") => api_json(
+            &OwnerItems {
+                items: owner_notifications(&env, limit).await?,
+            },
+            200,
+        ),
+        (worker::Method::Get, "/deliveries") => api_json(
+            &OwnerItems {
+                items: owner_deliveries(&env, limit).await?,
+            },
+            200,
+        ),
+        (worker::Method::Get, "/direct-messages") => api_json(
+            &OwnerItems {
+                items: owner_direct_messages(&env, limit).await?,
+            },
+            200,
+        ),
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
             501,
@@ -390,6 +408,59 @@ async fn owner_home_timeline(
         "#,
     )
     .bind_refs([&limit_arg, &include_replies_arg])?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_notifications(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, type, actor_id, actor_username, actor_display_name, actor_avatar_url,
+               post_id, activity_id, content, read, created_at
+        FROM notifications
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_deliveries(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, post_id, target_type, target_url, protocol, status, retry_count,
+               last_attempt_at, error_message, activity_type, created_at, delivered_at
+        FROM deliveries
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_direct_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, conversation_id, sender_id, content, published_at, created_at
+        FROM direct_messages
+        ORDER BY published_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
     .all()
     .await?
     .results::<Map<String, Value>>()
