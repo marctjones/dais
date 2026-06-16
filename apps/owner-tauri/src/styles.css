@@ -216,6 +216,27 @@ h2 {
   color: #3f4a43;
 }
 
+.feed-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0 12px;
+  color: #4b564f;
+  font-size: 0.9rem;
+}
+
+.feed-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+}
+
+.feed-controls input {
+  min-height: auto;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

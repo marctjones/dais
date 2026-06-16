@@ -575,6 +575,90 @@ async function ownerReaderLifecycleFixture() {
   }
 }
 
+async function ownerFeedControlsFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner feed controls fixture" };
+  }
+  const fixture = generateFixtureActor();
+  const token = `dais-feed-controls-${Date.now()}`;
+  const rootId = `${fixture.actorUrl}#posts/${token}-root`;
+  const replyId = `${fixture.actorUrl}#posts/${token}-reply`;
+  try {
+    const follow = await ownerApi("/following/follow", {
+      method: "POST",
+      body: JSON.stringify({ target: fixture.actorUrl }),
+    });
+    const followId = follow.json?.following?.id;
+    if (!followId) {
+      throw new Error(`follow response missing following id: ${summarizeJson(follow.json)}`);
+    }
+
+    const accept = JSON.stringify({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      id: `${fixture.actorUrl}#activities/accept-${token}`,
+      type: "Accept",
+      actor: fixture.actorUrl,
+      object: {
+        id: followId,
+        type: "Follow",
+        actor: actorUrl,
+        object: fixture.actorUrl,
+      },
+    });
+    const acceptRes = await signedActivityPost(fixture, accept);
+    if (acceptRes.status < 200 || acceptRes.status >= 300) {
+      throw new Error(`Accept expected 2xx, got ${acceptRes.status}: ${acceptRes.text}`);
+    }
+
+    for (const [objectId, suffix, inReplyTo] of [
+      [rootId, "root", null],
+      [replyId, "reply", rootId],
+    ]) {
+      const create = JSON.stringify({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        id: `${fixture.actorUrl}#activities/create-${token}-${suffix}`,
+        type: "Create",
+        actor: fixture.actorUrl,
+        published: new Date().toISOString(),
+        to: ["https://www.w3.org/ns/activitystreams#Public"],
+        object: {
+          id: objectId,
+          type: "Note",
+          attributedTo: fixture.actorUrl,
+          to: ["https://www.w3.org/ns/activitystreams#Public"],
+          inReplyTo,
+          content: `<p>${token} ${suffix} fixture</p>`,
+          published: new Date().toISOString(),
+        },
+      });
+      const createRes = await signedActivityPost(fixture, create);
+      if (createRes.status < 200 || createRes.status >= 300) {
+        throw new Error(`${suffix} Create expected 2xx, got ${createRes.status}: ${createRes.text}`);
+      }
+    }
+
+    const quiet = await ownerApi("/timeline/home?limit=100");
+    const withReplies = await ownerApi("/timeline/home?limit=100&include_replies=true");
+    return { fixture, rootId, replyId, quiet: quiet.json, withReplies: withReplies.json };
+  } finally {
+    for (const objectId of [rootId, replyId]) {
+      const deleteActivity = JSON.stringify({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        id: `${fixture.actorUrl}#activities/delete-${token}-${objectId.endsWith("reply") ? "reply" : "root"}`,
+        type: "Delete",
+        actor: fixture.actorUrl,
+        object: objectId,
+        published: new Date().toISOString(),
+      });
+      await signedActivityPost(fixture, deleteActivity).catch(() => {});
+    }
+    await ownerApi("/following/unfollow", {
+      method: "POST",
+      body: JSON.stringify({ target: fixture.actorUrl }),
+    }).catch(() => {});
+  }
+}
+
 async function ownerReaderReplyFixture() {
   if (!config.ownerToken) {
     return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner reader reply fixture" };
@@ -1050,6 +1134,19 @@ const tests = [
       return t.fail(`timeline content missing fixture token: ${summarizeJson(result.timelinePost)}`);
     }
     t.pass(`home_timeline contains signed fixture post ${result.objectId}`);
+  }),
+
+  requirement("OWNER-FEED-01", "DAIS-OWNER", "Owner home timeline hides replies by default and exposes an explicit reply toggle", async (t) => {
+    const result = await ownerFeedControlsFixture();
+    if (result.skipped) return t.info(result.detail);
+    const quietItems = result.quiet?.items || [];
+    const replyHidden = !quietItems.some((post) => post.object_id === result.replyId);
+    const rootVisible = quietItems.some((post) => post.object_id === result.rootId);
+    const replyVisible = (result.withReplies?.items || []).some((post) => post.object_id === result.replyId);
+    if (!rootVisible || !replyHidden || !replyVisible) {
+      return t.fail(`reply filter mismatch: quiet=${summarizeJson(result.quiet)} withReplies=${summarizeJson(result.withReplies)}`);
+    }
+    t.pass("home timeline hides replies by default and include_replies=true restores them");
   }),
 
   requirement("OWNER-READER-03", "DAIS-OWNER", "Reader reply compose generates an ActivityPub reply object", async (t) => {

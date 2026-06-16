@@ -1045,8 +1045,9 @@ async function handleOwnerApi(request, env, url) {
   }
 
   if (request.method === 'GET' && path === '/timeline/home') {
+    const includeReplies = url.searchParams.get('include_replies') === 'true';
     return apiJson({
-      items: await ownerHomeTimeline(env, clampLimit(url.searchParams.get('limit'))),
+      items: await ownerHomeTimeline(env, clampLimit(url.searchParams.get('limit')), { includeReplies }),
     });
   }
 
@@ -1265,7 +1266,7 @@ async function handleOwnerApi(request, env, url) {
 async function ownerSnapshot(env) {
   const [profile, homeTimeline, posts, followers, friends, following, sources, moderation, diagnostics] = await Promise.all([
     ownerProfile(env),
-    ownerHomeTimeline(env, 20),
+    ownerHomeTimeline(env, 20, { includeReplies: false }),
     ownerPosts(env, 20),
     ownerFollowers(env, 100),
     ownerFriends(env, 100),
@@ -1483,7 +1484,8 @@ async function ownerPostInteractions(env, id, type) {
   return rows.results || [];
 }
 
-async function ownerHomeTimeline(env, limit) {
+async function ownerHomeTimeline(env, limit, options = {}) {
+  const includeReplies = options.includeReplies === true;
   const rows = await env.DB.prepare(
     `SELECT id, object_id, actor_id, actor_username, actor_display_name, actor_avatar_url,
             content, content_html, visibility, in_reply_to, published_at, updated_at,
@@ -1493,9 +1495,10 @@ async function ownerHomeTimeline(env, limit) {
             (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = timeline_posts.object_id OR i.object_url = timeline_posts.object_id) AND i.type = 'boost') AS boost_count
      FROM timeline_posts
      WHERE deleted_at IS NULL
+       AND (?2 = 1 OR in_reply_to IS NULL OR in_reply_to = '')
      ORDER BY published_at DESC
      LIMIT ?1`,
-  ).bind(limit).all();
+  ).bind(limit, includeReplies ? 1 : 0).all();
   return rows.results || [];
 }
 

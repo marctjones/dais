@@ -916,6 +916,9 @@ pub struct OwnerTimelineArgs {
     pub api: OwnerApiArgs,
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
+    /// Include reply posts in the owner home timeline.
+    #[arg(long, default_value_t = false)]
+    pub include_replies: bool,
 }
 
 #[derive(Args, Clone, Debug)]

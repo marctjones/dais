@@ -499,6 +499,7 @@ struct App {
     search_source_items: Vec<OwnerSearchSourceItem>,
     reader: Vec<OwnerTimelinePost>,
     reader_details: HashMap<String, OwnerPostDetail>,
+    show_reader_replies: bool,
     discovered_actor: Option<OwnerDiscoveredActor>,
     bluesky_feed: Vec<crate::atproto::FeedItem>,
     sources: OwnerSources,
@@ -547,6 +548,7 @@ impl App {
             search_source_items: Vec::new(),
             reader: Vec::new(),
             reader_details: HashMap::new(),
+            show_reader_replies: false,
             discovered_actor: None,
             bluesky_feed: Vec::new(),
             sources: OwnerSources {
@@ -610,6 +612,15 @@ impl App {
             KeyCode::Char('u') => self.unblock_selected_block(),
             KeyCode::Char('s') => self.refresh_selected_source(),
             KeyCode::Char('v') => self.remove_selected_source(),
+            KeyCode::Char('h') if self.active == Tab::Reader || self.active == Tab::Home => {
+                self.show_reader_replies = !self.show_reader_replies;
+                self.status = if self.show_reader_replies {
+                    "Showing reply posts in reader"
+                } else {
+                    "Hiding reply posts in reader"
+                }
+                .to_string();
+            }
             KeyCode::Enter => self.load_selected_reader_detail(),
             KeyCode::Char('l') => self.reader_interaction("like"),
             KeyCode::Char('o') => self.reader_interaction("boost"),
@@ -1321,9 +1332,27 @@ impl App {
     }
 
     fn selected_reader_object_id(&self) -> Option<String> {
-        self.reader
+        self.visible_reader_posts()
             .get(self.selected(Tab::Reader))
             .map(|row| row.object_id.clone())
+    }
+
+    fn visible_reader_posts(&self) -> Vec<&OwnerTimelinePost> {
+        self.reader
+            .iter()
+            .filter(|post| {
+                self.show_reader_replies || post.in_reply_to.as_deref().unwrap_or("").is_empty()
+            })
+            .collect()
+    }
+
+    fn visible_home_posts(&self) -> Vec<&OwnerTimelinePost> {
+        self.home
+            .iter()
+            .filter(|post| {
+                self.show_reader_replies || post.in_reply_to.as_deref().unwrap_or("").is_empty()
+            })
+            .collect()
     }
 
     fn load_selected_reader_detail(&mut self) {
@@ -1677,7 +1706,7 @@ impl App {
 
     fn draw_footer(&self, frame: &mut Frame<'_>, area: Rect) {
         let left = match self.mode {
-            Mode::Normal => "q quit · tab switch · r refresh · g discover · f follow · w unfollow · enter detail · y/l/o actions · i link · n open",
+            Mode::Normal => "q quit · tab switch · r refresh · h replies · g discover · f follow · w unfollow · enter detail · y/l/o actions · i link · n open",
             Mode::Compose => "ctrl+s send · tab field · v visibility · p protocol · e e2ee · esc cancel",
             Mode::Search => "enter search · esc cancel · backspace edit",
             Mode::SourceAdd => "enter add source · esc cancel · format: rss|atom|jsonfeed|api url [title]",
@@ -2008,8 +2037,8 @@ impl App {
                 }]
             }
             Tab::Reader => self
-                .reader
-                .iter()
+                .visible_reader_posts()
+                .into_iter()
                 .map(|post| {
                     let author = post
                         .actor_display_name
@@ -2060,8 +2089,8 @@ impl App {
                 })
                 .collect(),
             Tab::Home => self
-                .home
-                .iter()
+                .visible_home_posts()
+                .into_iter()
                 .map(|post| {
                     let display = post
                         .actor_display_name

@@ -1007,12 +1007,11 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
         }
         OwnerCommand::Profile(command) => handle_owner_profile(command).await?,
         OwnerCommand::Timeline(args) => {
-            let snapshot = owner_api(&args.api)
-                .snapshot()
+            let posts = owner_api(&args.api)
+                .home_timeline(args.limit, args.include_replies)
                 .await
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-            let limit = args.limit.min(snapshot.home_timeline.len());
-            for post in snapshot.home_timeline.iter().take(limit) {
+            for post in &posts {
                 let author = post
                     .actor_display_name
                     .as_deref()
@@ -1027,7 +1026,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 println!("{}", post.content);
                 println!();
             }
-            if limit == 0 {
+            if posts.is_empty() {
                 println!("No followed posts found");
             }
         }

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.72] - 2026-06-16
+
+### Added
+- Added privacy-safe reader feed controls: owner home timelines hide replies by
+  default, expose an explicit `include_replies=true` API toggle, and surface
+  reply visibility controls in CLI, Rust TUI, and Dais Desk, plus source-item
+  visibility controls in Dais Desk.
+- Added authenticated ActivityPub conformance coverage proving the default home
+  timeline hides replies and the explicit reply toggle restores them.
+
 ## [1.28.71] - 2026-06-16
 
 ### Added

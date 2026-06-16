@@ -366,6 +366,8 @@ let directMessages: OwnerDirectMessage[] = [];
 let searchQuery = "";
 let searchResults: OwnerSearchResult = { posts: [], users: [], sources: [], source_items: [] };
 let ownerStats: OwnerStats | null = null;
+let showTimelineReplies = false;
+let showSourceItems = true;
 
 async function ownerInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!smokeMode) {
@@ -758,6 +760,13 @@ function render() {
       void disallowHost(button.dataset.disallowHost || "");
     });
   });
+  app.querySelectorAll<HTMLInputElement>("[data-feed-toggle]").forEach((input) => {
+    input.addEventListener("change", () => {
+      if (input.dataset.feedToggle === "replies") showTimelineReplies = input.checked;
+      if (input.dataset.feedToggle === "sources") showSourceItems = input.checked;
+      render();
+    });
+  });
 }
 
 function navButton(section: string) {
@@ -882,7 +891,7 @@ function statsView(data: OwnerSnapshot) {
 }
 
 function sourcesView(data: OwnerSnapshot) {
-  const items = sourceItems.length ? sourceItems : data.sources;
+  const items = showSourceItems ? (sourceItems.length ? sourceItems : data.sources) : [];
   return `<section class="split">
     <article>
       <div class="section-heading">
@@ -904,12 +913,14 @@ function sourcesView(data: OwnerSnapshot) {
     </article>
     <article>
       <h2 class="section-label">Reader items</h2>
+      ${sourceControls()}
       ${list(items.map(sourceCard), "No source items are available yet.")}
     </article>
   </section>`;
 }
 
 function dashboardView(data: OwnerSnapshot) {
+  const timeline = feedTimeline(data);
   return `
     <section class="metrics">
       <article><span>Posts</span><strong>${data.posts.length}</strong></article>
@@ -922,7 +933,8 @@ function dashboardView(data: OwnerSnapshot) {
     <section class="split">
       <article class="panel">
         <h2>Following feed</h2>
-        ${list(data.home_timeline.slice(0, 6).map(timelineCard), "No followed posts yet. Follow people or sources to build this feed.")}
+        ${feedControls()}
+        ${list(timeline.slice(0, 6).map(timelineCard), "No followed posts yet. Follow people or sources to build this feed.")}
       </article>
     </section>
     <section class="split">
@@ -932,10 +944,12 @@ function dashboardView(data: OwnerSnapshot) {
 }
 
 function followingView(data: OwnerSnapshot) {
+  const timeline = feedTimeline(data);
   return `<section class="split">
     <article class="panel">
       <h2>Following feed</h2>
-      ${list(data.home_timeline.map(timelineCard), "No followed posts yet. Follow an ActivityPub actor to build this feed.")}
+      ${feedControls()}
+      ${list(timeline.map(timelineCard), "No followed posts yet. Follow an ActivityPub actor to build this feed.")}
     </article>
     <article class="panel">
       <h2>Follow actor</h2>
@@ -951,6 +965,7 @@ function followingView(data: OwnerSnapshot) {
 }
 
 function friendsView(data: OwnerSnapshot) {
+  const timeline = feedTimeline(data);
   return `<section class="split">
     <article class="panel">
       <h2>Mutual friends</h2>
@@ -959,9 +974,28 @@ function friendsView(data: OwnerSnapshot) {
     </article>
     <article class="panel">
       <h2>Friend feed</h2>
-      ${list(data.home_timeline.map(timelineCard), "No friend posts yet. Follow mutual friends to build this feed.")}
+      ${feedControls()}
+      ${list(timeline.map(timelineCard), "No friend posts yet. Follow mutual friends to build this feed.")}
     </article>
   </section>`;
+}
+
+function feedTimeline(data: OwnerSnapshot) {
+  return showTimelineReplies ? data.home_timeline : data.home_timeline.filter((post) => !post.in_reply_to);
+}
+
+function feedControls() {
+  return `<div class="feed-controls">
+    <label><input type="checkbox" data-feed-toggle="replies" ${showTimelineReplies ? "checked" : ""} /> Show replies</label>
+    <span>Chronological, not engagement ranked</span>
+  </div>`;
+}
+
+function sourceControls() {
+  return `<div class="feed-controls">
+    <label><input type="checkbox" data-feed-toggle="sources" ${showSourceItems ? "checked" : ""} /> Show source items</label>
+    <span>Private reader-only by default</span>
+  </div>`;
 }
 
 function discoveryView() {

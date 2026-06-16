@@ -26,6 +26,19 @@ impl OwnerApiClient {
         self.get("/api/dais/owner/snapshot").await
     }
 
+    pub async fn home_timeline(
+        &self,
+        limit: usize,
+        include_replies: bool,
+    ) -> ClientResult<Vec<OwnerTimelinePost>> {
+        let response: OwnerItems<OwnerTimelinePost> = self
+            .get(&format!(
+                "/api/dais/owner/timeline/home?limit={limit}&include_replies={include_replies}"
+            ))
+            .await?;
+        Ok(response.items)
+    }
+
     pub async fn post_detail(&self, id: &str) -> ClientResult<OwnerPostDetail> {
         self.get(&format!("/api/dais/owner/posts/{}", url_encode(id)))
             .await
