@@ -25,17 +25,196 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return handle_owner_api(req, env, &url).await;
     }
 
+    if path.starts_with("/api/v1/") || path.starts_with("/api/v2/") || path.starts_with("/oauth/") {
+        return handle_mastodon_api(req, env, &url).await;
+    }
+
     match path {
         "/__dais-fixtures/activitypub/actor" => fixture_actor_response(&url),
         "/__dais-fixtures/activitypub/outbox" => fixture_outbox_response(&url),
         "/__dais-fixtures/activitypub/posts/public-preview" => fixture_post_response(&url),
         "/__dais-fixtures/sources/rss" => fixture_rss_response(&url),
+        "/.well-known/oauth-authorization-server" if req.method() == worker::Method::Get => {
+            oauth_authorization_server_metadata(&url)
+        }
+        "/.well-known/openid-configuration" if req.method() == worker::Method::Get => {
+            oauth_authorization_server_metadata(&url)
+        }
+        "/.well-known/nodeinfo" if req.method() == worker::Method::Get => nodeinfo_discovery(&url),
+        "/nodeinfo/2.0" if req.method() == worker::Method::Get => {
+            api_json(&nodeinfo_document(&env).await?, 200)
+        }
         "/health" => Response::ok("OK"),
         _ => Response::error(
             "Rust router migration scaffold: route not migrated yet",
             501,
         ),
     }
+}
+
+async fn handle_mastodon_api(req: Request, env: Env, url: &worker::Url) -> Result<Response> {
+    if req.method() == worker::Method::Options {
+        return api_json(&serde_json::json!({}), 204);
+    }
+
+    let path = url.path();
+    match (req.method(), path) {
+        (worker::Method::Get, "/api/v1/instance") | (worker::Method::Get, "/api/v2/instance") => {
+            api_json(
+                &mastodon_instance(&env, path == "/api/v2/instance").await?,
+                200,
+            )
+        }
+        _ => api_json(
+            &serde_json::json!({ "error": "Not implemented in dais Mastodon compatibility API" }),
+            404,
+        ),
+    }
+}
+
+fn oauth_authorization_server_metadata(url: &worker::Url) -> Result<Response> {
+    let origin = origin(url);
+    api_json(
+        &serde_json::json!({
+            "issuer": origin,
+            "authorization_endpoint": format!("{origin}/oauth/authorize"),
+            "token_endpoint": format!("{origin}/oauth/token"),
+            "revocation_endpoint": format!("{origin}/oauth/revoke"),
+            "scopes_supported": ["read", "write", "follow", "push"],
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+            "code_challenge_methods_supported": ["S256", "plain"],
+            "service_documentation": "https://github.com/marctjones/dais",
+        }),
+        200,
+    )
+}
+
+fn nodeinfo_discovery(url: &worker::Url) -> Result<Response> {
+    let origin = origin(url);
+    api_json(
+        &serde_json::json!({
+            "links": [
+                {
+                    "rel": "http://nodeinfo.diaspora.software/ns/schema/2.0",
+                    "href": format!("{origin}/nodeinfo/2.0"),
+                }
+            ]
+        }),
+        200,
+    )
+}
+
+async fn nodeinfo_document(env: &Env) -> Result<Value> {
+    Ok(serde_json::json!({
+        "version": "2.0",
+        "software": {
+            "name": "dais",
+            "version": "1.28",
+            "repository": "https://github.com/marctjones/dais",
+        },
+        "protocols": ["activitypub"],
+        "services": {
+            "inbound": [],
+            "outbound": [],
+        },
+        "openRegistrations": false,
+        "usage": {
+            "users": {
+                "total": 1,
+                "activeMonth": 1,
+                "activeHalfyear": 1,
+            },
+            "localPosts": public_status_count(env).await?,
+        },
+        "metadata": {
+            "nodeName": "dais",
+            "privateByDefault": true,
+        },
+    }))
+}
+
+async fn mastodon_instance(env: &Env, v2: bool) -> Result<Value> {
+    let mut instance = serde_json::json!({
+        "uri": "social.dais.social",
+        "domain": "social.dais.social",
+        "title": "dais",
+        "short_description": "Private-by-default single-user social server",
+        "description": "dais speaks ActivityPub and AT Protocol with private-by-default posting.",
+        "email": "",
+        "version": "4.2.0 (compatible; dais)",
+        "registrations": false,
+        "approval_required": true,
+        "invites_enabled": false,
+        "urls": { "streaming_api": "wss://social.dais.social" },
+        "stats": {
+            "user_count": 1,
+            "status_count": public_status_count(env).await?,
+            "domain_count": 1,
+        },
+    });
+
+    if v2 {
+        if let Value::Object(ref mut object) = instance {
+            object.insert(
+                "source_url".to_string(),
+                Value::String("https://github.com/marctjones/dais".to_string()),
+            );
+            object.insert("languages".to_string(), serde_json::json!(["en"]));
+            object.insert(
+                "configuration".to_string(),
+                serde_json::json!({
+                    "statuses": {
+                        "max_characters": 5000,
+                        "max_media_attachments": 4,
+                        "characters_reserved_per_url": 23,
+                    },
+                    "media_attachments": {
+                        "supported_mime_types": [
+                            "image/jpeg",
+                            "image/png",
+                            "image/gif",
+                            "image/webp",
+                            "video/mp4",
+                            "video/webm",
+                        ],
+                    },
+                    "polls": {
+                        "max_options": 4,
+                        "max_characters_per_option": 200,
+                        "min_expiration": 300,
+                        "max_expiration": 2629746,
+                    },
+                }),
+            );
+        }
+    }
+    Ok(instance)
+}
+
+async fn public_status_count(env: &Env) -> Result<i64> {
+    let row = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM posts
+            WHERE visibility = 'public'
+              AND encrypted_message IS NULL
+              AND content NOT LIKE '%End-to-end encrypted message%'
+            "#,
+        )
+        .first::<Map<String, Value>>(None)
+        .await?;
+    Ok(row
+        .as_ref()
+        .map(|fields| integer_field(Some(fields), "count"))
+        .unwrap_or(0))
+}
+
+fn origin(url: &worker::Url) -> String {
+    format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default())
 }
 
 async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Result<Response> {
