@@ -656,6 +656,7 @@ function followingView(data: OwnerSnapshot) {
     </article>
     <article class="panel">
       <h2>Follow actor</h2>
+      <p class="privacy-note">Following is operator-only by default. Treat this list as sensitive; it can reveal medical, adult, political, or private interests.</p>
       <form id="follow-form" class="inline-form">
         <input name="target" placeholder="@user@example.social or https://..." />
         <button type="submit">Follow</button>
@@ -715,6 +716,7 @@ function composeView(data: OwnerSnapshot) {
         </select>
       </label>
     </div>
+    <p class="privacy-note">Public is internet-visible. Followers goes to approved followers. Direct is for named recipients only.</p>
     <label>Recipients
       <input name="recipients" placeholder="Direct/E2EE actor URLs, comma separated" />
     </label>
@@ -752,6 +754,7 @@ function followersView(data: OwnerSnapshot) {
   const rejected = data.followers.filter((row) => row.status === "rejected");
   return `<section class="split followers">
     <div>
+      <p class="privacy-note">Follower lists are owner-token views. Dais does not advertise them publicly by default.</p>
       <h2 class="section-label">Pending</h2>
       ${list(pending.map(followerCard), "No pending follow requests.")}
     </div>
@@ -847,7 +850,7 @@ function postCard(post: OwnerSnapshot["posts"][number]) {
       <p>${escapeHtml(post.content)}</p>
     </div>
     <footer>
-      <span>${escapeHtml(String(post.visibility))}</span>
+      <span title="${escapeAttr(audienceDescription(post.visibility))}">${escapeHtml(audienceLabel(post.visibility))}</span>
       <span>${escapeHtml(String(post.protocol))}</span>
       ${post.encrypted ? "<span>E2EE</span>" : ""}
       ${post.attachments?.length ? `<span>${post.attachments.length} media</span>` : ""}
@@ -870,7 +873,7 @@ function postDetailView(post: OwnerPostDetail) {
     </div>
     <dl>
       <dt>ID</dt><dd>${escapeHtml(shortUrl(post.id))}</dd>
-      <dt>Visibility</dt><dd>${escapeHtml(String(post.visibility))}</dd>
+      <dt>Audience</dt><dd>${escapeHtml(audienceLabel(post.visibility))}</dd>
       <dt>Protocol</dt><dd>${escapeHtml(String(post.protocol))}</dd>
       <dt>Reply target</dt><dd>${post.in_reply_to ? escapeHtml(shortUrl(post.in_reply_to)) : "none"}</dd>
       <dt>Published</dt><dd>${post.published_at ? escapeHtml(formatTime(post.published_at)) : ""}</dd>
@@ -923,7 +926,7 @@ function timelineCard(post: OwnerSnapshot["home_timeline"][number]) {
       <p>${escapeHtml(post.content)}</p>
     </div>
     <footer>
-      <span>${escapeHtml(post.visibility)}</span>
+      <span title="${escapeAttr(audienceDescription(post.visibility))}">${escapeHtml(audienceLabel(post.visibility))}</span>
       ${post.protocol ? `<span>${escapeHtml(post.protocol)}</span>` : ""}
       ${post.in_reply_to ? "<span>reply</span>" : ""}
       ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
@@ -941,6 +944,24 @@ function interactionCounts(post: { reply_count?: number; like_count?: number; bo
   if (post.like_count) parts.push(`<span>${post.like_count} likes</span>`);
   if (post.boost_count) parts.push(`<span>${post.boost_count} boosts</span>`);
   return parts.join("");
+}
+
+function audienceLabel(value: unknown) {
+  const normalized = String(value || "unknown").toLowerCase();
+  if (normalized === "public") return "Public - internet visible";
+  if (normalized === "unlisted") return "Unlisted - link visible";
+  if (normalized === "followers" || normalized === "private") return "Followers - approved followers";
+  if (normalized === "direct") return "Direct - named recipients";
+  return `${String(value || "Unknown")} - check audience`;
+}
+
+function audienceDescription(value: unknown) {
+  const normalized = String(value || "unknown").toLowerCase();
+  if (normalized === "public") return "Visible on public web, public ActivityPub and Mastodon surfaces, and enabled public protocol routes.";
+  if (normalized === "unlisted") return "Reachable by URL but kept out of public listing surfaces where supported.";
+  if (normalized === "followers" || normalized === "private") return "Visible to approved followers; kept out of anonymous public feeds.";
+  if (normalized === "direct") return "Intended only for named recipients, not general friends or public feeds.";
+  return "Verify post details before assuming who can see this.";
 }
 
 function sourceCard(source: OwnerSnapshot["sources"][number]) {
@@ -1028,7 +1049,7 @@ function searchPostCard(row: OwnerSearchResult["posts"][number]) {
       <p>${escapeHtml(row.content)}</p>
     </div>
     <footer>
-      <span>${escapeHtml(row.visibility || "unknown")}</span>
+      <span title="${escapeAttr(audienceDescription(row.visibility))}">${escapeHtml(audienceLabel(row.visibility))}</span>
       <span>${escapeHtml(row.protocol || "activitypub")}</span>
       ${row.encrypted_message ? "<span>E2EE</span>" : ""}
       ${row.media_attachments ? "<span>media</span>" : ""}

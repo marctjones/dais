@@ -207,6 +207,15 @@ h2 {
   background: #ffffff;
 }
 
+.privacy-note {
+  margin: 8px 0 12px;
+  padding: 9px 10px;
+  border: 1px solid #d9ded7;
+  border-radius: 7px;
+  background: #f7faf5;
+  color: #3f4a43;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

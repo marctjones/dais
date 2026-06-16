@@ -1624,7 +1624,7 @@ impl App {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(4),
+                Constraint::Length(5),
                 Constraint::Min(8),
                 Constraint::Length(5),
             ])
@@ -1632,6 +1632,7 @@ impl App {
 
         let meta = Paragraph::new(vec![
             Line::from(format!("Audience: {}", self.compose.visibility)),
+            Line::from(audience_description(self.compose.visibility)),
             Line::from(format!(
                 "Protocol: {}",
                 match self.compose.protocol {
@@ -1904,7 +1905,7 @@ impl App {
                         title: author.to_string(),
                         subtitle: format!(
                             "{} · {} · replies={} likes={} boosts={}",
-                            post.visibility,
+                            audience_label(&post.visibility),
                             post.published_at.as_deref().unwrap_or("unknown time"),
                             post.reply_count,
                             post.like_count,
@@ -1928,7 +1929,7 @@ impl App {
                         title: display.to_string(),
                         subtitle: format!(
                             "{} · {} · replies={} likes={} boosts={}",
-                            post.visibility,
+                            audience_label(&post.visibility),
                             post.published_at.as_deref().unwrap_or("unknown time"),
                             post.reply_count,
                             post.like_count,
@@ -1949,7 +1950,7 @@ impl App {
                         .to_string(),
                     subtitle: format!(
                         "{:?} · {:?} · replies={} likes={} boosts={}",
-                        post.visibility, post.protocol, post.reply_count, post.like_count, post.boost_count
+                        audience_label(&format!("{:?}", post.visibility)), post.protocol, post.reply_count, post.like_count, post.boost_count
                     ),
                     details: owner_post_detail(post),
                 })
@@ -2362,6 +2363,25 @@ fn owner_visibility(value: Visibility) -> OwnerVisibility {
     }
 }
 
+fn audience_description(value: Visibility) -> &'static str {
+    match value {
+        Visibility::Public => "Public: internet-visible",
+        Visibility::Unlisted => "Unlisted: link-visible",
+        Visibility::Followers => "Followers: approved followers only",
+        Visibility::Direct => "Direct: named recipients only",
+    }
+}
+
+fn audience_label(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "public" => "Public - internet visible".to_string(),
+        "unlisted" => "Unlisted - link visible".to_string(),
+        "followers" | "private" => "Followers - approved followers".to_string(),
+        "direct" => "Direct - named recipients".to_string(),
+        _ => format!("{value} - check audience"),
+    }
+}
+
 fn owner_protocol(value: Protocol) -> OwnerProtocolRoute {
     match value {
         Protocol::ActivityPub => OwnerProtocolRoute::ActivityPub,
@@ -2443,12 +2463,13 @@ fn profile_detail(profile: &OwnerProfile) -> String {
 
 fn owner_timeline_detail(post: &OwnerTimelinePost) -> String {
     format!(
-        "id: {}\nobject: {}\nactor: {}\nusername: {}\ndisplay name: {}\nvisibility: {}\nprotocol: {}\nreply to: {}\npublished: {}\nreplies: {}\nlikes: {}\nboosts: {}\n\n{}",
+        "id: {}\nobject: {}\nactor: {}\nusername: {}\ndisplay name: {}\naudience: {}\nvisibility: {}\nprotocol: {}\nreply to: {}\npublished: {}\nreplies: {}\nlikes: {}\nboosts: {}\n\n{}",
         post.id,
         post.object_id,
         post.actor_id,
         post.actor_username.as_deref().unwrap_or(""),
         post.actor_display_name.as_deref().unwrap_or(""),
+        audience_label(&post.visibility),
         post.visibility,
         post.protocol.as_deref().unwrap_or("activitypub"),
         post.in_reply_to.as_deref().unwrap_or(""),
@@ -2462,9 +2483,10 @@ fn owner_timeline_detail(post: &OwnerTimelinePost) -> String {
 
 fn owner_post_detail(post: &OwnerPost) -> String {
     format!(
-        "id: {}\ntitle: {}\nvisibility: {:?}\nprotocol: {:?}\npublished: {}\nencrypted: {}\nattachments: {}\nreplies: {}\nlikes: {}\nboosts: {}\n\n{}",
+        "id: {}\ntitle: {}\naudience: {}\nvisibility: {:?}\nprotocol: {:?}\npublished: {}\nencrypted: {}\nattachments: {}\nreplies: {}\nlikes: {}\nboosts: {}\n\n{}",
         post.id,
         post.title.as_deref().unwrap_or(""),
+        audience_label(&format!("{:?}", post.visibility)),
         post.visibility,
         post.protocol,
         post.published_at.as_deref().unwrap_or(""),
@@ -2479,8 +2501,9 @@ fn owner_post_detail(post: &OwnerPost) -> String {
 
 fn post_detail(post: &OwnerSearchPost) -> String {
     format!(
-        "id: {}\nvisibility: {}\nprotocol: {}\npublished: {}\natproto: {}\nattachments: {}\n{}\n{}",
+        "id: {}\naudience: {}\nvisibility: {}\nprotocol: {}\npublished: {}\natproto: {}\nattachments: {}\n{}\n{}",
         post.id,
+        audience_label(post.visibility.as_deref().unwrap_or("unknown")),
         post.visibility.as_deref().unwrap_or("unknown"),
         post.protocol.as_deref().unwrap_or("activitypub"),
         post.published_at.as_deref().unwrap_or(""),

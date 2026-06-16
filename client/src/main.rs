@@ -1122,6 +1122,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
             println!("Created owner API post");
             println!("id={}", created.id);
             println!("visibility={}", created.visibility);
+            println!("audience={}", audience_description(&created.visibility));
             println!("protocol={}", created.protocol);
             println!("published_at={}", created.published_at);
             if let Some(reply) = created.in_reply_to {
@@ -1535,6 +1536,8 @@ fn print_owner_friends(friends: &[OwnerFriend]) {
 }
 
 fn print_owner_followers(followers: &[OwnerFollower]) {
+    println!("graph_visibility=operator-only");
+    println!("graph_note=Followers are not advertised publicly by Dais by default.");
     if followers.is_empty() {
         println!("No followers found");
         return;
@@ -1552,6 +1555,8 @@ fn print_owner_followers(followers: &[OwnerFollower]) {
 }
 
 fn print_owner_following(following: &[OwnerFollowing]) {
+    println!("graph_visibility=operator-only");
+    println!("graph_note=Following is private by default; audit this list for sensitive follows.");
     if following.is_empty() {
         println!("No following actors found");
         return;
@@ -1657,6 +1662,10 @@ fn print_owner_search(results: &OwnerSearchResult) {
             post.visibility.as_deref().unwrap_or("unknown"),
             post.protocol.as_deref().unwrap_or("activitypub"),
             post.published_at.as_deref().unwrap_or("")
+        );
+        println!(
+            "audience={}",
+            audience_description(post.visibility.as_deref().unwrap_or("unknown"))
         );
         println!("{}", post.content);
         println!();
@@ -1813,6 +1822,10 @@ fn print_owner_discovered_actor(actor: &OwnerDiscoveredActor) {
 fn print_owner_post_detail(detail: &OwnerPostDetail) {
     println!("id={}", detail.post.id);
     println!("visibility={:?}", detail.post.visibility);
+    println!(
+        "audience={}",
+        audience_description(&format!("{:?}", detail.post.visibility))
+    );
     println!("protocol={:?}", detail.post.protocol);
     if let Some(reply_to) = detail.in_reply_to.as_deref() {
         println!("reply_to={reply_to}");
@@ -1827,6 +1840,22 @@ fn print_owner_post_detail(detail: &OwnerPostDetail) {
         detail.post.reply_count, detail.post.like_count, detail.post.boost_count
     );
     println!("{}", detail.post.content);
+}
+
+fn audience_description(visibility: &str) -> &'static str {
+    match visibility.to_ascii_lowercase().as_str() {
+        "public" => {
+            "PUBLIC: visible on public web, public ActivityPub/Mastodon surfaces, and enabled public protocol routes"
+        }
+        "unlisted" => {
+            "UNLISTED: reachable by URL but kept out of public listing surfaces where supported"
+        }
+        "followers" | "private" => {
+            "FRIENDS/FOLLOWERS: visible to approved followers; not in anonymous public feeds"
+        }
+        "direct" => "DIRECT: intended only for named recipients; not for general friends or public feeds",
+        _ => "UNKNOWN: verify the post detail before assuming who can see it",
+    }
 }
 
 async fn handle_notifications(command: NotificationsCommand) -> Result<()> {

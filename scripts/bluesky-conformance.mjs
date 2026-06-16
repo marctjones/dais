@@ -139,6 +139,84 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-REPO-02", "Repo metadata advances when exposed record collections change", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for repo metadata fixture" };
+    }
+
+    const beforeStatus = await request(`/xrpc/com.atproto.sync.getRepoStatus?did=${encodeURIComponent(did())}`);
+    const beforeRepo = await request(`/xrpc/com.atproto.sync.getRepo?did=${encodeURIComponent(did())}`);
+    if (beforeStatus.status !== 200 || beforeRepo.status !== 200) {
+      throw new Error(`repo metadata before expected 200/200, got ${beforeStatus.status}/${beforeRepo.status}`);
+    }
+
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const authHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.json.accessJwt}`,
+    };
+    const subject = `did:web:repo-stats-${Date.now()}.example.com`;
+    let rkey = "";
+    try {
+      const create = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.graph.follow",
+          record: {
+            $type: "app.bsky.graph.follow",
+            subject,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+      });
+      if (create.status !== 200) throw new Error(`follow createRecord expected 200, got ${create.status}: ${create.text}`);
+      rkey = rkeyFromAtUri(create.json?.uri);
+
+      const afterStatus = await request(`/xrpc/com.atproto.sync.getRepoStatus?did=${encodeURIComponent(did())}`);
+      const afterRepo = await request(`/xrpc/com.atproto.sync.getRepo?did=${encodeURIComponent(did())}`);
+      if (afterStatus.status !== 200 || afterRepo.status !== 200) {
+        throw new Error(`repo metadata after expected 200/200, got ${afterStatus.status}/${afterRepo.status}`);
+      }
+      if (afterRepo.json.records !== beforeRepo.json.records + 1) {
+        throw new Error(`repo record count did not include follow record: before=${beforeRepo.json.records} after=${afterRepo.json.records}`);
+      }
+      if (afterStatus.json.rev === beforeStatus.json.rev || afterStatus.json.head === beforeStatus.json.head) {
+        throw new Error("repo status rev/head did not advance after record create");
+      }
+      if (afterRepo.json.rev !== afterStatus.json.rev || afterRepo.json.head !== afterStatus.json.head) {
+        throw new Error("getRepo and getRepoStatus metadata diverged after record create");
+      }
+    } finally {
+      if (rkey) {
+        const remove = await request("/xrpc/com.atproto.repo.deleteRecord", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            repo: did(),
+            collection: "app.bsky.graph.follow",
+            rkey,
+          }),
+        });
+        if (remove.status !== 200) {
+          throw new Error(`follow deleteRecord expected 200, got ${remove.status}: ${remove.text}`);
+        }
+      }
+    }
+
+    const restoredRepo = await request(`/xrpc/com.atproto.sync.getRepo?did=${encodeURIComponent(did())}`);
+    if (restoredRepo.status !== 200) throw new Error(`repo metadata restored expected 200, got ${restoredRepo.status}`);
+    if (restoredRepo.json.records !== beforeRepo.json.records) {
+      throw new Error(`repo record count did not return after cleanup: before=${beforeRepo.json.records} restored=${restoredRepo.json.records}`);
+    }
+  }),
+
   requirement("BLUESKY-FEED-01", "Author feed, timeline, and getRecord expose lexicon-shaped public posts", async () => {
     const authorFeed = await request(`/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(did())}&limit=2`);
     const timeline = await request("/xrpc/app.bsky.feed.getTimeline?limit=2");

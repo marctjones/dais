@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.63] - 2026-06-16
+
+### Added
+- Added Bluesky conformance coverage proving PDS repo metadata advances when
+  owner-token social records change, including temporary follow record
+  create/delete round-trips.
+- Added explicit operator-facing audience descriptions in the CLI, TUI, and
+  Dais Desk so public, followers, unlisted, and direct posts show who can see
+  them in consequence-oriented language.
+- Added operator-only graph notices for follower and following audits so clients
+  make clear that social graph lists are private-by-default owner views.
+
+### Fixed
+- Expanded PDS repo status statistics to account for profile, public post,
+  interaction, and follow records instead of reporting a post-only floor.
+
 ## [1.28.62] - 2026-06-16
 
 ### Added

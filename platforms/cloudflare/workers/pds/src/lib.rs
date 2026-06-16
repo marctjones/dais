@@ -248,7 +248,8 @@ async fn handle_get_repo(req: Request, ctx: RouteContext<()>) -> Result<Response
     let url = req.url()?;
     let did = required_query(&url, "did")?;
     console_log!("Getting repo for DID: {}", did);
-    let stats = repo_stats(&ctx.env).await?;
+    let identity = identity(&ctx.env);
+    let stats = repo_stats(&ctx.env, &identity).await?;
     json_response(serde_json::json!({
         "did": did,
         "head": stats.head,
@@ -295,7 +296,8 @@ async fn handle_get_blob(req: Request, ctx: RouteContext<()>) -> Result<Response
 async fn handle_get_repo_status(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let url = req.url()?;
     let did = required_query(&url, "did")?;
-    let stats = repo_stats(&ctx.env).await?;
+    let identity = identity(&ctx.env);
+    let stats = repo_stats(&ctx.env, &identity).await?;
     json_response(serde_json::json!({
         "did": did,
         "active": true,
@@ -307,7 +309,7 @@ async fn handle_get_repo_status(req: Request, ctx: RouteContext<()>) -> Result<R
 
 async fn handle_list_repos(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let identity = identity(&ctx.env);
-    let stats = repo_stats(&ctx.env).await?;
+    let stats = repo_stats(&ctx.env, &identity).await?;
     json_response(serde_json::json!({
         "repos": [{
             "did": identity.did,
@@ -950,18 +952,37 @@ fn query_limit(url: &Url) -> u32 {
         .clamp(1, 100)
 }
 
-async fn repo_stats(env: &Env) -> Result<RepoStats> {
+async fn repo_stats(env: &Env, identity: &Identity) -> Result<RepoStats> {
     let db = env.d1("DB")?;
+    let actor_id = local_actor_id(identity);
     let row = db
         .prepare(
             r#"
-            SELECT COUNT(*) AS records, MAX(COALESCE(updated_at, published_at)) AS rev
-            FROM posts
-            WHERE visibility = 'public'
-              AND encrypted_message IS NULL
-              AND content NOT LIKE '%End-to-end encrypted message%'
+            SELECT COUNT(*) AS records, MAX(rev) AS rev
+            FROM (
+              SELECT COALESCE(updated_at, created_at) AS rev
+              FROM actors
+              WHERE id = ?1
+              UNION ALL
+              SELECT COALESCE(updated_at, published_at) AS rev
+              FROM posts
+              WHERE visibility = 'public'
+                AND encrypted_message IS NULL
+                AND content NOT LIKE '%End-to-end encrypted message%'
+              UNION ALL
+              SELECT created_at AS rev
+              FROM interactions
+              WHERE actor_id = ?1
+                AND type IN ('like', 'boost')
+              UNION ALL
+              SELECT COALESCE(accepted_at, created_at) AS rev
+              FROM following
+              WHERE actor_id = ?1
+                AND status IN ('accepted', 'pending')
+            )
             "#,
         )
+        .bind(&[actor_id.into()])?
         .first::<serde_json::Map<String, Value>>(None)
         .await?
         .unwrap_or_default();
