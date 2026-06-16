@@ -1,0 +1,24 @@
+name = "router-rust-candidate"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-04"
+
+[build]
+command = 'PATH="/opt/homebrew/opt/rustup/bin:$PATH" cargo install -q worker-build --version 0.8.4 --locked && PATH="/opt/homebrew/opt/rustup/bin:$PATH" $HOME/.cargo/bin/worker-build --release'
+
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dais-social"
+database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+[vars]
+ENVIRONMENT = "rust-candidate"
+WEBFINGER_URL = "https://webfinger-production.marc-t-jones.workers.dev"
+ACTOR_URL = "https://actor-production.marc-t-jones.workers.dev"
+INBOX_URL = "https://inbox-production.marc-t-jones.workers.dev"
+OUTBOX_URL = "https://outbox-production.marc-t-jones.workers.dev"
+PDS_URL = "https://pds-production.marc-t-jones.workers.dev"
+DELIVERY_QUEUE_URL = "https://delivery-queue-production.marc-t-jones.workers.dev"
