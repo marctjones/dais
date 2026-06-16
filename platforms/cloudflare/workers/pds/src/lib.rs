@@ -16,6 +16,7 @@ use serde_json::Value;
 /// - GET /xrpc/com.atproto.sync.listRepos
 /// - GET /xrpc/com.atproto.repo.describeRepo
 /// - GET /xrpc/com.atproto.repo.getRecord
+/// - GET /xrpc/com.atproto.repo.listRecords
 /// - POST /xrpc/com.atproto.repo.createRecord
 /// - POST /xrpc/com.atproto.repo.deleteRecord
 /// - GET /xrpc/app.bsky.actor.getProfile
@@ -118,6 +119,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/xrpc/com.atproto.sync.listRepos", handle_list_repos)
         .get_async("/xrpc/com.atproto.repo.describeRepo", handle_describe_repo)
         .get_async("/xrpc/com.atproto.repo.getRecord", handle_get_record)
+        .get_async("/xrpc/com.atproto.repo.listRecords", handle_list_records)
         .post_async("/xrpc/com.atproto.repo.createRecord", handle_create_record)
         .post_async("/xrpc/com.atproto.repo.deleteRecord", handle_delete_record)
         .get_async("/xrpc/app.bsky.actor.getProfile", handle_get_profile)
@@ -310,6 +312,36 @@ async fn handle_get_record(req: Request, ctx: RouteContext<()>) -> Result<Respon
     json_response(record_response(&identity, row))
 }
 
+async fn handle_list_records(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    if !owner_bearer_matches(&req, &ctx.env)? {
+        return Response::error("Unauthorized", 401);
+    }
+    let url = req.url()?;
+    let repo = required_query(&url, "repo")?;
+    let collection = required_query(&url, "collection")?;
+    let identity = identity(&ctx.env);
+    if repo != identity.did && repo != identity.handle {
+        return Response::error("Repo not found", 404);
+    }
+    let limit = query_limit(&url);
+    let records = match collection.as_str() {
+        "app.bsky.feed.post" => public_posts(&ctx.env, limit)
+            .await?
+            .into_iter()
+            .map(|row| record_response(&identity, row))
+            .collect(),
+        "app.bsky.feed.like" => {
+            subject_records(&ctx.env, &identity, &collection, "like", limit).await?
+        }
+        "app.bsky.feed.repost" => {
+            subject_records(&ctx.env, &identity, &collection, "boost", limit).await?
+        }
+        "app.bsky.graph.follow" => follow_records(&ctx.env, &identity, limit).await?,
+        _ => return Response::error("Collection not found", 404),
+    };
+    json_response(serde_json::json!({ "records": records }))
+}
+
 async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     if !owner_bearer_matches(&req, &ctx.env)? {
         return Response::error("Unauthorized", 401);
@@ -319,19 +351,25 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
     if body.repo != identity.did && body.repo != identity.handle {
         return Response::error("Repo not found", 404);
     }
-    if body.collection != "app.bsky.feed.post" {
-        return Response::error(
-            "Collection not writable in dais PDS compatibility mode",
-            400,
-        );
-    }
     let record_type = body
         .record
         .get("$type")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if record_type != "app.bsky.feed.post" {
+    if record_type != body.collection {
         return Response::error("Record type mismatch", 400);
+    }
+    if body.collection == "app.bsky.feed.like" || body.collection == "app.bsky.feed.repost" {
+        return create_subject_record(&ctx.env, &identity, body).await;
+    }
+    if body.collection == "app.bsky.graph.follow" {
+        return create_follow_record(&ctx.env, &identity, body).await;
+    }
+    if body.collection != "app.bsky.feed.post" {
+        return Response::error(
+            "Collection not writable in dais PDS compatibility mode",
+            400,
+        );
     }
     let text = body
         .record
@@ -427,6 +465,28 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
     if body.repo != identity.did && body.repo != identity.handle {
         return Response::error("Repo not found", 404);
     }
+    if body.collection == "app.bsky.feed.like" || body.collection == "app.bsky.feed.repost" {
+        let atproto_uri = record_uri(&identity, &body.collection, &body.rkey);
+        let id_suffix = format!("/{}", body.rkey);
+        ctx.env
+            .d1("DB")?
+            .prepare("DELETE FROM interactions WHERE id = ?1 OR id LIKE ?2")
+            .bind(&[atproto_uri.into(), format!("%{id_suffix}").into()])?
+            .run()
+            .await?;
+        return delete_record_response(&body.rkey);
+    }
+    if body.collection == "app.bsky.graph.follow" {
+        let atproto_uri = record_uri(&identity, &body.collection, &body.rkey);
+        let id_suffix = format!("/{}", body.rkey);
+        ctx.env
+            .d1("DB")?
+            .prepare("DELETE FROM following WHERE id = ?1 OR id LIKE ?2")
+            .bind(&[atproto_uri.into(), format!("%{id_suffix}").into()])?
+            .run()
+            .await?;
+        return delete_record_response(&body.rkey);
+    }
     if body.collection != "app.bsky.feed.post" {
         return Response::error(
             "Collection not writable in dais PDS compatibility mode",
@@ -448,12 +508,7 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
         .bind(&[atproto_uri.into(), format!("%{id_suffix}").into()])?
         .run()
         .await?;
-    json_response(serde_json::json!({
-        "commit": {
-            "cid": stable_cid(&format!("delete:{}", body.rkey)),
-            "rev": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
-        }
-    }))
+    delete_record_response(&body.rkey)
 }
 
 async fn handle_get_profile(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -1013,6 +1068,178 @@ async fn public_media_by_cid(env: &Env, cid: &str) -> Result<Option<PublicMediaB
     Ok(None)
 }
 
+async fn create_subject_record(
+    env: &Env,
+    identity: &Identity,
+    body: CreateRecordRequest,
+) -> Result<Response> {
+    let subject = body
+        .record
+        .get("subject")
+        .and_then(Value::as_object)
+        .ok_or_else(|| worker::Error::RustError("subject is required".to_string()))?;
+    let subject_uri = subject
+        .get("uri")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| worker::Error::RustError("subject.uri is required".to_string()))?;
+    let created_at = record_created_at(&body.record);
+    let collection = body.collection;
+    let interaction_type = if collection == "app.bsky.feed.like" {
+        "like"
+    } else {
+        "boost"
+    };
+    let rkey = body
+        .rkey
+        .unwrap_or_else(|| generated_rkey(&created_at, subject_uri));
+    let uri = record_uri(identity, &collection, &rkey);
+    env.d1("DB")?
+        .prepare(
+            r#"
+            INSERT OR REPLACE INTO interactions (
+              id, type, actor_id, object_url, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+        )
+        .bind(&[
+            uri.clone().into(),
+            interaction_type.into(),
+            local_actor_id(identity).into(),
+            subject_uri.into(),
+            created_at.into(),
+        ])?
+        .run()
+        .await?;
+    create_record_response(&uri, &body.record)
+}
+
+async fn create_follow_record(
+    env: &Env,
+    identity: &Identity,
+    body: CreateRecordRequest,
+) -> Result<Response> {
+    let subject_did = body
+        .record
+        .get("subject")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| worker::Error::RustError("subject DID is required".to_string()))?;
+    if subject_did == identity.did {
+        return Response::error("Cannot follow the local DID", 400);
+    }
+    let created_at = record_created_at(&body.record);
+    let rkey = body
+        .rkey
+        .unwrap_or_else(|| generated_rkey(&created_at, subject_did));
+    let uri = record_uri(identity, "app.bsky.graph.follow", &rkey);
+    env.d1("DB")?
+        .prepare(
+            r#"
+            INSERT INTO following (
+              id, actor_id, target_actor_id, target_inbox, status, created_at, accepted_at
+            ) VALUES (?1, ?2, ?3, '', 'accepted', ?4, ?4)
+            ON CONFLICT(actor_id, target_actor_id) DO UPDATE SET
+              id = excluded.id,
+              status = 'accepted',
+              created_at = excluded.created_at,
+              accepted_at = excluded.accepted_at
+            "#,
+        )
+        .bind(&[
+            uri.clone().into(),
+            local_actor_id(identity).into(),
+            subject_did.into(),
+            created_at.into(),
+        ])?
+        .run()
+        .await?;
+    create_record_response(&uri, &body.record)
+}
+
+async fn subject_records(
+    env: &Env,
+    identity: &Identity,
+    collection: &str,
+    interaction_type: &str,
+    limit: u32,
+) -> Result<Vec<Value>> {
+    let rows = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, object_url, created_at
+            FROM interactions
+            WHERE actor_id = ?1
+              AND type = ?2
+            ORDER BY created_at DESC
+            LIMIT ?3
+            "#,
+        )
+        .bind(&[
+            local_actor_id(identity).into(),
+            interaction_type.into(),
+            limit.into(),
+        ])?
+        .all()
+        .await?
+        .results::<serde_json::Map<String, Value>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let subject_uri = string_field(&row, "object_url");
+            let uri = record_uri_from_row(identity, collection, &row);
+            serde_json::json!({
+                "uri": uri,
+                "cid": stable_cid(&format!("{}:{}", collection, subject_uri)),
+                "value": {
+                    "$type": collection,
+                    "subject": {
+                        "uri": subject_uri,
+                        "cid": stable_cid(&subject_uri)
+                    },
+                    "createdAt": string_field(&row, "created_at")
+                }
+            })
+        })
+        .collect())
+}
+
+async fn follow_records(env: &Env, identity: &Identity, limit: u32) -> Result<Vec<Value>> {
+    let rows = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, target_actor_id, created_at
+            FROM following
+            WHERE actor_id = ?1
+              AND status IN ('accepted', 'pending')
+            ORDER BY created_at DESC
+            LIMIT ?2
+            "#,
+        )
+        .bind(&[local_actor_id(identity).into(), limit.into()])?
+        .all()
+        .await?
+        .results::<serde_json::Map<String, Value>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let subject = string_field(&row, "target_actor_id");
+            let uri = record_uri_from_row(identity, "app.bsky.graph.follow", &row);
+            serde_json::json!({
+                "uri": uri,
+                "cid": stable_cid(&format!("app.bsky.graph.follow:{subject}")),
+                "value": {
+                    "$type": "app.bsky.graph.follow",
+                    "subject": subject,
+                    "createdAt": string_field(&row, "created_at")
+                }
+            })
+        })
+        .collect())
+}
+
 fn record_response(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
     let uri = at_uri(identity, &row);
     let cid = row
@@ -1025,6 +1252,26 @@ fn record_response(identity: &Identity, row: serde_json::Map<String, Value>) -> 
         "cid": cid,
         "value": record_value(row)
     })
+}
+
+fn create_record_response(uri: &str, record: &Value) -> Result<Response> {
+    json_response(serde_json::json!({
+        "uri": uri,
+        "cid": stable_cid(&serde_json::to_string(record).unwrap_or_default()),
+        "commit": {
+            "cid": stable_cid(&format!("commit:{uri}")),
+            "rev": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
+        }
+    }))
+}
+
+fn delete_record_response(rkey: &str) -> Result<Response> {
+    json_response(serde_json::json!({
+        "commit": {
+            "cid": stable_cid(&format!("delete:{rkey}")),
+            "rev": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
+        }
+    }))
 }
 
 fn post_view(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
@@ -1156,6 +1403,52 @@ fn at_uri(identity: &Identity, row: &serde_json::Map<String, Value>) -> String {
 
 fn local_actor_id(identity: &Identity) -> String {
     format!("https://{}/users/social", identity.handle)
+}
+
+fn record_created_at(record: &Value) -> String {
+    record
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            js_sys::Date::new_0()
+                .to_iso_string()
+                .as_string()
+                .unwrap_or_default()
+        })
+}
+
+fn generated_rkey(created_at: &str, seed: &str) -> String {
+    format!(
+        "{}-{}",
+        created_at
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .take(14)
+            .collect::<String>(),
+        stable_cid(&format!("{created_at}\n{seed}"))
+            .chars()
+            .skip(4)
+            .take(8)
+            .collect::<String>()
+    )
+}
+
+fn record_uri(identity: &Identity, collection: &str, rkey: &str) -> String {
+    format!("at://{}/{collection}/{rkey}", identity.did)
+}
+
+fn record_uri_from_row(
+    identity: &Identity,
+    collection: &str,
+    row: &serde_json::Map<String, Value>,
+) -> String {
+    let id = string_field(row, "id");
+    if id.starts_with("at://") {
+        return id;
+    }
+    let rkey = id.rsplit('/').next().unwrap_or(id.as_str());
+    record_uri(identity, collection, rkey)
 }
 
 fn stable_cid(value: &str) -> String {

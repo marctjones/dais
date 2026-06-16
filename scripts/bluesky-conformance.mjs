@@ -327,6 +327,90 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-SOCIAL-WRITE-01", "Owner-token ATProto like, repost, and follow records round-trip", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for social write fixture" };
+    }
+
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const authHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.json.accessJwt}`,
+    };
+    const timeline = await request("/xrpc/app.bsky.feed.getTimeline?limit=1");
+    const subject = timeline.json?.feed?.[0]?.post;
+    if (!subject?.uri || !subject?.cid) throw new Error("no public post subject available");
+
+    const created = [];
+    const followDid = "did:web:example.com";
+    try {
+      for (const collection of ["app.bsky.feed.like", "app.bsky.feed.repost"]) {
+        const create = await request("/xrpc/com.atproto.repo.createRecord", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            repo: did(),
+            collection,
+            record: {
+              $type: collection,
+              subject: { uri: subject.uri, cid: subject.cid },
+              createdAt: new Date().toISOString(),
+            },
+          }),
+        });
+        if (create.status !== 200) throw new Error(`${collection} create expected 200, got ${create.status}: ${create.text}`);
+        created.push({ collection, rkey: rkeyFromAtUri(create.json.uri), subject: subject.uri });
+      }
+
+      const follow = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.graph.follow",
+          record: {
+            $type: "app.bsky.graph.follow",
+            subject: followDid,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+      });
+      if (follow.status !== 200) throw new Error(`follow create expected 200, got ${follow.status}: ${follow.text}`);
+      created.push({ collection: "app.bsky.graph.follow", rkey: rkeyFromAtUri(follow.json.uri), subject: followDid });
+
+      for (const item of created) {
+        const listed = await request(
+          `/xrpc/com.atproto.repo.listRecords?repo=${encodeURIComponent(did())}&collection=${encodeURIComponent(item.collection)}&limit=20`,
+          { headers: { Authorization: `Bearer ${session.json.accessJwt}` } },
+        );
+        if (listed.status !== 200) throw new Error(`${item.collection} listRecords expected 200, got ${listed.status}: ${listed.text}`);
+        const found = listed.json?.records?.some((record) => {
+          const value = record.value || {};
+          if (item.collection === "app.bsky.graph.follow") return value.subject === item.subject;
+          return value.subject?.uri === item.subject;
+        });
+        if (!found) throw new Error(`${item.collection} listRecords did not include created subject`);
+      }
+    } finally {
+      for (const item of created.reverse()) {
+        await request("/xrpc/com.atproto.repo.deleteRecord", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            repo: did(),
+            collection: item.collection,
+            rkey: item.rkey,
+          }),
+        });
+      }
+    }
+  }),
+
   requirement("BLUESKY-PRIVACY-01", "PDS public feeds exclude private/E2EE fallback content", async () => {
     const feed = await request("/xrpc/app.bsky.feed.getTimeline?limit=20");
     if (feed.status !== 200) throw new Error(`timeline expected 200, got ${feed.status}`);

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.47] - 2026-06-16
+
+### Added
+- Added owner-token AT Protocol `listRecords`, like, repost, and follow
+  compatibility for the Dais PDS, backed by the existing interactions and
+  following tables used by the AppView read floor.
+- Expanded the Bluesky conformance gate with authenticated like, repost,
+  follow, list-records, and cleanup coverage.
+
 ## [1.28.46] - 2026-06-16
 
 ### Added

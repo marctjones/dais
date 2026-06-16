@@ -146,9 +146,10 @@ Bluesky parity requires substantially more than the existing endpoints:
 - AppView-like read APIs for feeds, author feeds, profiles, notifications, and
   interaction counts.
 - Owner-token authenticated compatibility writes for public
-  `app.bsky.feed.post` records through `createSession`, `createRecord`, and
-  `deleteRecord`. Full OAuth, signed repository commits, and arbitrary record
-  collections remain out of scope for the current floor.
+  `app.bsky.feed.post`, `app.bsky.feed.like`, `app.bsky.feed.repost`, and
+  `app.bsky.graph.follow` records through `createSession`, `createRecord`,
+  `listRecords`, and `deleteRecord`. Full OAuth, signed repository commits, and
+  arbitrary record collections remain out of scope for the current floor.
 
 ## Current Test Hooks
 
@@ -156,7 +157,8 @@ Bluesky parity requires substantially more than the existing endpoints:
   Mastodon, dais privacy, and ATProto public-read behavior.
 - `npm run test:bluesky-conformance` checks the current PDS/AppView
   compatibility floor for identity, repo metadata, public feed records,
-  owner-token public post writes/deletes, public image blob reads, search,
-  profiles, notifications, graph reads, privacy filtering, and sync guidance.
+  owner-token public post/like/repost/follow writes and deletes, public image
+  blob reads, search, profiles, notifications, graph reads, privacy filtering,
+  and sync guidance.
 - The conformance runner should grow alongside this document.
 - Gaps found by the runner should be filed as GitHub issues under epic #70.
