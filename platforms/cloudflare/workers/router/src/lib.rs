@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use worker::{event, Context, D1Type, Env, Headers, Request, Response, Result};
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
@@ -143,6 +144,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Post, "/sources") => {
+            let body = read_json(&mut req).await;
+            match owner_add_source(&env, &body).await {
+                Ok(source) => api_json(&serde_json::json!({ "ok": true, "source": source }), 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Delete, _) if owner_path.starts_with("/sources/") => {
             let id = decode_component(owner_path.trim_start_matches("/sources/"));
             if id.trim().is_empty() {
@@ -1245,6 +1253,97 @@ async fn owner_source_items(env: &Env, limit: i32) -> Result<Vec<Map<String, Val
     Ok(rows.into_iter().map(normalize_source_item).collect())
 }
 
+async fn owner_add_source(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let source_type = string_like_any(body, &["source_type", "sourceType"])
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(source_type.as_str(), "rss" | "atom" | "api") {
+        return Err("source_type must be rss, atom, or api".to_string());
+    }
+    let source_url = public_https_url(
+        &string_like_field(body, "url").unwrap_or_default(),
+        "source url",
+    )?;
+    let id = source_id(&source_type, &source_url);
+    let title = body.get("title").and_then(optional_body_string);
+    let cadence_minutes = clamp_cadence_minutes(string_like_any(
+        body,
+        &["cadence_minutes", "cadenceMinutes"],
+    ));
+    let api_secret_name = string_like_any(body, &["api_secret_name", "apiSecretName"])
+        .and_then(|value| optional_body_string(&Value::String(value)));
+    let policy_json = source_policy_json(body);
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(&id);
+    let type_arg = D1Type::Text(&source_type);
+    let url_arg = D1Type::Text(&source_url);
+    let title_arg = title.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let cadence_arg = D1Type::Integer(cadence_minutes);
+    let policy_arg = D1Type::Text(&policy_json);
+    let secret_arg = api_secret_name
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    db.prepare(
+        r#"
+        INSERT INTO source_subscriptions (
+          id, source_type, url, title, refresh_cadence_minutes, policy_json,
+          api_secret_name, status, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          source_type = excluded.source_type,
+          url = excluded.url,
+          title = excluded.title,
+          refresh_cadence_minutes = excluded.refresh_cadence_minutes,
+          policy_json = excluded.policy_json,
+          api_secret_name = excluded.api_secret_name,
+          status = 'active',
+          last_error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind_refs([
+        &id_arg,
+        &type_arg,
+        &url_arg,
+        &title_arg,
+        &cadence_arg,
+        &policy_arg,
+        &secret_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    owner_source_by_id(env, &id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "source add failed".to_string())
+}
+
+async fn owner_source_by_id(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+               policy_json, api_secret_name, created_at, updated_at
+        FROM source_subscriptions
+        WHERE id = ?1
+        "#,
+    )
+    .bind_refs(&id_arg)?
+    .first::<Map<String, Value>>(None)
+    .await
+}
+
 async fn owner_delete_source(env: &Env, id: &str) -> Result<()> {
     let db = env.d1("DB")?;
     let id_arg = D1Type::Text(id);
@@ -1568,6 +1667,10 @@ fn string_like_field(body: &Value, key: &str) -> Option<String> {
     })
 }
 
+fn string_like_any(body: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| string_like_field(body, key))
+}
+
 fn optional_body_string(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => {
@@ -1582,6 +1685,45 @@ fn optional_body_string(value: &Value) -> Option<String> {
         Value::Bool(true) => Some("true".to_string()),
         _ => None,
     }
+}
+
+fn clamp_cadence_minutes(value: Option<String>) -> i32 {
+    let minutes = value
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(60.0);
+    minutes.max(5.0).min(1440.0) as i32
+}
+
+fn source_policy_json(body: &Value) -> String {
+    format!(
+        "{{\"private_reader_only\":{},\"excerpt_only\":{},\"link_required\":{},\"attribution_required\":{},\"image_allowed\":{},\"full_text_allowed\":{}}}",
+        source_policy_default_true(body, "private_reader_only", "privateReaderOnly"),
+        source_policy_default_true(body, "excerpt_only", "excerptOnly"),
+        source_policy_default_true(body, "link_required", "linkRequired"),
+        source_policy_default_true(body, "attribution_required", "attributionRequired"),
+        source_policy_bool(body, "image_allowed", "imageAllowed"),
+        source_policy_bool(body, "full_text_allowed", "fullTextAllowed"),
+    )
+}
+
+fn source_policy_default_true(body: &Value, snake: &str, camel: &str) -> bool {
+    !matches!(
+        body.get(snake).or_else(|| body.get(camel)),
+        Some(Value::Bool(false))
+    )
+}
+
+fn source_policy_bool(body: &Value, snake: &str, camel: &str) -> bool {
+    matches!(
+        body.get(snake).or_else(|| body.get(camel)),
+        Some(Value::Bool(true))
+    )
+}
+
+fn source_id(source_type: &str, source_url: &str) -> String {
+    let digest = Sha256::digest(format!("{source_type}\n{source_url}").as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("source-{}", &hex[..24])
 }
 
 fn body_string_any(body: &Value, keys: &[&str]) -> Option<String> {
