@@ -1944,6 +1944,19 @@ impl App {
                         "Press g to resolve an ActivityPub actor by @user@host or URL. Press f after resolving to follow.".to_string()
                     },
                     |actor| {
+                        let target_post = actor.target_public_post.as_ref().map_or_else(
+                            || "target public post: none".to_string(),
+                            |post| {
+                                format!(
+                                    "target public post: {}\ntype: {}\nauthor: {}\npublished: {}\n{}",
+                                    post.url.as_deref().unwrap_or(&post.id),
+                                    post.kind,
+                                    post.actor_id.as_deref().unwrap_or(""),
+                                    post.published.as_deref().unwrap_or("undated"),
+                                    post.content
+                                )
+                            },
+                        );
                         let recent = if actor.recent_public_posts.is_empty() {
                             "recent public posts: none returned".to_string()
                         } else {
@@ -1964,8 +1977,9 @@ impl App {
                                 .join("\n")
                         };
                         format!(
-                            "id: {}\nhandle: {}\ninbox: {}\nshared inbox: {}\nstatus: {}\nurl: {}\nicon: {}\n\n{}\n\nRecent public posts\n{}\n\nPress f to follow this actor.",
+                            "id: {}\ntype: {}\nhandle: {}\ninbox: {}\nshared inbox: {}\nstatus: {}\nurl: {}\nicon: {}\n\n{}\n\n{}\n\nRecent public posts\n{}\n\nPress f to follow this actor.",
                             actor.id,
+                            actor.actor_type.as_deref().unwrap_or(""),
                             actor.handle.as_deref().unwrap_or(""),
                             actor.inbox,
                             actor.shared_inbox.as_deref().unwrap_or(""),
@@ -1973,6 +1987,7 @@ impl App {
                             actor.url.as_deref().unwrap_or(""),
                             actor.icon_url.as_deref().unwrap_or(""),
                             actor.summary.as_deref().unwrap_or(""),
+                            target_post,
                             recent
                         )
                     },

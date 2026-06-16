@@ -1843,6 +1843,9 @@ fn print_owner_discovered_actor(actor: &OwnerDiscoveredActor) {
     if let Some(username) = actor.preferred_username.as_deref() {
         println!("preferred_username={username}");
     }
+    if let Some(actor_type) = actor.actor_type.as_deref() {
+        println!("actor_type={actor_type}");
+    }
     if let Some(summary) = actor.summary.as_deref() {
         println!("summary={summary}");
     }
@@ -1860,12 +1863,31 @@ fn print_owner_discovered_actor(actor: &OwnerDiscoveredActor) {
         "following_status={}",
         actor.following_status.as_deref().unwrap_or("not-following")
     );
+    if let Some(post) = actor.target_public_post.as_ref() {
+        println!(
+            "target_public_post={}",
+            post.url.as_deref().unwrap_or(&post.id)
+        );
+        println!("target_public_post_type={}", post.kind);
+        if let Some(actor_id) = post.actor_id.as_deref() {
+            println!("target_public_post_actor={actor_id}");
+        }
+        if let Some(published) = post.published.as_deref() {
+            println!("target_public_post_published={published}");
+        }
+        if !post.content.is_empty() {
+            println!("target_public_post_content={}", post.content);
+        }
+    }
     if !actor.recent_public_posts.is_empty() {
         println!("recent_public_posts={}", actor.recent_public_posts.len());
         for post in &actor.recent_public_posts {
             println!();
             println!("post={}", post.url.as_deref().unwrap_or(&post.id));
             println!("type={}", post.kind);
+            if let Some(actor_id) = post.actor_id.as_deref() {
+                println!("actor={actor_id}");
+            }
             if let Some(name) = post.name.as_deref() {
                 println!("name={name}");
             }

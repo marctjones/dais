@@ -134,6 +134,7 @@ type FollowResult = {
 
 type DiscoveredActor = {
   id: string;
+  actor_type?: string | null;
   inbox: string;
   shared_inbox?: string | null;
   preferred_username?: string | null;
@@ -143,15 +144,19 @@ type DiscoveredActor = {
   icon_url?: string | null;
   handle?: string | null;
   following_status?: string | null;
-  recent_public_posts?: Array<{
-    id: string;
-    type: string;
-    url?: string | null;
-    name?: string | null;
-    summary?: string | null;
-    content: string;
-    published?: string | null;
-  }>;
+  target_public_post?: DiscoveredPost | null;
+  recent_public_posts?: DiscoveredPost[];
+};
+
+type DiscoveredPost = {
+  id: string;
+  type: string;
+  actor_id?: string | null;
+  url?: string | null;
+  name?: string | null;
+  summary?: string | null;
+  content: string;
+  published?: string | null;
 };
 
 type InteractionResult = {
@@ -182,7 +187,9 @@ type PostReply = {
   actor_id: string;
   actor_username?: string | null;
   actor_display_name?: string | null;
+  actor_avatar_url?: string | null;
   content?: string | null;
+  content_html?: string | null;
   published_at?: string | null;
   created_at?: string | null;
 };
@@ -192,6 +199,7 @@ type PostInteraction = {
   actor_id: string;
   actor_username?: string | null;
   actor_display_name?: string | null;
+  actor_avatar_url?: string | null;
   object_url?: string | null;
   created_at?: string | null;
 };
@@ -1436,8 +1444,13 @@ function discoveredActorCard(actor: DiscoveredActor) {
     <div>
       ${actor.icon_url ? `<img class="avatar" src="${escapeAttr(actor.icon_url)}" alt="" />` : ""}
       <h2>${escapeHtml(title)}</h2>
+      ${actor.actor_type ? `<p>${escapeHtml(actor.actor_type)}</p>` : ""}
       ${actor.handle ? `<p>${escapeHtml(actor.handle)}</p>` : ""}
       ${actor.summary ? `<p>${escapeHtml(stripTags(actor.summary))}</p>` : ""}
+      ${actor.target_public_post ? `
+        <h2 class="section-label">Requested public post</h2>
+        ${discoveredPostCard(actor.target_public_post)}
+      ` : ""}
       <h2 class="section-label">Recent public posts</h2>
       ${list((actor.recent_public_posts || []).map(discoveredPostCard), "No recent public posts returned.")}
     </div>
@@ -1450,7 +1463,7 @@ function discoveredActorCard(actor: DiscoveredActor) {
   </article>`;
 }
 
-function discoveredPostCard(post: NonNullable<DiscoveredActor["recent_public_posts"]>[number]) {
+function discoveredPostCard(post: DiscoveredPost) {
   const title = post.name || post.content || post.url || post.id;
   return `<article class="panel item">
     <div>
@@ -1459,6 +1472,7 @@ function discoveredPostCard(post: NonNullable<DiscoveredActor["recent_public_pos
     </div>
     <footer>
       <span>${escapeHtml(post.type)}</span>
+      ${post.actor_id ? `<span>${escapeHtml(actorLabel(post.actor_id))}</span>` : ""}
       ${post.published ? `<time>${escapeHtml(formatTime(post.published))}</time>` : ""}
       ${post.url ? `<a href="${escapeAttr(post.url)}">${escapeHtml(shortUrl(post.url))}</a>` : ""}
     </footer>

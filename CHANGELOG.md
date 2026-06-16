@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.71] - 2026-06-16
+
+### Added
+- Added public ActivityPub post URL discovery: the owner API now previews a
+  pasted public post, resolves its author actor, and exposes the result through
+  the shared Rust client, CLI, Rust TUI, and Dais Desk.
+- Added authenticated ActivityPub conformance coverage for pasted public post
+  URL discovery.
+
 ## [1.28.70] - 2026-06-16
 
 ### Added

@@ -175,8 +175,9 @@ function generateFixtureActor() {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
-  const actorUrl = `${config.socialBaseUrl}/__dais-fixtures/activitypub/actor?pk=${base64Url(publicKey)}`;
-  return { actorUrl, privateKey };
+  const publicKeyParam = base64Url(publicKey);
+  const actorUrl = `${config.socialBaseUrl}/__dais-fixtures/activitypub/actor?pk=${publicKeyParam}`;
+  return { actorUrl, privateKey, publicKeyParam };
 }
 
 async function signedActivityPost(fixture, body) {
@@ -437,6 +438,19 @@ async function ownerDiscoveryFixture() {
     body: JSON.stringify({ target: fixture.actorUrl }),
   });
   return discovery.json;
+}
+
+async function ownerPostDiscoveryFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner post discovery fixture" };
+  }
+  const fixture = generateFixtureActor();
+  const postUrl = `${config.socialBaseUrl}/__dais-fixtures/activitypub/posts/public-preview?pk=${fixture.publicKeyParam}`;
+  const discovery = await ownerApi("/discovery/actor", {
+    method: "POST",
+    body: JSON.stringify({ target: postUrl }),
+  });
+  return { fixture, postUrl, discovery: discovery.json };
 }
 
 function knownPublicObjectId() {
@@ -976,6 +990,26 @@ const tests = [
       return t.fail(`unexpected public preview post: ${summarizeJson(preview)}`);
     }
     t.pass("owner discovery returned fixture actor profile and recent public post preview");
+  }),
+
+  requirement("OWNER-DISCOVERY-02", "DAIS-OWNER", "Pasted public post URL discovery previews the post and resolves its author", async (t) => {
+    const result = await ownerPostDiscoveryFixture();
+    if (result?.skipped) return t.info(result.detail);
+    const actor = result.discovery;
+    if (actor?.id !== result.fixture.actorUrl) {
+      return t.fail(`post discovery actor mismatch: ${summarizeJson(actor)}`);
+    }
+    const post = actor.target_public_post;
+    if (!post) {
+      return t.fail(`post discovery missing target_public_post: ${summarizeJson(actor)}`);
+    }
+    if (post.id !== result.postUrl || post.actor_id !== result.fixture.actorUrl) {
+      return t.fail(`post discovery target mismatch: ${summarizeJson(post)}`);
+    }
+    if (post.type !== "Note" || !post.content.includes("Dais fixture public preview post")) {
+      return t.fail(`post discovery preview mismatch: ${summarizeJson(post)}`);
+    }
+    t.pass("owner discovery resolved pasted public post URL to preview and author actor");
   }),
 
   requirement("OWNER-READER-01", "DAIS-OWNER", "Reader like and boost actions enqueue ActivityPub deliveries and update detail counts", async (t) => {

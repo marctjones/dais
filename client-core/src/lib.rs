@@ -523,6 +523,7 @@ pub struct OwnerFollowResult {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerDiscoveredActor {
     pub id: String,
+    pub actor_type: Option<String>,
     pub inbox: String,
     pub shared_inbox: Option<String>,
     pub preferred_username: Option<String>,
@@ -532,6 +533,7 @@ pub struct OwnerDiscoveredActor {
     pub icon_url: Option<String>,
     pub handle: Option<String>,
     pub following_status: Option<String>,
+    pub target_public_post: Option<OwnerDiscoveredPost>,
     #[serde(default)]
     pub recent_public_posts: Vec<OwnerDiscoveredPost>,
 }
@@ -541,6 +543,7 @@ pub struct OwnerDiscoveredPost {
     pub id: String,
     #[serde(rename = "type")]
     pub kind: String,
+    pub actor_id: Option<String>,
     pub url: Option<String>,
     pub name: Option<String>,
     pub summary: Option<String>,

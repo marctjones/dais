@@ -29,6 +29,9 @@ export default {
     if (path === '/__dais-fixtures/activitypub/outbox') {
       return fixtureActivityPubOutbox(url);
     }
+    if (path === '/__dais-fixtures/activitypub/posts/public-preview') {
+      return fixtureActivityPubPost(url);
+    }
 
     if (path.startsWith('/api/dais/owner/')) {
       return handleOwnerApi(request, env, url);
@@ -1833,7 +1836,7 @@ function fixtureActorFromKeyUrl(actorUrl) {
     preferredUsername: name,
     name,
     inbox: `${url.origin}/__dais-fixtures/activitypub/inbox`,
-    outbox: `${url.origin}/__dais-fixtures/activitypub/outbox`,
+    outbox: fixtureOutboxUrl(url),
     publicKey: {
       id: `${canonical}#main-key`,
       owner: canonical,
@@ -1989,11 +1992,17 @@ async function ownerFollowActor(env, target) {
 async function ownerDiscoverActor(env, target) {
   if (!target) throw new Error('target is required');
   const localActor = await ownerLocalActor(env);
-  const remote = await resolveActivityPubActor(target);
+  const targetPublicPost = await discoverPublicPostTarget(target);
+  const actorTarget = targetPublicPost?.actor_id || target;
+  const remote = await resolveActivityPubActor(actorTarget);
+  if (!remote.inbox) {
+    throw new Error('target actor must expose inbox');
+  }
   const following = await ownerFollowingRow(env, localActor.id, remote.id);
   const recentPublicPosts = await fetchActorRecentPublicPosts(remote);
   return {
     id: remote.id,
+    actor_type: remote.actor_type || null,
     inbox: remote.inbox,
     shared_inbox: remote.shared_inbox || null,
     preferred_username: remote.preferred_username || null,
@@ -2003,8 +2012,29 @@ async function ownerDiscoverActor(env, target) {
     icon_url: remote.icon_url || null,
     handle: actorHandle(remote),
     following_status: following?.status || null,
+    target_public_post: targetPublicPost,
     recent_public_posts: recentPublicPosts,
   };
+}
+
+async function discoverPublicPostTarget(target) {
+  if (!target.startsWith('http://') && !target.startsWith('https://')) return null;
+  let objectUrl;
+  try {
+    objectUrl = publicHttpsUrl(target, 'target public post').toString();
+  } catch {
+    return null;
+  }
+
+  try {
+    const item = fixturePostFromUrl(objectUrl) || await fetchActivityJson(objectUrl);
+    const post = normalizeDiscoveredPublicPost(item);
+    if (!post) return null;
+    if (!post.actor_id) throw new Error('public post does not expose attributedTo or actor');
+    return post;
+  } catch {
+    return null;
+  }
 }
 
 async function fetchActorRecentPublicPosts(actor) {
@@ -2059,12 +2089,23 @@ function normalizeDiscoveredPublicPost(item) {
   return {
     id: String(object.id || item.id || '').trim(),
     type: String(object.type || '').trim(),
+    actor_id: publicPostActorId(item, object),
     url: typeof object.url === 'string' ? object.url : typeof item.url === 'string' ? item.url : null,
     name: optionalString(object.name),
     summary: optionalString(object.summary),
     content: stripHtml(String(object.content || object.name || object.summary || '')).slice(0, 280),
     published: optionalString(object.published || item.published),
   };
+}
+
+function publicPostActorId(item, object) {
+  const actor = object?.attributedTo || object?.actor || item?.actor || item?.attributedTo;
+  if (typeof actor === 'string') return actor.trim() || null;
+  if (Array.isArray(actor)) {
+    const first = actor.find((value) => typeof value === 'string' && value.trim());
+    return first ? first.trim() : null;
+  }
+  return null;
 }
 
 async function ownerUnfollowActor(env, target) {
@@ -2195,6 +2236,7 @@ async function resolveActivityPubActor(target) {
   if (fixture) {
     return {
       id: fixture.id,
+      actor_type: fixture.type || null,
       inbox: fixture.inbox,
       shared_inbox: null,
       preferred_username: fixture.preferredUsername || null,
@@ -2218,6 +2260,7 @@ async function resolveActivityPubActor(target) {
   const inbox = String(actor.inbox || '').trim();
   return {
     id: String(actor.id || actorUrl).trim(),
+    actor_type: actor.type || null,
     inbox,
     shared_inbox: actor.endpoints?.sharedInbox || null,
     preferred_username: actor.preferredUsername || null,
@@ -2369,7 +2412,7 @@ function fixtureActivityPubActor(url) {
     type: 'Application',
     preferredUsername: name,
     inbox: `${url.origin}/__dais-fixtures/activitypub/inbox`,
-    outbox: `${url.origin}/__dais-fixtures/activitypub/outbox`,
+    outbox: fixtureOutboxUrl(url),
     publicKey: {
       id: `${actorUrl}#main-key`,
       owner: actorUrl,
@@ -2393,6 +2436,15 @@ function fixtureActivityPubOutbox(url) {
   });
 }
 
+function fixtureActivityPubPost(url) {
+  return new Response(JSON.stringify(fixtureActivityPubPostJson(url)), {
+    headers: {
+      'Content-Type': 'application/activity+json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
 function fixtureOutboxFromUrl(value) {
   try {
     const url = new URL(value);
@@ -2403,18 +2455,38 @@ function fixtureOutboxFromUrl(value) {
   }
 }
 
+function fixturePostFromUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.pathname !== '/__dais-fixtures/activitypub/posts/public-preview') return null;
+    return fixtureActivityPubPostJson(url);
+  } catch {
+    return null;
+  }
+}
+
+function fixtureOutboxUrl(url) {
+  return fixtureUrlWithPublicKey(url, '/__dais-fixtures/activitypub/outbox');
+}
+
+function fixturePostUrl(url) {
+  return fixtureUrlWithPublicKey(url, '/__dais-fixtures/activitypub/posts/public-preview');
+}
+
+function fixtureActorUrl(url) {
+  return fixtureUrlWithPublicKey(url, '/__dais-fixtures/activitypub/actor');
+}
+
+function fixtureUrlWithPublicKey(url, pathname) {
+  const next = new URL(pathname, url.origin);
+  const publicKey = url.searchParams.get('pk');
+  if (publicKey) next.searchParams.set('pk', publicKey);
+  return next.toString();
+}
+
 function fixtureActivityPubOutboxJson(url) {
-  const postId = `${url.origin}/__dais-fixtures/activitypub/posts/public-preview`;
-  const note = {
-    '@context': 'https://www.w3.org/ns/activitystreams',
-    id: postId,
-    type: 'Note',
-    attributedTo: `${url.origin}/__dais-fixtures/activitypub/actor`,
-    to: ['https://www.w3.org/ns/activitystreams#Public'],
-    content: '<p>Dais fixture public preview post</p>',
-    published: '2026-06-16T00:00:00Z',
-    url: postId,
-  };
+  const postId = fixturePostUrl(url);
+  const note = fixtureActivityPubPostJson(new URL(postId));
   const collection = {
     '@context': 'https://www.w3.org/ns/activitystreams',
     id: url.toString(),
@@ -2431,6 +2503,20 @@ function fixtureActivityPubOutboxJson(url) {
     ],
   };
   return collection;
+}
+
+function fixtureActivityPubPostJson(url) {
+  const postId = url.toString();
+  return {
+    '@context': 'https://www.w3.org/ns/activitystreams',
+    id: postId,
+    type: 'Note',
+    attributedTo: fixtureActorUrl(url),
+    to: ['https://www.w3.org/ns/activitystreams#Public'],
+    content: '<p>Dais fixture public preview post</p>',
+    published: '2026-06-16T00:00:00Z',
+    url: postId,
+  };
 }
 
 function decodeFixturePublicKey(value) {
