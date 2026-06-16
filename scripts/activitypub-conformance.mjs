@@ -58,7 +58,7 @@ async function request(pathOrUrl, options = {}) {
   const cacheKey = `${options.method || "GET"} ${url} ${JSON.stringify(headers)} ${
     options.body || ""
   } ${options.redirect || ""}`;
-  if (cache.has(cacheKey)) {
+  if (!options.noCache && cache.has(cacheKey)) {
     return cache.get(cacheKey);
   }
 
@@ -80,7 +80,9 @@ async function request(pathOrUrl, options = {}) {
     text,
     json: parseJson(text),
   };
-  cache.set(cacheKey, value);
+  if (!options.noCache) {
+    cache.set(cacheKey, value);
+  }
   return value;
 }
 
@@ -208,6 +210,7 @@ async function signedActivityPost(fixture, body) {
 async function ownerApi(path, options = {}) {
   const res = await request(`/api/dais/owner${path}`, {
     ...options,
+    noCache: true,
     headers: {
       ...(options.headers || {}),
       Authorization: `Bearer ${config.ownerToken}`,
@@ -434,6 +437,46 @@ async function ownerDiscoveryFixture() {
     body: JSON.stringify({ target: fixture.actorUrl }),
   });
   return discovery.json;
+}
+
+function knownPublicObjectId() {
+  return config.knownPublicPost.startsWith("http")
+    ? config.knownPublicPost
+    : `${config.socialBaseUrl}${config.knownPublicPost}`;
+}
+
+async function ownerPostDetail(objectId) {
+  const detail = await ownerApi(`/posts/${encodeURIComponent(objectId)}`);
+  return detail.json;
+}
+
+async function ownerInteraction(objectId, interaction) {
+  const response = await ownerApi("/interactions", {
+    method: "POST",
+    body: JSON.stringify({ object_id: objectId, interaction }),
+  });
+  return response.json;
+}
+
+async function ownerReaderInteractionFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner reader interaction fixture" };
+  }
+  const objectId = knownPublicObjectId();
+  await ownerInteraction(objectId, "unlike").catch(() => {});
+  await ownerInteraction(objectId, "unboost").catch(() => {});
+  const before = await ownerPostDetail(objectId);
+  let like;
+  let boost;
+  try {
+    like = await ownerInteraction(objectId, "like");
+    boost = await ownerInteraction(objectId, "boost");
+    const after = await ownerPostDetail(objectId);
+    return { objectId, before, like, boost, after };
+  } finally {
+    await ownerInteraction(objectId, "unlike").catch(() => {});
+    await ownerInteraction(objectId, "unboost").catch(() => {});
+  }
 }
 
 function rkeyFromAtUri(uri) {
@@ -813,6 +856,28 @@ const tests = [
       return t.fail(`unexpected public preview post: ${summarizeJson(preview)}`);
     }
     t.pass("owner discovery returned fixture actor profile and recent public post preview");
+  }),
+
+  requirement("OWNER-READER-01", "DAIS-OWNER", "Reader like and boost actions enqueue ActivityPub deliveries and update detail counts", async (t) => {
+    const result = await ownerReaderInteractionFixture();
+    if (result.skipped) return t.info(result.detail);
+    if (result.like?.interaction !== "like" || !Array.isArray(result.like.delivery_ids) || result.like.delivery_ids.length === 0) {
+      return t.fail(`like did not return delivery ids: ${summarizeJson(result.like)}`);
+    }
+    if (result.boost?.interaction !== "boost" || !Array.isArray(result.boost.delivery_ids) || result.boost.delivery_ids.length === 0) {
+      return t.fail(`boost did not return delivery ids: ${summarizeJson(result.boost)}`);
+    }
+    const beforeLikes = Number(result.before?.like_count || 0);
+    const beforeBoosts = Number(result.before?.boost_count || 0);
+    const afterLikes = Number(result.after?.like_count || 0);
+    const afterBoosts = Number(result.after?.boost_count || 0);
+    if (afterLikes !== beforeLikes + 1) {
+      return t.fail(`like_count expected ${beforeLikes + 1}, got ${afterLikes}`);
+    }
+    if (afterBoosts !== beforeBoosts + 1) {
+      return t.fail(`boost_count expected ${beforeBoosts + 1}, got ${afterBoosts}`);
+    }
+    t.pass(`like=${result.like.delivery_ids.length} boost=${result.boost.delivery_ids.length} delivery row(s) for ${result.objectId}`);
   }),
 
   requirement("PDS-ATPROTO-01", "MASTODON-ADJACENT", "ATProto public read endpoints stay available", async (t) => {

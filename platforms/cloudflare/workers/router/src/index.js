@@ -2241,6 +2241,8 @@ function actorHandle(actor) {
 
 async function resolveActivityPubObjectInbox(objectId) {
   const objectUrl = publicHttpsUrl(objectId, 'object_id').toString();
+  const localInbox = localObjectInbox(objectUrl);
+  if (localInbox) return localInbox;
   const response = await fetch(objectUrl, {
     headers: {
       Accept: 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams", application/json',
@@ -2256,6 +2258,19 @@ async function resolveActivityPubObjectInbox(objectId) {
   const actor = await resolveActivityPubActor(actorId);
   if (!actor.inbox) throw new Error('object actor does not expose inbox');
   return actor.shared_inbox || actor.inbox;
+}
+
+function localObjectInbox(objectId) {
+  try {
+    const url = new URL(objectId);
+    const match = url.pathname.match(/^\/users\/([^/]+)\/posts\/[^/]+$/);
+    if (url.hostname === 'social.dais.social' && match) {
+      return `${url.origin}/users/${match[1]}/inbox`;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 function isLocalObjectUrl(value) {

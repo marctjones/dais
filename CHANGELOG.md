@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.70] - 2026-06-16
+
+### Added
+- Added authenticated ActivityPub conformance coverage for owner reader
+  like/boost actions, including delivery enqueue evidence and post detail count
+  updates.
+
+### Fixed
+- Fixed owner reader interactions against local Dais posts by resolving local
+  post inboxes without a network self-fetch that could return Cloudflare 522.
+
 ## [1.28.69] - 2026-06-16
 
 ### Added
