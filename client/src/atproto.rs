@@ -44,6 +44,12 @@ pub struct ReplyTarget {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct ProfileRecord {
+    pub uri: String,
+    pub cid: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Profile {
     pub did: String,
     pub handle: String,
@@ -445,6 +451,47 @@ impl AtprotoClient {
             &self.appview,
             "app.bsky.actor.getProfile",
             &[("actor", actor)],
+        )
+        .await
+    }
+
+    pub async fn update_profile_record(
+        &mut self,
+        display_name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<ProfileRecord> {
+        if display_name.is_none() && description.is_none() {
+            return Err(anyhow!("no profile fields provided"));
+        }
+        self.ensure_session().await?;
+        let token = self.token()?;
+        let mut record = serde_json::Map::new();
+        record.insert(
+            "$type".to_string(),
+            serde_json::Value::String("app.bsky.actor.profile".to_string()),
+        );
+        if let Some(value) = display_name {
+            record.insert(
+                "displayName".to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
+        }
+        if let Some(value) = description {
+            record.insert(
+                "description".to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
+        }
+        self.post_json(
+            &self.service,
+            "com.atproto.repo.createRecord",
+            json!({
+                "repo": self.did,
+                "collection": "app.bsky.actor.profile",
+                "rkey": "self",
+                "record": record,
+            }),
+            Some(token),
         )
         .await
     }

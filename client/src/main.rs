@@ -228,6 +228,17 @@ async fn handle_bluesky(command: BlueskyCommand, store: &ConfigStore) -> Result<
             let profile = client.get_profile(handle.trim_start_matches('@')).await?;
             output::print_profile(&profile);
         }
+        BlueskyCommand::UpdateProfile(args) => {
+            let mut client = atproto::AtprotoClient::from_config(&store.load_bluesky()?)?;
+            let updated = client
+                .update_profile_record(args.display_name.as_deref(), args.description.as_deref())
+                .await?;
+            println!("Updated Bluesky profile record");
+            println!("URI: {}", updated.uri);
+            if let Some(cid) = updated.cid {
+                println!("CID: {cid}");
+            }
+        }
         BlueskyCommand::Post(command) => handle_bluesky_post(command, store).await?,
         BlueskyCommand::Timeline(command) => handle_bluesky_timeline(command, store).await?,
         BlueskyCommand::Follow(command) => handle_bluesky_follow(command, store).await?,

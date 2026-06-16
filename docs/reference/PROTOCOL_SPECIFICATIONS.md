@@ -148,11 +148,13 @@ Bluesky parity requires substantially more than the existing endpoints:
 - AppView-like read APIs for feeds, author feeds, profiles, notifications, and
   interaction counts.
 - Owner-token authenticated compatibility writes for public
-  `app.bsky.feed.post` records, feed-post replies, feed-post image embeds,
-  `app.bsky.feed.like`, `app.bsky.feed.repost`, and `app.bsky.graph.follow`
-  records through `createSession`, `uploadBlob`, `createRecord`, `listRecords`,
-  and `deleteRecord`. Full OAuth, signed repository commits, and arbitrary
-  record collections remain out of scope for the current floor.
+  `app.bsky.actor.profile/self`, `app.bsky.feed.post` records, feed-post
+  replies, feed-post image embeds, `app.bsky.feed.like`,
+  `app.bsky.feed.repost`, and `app.bsky.graph.follow` records through
+  `createSession`, `uploadBlob`, `createRecord`, `listRecords`, and
+  `deleteRecord`. Full OAuth, signed repository commits, profile avatar/banner
+  blob writes, and arbitrary record collections remain out of scope for the
+  current floor.
 
 ## Current Test Hooks
 

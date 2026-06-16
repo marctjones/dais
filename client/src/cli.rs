@@ -85,6 +85,8 @@ pub enum BlueskyCommand {
     Whoami,
     /// Show a Bluesky profile.
     Profile { handle: String },
+    /// Update the configured Bluesky/AT Protocol profile record.
+    UpdateProfile(UpdateBlueskyProfileArgs),
     /// Manage Bluesky posts.
     #[command(subcommand)]
     Post(PostCommand),
@@ -109,6 +111,14 @@ pub struct LoginArgs {
     /// AppView URL used for profile and timeline reads.
     #[arg(long, default_value = "https://api.bsky.app")]
     pub appview: String,
+}
+
+#[derive(Args)]
+pub struct UpdateBlueskyProfileArgs {
+    #[arg(long)]
+    pub display_name: Option<String>,
+    #[arg(long)]
+    pub description: Option<String>,
 }
 
 #[derive(Subcommand)]

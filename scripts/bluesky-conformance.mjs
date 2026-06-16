@@ -125,7 +125,15 @@ const tests = [
     if (statuses.some((value) => value !== 200)) throw new Error(`expected all 200, got ${statuses.join("/")}`);
     if (status.json?.did !== did() || status.json?.status !== "active") throw new Error("repo status shape mismatch");
     if (!repos.json?.repos?.some((entry) => entry.did === did())) throw new Error("listRepos missing dais DID");
-    if (!repo.json?.collections?.includes("app.bsky.feed.post")) throw new Error("describeRepo missing feed.post collection");
+    for (const collection of [
+      "app.bsky.actor.profile",
+      "app.bsky.feed.post",
+      "app.bsky.feed.like",
+      "app.bsky.feed.repost",
+      "app.bsky.graph.follow",
+    ]) {
+      if (!repo.json?.collections?.includes(collection)) throw new Error(`describeRepo missing ${collection} collection`);
+    }
     if (car.json?.did !== did() || !car.json?.warning || !Number.isInteger(car.json?.records)) {
       throw new Error("getRepo compatibility floor shape mismatch");
     }
@@ -170,6 +178,79 @@ const tests = [
     if (profiles.json.profiles.length !== 2) throw new Error("getProfiles did not return both requested profiles");
     if (!profiles.json.profiles.every((item) => item.did === did())) {
       throw new Error("getProfiles local identities did not resolve to dais DID");
+    }
+  }),
+
+  requirement("BLUESKY-PROFILE-RECORD-01", "Owner-token actor.profile record round-trips through repo and AppView reads", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for profile record fixture" };
+    }
+
+    const before = await request(`/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(did())}`);
+    if (before.status !== 200) throw new Error(`profile before expected 200, got ${before.status}: ${before.text}`);
+    const previousDisplayName = before.json?.displayName || "";
+    const previousDescription = before.json?.description || "";
+
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const authHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.json.accessJwt}`,
+    };
+    const displayName = `dais profile conformance ${Date.now()}`;
+    const description = "temporary Dais PDS profile conformance description";
+    const writeProfile = async (nextDisplayName, nextDescription) =>
+      request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.actor.profile",
+          rkey: "self",
+          record: {
+            $type: "app.bsky.actor.profile",
+            displayName: nextDisplayName,
+            description: nextDescription,
+          },
+        }),
+      });
+
+    try {
+      const create = await writeProfile(displayName, description);
+      if (create.status !== 200) throw new Error(`profile createRecord expected 200, got ${create.status}: ${create.text}`);
+      if (create.json?.uri !== `at://${did()}/app.bsky.actor.profile/self`) throw new Error("profile record URI mismatch");
+
+      const record = await request(
+        `/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did())}&collection=app.bsky.actor.profile&rkey=self`,
+      );
+      if (record.status !== 200) throw new Error(`profile getRecord expected 200, got ${record.status}: ${record.text}`);
+      if (record.json?.value?.displayName !== displayName || record.json?.value?.description !== description) {
+        throw new Error("profile record did not round-trip displayName/description");
+      }
+
+      const records = await request(
+        `/xrpc/com.atproto.repo.listRecords?repo=${encodeURIComponent(did())}&collection=app.bsky.actor.profile&limit=5`,
+        { headers: { Authorization: `Bearer ${session.json.accessJwt}` } },
+      );
+      if (records.status !== 200) throw new Error(`profile listRecords expected 200, got ${records.status}: ${records.text}`);
+      if (!records.json?.records?.some((item) => item.uri === `at://${did()}/app.bsky.actor.profile/self`)) {
+        throw new Error("profile listRecords missing self record");
+      }
+
+      const profile = await request(`/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(did())}`);
+      if (profile.status !== 200) throw new Error(`profile after expected 200, got ${profile.status}: ${profile.text}`);
+      if (profile.json?.displayName !== displayName || profile.json?.description !== description) {
+        throw new Error("AppView profile did not reflect profile record write");
+      }
+    } finally {
+      const restore = await writeProfile(previousDisplayName, previousDescription);
+      if (restore.status !== 200) {
+        throw new Error(`profile restore expected 200, got ${restore.status}: ${restore.text}`);
+      }
     }
   }),
 

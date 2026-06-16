@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.50] - 2026-06-16
+
+### Added
+- Added Dais PDS `app.bsky.actor.profile/self` record support for
+  `getRecord`, `listRecords`, and owner-token `createRecord` writes backed by
+  the existing local actor profile metadata.
+- Added `dais bluesky update-profile` to update the configured AT Protocol
+  profile record from the Rust client.
+- Expanded the Bluesky conformance gate with authenticated actor-profile record
+  write, repo readback, AppView readback, list-records, and restoration coverage.
+
 ## [1.28.49] - 2026-06-16
 
 ### Added

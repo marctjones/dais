@@ -337,7 +337,13 @@ async fn handle_describe_repo(req: Request, ctx: RouteContext<()>) -> Result<Res
                 "serviceEndpoint": format!("https://{}", identity.pds_hostname)
             }]
         },
-        "collections": ["app.bsky.feed.post"],
+        "collections": [
+            "app.bsky.actor.profile",
+            "app.bsky.feed.post",
+            "app.bsky.feed.like",
+            "app.bsky.feed.repost",
+            "app.bsky.graph.follow"
+        ],
         "handleIsCorrect": true
     }))
 }
@@ -350,6 +356,12 @@ async fn handle_get_record(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let identity = identity(&ctx.env);
     if repo != identity.did && repo != identity.handle {
         return Response::error("Repo not found", 404);
+    }
+    if collection == "app.bsky.actor.profile" {
+        if rkey != "self" {
+            return Response::error("Record not found", 404);
+        }
+        return json_response(profile_record_response(&ctx.env, &identity).await?);
     }
     if collection != "app.bsky.feed.post" {
         return Response::error("Collection not found", 404);
@@ -386,6 +398,9 @@ async fn handle_list_records(req: Request, ctx: RouteContext<()>) -> Result<Resp
             subject_records(&ctx.env, &identity, &collection, "boost", limit).await?
         }
         "app.bsky.graph.follow" => follow_records(&ctx.env, &identity, limit).await?,
+        "app.bsky.actor.profile" => {
+            vec![profile_record_response(&ctx.env, &identity).await?]
+        }
         _ => return Response::error("Collection not found", 404),
     };
     json_response(serde_json::json!({ "records": records }))
@@ -413,6 +428,9 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
     }
     if body.collection == "app.bsky.graph.follow" {
         return create_follow_record(&ctx.env, &identity, body).await;
+    }
+    if body.collection == "app.bsky.actor.profile" {
+        return create_profile_record(&ctx.env, &identity, body).await;
     }
     if body.collection != "app.bsky.feed.post" {
         return Response::error(
@@ -549,6 +567,26 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
             .d1("DB")?
             .prepare("DELETE FROM following WHERE id = ?1 OR id LIKE ?2")
             .bind(&[atproto_uri.into(), format!("%{id_suffix}").into()])?
+            .run()
+            .await?;
+        return delete_record_response(&body.rkey);
+    }
+    if body.collection == "app.bsky.actor.profile" {
+        if body.rkey != "self" {
+            return Response::error("Record not found", 404);
+        }
+        ctx.env
+            .d1("DB")?
+            .prepare(
+                r#"
+                UPDATE actors
+                SET display_name = NULL,
+                    summary = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?1 OR username = 'social'
+                "#,
+            )
+            .bind(&[local_actor_id(&identity).into()])?
             .run()
             .await?;
         return delete_record_response(&body.rkey);
@@ -813,6 +851,11 @@ struct ProfileCounts {
     posts: u64,
     followers: u64,
     follows: u64,
+}
+
+struct ActorProfile {
+    display_name: String,
+    description: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1233,6 +1276,51 @@ async fn create_follow_record(
     create_record_response(&uri, &body.record)
 }
 
+async fn create_profile_record(
+    env: &Env,
+    identity: &Identity,
+    body: CreateRecordRequest,
+) -> Result<Response> {
+    let rkey = body.rkey.unwrap_or_else(|| "self".to_string());
+    if rkey != "self" {
+        return Response::error("Profile record key must be self", 400);
+    }
+    if body.record.get("avatar").is_some() || body.record.get("banner").is_some() {
+        return Response::error("Profile avatar/banner blobs are not supported yet", 400);
+    }
+    let display_name = body
+        .record
+        .get("displayName")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let description = body
+        .record
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    env.d1("DB")?
+        .prepare(
+            r#"
+            UPDATE actors
+            SET display_name = ?1,
+                summary = ?2,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?3 OR username = 'social'
+            "#,
+        )
+        .bind(&[
+            display_name.into(),
+            description.into(),
+            local_actor_id(identity).into(),
+        ])?
+        .run()
+        .await?;
+    let uri = record_uri(identity, "app.bsky.actor.profile", "self");
+    create_record_response(&uri, &body.record)
+}
+
 async fn subject_records(
     env: &Env,
     identity: &Identity,
@@ -1314,6 +1402,16 @@ async fn follow_records(env: &Env, identity: &Identity, limit: u32) -> Result<Ve
             })
         })
         .collect())
+}
+
+async fn profile_record_response(env: &Env, identity: &Identity) -> Result<Value> {
+    let profile = actor_profile(env, identity).await?;
+    let value = profile_record_value(&profile);
+    Ok(serde_json::json!({
+        "uri": record_uri(identity, "app.bsky.actor.profile", "self"),
+        "cid": stable_cid(&serde_json::to_string(&value).unwrap_or_default()),
+        "value": value
+    }))
 }
 
 fn record_response(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
@@ -1402,16 +1500,71 @@ fn profile_view(identity: &Identity, actor_id: &str, handle: &str, display_name:
 
 async fn local_profile_view(env: &Env, identity: &Identity) -> Result<Value> {
     let counts = profile_counts(env).await?;
+    let profile = actor_profile(env, identity).await?;
     Ok(serde_json::json!({
         "did": identity.did,
         "handle": identity.handle,
-        "displayName": "dais",
-        "description": "Private-by-default social server.",
+        "displayName": profile.display_name,
+        "description": profile.description,
         "followersCount": counts.followers,
         "followsCount": counts.follows,
         "postsCount": counts.posts,
         "indexedAt": "1970-01-01T00:00:00Z"
     }))
+}
+
+async fn actor_profile(env: &Env, identity: &Identity) -> Result<ActorProfile> {
+    let row = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT display_name, summary
+            FROM actors
+            WHERE id = ?1 OR username = 'social'
+            LIMIT 1
+            "#,
+        )
+        .bind(&[local_actor_id(identity).into()])?
+        .first::<serde_json::Map<String, Value>>(None)
+        .await?
+        .unwrap_or_default();
+    let display_name = row
+        .get("display_name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("dais")
+        .to_string();
+    let description = row
+        .get("summary")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Private-by-default social server.")
+        .to_string();
+    Ok(ActorProfile {
+        display_name,
+        description,
+    })
+}
+
+fn profile_record_value(profile: &ActorProfile) -> Value {
+    let mut value = serde_json::json!({
+        "$type": "app.bsky.actor.profile"
+    });
+    if let Some(object) = value.as_object_mut() {
+        if !profile.display_name.is_empty() {
+            object.insert(
+                "displayName".to_string(),
+                Value::String(profile.display_name.clone()),
+            );
+        }
+        if !profile.description.is_empty() {
+            object.insert(
+                "description".to_string(),
+                Value::String(profile.description.clone()),
+            );
+        }
+    }
+    value
 }
 
 fn actor_handle(actor_id: &str) -> String {
