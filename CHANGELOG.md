@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.69] - 2026-06-16
+
+### Added
+- Added Rust TUI source subscription creation from the Sources tab, matching the
+  CLI and Dais Desk source-add workflow with private reader-only defaults.
+
 ## [1.28.68] - 2026-06-16
 
 ### Added

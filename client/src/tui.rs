@@ -24,9 +24,9 @@ use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, ModerationBlockRow, OwnerApiClient, OwnerDelivery,
     OwnerDirectMessage, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing, OwnerFriend,
     OwnerInteraction, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
-    OwnerProfileUpdate, OwnerSearchPost, OwnerSearchSourceItem, OwnerSearchUser, OwnerSources,
-    OwnerStats, OwnerTimelinePost, ProtocolRoute as OwnerProtocolRoute, SourceSubscription,
-    Visibility as OwnerVisibility,
+    OwnerProfileUpdate, OwnerSearchPost, OwnerSearchSourceItem, OwnerSearchUser, OwnerSourceAdd,
+    OwnerSources, OwnerStats, OwnerTimelinePost, ProtocolRoute as OwnerProtocolRoute,
+    SourceSubscription, Visibility as OwnerVisibility,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -98,6 +98,7 @@ enum Mode {
     Normal,
     Compose,
     Search,
+    SourceAdd,
     Discovery,
     ProfileEdit,
 }
@@ -480,6 +481,7 @@ struct App {
     mode: Mode,
     compose: ComposeState,
     search: SearchState,
+    source_add: SearchState,
     discovery: SearchState,
     profile_edit: ProfileEditState,
     home: Vec<OwnerTimelinePost>,
@@ -527,6 +529,7 @@ impl App {
             mode: Mode::Normal,
             compose: ComposeState::new(),
             search: SearchState::new(),
+            source_add: SearchState::new(),
             discovery: SearchState::new(),
             profile_edit: ProfileEditState::new(),
             home: Vec::new(),
@@ -560,6 +563,7 @@ impl App {
             Mode::Normal => self.handle_normal_key(key),
             Mode::Compose => self.handle_compose_key(key),
             Mode::Search => self.handle_search_key(key),
+            Mode::SourceAdd => self.handle_source_add_key(key),
             Mode::Discovery => self.handle_discovery_key(key),
             Mode::ProfileEdit => self.handle_profile_edit_key(key),
         }
@@ -599,6 +603,7 @@ impl App {
             KeyCode::Char('p') => self.edit_profile(),
             KeyCode::Char('f') => self.follow_discovered_actor(),
             KeyCode::Char('w') => self.unfollow_selected_following(),
+            KeyCode::Char('a') if self.active == Tab::Sources => self.start_source_add(),
             KeyCode::Char('a') => self.approve_selected_follower(),
             KeyCode::Char('x') => self.reject_selected_follower(),
             KeyCode::Char('m') => self.mark_selected_notification_read(),
@@ -710,6 +715,37 @@ impl App {
             KeyCode::Up => self.search.query.move_up(),
             KeyCode::Down => self.search.query.move_down(),
             KeyCode::Char(ch) => self.search.query.insert_char(ch),
+            _ => {}
+        }
+    }
+
+    fn handle_source_add_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.source_add.query.clear();
+                self.status = "Source add canceled".to_string();
+            }
+            KeyCode::Enter => {
+                let input = self.source_add.query.text();
+                match parse_source_add_input(&input) {
+                    Ok(source) => {
+                        self.submit_source_add(source);
+                        self.active = Tab::Sources;
+                        self.mode = Mode::Normal;
+                        self.source_add.query.clear();
+                    }
+                    Err(error) => {
+                        self.status = error.to_string();
+                    }
+                }
+            }
+            KeyCode::Backspace => self.source_add.query.backspace(),
+            KeyCode::Left => self.source_add.query.move_left(),
+            KeyCode::Right => self.source_add.query.move_right(),
+            KeyCode::Up => self.source_add.query.move_up(),
+            KeyCode::Down => self.source_add.query.move_down(),
+            KeyCode::Char(ch) => self.source_add.query.insert_char(ch),
             _ => {}
         }
     }
@@ -1146,6 +1182,13 @@ impl App {
             .and_then(SourceEntry::subscription_id)
     }
 
+    fn start_source_add(&mut self) {
+        self.active = Tab::Sources;
+        self.source_add.query.clear();
+        self.mode = Mode::SourceAdd;
+        self.status = "Add source".to_string();
+    }
+
     fn source_entries(&self) -> Vec<SourceEntry> {
         self.sources
             .subscriptions
@@ -1154,6 +1197,35 @@ impl App {
             .map(SourceEntry::Subscription)
             .chain(self.sources.items.iter().cloned().map(SourceEntry::Item))
             .collect()
+    }
+
+    fn submit_source_add(&mut self, source: OwnerSourceAdd) {
+        let url = source.url.clone();
+        let tx = self.tx.clone();
+        self.status = format!("Adding source {url}");
+        tokio::spawn(async move {
+            let client = match owner_api_from_env() {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                    return;
+                }
+            };
+            match client.add_source(&source).await {
+                Ok(result) => {
+                    let title = result
+                        .source
+                        .title
+                        .unwrap_or_else(|| result.source.url.clone());
+                    let _ = tx.send(Message::Status(format!("Added source {title}")));
+                    let _ = tx.send(Message::Refresh(Tab::Sources));
+                    let _ = tx.send(Message::Refresh(Tab::Stats));
+                }
+                Err(error) => {
+                    let _ = tx.send(Message::Error(error.to_string()));
+                }
+            }
+        });
     }
 
     fn refresh_selected_source(&mut self) {
@@ -1505,6 +1577,8 @@ impl App {
             self.draw_compose_overlay(frame);
         } else if self.mode == Mode::Search {
             self.draw_search_overlay(frame);
+        } else if self.mode == Mode::SourceAdd {
+            self.draw_source_add_overlay(frame);
         } else if self.mode == Mode::Discovery {
             self.draw_discovery_overlay(frame);
         } else if self.mode == Mode::ProfileEdit {
@@ -1606,6 +1680,7 @@ impl App {
             Mode::Normal => "q quit · tab switch · r refresh · g discover · f follow · w unfollow · enter detail · y/l/o actions · i link · n open",
             Mode::Compose => "ctrl+s send · tab field · v visibility · p protocol · e e2ee · esc cancel",
             Mode::Search => "enter search · esc cancel · backspace edit",
+            Mode::SourceAdd => "enter add source · esc cancel · format: rss|atom|jsonfeed|api url [title]",
             Mode::Discovery => "enter lookup actor · esc cancel · backspace edit",
             Mode::ProfileEdit => "ctrl+s save profile · tab field · enter newline in summary · esc cancel",
         };
@@ -1763,6 +1838,27 @@ impl App {
         frame.render_widget(query, layout[0]);
         let hint = Paragraph::new("Enter resolves through the live owner API. Esc cancels.")
             .block(Block::default().borders(Borders::ALL));
+        frame.render_widget(hint, layout[1]);
+    }
+
+    fn draw_source_add_overlay(&self, frame: &mut Frame<'_>) {
+        let area = centered_rect(76, 40, frame.area());
+        let block = Block::default().borders(Borders::ALL).title("Add source");
+        frame.render_widget(block, area);
+        let inner = area.inner(Margin::new(1, 1));
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(1)])
+            .split(inner);
+        let query = Paragraph::new(self.source_add.query.text()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("rss|atom|jsonfeed|api url [title]"),
+        );
+        frame.render_widget(query, layout[0]);
+        let hint =
+            Paragraph::new("Enter subscribes as private reader-only by default. Esc cancels.")
+                .block(Block::default().borders(Borders::ALL));
         frame.render_widget(hint, layout[1]);
     }
 
@@ -2658,6 +2754,31 @@ fn optional_trimmed(value: String) -> Option<String> {
     }
 }
 
+fn parse_source_add_input(input: &str) -> Result<OwnerSourceAdd> {
+    let mut parts = input.split_whitespace();
+    let source_type = parts
+        .next()
+        .ok_or_else(|| anyhow!("Use: rss|atom|jsonfeed|api url [title]"))?;
+    let url = parts
+        .next()
+        .ok_or_else(|| anyhow!("Source URL is required"))?;
+    let title = parts.collect::<Vec<_>>().join(" ");
+
+    Ok(OwnerSourceAdd {
+        source_type: source_type.to_string(),
+        url: url.to_string(),
+        title: optional_trimmed(title),
+        cadence_minutes: Some(60),
+        api_secret_name: None,
+        private_reader_only: true,
+        excerpt_only: true,
+        link_required: true,
+        attribution_required: true,
+        image_allowed: false,
+        full_text_allowed: false,
+    })
+}
+
 fn open_url(url: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").arg(url).status()?;
@@ -2698,4 +2819,42 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_source_add_input_accepts_type_url_and_title() {
+        let source =
+            parse_source_add_input("rss https://example.com/feed.xml Example Feed").unwrap();
+
+        assert_eq!(source.source_type, "rss");
+        assert_eq!(source.url, "https://example.com/feed.xml");
+        assert_eq!(source.title.as_deref(), Some("Example Feed"));
+        assert_eq!(source.cadence_minutes, Some(60));
+        assert!(source.private_reader_only);
+        assert!(source.excerpt_only);
+        assert!(source.link_required);
+        assert!(source.attribution_required);
+        assert!(!source.image_allowed);
+        assert!(!source.full_text_allowed);
+    }
+
+    #[test]
+    fn parse_source_add_input_allows_missing_title() {
+        let source = parse_source_add_input("atom https://example.com/atom.xml").unwrap();
+
+        assert_eq!(source.source_type, "atom");
+        assert_eq!(source.url, "https://example.com/atom.xml");
+        assert_eq!(source.title, None);
+    }
+
+    #[test]
+    fn parse_source_add_input_requires_url() {
+        let error = parse_source_add_input("rss").unwrap_err();
+
+        assert!(error.to_string().contains("Source URL is required"));
+    }
 }
