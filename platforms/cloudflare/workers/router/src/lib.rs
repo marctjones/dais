@@ -1,6 +1,9 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use wasm_bindgen::{JsCast, JsValue};
 use worker::{event, Context, D1Type, Env, Headers, Request, Response, Result};
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
@@ -60,6 +63,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             let body = read_json(&mut req).await;
             match owner_update_profile(&env, &body).await {
                 Ok(profile) => api_json(&profile, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Post, "/media") => {
+            let body = read_json(&mut req).await;
+            match owner_upload_media(&env, &body).await {
+                Ok(result) => api_json(&result, 201),
                 Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
             }
         }
@@ -372,6 +382,148 @@ async fn owner_update_profile(
     .map_err(|error| error.to_string())?;
 
     owner_profile(env).await.map_err(|error| error.to_string())
+}
+
+async fn owner_upload_media(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let filename = body
+        .get("filename")
+        .and_then(optional_body_string)
+        .ok_or_else(|| "filename is required".to_string())?;
+    let data_base64 = body
+        .get("data_base64")
+        .and_then(optional_body_string)
+        .ok_or_else(|| "data_base64 is required".to_string())?;
+    let media_type = body
+        .get("media_type")
+        .and_then(optional_body_string)
+        .unwrap_or_else(|| media_type_for_filename(&filename));
+    let access = body
+        .get("access")
+        .and_then(optional_body_string)
+        .unwrap_or_else(|| "public".to_string());
+    let require_authorized_fetch = body
+        .get("require_authorized_fetch")
+        .or_else(|| body.get("requireAuthorizedFetch"))
+        .map(js_truthy)
+        .unwrap_or(false);
+    let expires_at = private_media_expires_at(
+        body.get("expires_in_seconds")
+            .or_else(|| body.get("expiresInSeconds")),
+    )?;
+
+    if !allowed_media_type(&media_type) {
+        return Err("unsupported media type".to_string());
+    }
+    if !matches!(access.as_str(), "public" | "private") {
+        return Err("access must be public or private".to_string());
+    }
+    if expires_at.is_some() && access != "private" {
+        return Err("media expiration is only supported for private uploads".to_string());
+    }
+    if require_authorized_fetch && access != "private" {
+        return Err("authorized-fetch media is only supported for private uploads".to_string());
+    }
+
+    let bytes = BASE64
+        .decode(data_base64.as_bytes())
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("media file is larger than 8 MB".to_string());
+    }
+
+    let safe_name = safe_media_filename(&filename)?;
+    let timestamp = current_media_timestamp();
+    let token = random_token()?;
+    let public_name = format!(
+        "{}-{}-{}",
+        timestamp,
+        stable_id(&format!("{safe_name}\n{data_base64}"))
+            .chars()
+            .take(12)
+            .collect::<String>(),
+        safe_name
+    );
+    let key = if access == "private" {
+        format!("private/{token}/{safe_name}")
+    } else {
+        format!("uploads/{public_name}")
+    };
+
+    let mut custom_metadata = HashMap::new();
+    let description = body.get("description").and_then(optional_body_string);
+    if let Some(description) = description.as_deref() {
+        custom_metadata.insert("description".to_string(), description.to_string());
+    }
+    if let Some(expires_at) = expires_at.as_deref() {
+        custom_metadata.insert("expires_at".to_string(), expires_at.to_string());
+    }
+    if require_authorized_fetch {
+        custom_metadata.insert("authorized_fetch".to_string(), "required".to_string());
+    }
+
+    let mut http_metadata = worker::HttpMetadata::default();
+    http_metadata.content_type = Some(media_type.clone());
+    let bucket = env
+        .bucket("MEDIA_BUCKET")
+        .map_err(|error| error.to_string())?;
+    let put = bucket.put(key.clone(), bytes).http_metadata(http_metadata);
+    if custom_metadata.is_empty() {
+        put.execute().await.map_err(|error| error.to_string())?;
+    } else {
+        put.custom_metadata(custom_metadata)
+            .execute()
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+
+    let url = if access == "private" {
+        format!(
+            "https://social.dais.social/media/{}/{}/{}",
+            if require_authorized_fetch {
+                "_private_signed"
+            } else {
+                "_private"
+            },
+            token,
+            safe_name
+        )
+    } else {
+        format!("https://social.dais.social/media/{key}")
+    };
+    let mut attachment = Map::new();
+    attachment.insert(
+        "type".to_string(),
+        Value::String(if media_type.starts_with("image/") {
+            "Image".to_string()
+        } else {
+            "Document".to_string()
+        }),
+    );
+    attachment.insert("mediaType".to_string(), Value::String(media_type.clone()));
+    attachment.insert("url".to_string(), Value::String(url.clone()));
+    attachment.insert("name".to_string(), Value::String(safe_name));
+
+    let mut response = Map::new();
+    response.insert("url".to_string(), Value::String(url));
+    response.insert("media_type".to_string(), Value::String(media_type));
+    response.insert("access".to_string(), Value::String(access));
+    response.insert(
+        "authorized_fetch".to_string(),
+        Value::Bool(require_authorized_fetch),
+    );
+    response.insert("attachment".to_string(), Value::Object(attachment));
+    response.insert(
+        "description".to_string(),
+        description.map(Value::String).unwrap_or(Value::Null),
+    );
+    response.insert(
+        "expires_at".to_string(),
+        expires_at.map(Value::String).unwrap_or(Value::Null),
+    );
+    Ok(response)
 }
 
 async fn owner_revoke_media(
@@ -1936,6 +2088,126 @@ fn media_r2_key_from_url(value: &str) -> Option<String> {
         return Some(decode_component(&format!("uploads/{rest}")));
     }
     None
+}
+
+fn media_type_for_filename(filename: &str) -> String {
+    match filename
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
+fn allowed_media_type(value: &str) -> bool {
+    matches!(
+        value,
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "video/mp4" | "video/webm"
+    )
+}
+
+fn safe_media_filename(value: &str) -> std::result::Result<String, String> {
+    let basename = value.rsplit(['/', '\\']).next().unwrap_or_default().trim();
+    let mut safe = String::new();
+    let mut previous_dash = false;
+    for ch in basename.chars() {
+        let replacement = if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            ch
+        } else {
+            '-'
+        };
+        if replacement == '-' {
+            if previous_dash {
+                continue;
+            }
+            previous_dash = true;
+        } else {
+            previous_dash = false;
+        }
+        safe.push(replacement);
+    }
+    let safe = safe
+        .trim_start_matches('.')
+        .chars()
+        .take(96)
+        .collect::<String>();
+    if safe.is_empty() {
+        return Err("filename is invalid".to_string());
+    }
+    Ok(safe)
+}
+
+fn private_media_expires_at(value: Option<&Value>) -> std::result::Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() || matches!(value, Value::String(text) if text.is_empty()) {
+        return Ok(None);
+    }
+    let seconds = match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => text.parse::<f64>().ok(),
+        Value::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
+        _ => None,
+    }
+    .ok_or_else(|| "expires_in_seconds must be a positive number".to_string())?;
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err("expires_in_seconds must be a positive number".to_string());
+    }
+    if seconds > 30.0 * 24.0 * 60.0 * 60.0 {
+        return Err("expires_in_seconds must be 30 days or less".to_string());
+    }
+    let expires_ms = js_sys::Date::now() + seconds.floor() * 1000.0;
+    Ok(js_sys::Date::new(&JsValue::from_f64(expires_ms))
+        .to_iso_string()
+        .as_string())
+}
+
+fn js_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(number) => number.as_f64().map(|value| value != 0.0).unwrap_or(false),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(_) | Value::Object(_) => true,
+    }
+}
+
+fn current_media_timestamp() -> String {
+    js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default()
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | ':' | 'T' | 'Z' | '.'))
+        .take(14)
+        .collect()
+}
+
+fn random_token() -> std::result::Result<String, String> {
+    let crypto = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
+        .map_err(|_| "crypto is unavailable".to_string())?;
+    let get_random_values = js_sys::Reflect::get(&crypto, &JsValue::from_str("getRandomValues"))
+        .map_err(|_| "crypto.getRandomValues is unavailable".to_string())?
+        .dyn_into::<js_sys::Function>()
+        .map_err(|_| "crypto.getRandomValues is unavailable".to_string())?;
+    let array = js_sys::Uint8Array::new_with_length(24);
+    get_random_values
+        .call1(&crypto, &array)
+        .map_err(|_| "crypto.getRandomValues failed".to_string())?;
+    let mut bytes = vec![0; 24];
+    array.copy_to(&mut bytes);
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn clamp_cadence_minutes(value: Option<String>) -> i32 {
