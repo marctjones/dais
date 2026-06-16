@@ -156,6 +156,48 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
                 200,
             )
         }
+        (worker::Method::Get, "/api/v1/blocks") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(
+                &mastodon_blocks(&env, clamp_limit(query_param(url, "limit"))).await?,
+                200,
+            )
+        }
+        (worker::Method::Get, "/api/v1/domain_blocks") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(
+                &mastodon_domain_blocks(&env, clamp_limit(query_param(url, "limit"))).await?,
+                200,
+            )
+        }
+        (worker::Method::Get, "/api/v1/conversations") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(
+                &mastodon_conversations(&env, clamp_limit(query_param(url, "limit"))).await?,
+                200,
+            )
+        }
+        (worker::Method::Get, "/api/v1/search") | (worker::Method::Get, "/api/v2/search") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(
+                &mastodon_search(
+                    &env,
+                    &query_param(url, "q").unwrap_or_default(),
+                    clamp_limit(query_param(url, "limit")),
+                    url,
+                )
+                .await?,
+                200,
+            )
+        }
         (worker::Method::Get, "/api/v1/notifications") => {
             if let Some(response) = require_mastodon_bearer(&req, &env)? {
                 return Ok(response);
@@ -179,6 +221,33 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
         ),
         (worker::Method::Get, _) if mastodon_account_path(path) => {
             api_json(&mastodon_account(&env).await?, 200)
+        }
+        (worker::Method::Get, _) if mastodon_status_context_path(path).is_some() => {
+            let id = mastodon_status_context_path(path).unwrap_or_default();
+            match mastodon_status_context(&env, &decode_component(&id)).await? {
+                Some(value) => api_json(&value, 200),
+                None => api_json(&serde_json::json!({ "error": "Record not found" }), 404),
+            }
+        }
+        (worker::Method::Get, _) if mastodon_status_source_path(path).is_some() => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let id = mastodon_status_source_path(path).unwrap_or_default();
+            match mastodon_status_row(&env, &decode_component(&id)).await? {
+                Some(row) => api_json(&mastodon_status_source_json(&row), 200),
+                None => api_json(&serde_json::json!({ "error": "Record not found" }), 404),
+            }
+        }
+        (worker::Method::Get, _) if mastodon_status_path(path).is_some() => {
+            let id = mastodon_status_path(path).unwrap_or_default();
+            match mastodon_status(&env, &decode_component(&id)).await? {
+                Some(value) => api_json(&value, 200),
+                None => api_json(&serde_json::json!({ "error": "Record not found" }), 404),
+            }
+        }
+        (worker::Method::Get, _) if path.starts_with("/api/v1/streaming") => {
+            mastodon_streaming_response()
         }
         (worker::Method::Delete, _) if mastodon_suggestion_dismiss(path) => {
             if let Some(response) = require_mastodon_bearer(&req, &env)? {
@@ -540,6 +609,281 @@ async fn mastodon_status_values(env: &Env, rows: Vec<Map<String, Value>>) -> Res
             .map(|row| mastodon_status_json(&row, &account))
             .collect(),
     ))
+}
+
+async fn mastodon_status(env: &Env, id: &str) -> Result<Option<Value>> {
+    let Some(row) = mastodon_status_row(env, id).await? else {
+        return Ok(None);
+    };
+    let account = mastodon_account(env).await?;
+    Ok(Some(mastodon_status_json(&row, &account)))
+}
+
+async fn mastodon_status_row(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare(
+        r#"
+        SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+               name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
+               (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+               (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+               (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count,
+               EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like' AND i.actor_id = posts.actor_id) AS favourited,
+               EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost' AND i.actor_id = posts.actor_id) AS reblogged
+        FROM posts
+        WHERE id = ?1
+          AND visibility = 'public'
+          AND encrypted_message IS NULL
+          AND content NOT LIKE '%End-to-end encrypted message%'
+        LIMIT 1
+        "#,
+    )
+    .bind_refs(&id_arg)?
+    .first::<Map<String, Value>>(None)
+    .await
+}
+
+async fn mastodon_status_context(env: &Env, id: &str) -> Result<Option<Value>> {
+    let Some(status) = mastodon_status(env, id).await? else {
+        return Ok(None);
+    };
+
+    let mut ancestors = Vec::new();
+    let mut seen = vec![id.to_string()];
+    let mut parent_id = status
+        .get("in_reply_to_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    while let Some(parent) = parent_id {
+        if ancestors.len() >= 20 || seen.iter().any(|value| value == &parent) {
+            break;
+        }
+        seen.push(parent.clone());
+        let Some(parent_status) = mastodon_status(env, &parent).await? else {
+            break;
+        };
+        parent_id = parent_status
+            .get("in_reply_to_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        ancestors.insert(0, parent_status);
+    }
+
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+                   name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
+                   (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+                   (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+                   (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count,
+                   EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like' AND i.actor_id = posts.actor_id) AS favourited,
+                   EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost' AND i.actor_id = posts.actor_id) AS reblogged
+            FROM posts
+            WHERE in_reply_to = ?1
+              AND visibility = 'public'
+              AND encrypted_message IS NULL
+              AND content NOT LIKE '%End-to-end encrypted message%'
+            ORDER BY published_at ASC
+            LIMIT 40
+            "#,
+        )
+        .bind_refs(&id_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    let account = mastodon_account(env).await?;
+    Ok(Some(serde_json::json!({
+        "ancestors": ancestors,
+        "descendants": rows.into_iter().map(|row| mastodon_status_json(&row, &account)).collect::<Vec<_>>(),
+    })))
+}
+
+fn mastodon_status_source_json(row: &Map<String, Value>) -> Value {
+    serde_json::json!({
+        "id": row_value_or_null(row, "id"),
+        "text": mastodon_status_content(row),
+        "spoiler_text": string_field(Some(row), "summary").unwrap_or_default(),
+    })
+}
+
+async fn mastodon_blocks(env: &Env, limit: i32) -> Result<Value> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT actor_id, actor_id AS url, created_at
+            FROM blocks
+            WHERE actor_id IS NOT NULL AND actor_id != ''
+              AND actor_id NOT LIKE 'domain:%'
+            ORDER BY created_at DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(Value::Array(rows.iter().map(remote_account_json).collect()))
+}
+
+async fn mastodon_domain_blocks(env: &Env, limit: i32) -> Result<Value> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT blocked_domain
+            FROM blocks
+            WHERE blocked_domain IS NOT NULL AND blocked_domain != ''
+            ORDER BY created_at DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(Value::Array(
+        rows.iter()
+            .filter_map(|row| string_field(Some(row), "blocked_domain").map(Value::String))
+            .collect(),
+    ))
+}
+
+async fn mastodon_search(env: &Env, query: &str, limit: i32, url: &worker::Url) -> Result<Value> {
+    let term = query.trim();
+    if term.is_empty() {
+        return Ok(serde_json::json!({ "accounts": [], "statuses": [], "hashtags": [] }));
+    }
+
+    if term.starts_with('@') || term.starts_with("https://") {
+        if let Ok(actor) = owner_discover_actor(env, term).await {
+            let mut row = Map::new();
+            if let Some(id) = actor.get("id").and_then(Value::as_str) {
+                row.insert("actor_id".to_string(), Value::String(id.to_string()));
+                row.insert("url".to_string(), Value::String(id.to_string()));
+                row.insert(
+                    "created_at".to_string(),
+                    Value::String("1970-01-01T00:00:00.000Z".to_string()),
+                );
+                return Ok(serde_json::json!({
+                    "accounts": [remote_account_json(&row)],
+                    "statuses": [],
+                    "hashtags": [],
+                }));
+            }
+        }
+    }
+
+    let db = env.d1("DB")?;
+    let cursors = mastodon_cursor_options(url);
+    let where_clause = mastodon_status_list_where("posts", &cursors, 0);
+    let like = format!("%{term}%");
+    let mut args = Vec::new();
+    if let Some(max_id) = cursors.max_id.as_deref() {
+        args.push(D1Type::Text(max_id));
+    }
+    if let Some(newer_than) = cursors.newer_than.as_deref() {
+        args.push(D1Type::Text(newer_than));
+    }
+    args.push(D1Type::Text(&like));
+    let term_index = args.len();
+    args.push(D1Type::Integer(limit));
+    let limit_index = args.len();
+    let query = format!(
+        r#"
+        SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+               name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
+               (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+               (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+               (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count,
+               EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like' AND i.actor_id = posts.actor_id) AS favourited,
+               EXISTS(SELECT 1 FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost' AND i.actor_id = posts.actor_id) AS reblogged
+        FROM posts
+        WHERE {where_clause}
+          AND (content LIKE ?{term_index} OR name LIKE ?{term_index} OR summary LIKE ?{term_index})
+        ORDER BY published_at DESC
+        LIMIT ?{limit_index}
+        "#,
+    );
+    let refs: Vec<&D1Type> = args.iter().collect();
+    let rows = db
+        .prepare(&query)
+        .bind_refs(refs)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    let statuses = mastodon_status_values(env, rows).await?;
+    Ok(serde_json::json!({
+        "accounts": [],
+        "statuses": statuses,
+        "hashtags": [],
+    }))
+}
+
+async fn mastodon_conversations(env: &Env, limit: i32) -> Result<Value> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, participants, last_message_at
+            FROM conversations
+            ORDER BY last_message_at DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(Value::Array(
+        rows.into_iter()
+            .map(|row| {
+                let accounts = parse_json_array(row.get("participants"))
+                    .into_iter()
+                    .filter_map(|actor_id| actor_id.as_str().map(ToOwned::to_owned))
+                    .map(|actor_id| {
+                        let mut account = Map::new();
+                        account.insert("actor_id".to_string(), Value::String(actor_id.clone()));
+                        account.insert("url".to_string(), Value::String(actor_id));
+                        remote_account_json(&account)
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "id": row_value_or_null(&row, "id"),
+                    "unread": false,
+                    "last_status": Value::Null,
+                    "accounts": accounts,
+                })
+            })
+            .collect(),
+    ))
+}
+
+fn parse_json_array(value: Option<&Value>) -> Vec<Value> {
+    match value {
+        Some(Value::Array(items)) => items.clone(),
+        Some(Value::String(text)) => serde_json::from_str::<Vec<Value>>(text).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn mastodon_streaming_response() -> Result<Response> {
+    let headers = Headers::new();
+    headers.set("Content-Type", "text/event-stream")?;
+    headers.set("Cache-Control", "no-cache")?;
+    headers.set("Access-Control-Allow-Origin", "*")?;
+    headers.set("X-Accel-Buffering", "no")?;
+    Ok(Response::ok(
+        "retry: 30000\nevent: connected\ndata: {\"stream\":\"polling-recommended\"}\n\n",
+    )?
+    .with_headers(headers))
 }
 
 struct MastodonCursorOptions {
@@ -1032,6 +1376,26 @@ fn mastodon_account_path(path: &str) -> bool {
         return false;
     };
     !rest.is_empty() && !rest.contains('/')
+}
+
+fn mastodon_status_context_path(path: &str) -> Option<String> {
+    mastodon_status_subpath(path, "context")
+}
+
+fn mastodon_status_source_path(path: &str) -> Option<String> {
+    mastodon_status_subpath(path, "source")
+}
+
+fn mastodon_status_subpath(path: &str, suffix: &str) -> Option<String> {
+    let rest = path.strip_prefix("/api/v1/statuses/")?;
+    let needle = format!("/{suffix}");
+    let id = rest.strip_suffix(&needle)?;
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+fn mastodon_status_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/api/v1/statuses/")?;
+    (!rest.is_empty() && !rest.contains('/')).then(|| rest.to_string())
 }
 
 async fn public_status_count(env: &Env) -> Result<i64> {
