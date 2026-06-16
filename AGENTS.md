@@ -16,6 +16,14 @@ under epic **#70**. Use the `gh` CLI:
 Avoid file-based trackers (`TODO.md`, `NOTES.md`, `BACKLOG.md`, …) and inline
 `TODO`/`FIXME` comments — open an issue instead.
 
+## Standing edit permission
+
+Do not ask before editing project files, files under `/tmp` or `/private/tmp`, or
+temporary files used for commit messages, release notes, GitHub issue bodies, or
+GitHub issue comments. The operator has given standing permission for these
+edits and for GitHub issue updates. Make the edit, run the appropriate
+verification, and report what changed.
+
 ## Design docs
 
 - `docs/POSITIONING.md` — purpose, persona, three-mode product, business model
