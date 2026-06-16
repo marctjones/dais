@@ -56,6 +56,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
     match (req.method(), owner_path) {
         (worker::Method::Get, "/snapshot") => api_json(&owner_snapshot(&env).await?, 200),
         (worker::Method::Get, "/profile") => api_json(&owner_profile(&env).await?, 200),
+        (worker::Method::Post, "/profile") => {
+            let body = read_json(&mut req).await;
+            match owner_update_profile(&env, &body).await {
+                Ok(profile) => api_json(&profile, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, "/stats") => api_json(&owner_stats(&env).await?, 200),
         (worker::Method::Get, "/diagnostics") => api_json(
             &serde_json::json!({ "items": owner_diagnostics(&env).await? }),
@@ -283,6 +290,81 @@ async fn owner_profile(env: &Env) -> Result<OwnerProfile> {
         public_handle: format!("@{username}@{handle_domain}"),
         actor_url,
     })
+}
+
+async fn owner_update_profile(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<OwnerProfile, String> {
+    let actor_type = body.get("actor_type").and_then(optional_body_string);
+    if let Some(actor_type) = actor_type.as_deref() {
+        if !matches!(actor_type, "Person" | "Group" | "Organization") {
+            return Err("actor_type must be Person, Group, or Organization".to_string());
+        }
+    }
+    let display_name = body.get("display_name").and_then(optional_body_string);
+    let summary = body.get("summary").and_then(optional_body_string);
+    let icon = optional_url_field(body, "icon", "icon")?;
+    let image = optional_url_field(body, "image", "image")?;
+
+    if actor_type.is_none()
+        && display_name.is_none()
+        && summary.is_none()
+        && icon.is_none()
+        && image.is_none()
+    {
+        return Err("no profile fields provided".to_string());
+    }
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let actor_type_arg = actor_type
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let display_name_arg = display_name
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let summary_arg = summary.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let icon_arg = icon.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let image_arg = image.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let actor_type_present = D1Type::Integer(if actor_type.is_some() { 1 } else { 0 });
+    let display_name_present = D1Type::Integer(if display_name.is_some() { 1 } else { 0 });
+    let summary_present = D1Type::Integer(if summary.is_some() { 1 } else { 0 });
+    let icon_present = D1Type::Integer(if icon.is_some() { 1 } else { 0 });
+    let image_present = D1Type::Integer(if image.is_some() { 1 } else { 0 });
+    db.prepare(
+        r#"
+        UPDATE actors
+        SET updated_at = CURRENT_TIMESTAMP,
+            actor_type = CASE WHEN ?1 = 1 THEN ?2 ELSE actor_type END,
+            display_name = CASE WHEN ?3 = 1 THEN ?4 ELSE display_name END,
+            summary = CASE WHEN ?5 = 1 THEN ?6 ELSE summary END,
+            icon = CASE WHEN ?7 = 1 THEN ?8 ELSE icon END,
+            avatar_url = CASE WHEN ?7 = 1 THEN ?8 ELSE avatar_url END,
+            image = CASE WHEN ?9 = 1 THEN ?10 ELSE image END,
+            header_url = CASE WHEN ?9 = 1 THEN ?10 ELSE header_url END
+        WHERE username = 'social'
+        "#,
+    )
+    .bind_refs([
+        &actor_type_present,
+        &actor_type_arg,
+        &display_name_present,
+        &display_name_arg,
+        &summary_present,
+        &summary_arg,
+        &icon_present,
+        &icon_arg,
+        &image_present,
+        &image_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    owner_profile(env).await.map_err(|error| error.to_string())
 }
 
 async fn owner_stats(env: &Env) -> Result<OwnerStats> {
@@ -1792,6 +1874,22 @@ fn optional_body_string(value: &Value) -> Option<String> {
         Value::Bool(true) => Some("true".to_string()),
         _ => None,
     }
+}
+
+fn optional_url_field(
+    body: &Value,
+    key: &str,
+    field: &str,
+) -> std::result::Result<Option<String>, String> {
+    let Some(value) = body.get(key).and_then(optional_body_string) else {
+        return Ok(None);
+    };
+    let url =
+        worker::Url::parse(&value).map_err(|_| format!("{field} must be an absolute https URL"))?;
+    if url.scheme() != "https" {
+        return Err(format!("{field} must be an absolute https URL"));
+    }
+    Ok(Some(value))
 }
 
 fn clamp_cadence_minutes(value: Option<String>) -> i32 {
