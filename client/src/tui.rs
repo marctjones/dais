@@ -24,8 +24,9 @@ use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, ModerationBlockRow, OwnerApiClient, OwnerDelivery,
     OwnerDirectMessage, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing, OwnerFriend,
     OwnerInteraction, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
-    OwnerProfileUpdate, OwnerSearchPost, OwnerSearchUser, OwnerSources, OwnerStats,
-    OwnerTimelinePost, ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
+    OwnerProfileUpdate, OwnerSearchPost, OwnerSearchSourceItem, OwnerSearchUser, OwnerSources,
+    OwnerStats, OwnerTimelinePost, ProtocolRoute as OwnerProtocolRoute, SourceSubscription,
+    Visibility as OwnerVisibility,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -344,6 +345,8 @@ enum TabData {
     Search {
         posts: Vec<OwnerSearchPost>,
         users: Vec<OwnerSearchUser>,
+        sources: Vec<SourceSubscription>,
+        source_items: Vec<OwnerSearchSourceItem>,
         query: String,
     },
     Bluesky(Vec<crate::atproto::FeedItem>),
@@ -490,6 +493,8 @@ struct App {
     direct_messages: Vec<OwnerDirectMessage>,
     search_posts: Vec<OwnerSearchPost>,
     search_users: Vec<OwnerSearchUser>,
+    search_sources: Vec<SourceSubscription>,
+    search_source_items: Vec<OwnerSearchSourceItem>,
     reader: Vec<OwnerTimelinePost>,
     reader_details: HashMap<String, OwnerPostDetail>,
     discovered_actor: Option<OwnerDiscoveredActor>,
@@ -535,6 +540,8 @@ impl App {
             direct_messages: Vec::new(),
             search_posts: Vec::new(),
             search_users: Vec::new(),
+            search_sources: Vec::new(),
+            search_source_items: Vec::new(),
             reader: Vec::new(),
             reader_details: HashMap::new(),
             discovered_actor: None,
@@ -868,12 +875,14 @@ impl App {
         tokio::spawn(async move {
             let result = load_search(remote, store, &query).await;
             match result {
-                Ok((posts, users)) => {
+                Ok((posts, users, sources, source_items)) => {
                     let _ = tx.send(Message::Loaded(
                         Tab::Search,
                         TabData::Search {
                             posts,
                             users,
+                            sources,
+                            source_items,
                             query,
                         },
                     ));
@@ -1448,10 +1457,14 @@ impl App {
                     TabData::Search {
                         posts,
                         users,
+                        sources,
+                        source_items,
                         query,
                     } => {
                         self.search_posts = posts;
                         self.search_users = users;
+                        self.search_sources = sources;
+                        self.search_source_items = source_items;
                         self.search.query = TextBuffer::from_text(&query);
                     }
                     TabData::Bluesky(value) => self.bluesky_feed = value,
@@ -2129,6 +2142,49 @@ impl App {
                         ),
                     });
                 }
+                for source in &self.search_sources {
+                    entries.push(Entry {
+                        title: format!(
+                            "source: {}",
+                            source.title.as_deref().unwrap_or(&source.url)
+                        ),
+                        subtitle: format!("{} · {}", source.source_type, source.status),
+                        details: format!(
+                            "id: {}\nurl: {}\nhomepage: {}\nstatus: {}\nrefresh: {} min\nlast fetched: {}\nnext fetch: {}\nlast error: {}",
+                            source.id,
+                            source.url,
+                            source.homepage_url.as_deref().unwrap_or(""),
+                            source.status,
+                            source.refresh_cadence_minutes,
+                            source.last_fetched_at.as_deref().unwrap_or(""),
+                            source.next_fetch_at.as_deref().unwrap_or(""),
+                            source.last_error.as_deref().unwrap_or("")
+                        ),
+                    });
+                }
+                for item in &self.search_source_items {
+                    entries.push(Entry {
+                        title: format!("source item: {}", item.title),
+                        subtitle: format!(
+                            "{} · {} · {}",
+                            item.source_type,
+                            if source_item_read(&item.read) {
+                                "read"
+                            } else {
+                                "unread"
+                            },
+                            item.published_at.as_deref().unwrap_or("unknown time")
+                        ),
+                        details: format!(
+                            "id: {}\nsource: {}\nurl: {}\ncreated: {}\n\n{}",
+                            item.id,
+                            item.source_id,
+                            item.canonical_url.as_deref().unwrap_or(""),
+                            item.created_at.as_deref().unwrap_or(""),
+                            item.excerpt.as_deref().unwrap_or("")
+                        ),
+                    });
+                }
                 entries
             }
             Tab::Bluesky => self
@@ -2414,13 +2470,23 @@ async fn load_search(
     _remote: bool,
     _store: ConfigStore,
     query: &str,
-) -> Result<(Vec<OwnerSearchPost>, Vec<OwnerSearchUser>)> {
+) -> Result<(
+    Vec<OwnerSearchPost>,
+    Vec<OwnerSearchUser>,
+    Vec<SourceSubscription>,
+    Vec<OwnerSearchSourceItem>,
+)> {
     let client = owner_api_from_env()?;
     let results = client
         .search(query)
         .await
         .map_err(|error| anyhow!(error.to_string()))?;
-    Ok((results.posts, results.users))
+    Ok((
+        results.posts,
+        results.users,
+        results.sources,
+        results.source_items,
+    ))
 }
 
 fn stats_detail(stats: &OwnerStats) -> String {
@@ -2558,6 +2624,13 @@ fn encryption_state(encrypted: bool) -> &'static str {
     } else {
         "[plaintext]"
     }
+}
+
+fn source_item_read(value: &serde_json::Value) -> bool {
+    value == &serde_json::Value::Bool(true)
+        || value == &serde_json::Value::Number(1.into())
+        || value == &serde_json::Value::String("1".to_string())
+        || value == &serde_json::Value::String("true".to_string())
 }
 
 fn compose_field_title(label: &str, active: bool) -> String {

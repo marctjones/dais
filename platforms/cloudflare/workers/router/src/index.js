@@ -2473,7 +2473,7 @@ async function ownerDirectMessages(env, limit) {
 
 async function ownerSearch(env, query, limit) {
   const term = String(query || '').trim();
-  if (!term) return { posts: [], users: [] };
+  if (!term) return { posts: [], users: [], sources: [], source_items: [] };
   const like = `%${term}%`;
   const posts = await env.DB.prepare(
     `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
@@ -2496,9 +2496,28 @@ async function ownerSearch(env, query, limit) {
      ORDER BY created_at DESC
      LIMIT ?2`,
   ).bind(like, limit).all();
+  const sources = await env.DB.prepare(
+    `SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+            last_fetched_at, next_fetch_at, last_error, error_count, policy_json,
+            created_at, updated_at
+     FROM source_subscriptions
+     WHERE url LIKE ?1 OR title LIKE ?1 OR homepage_url LIKE ?1
+     ORDER BY updated_at DESC
+     LIMIT ?2`,
+  ).bind(like, limit).all();
+  const sourceItems = await env.DB.prepare(
+    `SELECT id, source_id, source_type, title, canonical_url, excerpt, published_at,
+            read, rights_policy_json, created_at
+     FROM source_items
+     WHERE title LIKE ?1 OR canonical_url LIKE ?1 OR excerpt LIKE ?1
+     ORDER BY COALESCE(published_at, created_at) DESC
+     LIMIT ?2`,
+  ).bind(like, limit).all();
   return {
     posts: posts.results || [],
     users: users.results || [],
+    sources: sources.results || [],
+    source_items: sourceItems.results || [],
   };
 }
 

@@ -1680,6 +1680,49 @@ fn print_owner_search(results: &OwnerSearchResult) {
             user.created_at.as_deref().unwrap_or("")
         );
     }
+    println!("sources={}", results.sources.len());
+    for source in &results.sources {
+        println!(
+            "{} [{}] {} {}",
+            source.id,
+            source.source_type,
+            source.status,
+            source.title.as_deref().unwrap_or(&source.url)
+        );
+        println!("url={}", source.url);
+        if let Some(homepage) = source.homepage_url.as_deref() {
+            println!("homepage={homepage}");
+        }
+    }
+    println!("source_items={}", results.source_items.len());
+    for item in &results.source_items {
+        println!(
+            "{} [{}] {} {}",
+            item.id,
+            item.source_type,
+            if owner_source_item_read(&item.read) {
+                "read"
+            } else {
+                "unread"
+            },
+            item.published_at.as_deref().unwrap_or("")
+        );
+        println!("{}", item.title);
+        if let Some(url) = item.canonical_url.as_deref() {
+            println!("url={url}");
+        }
+        if let Some(excerpt) = item.excerpt.as_deref() {
+            println!("{excerpt}");
+        }
+        println!();
+    }
+}
+
+fn owner_source_item_read(value: &serde_json::Value) -> bool {
+    value == &serde_json::Value::Bool(true)
+        || value == &serde_json::Value::Number(1.into())
+        || value == &serde_json::Value::String("1".to_string())
+        || value == &serde_json::Value::String("true".to_string())
 }
 
 fn print_owner_stats(stats: &OwnerStats) {

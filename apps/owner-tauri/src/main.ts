@@ -279,6 +279,19 @@ type OwnerSearchResult = {
     status: string;
     created_at?: string | null;
   }>;
+  sources: SourceSubscription[];
+  source_items: Array<{
+    id: string;
+    source_id: string;
+    source_type: string;
+    title: string;
+    canonical_url?: string | null;
+    excerpt?: string | null;
+    published_at?: string | null;
+    read: boolean | number | string | null;
+    rights_policy_json: string;
+    created_at?: string | null;
+  }>;
 };
 
 type OwnerStats = {
@@ -340,7 +353,7 @@ let sourceItems: OwnerSnapshot["sources"] = [];
 let moderationState: ModerationState | null = null;
 let directMessages: OwnerDirectMessage[] = [];
 let searchQuery = "";
-let searchResults: OwnerSearchResult = { posts: [], users: [] };
+let searchResults: OwnerSearchResult = { posts: [], users: [], sources: [], source_items: [] };
 let ownerStats: OwnerStats | null = null;
 
 async function load() {
@@ -575,7 +588,7 @@ function searchView() {
     <article class="panel">
       <h2>Search</h2>
       <form id="search-form" class="inline-form">
-        <input name="query" value="${escapeAttr(searchQuery)}" placeholder="Search posts, followers, following" />
+        <input name="query" value="${escapeAttr(searchQuery)}" placeholder="Search posts, actors, follows, and sources" />
         <button type="submit">Search</button>
       </form>
       <h2 class="section-label">Posts</h2>
@@ -584,6 +597,12 @@ function searchView() {
     <article class="panel">
       <h2>Actors</h2>
       ${list(searchResults.users.map(searchUserCard), "No matching actors.")}
+    </article>
+    <article class="panel">
+      <h2>Sources</h2>
+      ${list((searchResults.sources || []).map(sourceSubscriptionCard), "No matching source subscriptions.")}
+      <h2 class="section-label">Source items</h2>
+      ${list((searchResults.source_items || []).map(searchSourceItemCard), "No matching source items.")}
     </article>
   </section>`;
 }
@@ -1099,6 +1118,21 @@ function searchUserCard(row: OwnerSearchResult["users"][number]) {
   </article>`;
 }
 
+function searchSourceItemCard(row: OwnerSearchResult["source_items"][number]) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.title)}</h2>
+      ${row.excerpt ? `<p>${escapeHtml(row.excerpt)}</p>` : ""}
+    </div>
+    <footer>
+      <span>${escapeHtml(row.source_type)}</span>
+      <span>${row.read ? "Read" : "Unread"}</span>
+      ${row.published_at ? `<time>${escapeHtml(formatTime(row.published_at))}</time>` : ""}
+      ${row.canonical_url ? `<a href="${escapeAttr(row.canonical_url)}">${escapeHtml(shortHost(row.canonical_url))}</a>` : ""}
+    </footer>
+  </article>`;
+}
+
 function metric(label: string, value: string | number, detail: string) {
   return `<article>
     <span>${escapeHtml(label)}</span>
@@ -1574,8 +1608,10 @@ async function runSearch(event: Event) {
   searchQuery = query;
   searchResults = query
     ? await invoke<OwnerSearchResult>("owner_search", { query })
-    : { posts: [], users: [] };
-  notice = query ? `Search returned ${searchResults.posts.length} posts and ${searchResults.users.length} actors.` : "";
+    : { posts: [], users: [], sources: [], source_items: [] };
+  notice = query
+    ? `Search returned ${searchResults.posts.length} posts, ${searchResults.users.length} actors, ${(searchResults.sources || []).length} sources, and ${(searchResults.source_items || []).length} source items.`
+    : "";
   render();
 }
 

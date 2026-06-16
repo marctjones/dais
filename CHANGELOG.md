@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.68] - 2026-06-16
+
+### Added
+- Added owner search results for source subscriptions and source reader items,
+  exposed through the owner API, shared Rust client, CLI, Rust TUI, and Dais
+  Desk Search view.
+
 ## [1.28.67] - 2026-06-16
 
 ### Added

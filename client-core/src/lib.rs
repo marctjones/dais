@@ -596,6 +596,10 @@ pub struct OwnerSearchResult {
     pub posts: Vec<OwnerSearchPost>,
     #[serde(default)]
     pub users: Vec<OwnerSearchUser>,
+    #[serde(default)]
+    pub sources: Vec<SourceSubscription>,
+    #[serde(default)]
+    pub source_items: Vec<OwnerSearchSourceItem>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -625,6 +629,20 @@ pub struct OwnerSearchUser {
     pub actor_id: String,
     pub relation: String,
     pub status: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSearchSourceItem {
+    pub id: String,
+    pub source_id: String,
+    pub source_type: String,
+    pub title: String,
+    pub canonical_url: Option<String>,
+    pub excerpt: Option<String>,
+    pub published_at: Option<String>,
+    pub read: serde_json::Value,
+    pub rights_policy_json: String,
     pub created_at: Option<String>,
 }
 
