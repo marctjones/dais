@@ -12,6 +12,9 @@ const config = {
   ownerToken:
     process.env.DAIS_OWNER_TOKEN ||
     (process.env.DAIS_OWNER_TOKEN_FILE ? readTokenFile(process.env.DAIS_OWNER_TOKEN_FILE) : ""),
+  ownerReadToken:
+    process.env.DAIS_OWNER_READ_TOKEN ||
+    (process.env.DAIS_OWNER_READ_TOKEN_FILE ? readTokenFile(process.env.DAIS_OWNER_READ_TOKEN_FILE) : ""),
   knownPublicPost:
     process.env.DAIS_PUBLIC_POST_PATH || "/users/social/posts/20260615220558-6fc8b18f",
   knownPrivatePost:
@@ -222,6 +225,18 @@ async function ownerApi(path, options = {}) {
     throw new Error(`owner API ${path} returned ${res.status}: ${res.text}`);
   }
   return res;
+}
+
+async function ownerApiWithToken(path, token, options = {}) {
+  return request(`/api/dais/owner${path}`, {
+    ...options,
+    noCache: true,
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
 }
 
 async function mastodonApi(path, options = {}) {
@@ -1094,6 +1109,36 @@ const tests = [
       return t.fail(`post discovery preview mismatch: ${summarizeJson(post)}`);
     }
     t.pass("owner discovery resolved pasted public post URL to preview and author actor");
+  }),
+
+  requirement("OWNER-SECURITY-01", "DAIS-OWNER", "Owner API rejects anonymous and invalid bearer requests", async (t) => {
+    const anonymous = await request("/api/dais/owner/snapshot", { noCache: true });
+    const invalid = await ownerApiWithToken("/snapshot", "dais-invalid-owner-token");
+    if (anonymous.status !== 401) {
+      return t.fail(`anonymous owner snapshot expected 401, got ${anonymous.status}: ${anonymous.text}`);
+    }
+    if (invalid.status !== 401) {
+      return t.fail(`invalid owner token expected 401, got ${invalid.status}: ${invalid.text}`);
+    }
+    t.pass("owner API denied anonymous and invalid bearer requests");
+  }),
+
+  requirement("OWNER-SECURITY-02", "DAIS-OWNER", "Read-scoped owner tokens cannot perform write actions", async (t) => {
+    if (!config.ownerReadToken) {
+      return t.pass("no read-scoped owner token configured for live scope probe");
+    }
+    const read = await ownerApiWithToken("/snapshot", config.ownerReadToken);
+    if (read.status !== 200) {
+      return t.fail(`read-scoped token expected snapshot 200, got ${read.status}: ${read.text}`);
+    }
+    const write = await ownerApiWithToken("/posts", config.ownerReadToken, {
+      method: "POST",
+      body: JSON.stringify({ text: "read scoped token must not create posts", visibility: "Followers", protocol: "ActivityPub" }),
+    });
+    if (write.status !== 403) {
+      return t.fail(`read-scoped token write expected 403, got ${write.status}: ${write.text}`);
+    }
+    t.pass("read-scoped owner token can read but cannot create posts");
   }),
 
   requirement("OWNER-READER-01", "DAIS-OWNER", "Reader like and boost actions enqueue ActivityPub deliveries and update detail counts", async (t) => {

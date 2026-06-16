@@ -986,7 +986,7 @@ async function handleOwnerApi(request, env, url) {
     return apiJson({}, 204);
   }
 
-  const auth = requireOwnerBearer(request, env);
+  const auth = requireOwnerBearer(request, env, ownerApiRequiredScopes(request.method, path));
   if (auth) return auth;
 
   if (request.method === 'GET' && path === '/snapshot') {
@@ -3159,23 +3159,90 @@ async function ownerFederationTargetAllowed(env, targetUrl) {
   return Boolean(row);
 }
 
-function requireOwnerBearer(request, env) {
+function ownerApiRequiredScopes(method, path) {
+  if (method === 'GET') return ['read'];
+  if (method === 'DELETE') return ['write'];
+  if (path === '/discovery/actor') return ['read'];
+  if (path === '/followers/status' || path === '/following/follow' || path === '/following/unfollow') {
+    return ['follow'];
+  }
+  if (path.startsWith('/moderation/')) return ['moderation'];
+  if (path === '/media' || path === '/media/revoke') return ['media'];
+  return ['write'];
+}
+
+function requireOwnerBearer(request, env, requiredScopes = []) {
   const configured = configuredOwnerToken(env);
   const isProduction = env.ENVIRONMENT === 'production';
-  if (!configured && isProduction) {
+  const tokenSet = ownerBearerTokens(env);
+  if (tokenSet.length === 0 && !configured && isProduction) {
     return apiJson({ error: 'OWNER_API_TOKEN is not configured' }, 503);
   }
-  const expected = configured || 'dais-local-owner-token';
   const auth = request.headers.get('Authorization') || '';
   const provided = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  if (!provided || provided !== expected) {
+  const token = tokenSet.find((entry) => provided && entry.token === provided);
+  if (!token) {
     return apiJson({ error: 'Owner bearer token required' }, 401);
+  }
+  if (!ownerTokenHasScopes(token.scopes, requiredScopes)) {
+    return apiJson({ error: 'Owner bearer token lacks required scope', required_scopes: requiredScopes }, 403);
   }
   return null;
 }
 
 function configuredOwnerToken(env) {
   return env.OWNER_API_TOKEN || env.DAIS_OWNER_TOKEN || '';
+}
+
+function ownerBearerTokens(env) {
+  const tokens = [];
+  const configured = configuredOwnerToken(env) || (env.ENVIRONMENT === 'production' ? '' : 'dais-local-owner-token');
+  if (configured) {
+    tokens.push({ token: configured, scopes: ['owner'] });
+  }
+  tokens.push(...configuredScopedOwnerTokens(env));
+  return tokens.filter((entry) => entry.token);
+}
+
+function configuredScopedOwnerTokens(env) {
+  const raw = env.OWNER_API_SCOPED_TOKENS || env.DAIS_OWNER_SCOPED_TOKENS || '';
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((entry) => ({
+          token: String(entry.token || entry.value || '').trim(),
+          scopes: normalizeOwnerScopes(entry.scopes || entry.scope),
+        }))
+        .filter((entry) => entry.token && entry.scopes.length > 0);
+    }
+    if (parsed && typeof parsed === 'object') {
+      return Object.entries(parsed)
+        .map(([token, scopes]) => ({
+          token: String(token || '').trim(),
+          scopes: normalizeOwnerScopes(scopes),
+        }))
+        .filter((entry) => entry.token && entry.scopes.length > 0);
+    }
+  } catch {
+    return [];
+  }
+  return [];
+}
+
+function normalizeOwnerScopes(value) {
+  const raw = Array.isArray(value) ? value : String(value || '').split(/[,\s]+/);
+  return raw
+    .map((scope) => String(scope || '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function ownerTokenHasScopes(scopes, requiredScopes) {
+  if (!requiredScopes || requiredScopes.length === 0) return true;
+  const allowed = new Set(scopes || []);
+  if (allowed.has('owner') || allowed.has('admin') || allowed.has('*')) return true;
+  return requiredScopes.every((scope) => allowed.has(scope));
 }
 
 async function readJson(request) {

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.73] - 2026-06-16
+
+### Added
+- Added backward-compatible scoped owner API token support through
+  `OWNER_API_SCOPED_TOKENS`, with route-level read, write, follow, media, and
+  moderation scope enforcement.
+- Added authenticated owner security conformance coverage for anonymous/invalid
+  bearer denial and read-scoped token write denial.
+
 ## [1.28.72] - 2026-06-16
 
 ### Added
