@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.62] - 2026-06-16
+
+### Added
+- Added direct Rust owner API client methods for follower and following lists.
+- Added `dais owner followers --limit ...` and bounded
+  `dais owner following --limit ...` so the CLI can inspect the private social
+  graph through the owner API without pulling a full snapshot.
+
 ## [1.28.61] - 2026-06-16
 
 ### Added

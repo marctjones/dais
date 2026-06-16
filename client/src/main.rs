@@ -26,10 +26,10 @@ use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient,
-    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerFriend, OwnerInteraction,
-    OwnerMediaUpload, OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate,
-    OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats,
-    ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
+    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing,
+    OwnerFriend, OwnerInteraction, OwnerMediaUpload, OwnerNotification, OwnerPostDetail,
+    OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd,
+    OwnerSources, OwnerStats, ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
@@ -1031,20 +1031,19 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 println!("No followed posts found");
             }
         }
-        OwnerCommand::Following(args) => {
-            let snapshot = owner_api(&args)
-                .snapshot()
+        OwnerCommand::Followers(args) => {
+            let followers = owner_api(&args.api)
+                .followers(args.limit)
                 .await
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-            for row in snapshot.following {
-                println!(
-                    "{} [{}] inbox={} accepted_at={}",
-                    row.target_actor_id,
-                    row.status,
-                    row.target_inbox,
-                    row.accepted_at.as_deref().unwrap_or("")
-                );
-            }
+            print_owner_followers(&followers);
+        }
+        OwnerCommand::Following(args) => {
+            let following = owner_api(&args.api)
+                .following(args.limit)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_following(&following);
         }
         OwnerCommand::Friends(args) => {
             let friends = owner_api(&args)
@@ -1530,6 +1529,39 @@ fn print_owner_friends(friends: &[OwnerFriend]) {
             row.friend_shared_inbox.as_deref().unwrap_or(""),
             row.follower_since.as_deref().unwrap_or(""),
             row.following_since.as_deref().unwrap_or(""),
+            row.accepted_at.as_deref().unwrap_or("")
+        );
+    }
+}
+
+fn print_owner_followers(followers: &[OwnerFollower]) {
+    if followers.is_empty() {
+        println!("No followers found");
+        return;
+    }
+    for row in followers {
+        println!(
+            "{} [{}] inbox={} shared_inbox={} updated_at={}",
+            row.follower_actor_id,
+            row.status,
+            row.follower_inbox,
+            row.follower_shared_inbox.as_deref().unwrap_or(""),
+            row.updated_at.as_deref().unwrap_or("")
+        );
+    }
+}
+
+fn print_owner_following(following: &[OwnerFollowing]) {
+    if following.is_empty() {
+        println!("No following actors found");
+        return;
+    }
+    for row in following {
+        println!(
+            "{} [{}] inbox={} accepted_at={}",
+            row.target_actor_id,
+            row.status,
+            row.target_inbox,
             row.accepted_at.as_deref().unwrap_or("")
         );
     }

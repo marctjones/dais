@@ -91,6 +91,20 @@ impl OwnerApiClient {
         Ok(response.items)
     }
 
+    pub async fn followers(&self, limit: usize) -> ClientResult<Vec<OwnerFollower>> {
+        let response: OwnerItems<OwnerFollower> = self
+            .get(&format!("/api/dais/owner/followers?limit={limit}"))
+            .await?;
+        Ok(response.items)
+    }
+
+    pub async fn following(&self, limit: usize) -> ClientResult<Vec<OwnerFollowing>> {
+        let response: OwnerItems<OwnerFollowing> = self
+            .get(&format!("/api/dais/owner/following?limit={limit}"))
+            .await?;
+        Ok(response.items)
+    }
+
     pub async fn mark_notification_read(&self, id: &str) -> ClientResult<OwnerActionResult> {
         self.post(
             "/api/dais/owner/notifications/read",

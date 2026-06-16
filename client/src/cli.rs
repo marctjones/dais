@@ -793,8 +793,10 @@ pub enum OwnerCommand {
     Profile(OwnerProfileCommand),
     /// Read the live owner API home timeline.
     Timeline(OwnerTimelineArgs),
+    /// List actors following the live instance.
+    Followers(OwnerListArgs),
     /// List actors followed by the live instance.
-    Following(OwnerApiArgs),
+    Following(OwnerListArgs),
     /// List mutual friend relationships through the live owner API.
     Friends(OwnerApiArgs),
     /// List live owner API notifications.
@@ -913,6 +915,14 @@ pub struct OwnerTimelineArgs {
     #[command(flatten)]
     pub api: OwnerApiArgs,
     #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerListArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    #[arg(long, default_value_t = 50)]
     pub limit: usize,
 }
 
