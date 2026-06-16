@@ -127,6 +127,7 @@ async fn handle_owner_api(req: Request, env: Env, url: &worker::Url) -> Result<R
             },
             200,
         ),
+        (worker::Method::Get, "/moderation") => api_json(&owner_moderation(&env).await?, 200),
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
             501,
@@ -316,6 +317,84 @@ async fn owner_diagnostics(env: &Env) -> Result<Vec<OwnerDiagnostic>> {
             detail: delivery_detail,
         },
     ])
+}
+
+async fn owner_settings(env: &Env) -> Result<Map<String, Value>> {
+    let db = env.d1("DB")?;
+    Ok(db
+        .prepare(
+            r#"
+            SELECT default_visibility, require_authorized_fetch, manually_approves_followers,
+                   COALESCE(closed_network, 0) AS closed_network
+            FROM instance_settings
+            WHERE id = 1
+            "#,
+        )
+        .first::<Map<String, Value>>(None)
+        .await?
+        .unwrap_or_else(|| {
+            let mut settings = Map::new();
+            settings.insert(
+                "default_visibility".to_string(),
+                Value::String("followers".to_string()),
+            );
+            settings.insert("require_authorized_fetch".to_string(), Value::from(1));
+            settings.insert("manually_approves_followers".to_string(), Value::from(1));
+            settings.insert("closed_network".to_string(), Value::from(0));
+            settings
+        }))
+}
+
+async fn owner_moderation(env: &Env) -> Result<OwnerModeration> {
+    let db = env.d1("DB")?;
+    let settings = owner_settings(env).await?;
+    let blocks = db
+        .prepare("SELECT COUNT(*) AS count FROM blocks")
+        .first::<Map<String, Value>>(None)
+        .await?;
+    let allowlist = db
+        .prepare("SELECT COUNT(*) AS count FROM federation_allowlist WHERE enabled = 1")
+        .first::<Map<String, Value>>(None)
+        .await?;
+    Ok(OwnerModeration {
+        closed_network: bool_field(Some(&settings), "closed_network"),
+        block_count: integer_field(blocks.as_ref(), "count"),
+        allowlist_count: integer_field(allowlist.as_ref(), "count"),
+        require_authorized_fetch: bool_field(Some(&settings), "require_authorized_fetch"),
+        manually_approves_followers: bool_field(Some(&settings), "manually_approves_followers"),
+        blocks: owner_blocks(env).await?,
+        allowlist: owner_allowlist(env).await?,
+    })
+}
+
+async fn owner_blocks(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT id, actor_id, blocked_domain, reason, created_at
+        FROM blocks
+        ORDER BY created_at DESC
+        LIMIT 80
+        "#,
+    )
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_allowlist(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT host, note, enabled, created_at, updated_at
+        FROM federation_allowlist
+        ORDER BY host ASC
+        LIMIT 120
+        "#,
+    )
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
 }
 
 async fn owner_followers(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
@@ -1153,6 +1232,17 @@ struct OwnerSearch {
 struct OwnerSources {
     subscriptions: Vec<Map<String, Value>>,
     items: Vec<Map<String, Value>>,
+}
+
+#[derive(Serialize)]
+struct OwnerModeration {
+    closed_network: bool,
+    block_count: i64,
+    allowlist_count: i64,
+    require_authorized_fetch: bool,
+    manually_approves_followers: bool,
+    blocks: Vec<Map<String, Value>>,
+    allowlist: Vec<Map<String, Value>>,
 }
 
 #[derive(Serialize)]
