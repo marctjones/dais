@@ -151,6 +151,21 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             owner_delete_source(&env, &id).await?;
             api_json(&serde_json::json!({ "ok": true }), 200)
         }
+        (worker::Method::Post, "/followers/status") => {
+            let body = read_json(&mut req).await;
+            let follower_actor_id = string_like_field(&body, "follower_actor_id")
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let status = string_like_field(&body, "status")
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            match owner_set_follower_status(&env, &follower_actor_id, &status).await {
+                Ok(result) => api_json(&result, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, "/moderation") => api_json(&owner_moderation(&env).await?, 200),
         (worker::Method::Post, "/moderation/block") => {
             let body = read_json(&mut req).await;
@@ -665,6 +680,101 @@ async fn owner_followers(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>
     .all()
     .await?
     .results::<Map<String, Value>>()
+}
+
+async fn owner_set_follower_status(
+    env: &Env,
+    follower_actor_id: &str,
+    status: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    if follower_actor_id.is_empty() {
+        return Err("follower_actor_id is required".to_string());
+    }
+    if !matches!(status, "approved" | "pending" | "rejected") {
+        return Err("status must be approved, pending, or rejected".to_string());
+    }
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let local_actor_arg = D1Type::Text(&local_actor.id);
+    let follower_arg = D1Type::Text(follower_actor_id);
+    let existing = db
+        .prepare(
+            r#"
+            SELECT id, actor_id, follower_actor_id, follower_inbox, follower_shared_inbox, status
+            FROM followers
+            WHERE actor_id = ?1 AND follower_actor_id = ?2
+            LIMIT 1
+            "#,
+        )
+        .bind_refs([&local_actor_arg, &follower_arg])
+        .map_err(|error| error.to_string())?
+        .first::<Map<String, Value>>(None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(existing) = existing else {
+        return Err("follower not found".to_string());
+    };
+
+    let status_arg = D1Type::Text(status);
+    db.prepare(
+        r#"
+        UPDATE followers
+        SET status = ?1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE actor_id = ?2 AND follower_actor_id = ?3
+        "#,
+    )
+    .bind_refs([&status_arg, &local_actor_arg, &follower_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let delivery_ids = if status == "approved" {
+        let follow_id =
+            string_field(Some(&existing), "id").unwrap_or_else(|| follower_actor_id.to_string());
+        let accept_id = format!(
+            "{}#accepts/{}",
+            local_actor.id,
+            stable_id(&follow_id).chars().take(16).collect::<String>()
+        );
+        let activity = serde_json::json!({
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": accept_id,
+            "type": "Accept",
+            "actor": local_actor.id,
+            "to": [follower_actor_id],
+            "object": {
+                "id": follow_id,
+                "type": "Follow",
+                "actor": follower_actor_id,
+                "object": local_actor.id,
+            },
+        });
+        let inbox = string_field(Some(&existing), "follower_shared_inbox")
+            .or_else(|| string_field(Some(&existing), "follower_inbox"));
+        insert_delivery_rows(
+            env,
+            &accept_id,
+            inbox.into_iter().collect(),
+            "Accept",
+            Some(activity.to_string()),
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+
+    let mut response = Map::new();
+    response.insert("ok".to_string(), Value::Bool(true));
+    response.insert(
+        "delivery_ids".to_string(),
+        Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
+    );
+    Ok(response)
 }
 
 async fn owner_friends(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
@@ -1247,6 +1357,114 @@ async fn owner_allow_host(env: &Env, host: &str, note: Option<&str>) -> Result<M
     Ok(response)
 }
 
+async fn insert_delivery_rows(
+    env: &Env,
+    post_id: &str,
+    inboxes: Vec<String>,
+    activity_type: &str,
+    activity_json: Option<String>,
+) -> std::result::Result<Vec<String>, String> {
+    let mut allowed_inboxes = Vec::new();
+    for inbox in inboxes {
+        if owner_federation_target_allowed(env, &inbox).await? {
+            allowed_inboxes.push(inbox);
+        }
+    }
+    let mut unique_inboxes = Vec::new();
+    for inbox in allowed_inboxes
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        if !unique_inboxes.contains(&inbox) {
+            unique_inboxes.push(inbox);
+        }
+    }
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let created_at = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let activity_json_arg = activity_json
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let activity_type_arg = D1Type::Text(activity_type);
+    let post_arg = D1Type::Text(post_id);
+    let created_arg = D1Type::Text(&created_at);
+    let mut delivery_ids = Vec::new();
+
+    for inbox in unique_inboxes {
+        let delivery_id = format!(
+            "delivery-{}",
+            stable_id(&format!("{post_id}\n{inbox}\n{created_at}"))
+                .chars()
+                .take(24)
+                .collect::<String>()
+        );
+        let delivery_arg = D1Type::Text(&delivery_id);
+        let inbox_arg = D1Type::Text(&inbox);
+        db.prepare(
+            r#"
+            INSERT INTO deliveries (
+              id, post_id, target_type, target_url, protocol,
+              status, retry_count, created_at, activity_type, activity_json
+            ) VALUES (
+              ?1, ?2, 'inbox', ?3, 'activitypub',
+              'queued', 0, ?4, ?5, ?6
+            )
+            "#,
+        )
+        .bind_refs([
+            &delivery_arg,
+            &post_arg,
+            &inbox_arg,
+            &created_arg,
+            &activity_type_arg,
+            &activity_json_arg,
+        ])
+        .map_err(|error| error.to_string())?
+        .run()
+        .await
+        .map_err(|error| error.to_string())?;
+        delivery_ids.push(delivery_id);
+    }
+    Ok(delivery_ids)
+}
+
+async fn owner_federation_target_allowed(
+    env: &Env,
+    target_url: &str,
+) -> std::result::Result<bool, String> {
+    let settings = owner_settings(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !bool_field(Some(&settings), "closed_network") {
+        return Ok(true);
+    }
+    let host = worker::Url::parse(target_url)
+        .ok()
+        .and_then(|url| url.host_str().map(ToOwned::to_owned))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return Ok(false);
+    }
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let host_arg = D1Type::Text(&host);
+    let row = db
+        .prepare(
+            "SELECT 1 AS allowed FROM federation_allowlist WHERE host = ?1 AND enabled = 1 LIMIT 1",
+        )
+        .bind_refs(&host_arg)
+        .map_err(|error| error.to_string())?
+        .first::<Map<String, Value>>(None)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(row.is_some())
+}
+
 fn normalize_source_item(row: Map<String, Value>) -> Map<String, Value> {
     let mut item = Map::new();
     item.insert("id".to_string(), row_value_or_null(&row, "id"));
@@ -1338,6 +1556,16 @@ fn required_body_string(value: Option<&Value>) -> Option<String> {
         Some(Value::Bool(true)) => Some("true".to_string()),
         _ => None,
     }
+}
+
+fn string_like_field(body: &Value, key: &str) -> Option<String> {
+    body.get(key).map(|value| match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        _ => value.to_string(),
+    })
 }
 
 fn optional_body_string(value: &Value) -> Option<String> {
