@@ -423,12 +423,7 @@ async function handleMastodonApi(request, env, url) {
   }
 
   if (request.method === 'POST' && path === '/api/v1/apps') {
-    let body = {};
-    try {
-      body = await request.json();
-    } catch {
-      body = {};
-    }
+    const body = await readRequestBody(request);
     const name = body.client_name || body.name || 'dais client';
     const redirectUri = body.redirect_uris || body.redirect_uri || 'urn:ietf:wg:oauth:2.0:oob';
     return apiJson({
@@ -3063,7 +3058,10 @@ function mastodonMediaAttachmentFromUpload(uploaded, description = null) {
   const mediaType = uploaded.media_type || attachment.mediaType || '';
   return {
     id: url,
-    type: mediaType.startsWith('image/') ? 'image' : mediaType.startsWith('video/') ? 'video' : 'unknown',
+    type: mediaType.startsWith('image/')
+      ? 'image'
+      : mediaType.startsWith('video/') ? 'video' : 'unknown',
+    media_type: mediaType,
     url,
     preview_url: url,
     remote_url: null,
@@ -3129,21 +3127,24 @@ function mastodonMediaR2Key(id) {
 }
 
 async function mastodonAttachmentsForMediaIds(env, mediaIds, visibility) {
-  return mediaIds.map((id) => {
+  const attachments = [];
+  for (const id of mediaIds) {
     const url = String(id || '').trim();
-    if (!url) return null;
+    if (!url) continue;
     if (visibility === 'followers' || visibility === 'direct') {
       if (!isPrivateMediaAttachment({ url })) {
         throw new Error('Mastodon API private media posts require private media URLs');
       }
     }
-    return {
+    const mastodonAttachment = await mastodonMediaAttachmentForId(env, url);
+    attachments.push({
       type: 'Document',
       url,
-      mediaType: mediaTypeForFilename(url),
-      name: decodeURIComponent(url.split('/').pop() || 'media'),
-    };
-  }).filter(Boolean);
+      mediaType: mastodonAttachment?.media_type || mediaTypeForFilename(url),
+      name: mastodonAttachment?.description || decodeURIComponent(url.split('/').pop() || 'media'),
+    });
+  }
+  return attachments;
 }
 
 function mastodonPollFromRequestBody(body) {

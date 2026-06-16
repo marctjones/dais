@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.56] - 2026-06-16
+
+### Added
+- Added a reusable Mastodon client smoke gate that exercises form-encoded app
+  registration, OOB OAuth compatibility, form status/poll creation, multipart
+  media upload, media attachment readback, and cleanup.
+
+### Fixed
+- Fixed Mastodon app registration to accept form-encoded request bodies from
+  third-party client flows.
+- Fixed Mastodon `media_ids` attachment creation to preserve stored media
+  descriptions when statuses are created from uploaded media.
+
 ## [1.28.55] - 2026-06-16
 
 ### Added

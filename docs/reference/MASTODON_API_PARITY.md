@@ -57,3 +57,10 @@ For authenticated production checks:
 ```bash
 DAIS_MASTODON_BEARER_TOKEN="$OWNER_API_TOKEN" npm run test:mastodon-api-conformance
 ```
+
+For a third-party-client-shaped smoke that uses form-encoded OAuth/status
+requests and multipart media upload:
+
+```bash
+DAIS_MASTODON_BEARER_TOKEN="$OWNER_API_TOKEN" npm run test:mastodon-client-smoke
+```
