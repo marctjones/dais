@@ -485,6 +485,23 @@ async function handleMastodonApi(request, env, url) {
     return apiJson([]);
   }
 
+  if (request.method === 'GET' && path === '/api/v1/announcements') {
+    return apiJson([]);
+  }
+
+  if (request.method === 'GET' && path === '/api/v1/directory') {
+    return apiJson([]);
+  }
+
+  if (request.method === 'GET' && (
+    path === '/api/v1/trends' ||
+    path === '/api/v1/trends/statuses' ||
+    path === '/api/v1/trends/tags' ||
+    path === '/api/v1/trends/links'
+  )) {
+    return apiJson([]);
+  }
+
   if (request.method === 'GET' && path === '/api/v1/markers') {
     const auth = requireBearer(request, env);
     if (auth) return auth;
@@ -531,6 +548,72 @@ async function handleMastodonApi(request, env, url) {
     const auth = requireBearer(request, env);
     if (auth) return auth;
     return apiJson([]);
+  }
+
+  if (request.method === 'GET' && path === '/api/v1/domain_blocks') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson(await mastodonDomainBlocks(env, clampLimit(url.searchParams.get('limit'))));
+  }
+
+  if (request.method === 'POST' && path === '/api/v1/domain_blocks') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const body = await readRequestBody(request);
+    let domain;
+    try {
+      domain = normalizeHost(body.domain || url.searchParams.get('domain') || '');
+    } catch {
+      return apiJson({ error: 'domain is required' }, 400);
+    }
+    if (!domain) return apiJson({ error: 'domain is required' }, 400);
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO blocks (id, actor_id, blocked_domain, reason, created_at)
+       VALUES (?1, ?2, ?3, 'Mastodon API domain block', CURRENT_TIMESTAMP)`,
+    ).bind(`domain-block-${stableId(domain)}`, `domain:${domain}`, domain).run();
+    return apiJson({});
+  }
+
+  if (request.method === 'DELETE' && path === '/api/v1/domain_blocks') {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const body = await readRequestBody(request);
+    let domain;
+    try {
+      domain = normalizeHost(body.domain || url.searchParams.get('domain') || '');
+    } catch {
+      return apiJson({ error: 'domain is required' }, 400);
+    }
+    if (!domain) return apiJson({ error: 'domain is required' }, 400);
+    await env.DB.prepare("DELETE FROM blocks WHERE blocked_domain = ?1").bind(domain).run();
+    return apiJson({});
+  }
+
+  if (request.method === 'GET' && (
+    path === '/api/v1/follow_requests' ||
+    path === '/api/v1/suggestions' ||
+    path === '/api/v1/endorsements' ||
+    path === '/api/v1/featured_tags' ||
+    path === '/api/v1/followed_tags' ||
+    path === '/api/v1/scheduled_statuses'
+  )) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson([]);
+  }
+
+  const followRequestAction = path.match(/^\/api\/v1\/follow_requests\/([^/]+)\/(authorize|reject)$/);
+  if (request.method === 'POST' && followRequestAction) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson({});
+  }
+
+  const suggestionDismiss = path.match(/^\/api\/v1\/suggestions\/([^/]+)$/);
+  if (request.method === 'DELETE' && suggestionDismiss) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    return apiJson({});
   }
 
   if (request.method === 'GET' && path === '/api/v1/timelines/public') {
@@ -630,6 +713,15 @@ async function handleMastodonApi(request, env, url) {
     const value = await mastodonStatusContext(env, decodeURIComponent(statusContext[1]));
     if (!value) return apiJson({ error: 'Record not found' }, 404);
     return apiJson(value);
+  }
+
+  const statusSource = path.match(/^\/api\/v1\/statuses\/(.+)\/source$/);
+  if (request.method === 'GET' && statusSource) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const value = await mastodonStatus(env, decodeURIComponent(statusSource[1]));
+    if (!value) return apiJson({ error: 'Record not found' }, 404);
+    return apiJson(mastodonStatusSourceJson(value));
   }
 
   const statusAction = path.match(/^\/api\/v1\/statuses\/(.+)\/(favourite|unfavourite|reblog|unreblog)$/);
@@ -2790,6 +2882,26 @@ function mastodonPlainText(row) {
   return [row.name, row.summary, row.content].filter(Boolean).join('\n\n');
 }
 
+function mastodonStatusSourceJson(row) {
+  return {
+    id: row.id,
+    text: row.content || mastodonTextFromHtml(row.content_html || ''),
+    spoiler_text: row.summary || '',
+  };
+}
+
+function mastodonTextFromHtml(value) {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .trim();
+}
+
 function mastodonStatusContent(row) {
   const parts = [];
   if (row.name) parts.push(`<p><strong>${escapeHtml(row.name)}</strong></p>`);
@@ -2967,10 +3079,22 @@ async function mastodonBlocks(env, limit) {
     `SELECT actor_id, actor_id AS url, created_at
      FROM blocks
      WHERE actor_id IS NOT NULL AND actor_id != ''
+       AND actor_id NOT LIKE 'domain:%'
      ORDER BY created_at DESC
      LIMIT ?1`,
   ).bind(limit).all();
   return (rows.results || []).map(remoteAccountJson);
+}
+
+async function mastodonDomainBlocks(env, limit) {
+  const rows = await env.DB.prepare(
+    `SELECT blocked_domain
+     FROM blocks
+     WHERE blocked_domain IS NOT NULL AND blocked_domain != ''
+     ORDER BY created_at DESC
+     LIMIT ?1`,
+  ).bind(limit).all();
+  return (rows.results || []).map((row) => row.blocked_domain);
 }
 
 async function mastodonSearch(env, query, limit, cursors = {}) {

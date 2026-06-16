@@ -178,6 +178,59 @@ const tests = [
       throw new Error("status context shape incomplete");
     }
   }),
+  requirement("MASTODON-API-READ-04", true, "Common Mastodon client probe endpoints return safe compatible shapes", async () => {
+    const publicTimeline = await request("/api/v1/timelines/public?limit=1");
+    const statusId = publicTimeline.json?.[0]?.id ? encodeURIComponent(publicTimeline.json[0].id) : "";
+    const checks = await Promise.all([
+      request("/api/v1/custom_emojis"),
+      request("/api/v1/announcements"),
+      request("/api/v1/directory?limit=2", { auth: true }),
+      request("/api/v1/trends", { auth: true }),
+      request("/api/v1/trends/statuses", { auth: true }),
+      request("/api/v1/trends/tags", { auth: true }),
+      request("/api/v1/trends/links", { auth: true }),
+      request("/api/v1/follow_requests", { auth: true }),
+      request("/api/v1/suggestions", { auth: true }),
+      request("/api/v1/endorsements", { auth: true }),
+      request("/api/v1/featured_tags", { auth: true }),
+      request("/api/v1/followed_tags", { auth: true }),
+      request("/api/v1/scheduled_statuses", { auth: true }),
+      request("/api/v1/domain_blocks", { auth: true }),
+      statusId ? request(`/api/v1/statuses/${statusId}/source`, { auth: true }) : Promise.resolve({ status: 200, json: { id: "", text: "", spoiler_text: "" } }),
+    ]);
+    if (checks.some((res) => res.status !== 200)) {
+      throw new Error(`expected all 200, got ${checks.map((res) => res.status).join("/")}`);
+    }
+    for (let index = 0; index < checks.length - 1; index += 1) {
+      expectArray(checks[index].json, `probe endpoint ${index}`);
+    }
+    if (!isObject(checks.at(-1).json) || checks.at(-1).json.text === undefined || checks.at(-1).json.spoiler_text === undefined) {
+      throw new Error("status source shape incomplete");
+    }
+
+    const domain = `dais-conformance-${Date.now()}.example`;
+    try {
+      const block = await request("/api/v1/domain_blocks", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain }),
+      });
+      if (block.status !== 200) throw new Error(`domain block expected 200, got ${block.status}: ${block.text}`);
+      const list = await request("/api/v1/domain_blocks?limit=20", { auth: true });
+      if (list.status !== 200 || !list.json?.includes(domain)) {
+        throw new Error("domain block list did not include blocked domain");
+      }
+    } finally {
+      const body = new URLSearchParams({ domain });
+      await request("/api/v1/domain_blocks", {
+        method: "DELETE",
+        auth: true,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+    }
+  }),
   requirement("MASTODON-API-READ-03", true, "Timeline and search pagination honor Mastodon cursor parameters", async () => {
     const createdIds = [];
     const token = `DaisPageSmoke${Date.now()}`;

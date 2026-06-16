@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.57] - 2026-06-16
+
+### Added
+- Added Mastodon client-probe compatibility endpoints for follow requests,
+  suggestions, endorsements, featured/followed tags, scheduled statuses,
+  announcements, directory, trends, domain blocks, and status source reads.
+- Expanded the Mastodon API conformance gate to cover these safe single-user
+  compatibility surfaces without leaving public posts behind.
+
 ## [1.28.56] - 2026-06-16
 
 ### Added
