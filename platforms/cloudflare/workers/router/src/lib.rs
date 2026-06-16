@@ -161,6 +161,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             owner_unblock(&env, &value).await?;
             api_json(&serde_json::json!({ "ok": true }), 200)
         }
+        (worker::Method::Delete, _) if owner_path.starts_with("/moderation/allowlist/") => {
+            let host = normalize_host(&decode_component(
+                owner_path.trim_start_matches("/moderation/allowlist/"),
+            ))?;
+            owner_delete_allowlist_host(&env, &host).await?;
+            api_json(&serde_json::json!({ "ok": true }), 200)
+        }
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
             501,
@@ -1125,6 +1132,16 @@ async fn owner_unblock(env: &Env, value: &str) -> Result<()> {
     Ok(())
 }
 
+async fn owner_delete_allowlist_host(env: &Env, host: &str) -> Result<()> {
+    let db = env.d1("DB")?;
+    let host_arg = D1Type::Text(host);
+    db.prepare("DELETE FROM federation_allowlist WHERE host = ?1")
+        .bind_refs(&host_arg)?
+        .run()
+        .await?;
+    Ok(())
+}
+
 fn normalize_source_item(row: Map<String, Value>) -> Map<String, Value> {
     let mut item = Map::new();
     item.insert("id".to_string(), row_value_or_null(&row, "id"));
@@ -1221,6 +1238,38 @@ fn required_body_string(value: Option<&Value>) -> Option<String> {
 fn body_string_any(body: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| required_body_string(body.get(*key)))
+}
+
+fn normalize_host(value: &str) -> Result<String> {
+    let raw = value.trim();
+    if raw.is_empty() {
+        return Err(worker::Error::RustError("host is required".to_string()));
+    }
+    let lower_raw = raw.to_ascii_lowercase();
+    let without_scheme = lower_raw
+        .strip_prefix("http://")
+        .or_else(|| lower_raw.strip_prefix("https://"))
+        .unwrap_or(lower_raw.as_str());
+    let host = without_scheme
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !host.contains('.')
+        || host.is_empty()
+        || !host.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'-'
+        })
+    {
+        return Err(worker::Error::RustError(
+            "host must be a domain name".to_string(),
+        ));
+    }
+    Ok(host)
 }
 
 fn clamp_limit(value: Option<String>) -> i32 {
