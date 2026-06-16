@@ -158,6 +158,22 @@ const tests = [
     expectArray(likes.json?.likes, "likes");
   }),
 
+  requirement("BLUESKY-SEARCH-01", "AppView search endpoints return public post and actor result arrays", async () => {
+    const posts = await request("/xrpc/app.bsky.feed.searchPosts?q=dais&limit=5");
+    const actors = await request(`/xrpc/app.bsky.actor.searchActors?q=${encodeURIComponent(config.acctDomain)}&limit=5`);
+    const typeahead = await request("/xrpc/app.bsky.actor.searchActorsTypeahead?q=dais&limit=5");
+    const statuses = [posts, actors, typeahead].map((res) => res.status);
+    if (statuses.some((value) => value !== 200)) throw new Error(`expected all 200, got ${statuses.join("/")}`);
+    expectArray(posts.json?.posts, "search posts");
+    expectArray(actors.json?.actors, "search actors");
+    expectArray(typeahead.json?.actors, "typeahead actors");
+    for (const post of posts.json.posts) {
+      assertPublicPostShape(post);
+    }
+    if (!actors.json.actors.some((actor) => actor.did === did())) throw new Error("actor search missing local profile");
+    if (!typeahead.json.actors.some((actor) => actor.did === did())) throw new Error("actor typeahead missing local profile");
+  }),
+
   requirement("BLUESKY-PRIVACY-01", "PDS public feeds exclude private/E2EE fallback content", async () => {
     const feed = await request("/xrpc/app.bsky.feed.getTimeline?limit=20");
     if (feed.status !== 200) throw new Error(`timeline expected 200, got ${feed.status}`);

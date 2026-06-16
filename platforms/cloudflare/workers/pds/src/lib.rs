@@ -108,6 +108,12 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/xrpc/app.bsky.actor.getProfiles", handle_get_profiles)
         .get_async("/xrpc/app.bsky.feed.getAuthorFeed", handle_get_author_feed)
         .get_async("/xrpc/app.bsky.feed.getTimeline", handle_get_timeline)
+        .get_async("/xrpc/app.bsky.feed.searchPosts", handle_search_posts)
+        .get_async("/xrpc/app.bsky.actor.searchActors", handle_search_actors)
+        .get_async(
+            "/xrpc/app.bsky.actor.searchActorsTypeahead",
+            handle_search_actors,
+        )
         .get_async(
             "/xrpc/app.bsky.notification.listNotifications",
             handle_list_notifications,
@@ -285,6 +291,36 @@ async fn handle_get_timeline(req: Request, ctx: RouteContext<()>) -> Result<Resp
         .map(|row| serde_json::json!({ "post": post_view(&identity, row) }))
         .collect();
     json_response(serde_json::json!({ "feed": feed }))
+}
+
+async fn handle_search_posts(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let query = required_query(&url, "q")?;
+    let identity = identity(&ctx.env);
+    if query.trim().is_empty() {
+        return json_response(serde_json::json!({ "posts": [] }));
+    }
+    let posts: Vec<Value> = search_public_posts(&ctx.env, &query, query_limit(&url))
+        .await?
+        .into_iter()
+        .map(|row| post_view(&identity, row))
+        .collect();
+    json_response(serde_json::json!({ "posts": posts }))
+}
+
+async fn handle_search_actors(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let query = required_query(&url, "q")?.to_ascii_lowercase();
+    let identity = identity(&ctx.env);
+    let mut actors = Vec::new();
+    if query.trim().is_empty()
+        || identity.handle.to_ascii_lowercase().contains(&query)
+        || identity.did.to_ascii_lowercase().contains(&query)
+        || "dais".contains(&query)
+    {
+        actors.push(local_profile_view(&ctx.env, &identity).await?);
+    }
+    json_response(serde_json::json!({ "actors": actors }))
 }
 
 async fn handle_list_notifications(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -542,6 +578,32 @@ async fn public_posts(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<Strin
         "#,
     )
     .bind(&[limit.into()])?
+    .all()
+    .await?
+    .results::<serde_json::Map<String, Value>>()
+}
+
+async fn search_public_posts(
+    env: &Env,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<serde_json::Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let pattern = format!("%{}%", query.trim());
+    db.prepare(
+        r#"
+        SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
+               atproto_uri, atproto_cid
+        FROM posts
+        WHERE visibility = 'public'
+          AND encrypted_message IS NULL
+          AND content NOT LIKE '%End-to-end encrypted message%'
+          AND content LIKE ?1
+        ORDER BY published_at DESC
+        LIMIT ?2
+        "#,
+    )
+    .bind(&[pattern.into(), limit.into()])?
     .all()
     .await?
     .results::<serde_json::Map<String, Value>>()
