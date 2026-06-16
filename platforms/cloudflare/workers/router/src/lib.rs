@@ -4,7 +4,10 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
-use worker::{event, Context, D1Type, Env, Fetch, Headers, Request, RequestInit, Response, Result};
+use worker::{
+    event, Context, D1Type, Env, Fetch, FormData, FormEntry, Headers, Request, RequestInit,
+    Response, Result,
+};
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
 
@@ -277,6 +280,9 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
         (worker::Method::Post, "/api/v1/media") | (worker::Method::Post, "/api/v2/media") => {
             if let Some(response) = require_mastodon_bearer(&req, &env)? {
                 return Ok(response);
+            }
+            if request_content_type(&req).contains("multipart/form-data") {
+                return mastodon_upload_media_multipart(&env, &mut req).await;
             }
             let body = read_mastodon_body(&mut req).await;
             mastodon_upload_media(&env, &body).await
@@ -855,7 +861,7 @@ async fn mastodon_create_status(env: &Env, body: &Value) -> Result<Response> {
         Err(message) => return api_json(&serde_json::json!({ "error": message }), 400),
     };
     let media_ids = request_body_array(body, "media_ids");
-    let attachments = match mastodon_attachments_for_media_ids(&media_ids, &visibility) {
+    let attachments = match mastodon_attachments_for_media_ids(env, &media_ids, &visibility).await {
         Ok(attachments) => attachments,
         Err(message) => return api_json(&serde_json::json!({ "error": message }), 400),
     };
@@ -1041,7 +1047,8 @@ fn mastodon_poll_multiple_from_body(body: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn mastodon_attachments_for_media_ids(
+async fn mastodon_attachments_for_media_ids(
+    env: &Env,
     media_ids: &[String],
     visibility: &str,
 ) -> std::result::Result<Vec<Value>, String> {
@@ -1056,11 +1063,22 @@ fn mastodon_attachments_for_media_ids(
         {
             return Err("Mastodon API private media posts require private media URLs".to_string());
         }
+        let media_attachment = mastodon_media_attachment_for_id(env, url)
+            .await
+            .map_err(|error| error.to_string())?;
         attachments.push(serde_json::json!({
             "type": "Document",
             "url": url,
-            "mediaType": media_type_for_filename(url),
-            "name": decode_component(url.rsplit('/').next().unwrap_or("media")),
+            "mediaType": media_attachment
+                .as_ref()
+                .and_then(Value::as_object)
+                .and_then(|attachment| string_field(Some(attachment), "media_type"))
+                .unwrap_or_else(|| media_type_for_filename(url)),
+            "name": media_attachment
+                .as_ref()
+                .and_then(Value::as_object)
+                .and_then(|attachment| string_field(Some(attachment), "description"))
+                .unwrap_or_else(|| decode_component(url.rsplit('/').next().unwrap_or("media"))),
         }));
     }
     Ok(attachments)
@@ -1097,6 +1115,72 @@ async fn mastodon_upload_media(env: &Env, body: &Value) -> Result<Response> {
         ),
         Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
     }
+}
+
+async fn mastodon_upload_media_multipart(env: &Env, req: &mut Request) -> Result<Response> {
+    let form = req.form_data().await?;
+    let description = form_field(&form, "description");
+    let mut filename = form_field(&form, "filename")
+        .or_else(|| description.clone())
+        .unwrap_or_else(|| "upload.bin".to_string());
+    let mut media_type = form_field(&form, "media_type")
+        .or_else(|| form_field(&form, "content_type"))
+        .unwrap_or_default();
+    let mut data_base64 = form_field(&form, "data_base64");
+
+    let file = form.get("file").or_else(|| form.get("file[]"));
+    if let Some(FormEntry::File(file)) = file {
+        let file_name = file.name();
+        if !file_name.trim().is_empty() {
+            filename = file_name;
+        }
+        let file_type = file.type_();
+        if !file_type.trim().is_empty() {
+            media_type = file_type;
+        } else if media_type.is_empty() {
+            media_type = media_type_for_filename(&filename);
+        }
+        data_base64 = Some(BASE64.encode(file.bytes().await?));
+    }
+
+    let Some(data_base64) = data_base64 else {
+        return api_json(&serde_json::json!({ "error": "file is required" }), 400);
+    };
+    if media_type.is_empty() {
+        media_type = media_type_for_filename(&filename);
+    }
+
+    let mut upload = Map::new();
+    upload.insert("filename".to_string(), Value::String(filename));
+    upload.insert("data_base64".to_string(), Value::String(data_base64));
+    upload.insert("media_type".to_string(), Value::String(media_type));
+    upload.insert("access".to_string(), Value::String("public".to_string()));
+    upload.insert(
+        "description".to_string(),
+        description
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+
+    match owner_upload_media(env, &Value::Object(upload)).await {
+        Ok(uploaded) => api_json(
+            &mastodon_media_attachment_from_upload(&uploaded, description),
+            200,
+        ),
+        Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+    }
+}
+
+fn form_field(form: &FormData, name: &str) -> Option<String> {
+    form.get_field(name).and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn mastodon_media_attachment_from_upload(
@@ -5602,13 +5686,7 @@ async fn read_json(req: &mut Request) -> Value {
 }
 
 async fn read_mastodon_body(req: &mut Request) -> Value {
-    let content_type = req
-        .headers()
-        .get("Content-Type")
-        .ok()
-        .flatten()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let content_type = request_content_type(req);
     if content_type.contains("application/json") {
         return read_json(req).await;
     }
@@ -5627,6 +5705,15 @@ async fn read_mastodon_body(req: &mut Request) -> Value {
         return Value::Object(body);
     }
     serde_json::json!({})
+}
+
+fn request_content_type(req: &Request) -> String {
+    req.headers()
+        .get("Content-Type")
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
 }
 
 fn decode_form_component(value: &str) -> String {
