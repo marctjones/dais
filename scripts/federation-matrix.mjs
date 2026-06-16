@@ -6,7 +6,7 @@ const config = {
   username: process.env.DAIS_USERNAME || "social",
   acctDomain: process.env.DAIS_ACCT_DOMAIN || "social.dais.social",
   knownPublicPost:
-    process.env.DAIS_PUBLIC_POST_PATH || "/users/social/posts/20260615200518-df261fea",
+    process.env.DAIS_PUBLIC_POST_PATH || "/users/social/posts/20260615220558-6fc8b18f",
   knownPrivatePost:
     process.env.DAIS_PRIVATE_POST_PATH || "/users/social/posts/20260608215639-2ddf52c8",
   mastodonApiToken: process.env.DAIS_MASTODON_API_TOKEN || "",

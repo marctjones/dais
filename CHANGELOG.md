@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.38] - 2026-06-16
+
+### Fixed
+- Updated ActivityPub conformance and federation matrix public-object fixtures
+  to use a retained public post after the project-account cleanup removed older
+  release-only posts.
+
 ## [1.28.37] - 2026-06-15
 
 ### Added
