@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.65] - 2026-06-16
+
+### Added
+- Added a first-class Dais Desk Friends section for owner-only mutual
+  relationships and friend feed inspection, matching the shared owner API
+  friends surface already used by the CLI and Rust TUI.
+
 ## [1.28.64] - 2026-06-16
 
 ### Added

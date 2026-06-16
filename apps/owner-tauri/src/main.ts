@@ -300,6 +300,7 @@ type OwnerStats = {
 const sections = [
   "Home",
   "Following",
+  "Friends",
   "Discovery",
   "Compose",
   "Posts",
@@ -497,6 +498,8 @@ function view(section: string, data: OwnerSnapshot): string {
       return dashboardView(data);
     case "Following":
       return followingView(data);
+    case "Friends":
+      return friendsView(data);
     case "Discovery":
       return discoveryView();
     case "Compose":
@@ -663,6 +666,20 @@ function followingView(data: OwnerSnapshot) {
       </form>
       <h2 class="section-label">Following</h2>
       ${list(data.following.map(followingCard), "No followed actors yet.")}
+    </article>
+  </section>`;
+}
+
+function friendsView(data: OwnerSnapshot) {
+  return `<section class="split">
+    <article class="panel">
+      <h2>Mutual friends</h2>
+      <p class="privacy-note">Friends are mutual approved relationships. This view is operator-only and should be treated as sensitive social graph data.</p>
+      ${list(data.friends.map(friendCard), "No mutual friends yet. A friend appears after they are an approved follower and you follow them back.")}
+    </article>
+    <article class="panel">
+      <h2>Friend feed</h2>
+      ${list(data.home_timeline.map(timelineCard), "No friend posts yet. Follow mutual friends to build this feed.")}
     </article>
   </section>`;
 }
@@ -1111,6 +1128,20 @@ function followingCard(row: OwnerSnapshot["following"][number]) {
   </article>`;
 }
 
+function friendCard(row: OwnerSnapshot["friends"][number]) {
+  return `<article class="panel item follower">
+    <div>
+      <h2>${escapeHtml(actorLabel(row.friend_actor_id))}</h2>
+      <p>${escapeHtml(row.friend_actor_id)}</p>
+    </div>
+    <footer>
+      <span>Mutual</span>
+      ${row.accepted_at ? `<time>${escapeHtml(formatTime(row.accepted_at))}</time>` : ""}
+      ${row.friend_shared_inbox ? `<span>${escapeHtml(shortHost(row.friend_shared_inbox))}</span>` : ""}
+    </footer>
+  </article>`;
+}
+
 function discoveredActorCard(actor: DiscoveredActor) {
   const title = actor.name || actor.handle || actor.preferred_username || actor.id;
   const status = actor.following_status || "not-following";
@@ -1543,6 +1574,7 @@ function option(value: string, selected: boolean) {
 
 function sectionSubtitle(section: string) {
   if (section === "Compose") return "Private-by-default publishing with explicit public and E2EE modes";
+  if (section === "Friends") return "Owner-only mutual relationships and friend feed";
   if (section === "Sources") return "Private reader items from public standards-based sources";
   if (section === "Diagnostics") return "Instance, federation, delivery, and client health";
   return "Owner workspace for the live dais instance";
