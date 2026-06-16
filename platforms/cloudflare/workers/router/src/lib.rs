@@ -112,6 +112,21 @@ async fn handle_owner_api(req: Request, env: Env, url: &worker::Url) -> Result<R
             },
             200,
         ),
+        (worker::Method::Get, "/search") => api_json(
+            &owner_search(&env, query_param(url, "q").unwrap_or_default(), limit).await?,
+            200,
+        ),
+        (worker::Method::Get, "/sources") => api_json(
+            &OwnerSources {
+                subscriptions: owner_source_subscriptions(&env, limit).await?,
+                items: owner_source_items(
+                    &env,
+                    clamp_limit(query_param(url, "items_limit").or_else(|| Some("40".to_string()))),
+                )
+                .await?,
+            },
+            200,
+        ),
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
             501,
@@ -466,6 +481,180 @@ async fn owner_direct_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, 
     .results::<Map<String, Value>>()
 }
 
+async fn owner_search(env: &Env, query: String, limit: i32) -> Result<OwnerSearch> {
+    let term = query.trim().to_string();
+    if term.is_empty() {
+        return Ok(OwnerSearch {
+            posts: Vec::new(),
+            users: Vec::new(),
+            sources: Vec::new(),
+            source_items: Vec::new(),
+        });
+    }
+
+    let db = env.d1("DB")?;
+    let like = format!("%{term}%");
+    let like_arg = D1Type::Text(&like);
+    let limit_arg = D1Type::Integer(limit);
+    let posts = db
+        .prepare(
+            r#"
+            SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+                   name, summary, start_time, end_time, location, poll_options,
+                   visibility, COALESCE(protocol, 'activitypub') AS protocol,
+                   published_at, in_reply_to, atproto_uri, encrypted_message, media_attachments
+            FROM posts
+            WHERE content LIKE ?1 OR name LIKE ?1 OR summary LIKE ?1
+            ORDER BY published_at DESC
+            LIMIT ?2
+            "#,
+        )
+        .bind_refs([&like_arg, &limit_arg])?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    let users = db
+        .prepare(
+            r#"
+            SELECT follower_actor_id AS actor_id, 'follower' AS relation, status, created_at
+            FROM followers
+            WHERE follower_actor_id LIKE ?1
+            UNION ALL
+            SELECT target_actor_id AS actor_id, 'following' AS relation, status, created_at
+            FROM following
+            WHERE target_actor_id LIKE ?1
+            ORDER BY created_at DESC
+            LIMIT ?2
+            "#,
+        )
+        .bind_refs([&like_arg, &limit_arg])?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    let sources = db
+        .prepare(
+            r#"
+            SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+                   last_fetched_at, next_fetch_at, last_error, error_count, policy_json,
+                   created_at, updated_at
+            FROM source_subscriptions
+            WHERE url LIKE ?1 OR title LIKE ?1 OR homepage_url LIKE ?1
+            ORDER BY updated_at DESC
+            LIMIT ?2
+            "#,
+        )
+        .bind_refs([&like_arg, &limit_arg])?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    let source_items = db
+        .prepare(
+            r#"
+            SELECT id, source_id, source_type, title, canonical_url, excerpt, published_at,
+                   read, rights_policy_json, created_at
+            FROM source_items
+            WHERE title LIKE ?1 OR canonical_url LIKE ?1 OR excerpt LIKE ?1
+            ORDER BY COALESCE(published_at, created_at) DESC
+            LIMIT ?2
+            "#,
+        )
+        .bind_refs([&like_arg, &limit_arg])?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+
+    Ok(OwnerSearch {
+        posts,
+        users,
+        sources,
+        source_items,
+    })
+}
+
+async fn owner_source_subscriptions(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               last_fetched_at, next_fetch_at, last_error, error_count, policy_json, created_at, updated_at
+        FROM source_subscriptions
+        ORDER BY updated_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_source_items(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, source_id, source_type, title, canonical_url, external_id, author,
+                   published_at, fetched_at, excerpt, content_type, thumbnail_url,
+                   rights_policy_json, read, summary, created_at, updated_at
+            FROM source_items
+            ORDER BY COALESCE(published_at, fetched_at) DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(rows.into_iter().map(normalize_source_item).collect())
+}
+
+fn normalize_source_item(row: Map<String, Value>) -> Map<String, Value> {
+    let mut item = Map::new();
+    item.insert("id".to_string(), row_value_or_null(&row, "id"));
+    item.insert("title".to_string(), row_value_or_null(&row, "title"));
+    item.insert(
+        "source_type".to_string(),
+        row_value_or_null(&row, "source_type"),
+    );
+    item.insert(
+        "canonical_url".to_string(),
+        row_value_or_null(&row, "canonical_url"),
+    );
+    item.insert(
+        "excerpt".to_string(),
+        row_value_or_fallback_null(&row, "excerpt", "summary"),
+    );
+    item.insert(
+        "rights_policy_json".to_string(),
+        non_empty_value(&row, "rights_policy_json")
+            .unwrap_or_else(|| Value::String("{}".to_string())),
+    );
+    item.insert(
+        "read".to_string(),
+        Value::Bool(bool_field(Some(&row), "read")),
+    );
+    item.insert(
+        "source_id".to_string(),
+        row_value_or_null(&row, "source_id"),
+    );
+    item.insert("author".to_string(), row_value_or_null(&row, "author"));
+    item.insert(
+        "published_at".to_string(),
+        row_value_or_null(&row, "published_at"),
+    );
+    item.insert(
+        "fetched_at".to_string(),
+        row_value_or_null(&row, "fetched_at"),
+    );
+    item.insert(
+        "thumbnail_url".to_string(),
+        row_value_or_null(&row, "thumbnail_url"),
+    );
+    item
+}
+
 async fn owner_local_actor(env: &Env) -> Result<LocalActor> {
     let db = env.d1("DB")?;
     let row = db
@@ -509,6 +698,40 @@ fn integer_field(row: Option<&Map<String, Value>>, key: &str) -> i64 {
                 .or_else(|| value.as_str().and_then(|text| text.parse::<i64>().ok()))
         })
         .unwrap_or(0)
+}
+
+fn bool_field(row: Option<&Map<String, Value>>, key: &str) -> bool {
+    row.and_then(|fields| fields.get(key))
+        .and_then(|value| {
+            value
+                .as_bool()
+                .or_else(|| value.as_i64().map(|number| number != 0))
+                .or_else(|| value.as_u64().map(|number| number != 0))
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .map(|text| matches!(text, "1" | "true" | "TRUE" | "yes" | "YES"))
+                })
+        })
+        .unwrap_or(false)
+}
+
+fn row_value_or_null(row: &Map<String, Value>, key: &str) -> Value {
+    non_empty_value(row, key).unwrap_or(Value::Null)
+}
+
+fn row_value_or_fallback_null(row: &Map<String, Value>, key: &str, fallback: &str) -> Value {
+    non_empty_value(row, key)
+        .or_else(|| non_empty_value(row, fallback))
+        .unwrap_or(Value::Null)
+}
+
+fn non_empty_value(row: &Map<String, Value>, key: &str) -> Option<Value> {
+    row.get(key).and_then(|value| match value {
+        Value::Null => None,
+        Value::String(text) if text.is_empty() => None,
+        _ => Some(value.clone()),
+    })
 }
 
 fn require_owner_bearer(
@@ -916,6 +1139,20 @@ struct OwnerStats {
 #[derive(Serialize)]
 struct OwnerItems<T> {
     items: Vec<T>,
+}
+
+#[derive(Serialize)]
+struct OwnerSearch {
+    posts: Vec<Map<String, Value>>,
+    users: Vec<Map<String, Value>>,
+    sources: Vec<Map<String, Value>>,
+    source_items: Vec<Map<String, Value>>,
+}
+
+#[derive(Serialize)]
+struct OwnerSources {
+    subscriptions: Vec<Map<String, Value>>,
+    items: Vec<Map<String, Value>>,
 }
 
 #[derive(Serialize)]
