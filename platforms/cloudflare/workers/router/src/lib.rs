@@ -274,6 +274,39 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
             let (id, action) = mastodon_status_action_path(path).unwrap_or_default();
             mastodon_status_action(&env, &decode_component(&id), &action).await
         }
+        (worker::Method::Post, "/api/v1/media") | (worker::Method::Post, "/api/v2/media") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let body = read_mastodon_body(&mut req).await;
+            mastodon_upload_media(&env, &body).await
+        }
+        (worker::Method::Get, _) if mastodon_media_path(path).is_some() => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let id = mastodon_media_path(path).unwrap_or_default();
+            match mastodon_media_attachment_for_id(&env, &decode_component(&id)).await? {
+                Some(attachment) => api_json(&attachment, 200),
+                None => api_json(&serde_json::json!({ "error": "Record not found" }), 404),
+            }
+        }
+        (worker::Method::Put, _) | (worker::Method::Patch, _)
+            if mastodon_media_path(path).is_some() =>
+        {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let id = mastodon_media_path(path).unwrap_or_default();
+            let body = read_mastodon_body(&mut req).await;
+            let description = body.get("description").and_then(optional_body_string);
+            match mastodon_update_media_attachment(&env, &decode_component(&id), description)
+                .await?
+            {
+                Some(attachment) => api_json(&attachment, 200),
+                None => api_json(&serde_json::json!({ "error": "Record not found" }), 404),
+            }
+        }
         (worker::Method::Get, _) if mastodon_status_path(path).is_some() => {
             let id = mastodon_status_path(path).unwrap_or_default();
             match mastodon_status(&env, &decode_component(&id)).await? {
@@ -1031,6 +1064,166 @@ fn mastodon_attachments_for_media_ids(
         }));
     }
     Ok(attachments)
+}
+
+async fn mastodon_upload_media(env: &Env, body: &Value) -> Result<Response> {
+    let data_base64 = body.get("data_base64").and_then(optional_body_string);
+    let Some(data_base64) = data_base64 else {
+        return api_json(&serde_json::json!({ "error": "file is required" }), 400);
+    };
+    let filename = body_string_any(body, &["filename", "description"])
+        .unwrap_or_else(|| "upload.bin".to_string());
+    let media_type = body_string_any(body, &["media_type", "content_type"])
+        .unwrap_or_else(|| media_type_for_filename(&filename));
+    let description = body.get("description").and_then(optional_body_string);
+
+    let mut upload = Map::new();
+    upload.insert("filename".to_string(), Value::String(filename));
+    upload.insert("data_base64".to_string(), Value::String(data_base64));
+    upload.insert("media_type".to_string(), Value::String(media_type));
+    upload.insert("access".to_string(), Value::String("public".to_string()));
+    upload.insert(
+        "description".to_string(),
+        description
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+
+    match owner_upload_media(env, &Value::Object(upload)).await {
+        Ok(uploaded) => api_json(
+            &mastodon_media_attachment_from_upload(&uploaded, description),
+            200,
+        ),
+        Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+    }
+}
+
+fn mastodon_media_attachment_from_upload(
+    uploaded: &Map<String, Value>,
+    description: Option<String>,
+) -> Value {
+    let attachment = uploaded.get("attachment").and_then(Value::as_object);
+    let url = string_field(Some(uploaded), "url")
+        .or_else(|| string_field(attachment, "url"))
+        .unwrap_or_default();
+    let media_type = string_field(Some(uploaded), "media_type")
+        .or_else(|| string_field(attachment, "mediaType"))
+        .unwrap_or_default();
+    serde_json::json!({
+        "id": url,
+        "type": mastodon_media_attachment_type(&media_type),
+        "media_type": media_type,
+        "url": url,
+        "preview_url": url,
+        "remote_url": Value::Null,
+        "preview_remote_url": Value::Null,
+        "text_url": Value::Null,
+        "meta": {},
+        "description": description
+            .or_else(|| string_field(Some(uploaded), "description"))
+            .or_else(|| string_field(attachment, "name"))
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+        "blurhash": Value::Null,
+    })
+}
+
+async fn mastodon_media_attachment_for_id(env: &Env, id: &str) -> Result<Option<Value>> {
+    let Some(key) = mastodon_media_r2_key(id) else {
+        return Ok(None);
+    };
+    let bucket = env.bucket("MEDIA_BUCKET")?;
+    let Some(object) = bucket.get(key.clone()).execute().await? else {
+        return Ok(None);
+    };
+    let metadata = object.http_metadata();
+    let media_type = metadata
+        .content_type
+        .unwrap_or_else(|| media_type_for_filename(&key));
+    let custom_metadata = object.custom_metadata().unwrap_or_default();
+    let description = custom_metadata
+        .get("description")
+        .cloned()
+        .unwrap_or_else(|| decode_component(key.rsplit('/').next().unwrap_or("media")));
+    Ok(Some(mastodon_media_attachment_for_key(
+        &key,
+        &media_type,
+        &description,
+    )))
+}
+
+async fn mastodon_update_media_attachment(
+    env: &Env,
+    id: &str,
+    description: Option<String>,
+) -> Result<Option<Value>> {
+    let Some(key) = mastodon_media_r2_key(id) else {
+        return Ok(None);
+    };
+    let bucket = env.bucket("MEDIA_BUCKET")?;
+    let Some(object) = bucket.get(key.clone()).execute().await? else {
+        return Ok(None);
+    };
+    let bytes = match object.body() {
+        Some(body) => body.bytes().await?,
+        None => Vec::new(),
+    };
+    let metadata = object.http_metadata();
+    let media_type = metadata
+        .content_type
+        .clone()
+        .unwrap_or_else(|| media_type_for_filename(&key));
+    let mut custom_metadata = object.custom_metadata().unwrap_or_default();
+    if let Some(description) = description.as_deref() {
+        custom_metadata.insert("description".to_string(), description.to_string());
+    } else {
+        custom_metadata.remove("description");
+    }
+    let mut http_metadata = worker::HttpMetadata::default();
+    http_metadata.content_type = Some(media_type.clone());
+    bucket
+        .put(key.clone(), bytes)
+        .http_metadata(http_metadata)
+        .custom_metadata(custom_metadata)
+        .execute()
+        .await?;
+    mastodon_media_attachment_for_id(env, id).await
+}
+
+fn mastodon_media_attachment_for_key(key: &str, media_type: &str, description: &str) -> Value {
+    let url = format!("https://social.dais.social/media/{key}");
+    serde_json::json!({
+        "id": url,
+        "type": mastodon_media_attachment_type(media_type),
+        "url": url,
+        "preview_url": url,
+        "remote_url": Value::Null,
+        "preview_remote_url": Value::Null,
+        "text_url": Value::Null,
+        "meta": {},
+        "description": description,
+        "blurhash": Value::Null,
+    })
+}
+
+fn mastodon_media_attachment_type(media_type: &str) -> &'static str {
+    if media_type.starts_with("image/") {
+        "image"
+    } else if media_type.starts_with("video/") {
+        "video"
+    } else {
+        "unknown"
+    }
+}
+
+fn mastodon_media_r2_key(id: &str) -> Option<String> {
+    let parsed = worker::Url::parse(id).ok()?;
+    if parsed.host_str()? != "social.dais.social" {
+        return None;
+    }
+    let rest = parsed.path().strip_prefix("/media/uploads/")?;
+    (!rest.is_empty()).then(|| decode_component(&format!("uploads/{rest}")))
 }
 
 fn array_from_body_value(value: &Value) -> Vec<String> {
@@ -1960,6 +2153,13 @@ fn mastodon_status_subpath(path: &str, suffix: &str) -> Option<String> {
 fn mastodon_status_path(path: &str) -> Option<String> {
     let rest = path.strip_prefix("/api/v1/statuses/")?;
     (!rest.is_empty() && !rest.contains('/')).then(|| rest.to_string())
+}
+
+fn mastodon_media_path(path: &str) -> Option<String> {
+    path.strip_prefix("/api/v1/media/")
+        .or_else(|| path.strip_prefix("/api/v2/media/"))
+        .filter(|rest| !rest.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn mastodon_notification_dismiss_path(path: &str) -> Option<String> {
