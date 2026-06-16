@@ -158,8 +158,10 @@ Bluesky parity requires substantially more than the existing endpoints:
 
 ## Current Test Hooks
 
-- `npm run test:activitypub-conformance` checks a subset of ActivityPub,
-  Mastodon, dais privacy, and ATProto public-read behavior.
+- `npm run test:activitypub-conformance` checks ActivityPub, Mastodon, dais
+  privacy, and ATProto public-read behavior, including authenticated live
+  fixtures for authorized fetch and temporary rich public `Question` objects
+  with media, summary, mentions, hashtags, and poll options.
 - `npm run test:bluesky-conformance` checks the current PDS/AppView
   compatibility floor for identity, repo metadata, public feed records,
   owner-token public post/like/repost/follow writes and deletes, public image

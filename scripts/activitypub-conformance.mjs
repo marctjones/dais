@@ -21,6 +21,8 @@ const config = {
 const actorPath = `/users/${config.username}`;
 const actorUrl = `${config.socialBaseUrl}${actorPath}`;
 const publicCollection = "https://www.w3.org/ns/activitystreams#Public";
+const tinyPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 const results = [];
 const cache = new Map();
@@ -49,7 +51,11 @@ async function request(pathOrUrl, options = {}) {
   const url = pathOrUrl.startsWith("http")
     ? pathOrUrl
     : `${config.socialBaseUrl}${pathOrUrl}`;
-  const cacheKey = `${options.method || "GET"} ${url} ${JSON.stringify(options.headers || {})} ${
+  const headers = { ...(options.headers || {}) };
+  if (options.auth && config.ownerToken) {
+    headers.Authorization = `Bearer ${config.ownerToken}`;
+  }
+  const cacheKey = `${options.method || "GET"} ${url} ${JSON.stringify(headers)} ${
     options.body || ""
   } ${options.redirect || ""}`;
   if (cache.has(cacheKey)) {
@@ -59,7 +65,7 @@ async function request(pathOrUrl, options = {}) {
   const response = await fetch(url, {
     redirect: options.redirect || "follow",
     method: options.method || "GET",
-    headers: options.headers || {},
+    headers,
     body: options.body,
   });
   const text = await response.text();
@@ -200,6 +206,24 @@ async function ownerApi(path, options = {}) {
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`owner API ${path} returned ${res.status}: ${res.text}`);
   }
+  return res;
+}
+
+async function mastodonApi(path, options = {}) {
+  if (!config.ownerToken) {
+    return {
+      skipped: true,
+      detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live Mastodon-backed ActivityPub content fixture",
+    };
+  }
+  const res = await request(path, {
+    ...options,
+    auth: true,
+    headers: {
+      ...(options.headers || {}),
+      "Content-Type": "application/json",
+    },
+  });
   return res;
 }
 
@@ -500,6 +524,82 @@ const tests = [
       return t.missing(`optional Mastodon collections not exposed: ${missingFields.join(", ")}`);
     }
     t.pass("replies/likes/shares present");
+  }),
+
+  requirement("MASTODON-CONTENT-03", "MASTODON", "Live public Question exposes media, tags, summary, and poll shape", async (t) => {
+    if (!config.ownerToken) {
+      return t.info("set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live rich content fixture");
+    }
+    let createdId = "";
+    try {
+      const media = await mastodonApi("/api/v1/media", {
+        method: "POST",
+        body: JSON.stringify({
+          filename: "dais-activitypub-rich-content.png",
+          media_type: "image/png",
+          data_base64: tinyPngBase64,
+          description: "ActivityPub rich content fixture image",
+        }),
+      });
+      if (media.skipped) return t.info(media.detail);
+      if (media.status !== 200) {
+        return t.fail(`media upload expected 200, got ${media.status}: ${media.text}`);
+      }
+
+      const token = `DaisApRich${Date.now()}`;
+      const create = await mastodonApi("/api/v1/statuses", {
+        method: "POST",
+        body: JSON.stringify({
+          status: `dais ActivityPub rich content fixture @social@dais.social #${token}`,
+          spoiler_text: "ActivityPub rich content fixture summary",
+          visibility: "public",
+          media_ids: [media.json.id],
+          poll: {
+            options: ["Alpha", "Beta"],
+            multiple: false,
+            expires_in: 300,
+          },
+        }),
+      });
+      if (create.status !== 201) {
+        return t.fail(`status create expected 201, got ${create.status}: ${create.text}`);
+      }
+      createdId = create.json?.id || "";
+      const postPath = new URL(createdId).pathname;
+      const object = await request(postPath, {
+        headers: { Accept: "application/activity+json" },
+      });
+      if (object.status !== 200) {
+        return t.fail(`ActivityPub object fetch expected 200, got ${object.status}: ${object.text}`);
+      }
+      const note = object.json;
+      if (note?.type !== "Question") return t.fail(`expected Question, got ${note?.type}`);
+      if (note.summary !== "ActivityPub rich content fixture summary") {
+        return t.fail(`summary did not round-trip: ${summarizeJson(note)}`);
+      }
+      if (!note.contentMap?.en?.includes("dais ActivityPub rich content fixture")) {
+        return t.fail("contentMap.en missing rendered content");
+      }
+      if (!Array.isArray(note.oneOf) || note.oneOf.length !== 2 || note.oneOf[0]?.name !== "Alpha") {
+        return t.fail(`poll oneOf shape incomplete: ${summarizeJson(note.oneOf)}`);
+      }
+      if (!Array.isArray(note.attachment) || note.attachment[0]?.mediaType !== "image/png") {
+        return t.fail(`image attachment shape incomplete: ${summarizeJson(note.attachment)}`);
+      }
+      if (!note.tag?.some((tag) => tag.type === "Mention" && tag.name === "@social@dais.social")) {
+        return t.fail(`mention tag missing: ${summarizeJson(note.tag)}`);
+      }
+      if (!note.tag?.some((tag) => tag.type === "Hashtag" && tag.name === `#${token}`)) {
+        return t.fail(`hashtag tag missing: ${summarizeJson(note.tag)}`);
+      }
+      t.pass(`temporary public Question ${createdId} exposed rich Mastodon ActivityPub shape`);
+    } finally {
+      if (createdId) {
+        await mastodonApi(`/api/v1/statuses/${encodeURIComponent(createdId)}`, {
+          method: "DELETE",
+        }).catch(() => {});
+      }
+    }
   }),
 
   requirement("PDS-ATPROTO-01", "MASTODON-ADJACENT", "ATProto public read endpoints stay available", async (t) => {

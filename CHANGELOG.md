@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.51] - 2026-06-16
+
+### Added
+- Expanded the ActivityPub/Mastodon conformance gate with an authenticated live
+  rich-content fixture that creates a temporary public `Question` with image
+  media, spoiler summary, mention, hashtag, and poll options, dereferences it as
+  ActivityPub JSON, and deletes it during cleanup.
+
 ## [1.28.50] - 2026-06-16
 
 ### Added

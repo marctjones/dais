@@ -60,6 +60,12 @@ wrangler --version
 Runs a production/local conformance audit for the public ActivityPub, WebFinger,
 Mastodon-compatibility, and dais private-by-default surfaces.
 
+When `DAIS_OWNER_TOKEN` or `DAIS_OWNER_TOKEN_FILE` is set, the audit also runs
+live authenticated fixtures for authorized fetch and rich Mastodon content
+shape: it creates a temporary public `Question` with image media, spoiler
+summary, mention, hashtag, and poll options, verifies the dereferenced
+ActivityPub object, and deletes the temporary post during cleanup.
+
 **Usage:**
 ```bash
 npm run test:activitypub-conformance
