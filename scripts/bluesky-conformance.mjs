@@ -327,6 +327,90 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-REPLY-01", "Owner-token ATProto feed replies preserve root and parent refs", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for reply fixture" };
+    }
+
+    const token = `dais Bluesky reply conformance ${new Date().toISOString()}`;
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const authHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.json.accessJwt}`,
+    };
+    const createdRkeys = [];
+    try {
+      const parent = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.feed.post",
+          record: {
+            $type: "app.bsky.feed.post",
+            text: `${token} parent`,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+      });
+      if (parent.status !== 200) throw new Error(`parent createRecord expected 200, got ${parent.status}: ${parent.text}`);
+      const parentRef = { uri: parent.json?.uri, cid: parent.json?.cid };
+      if (!parentRef.uri || !parentRef.cid) throw new Error("parent createRecord missing uri/cid");
+      createdRkeys.push(rkeyFromAtUri(parentRef.uri));
+
+      const reply = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.feed.post",
+          record: {
+            $type: "app.bsky.feed.post",
+            text: `${token} child`,
+            createdAt: new Date().toISOString(),
+            reply: {
+              root: parentRef,
+              parent: parentRef,
+            },
+          },
+        }),
+      });
+      if (reply.status !== 200) throw new Error(`reply createRecord expected 200, got ${reply.status}: ${reply.text}`);
+      const replyRkey = rkeyFromAtUri(reply.json?.uri);
+      createdRkeys.push(replyRkey);
+
+      const record = await request(
+        `/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did())}&collection=app.bsky.feed.post&rkey=${encodeURIComponent(replyRkey)}`,
+      );
+      if (record.status !== 200) throw new Error(`reply getRecord expected 200, got ${record.status}: ${record.text}`);
+      const replyValue = record.json?.value?.reply;
+      if (replyValue?.parent?.uri !== parentRef.uri || replyValue?.parent?.cid !== parentRef.cid) {
+        throw new Error("reply parent ref did not round-trip");
+      }
+      if (replyValue?.root?.uri !== parentRef.uri || replyValue?.root?.cid !== parentRef.cid) {
+        throw new Error("reply root ref did not round-trip");
+      }
+    } finally {
+      for (const rkey of createdRkeys.reverse()) {
+        if (!rkey) continue;
+        await request("/xrpc/com.atproto.repo.deleteRecord", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            repo: did(),
+            collection: "app.bsky.feed.post",
+            rkey,
+          }),
+        });
+      }
+    }
+  }),
+
   requirement("BLUESKY-UPLOAD-01", "Owner-token uploadBlob can attach a public image to a feed post", async () => {
     if (!config.mastodonToken) {
       return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for upload fixture" };

@@ -402,7 +402,14 @@ pub async fn publish_post(
         Protocol::Atproto => {
             let mut client = AtprotoClient::from_config(&store.load_bluesky()?)?;
             let images = upload_atproto_images(&mut client, &draft.attachments).await?;
-            let created = client.create_post_with_images(&draft.text, images).await?;
+            let created = if let Some(reply_to) = draft.reply_to.as_deref() {
+                let reply = client.resolve_reply_target(reply_to).await?;
+                client
+                    .create_reply_with_images(&draft.text, reply, images)
+                    .await?
+            } else {
+                client.create_post_with_images(&draft.text, images).await?
+            };
             Ok(PostOutcome::Bluesky { uri: created.uri })
         }
         Protocol::Both => {
@@ -452,7 +459,14 @@ pub async fn publish_post(
 
             let mut client = AtprotoClient::from_config(&store.load_bluesky()?)?;
             let images = upload_atproto_images(&mut client, &draft.attachments).await?;
-            let created = client.create_post_with_images(&draft.text, images).await?;
+            let created = if let Some(reply_to) = draft.reply_to.as_deref() {
+                let reply = client.resolve_reply_target(reply_to).await?;
+                client
+                    .create_reply_with_images(&draft.text, reply, images)
+                    .await?
+            } else {
+                client.create_post_with_images(&draft.text, images).await?
+            };
             Ok(PostOutcome::Both {
                 post_id,
                 uri: created.uri,

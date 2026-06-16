@@ -478,6 +478,13 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let atproto_reply_json = body
+        .record
+        .get("reply")
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| worker::Error::RustError(error.to_string()))?
+        .unwrap_or_default();
 
     ctx.env
         .d1("DB")?
@@ -485,8 +492,9 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
             r#"
             INSERT INTO posts (
               id, actor_id, content, content_html, object_type, visibility, protocol,
-              published_at, in_reply_to, atproto_uri, atproto_cid, media_attachments, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, 'Note', 'public', 'atproto', ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+              published_at, in_reply_to, atproto_uri, atproto_cid, media_attachments,
+              atproto_reply_json, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, 'Note', 'public', 'atproto', ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             "#,
         )
         .bind(&[
@@ -499,6 +507,7 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
             atproto_uri.clone().into(),
             cid.clone().into(),
             media_attachments_json.into(),
+            atproto_reply_json.into(),
         ])?
         .run()
         .await?;
@@ -955,7 +964,7 @@ async fn public_posts(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<Strin
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               atproto_uri, atproto_cid, media_attachments
+               atproto_uri, atproto_cid, media_attachments, atproto_reply_json
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -979,7 +988,7 @@ async fn search_public_posts(
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               atproto_uri, atproto_cid, media_attachments
+               atproto_uri, atproto_cid, media_attachments, atproto_reply_json
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -1075,7 +1084,7 @@ async fn find_public_post(env: &Env, rkey: &str) -> Result<Option<serde_json::Ma
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               atproto_uri, atproto_cid, media_attachments
+               atproto_uri, atproto_cid, media_attachments, atproto_reply_json
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -1428,6 +1437,37 @@ fn record_value(row: serde_json::Map<String, Value>) -> Value {
         "text": row.get("content").and_then(Value::as_str).unwrap_or(""),
         "createdAt": row.get("published_at").and_then(Value::as_str).unwrap_or("")
     });
+    if let Some(reply) = row
+        .get("atproto_reply_json")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| serde_json::from_str::<Value>(value).ok())
+    {
+        if let Some(object) = record.as_object_mut() {
+            object.insert("reply".to_string(), reply);
+        }
+    } else if let Some(in_reply_to) = row
+        .get("in_reply_to")
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("at://"))
+    {
+        let cid = stable_cid(in_reply_to);
+        if let Some(object) = record.as_object_mut() {
+            object.insert(
+                "reply".to_string(),
+                serde_json::json!({
+                    "root": {
+                        "uri": in_reply_to,
+                        "cid": cid
+                    },
+                    "parent": {
+                        "uri": in_reply_to,
+                        "cid": cid
+                    }
+                }),
+            );
+        }
+    }
     let images: Vec<Value> = media_attachments(&row)
         .into_iter()
         .filter(|attachment| attachment.media_type.starts_with("image/"))

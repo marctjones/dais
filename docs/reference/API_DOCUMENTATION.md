@@ -274,6 +274,7 @@ CREATE TABLE posts (
     protocol TEXT NOT NULL DEFAULT 'activitypub', -- activitypub, atproto, both
     atproto_uri TEXT,                       -- AT Protocol URI
     atproto_cid TEXT,                       -- AT Protocol CID
+    atproto_reply_json TEXT,                -- Original app.bsky.feed.post reply refs
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -438,7 +439,7 @@ ORDER BY created_at ASC;
 - `/xrpc/com.atproto.repo.uploadBlob` - Owner-token public image blob upload
 - `/xrpc/com.atproto.repo.getRecord` - Public feed-post record read
 - `/xrpc/com.atproto.repo.listRecords` - Owner-token record listing for feed posts, likes, reposts, and follows
-- `/xrpc/com.atproto.repo.createRecord` - Owner-token feed-post, image-post, like, repost, and follow create
+- `/xrpc/com.atproto.repo.createRecord` - Owner-token feed-post, reply, image-post, like, repost, and follow create
 - `/xrpc/com.atproto.repo.deleteRecord` - Owner-token feed-post, like, repost, and follow delete
 - `/xrpc/com.atproto.sync.getRepo` - JSON compatibility repo floor
 - `/xrpc/com.atproto.sync.getRepoStatus` - Repo status metadata

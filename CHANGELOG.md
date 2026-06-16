@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.49] - 2026-06-16
+
+### Added
+- Added unified Rust client reply support for `dais post create --protocol
+  atproto --reply-to at://...`, resolving the target record through the PDS and
+  publishing a lexicon-shaped `app.bsky.feed.post` reply.
+- Added PDS reply-reference persistence for owner-token `app.bsky.feed.post`
+  writes so `getRecord` round-trips `reply.root` and `reply.parent`.
+- Expanded the Bluesky conformance gate with authenticated reply create,
+  readback, and cleanup coverage.
+
 ## [1.28.48] - 2026-06-16
 
 ### Added

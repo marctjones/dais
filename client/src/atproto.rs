@@ -31,6 +31,18 @@ pub struct CreatedRecord {
     pub cid: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct PostRef {
+    pub uri: String,
+    pub cid: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReplyTarget {
+    pub root: PostRef,
+    pub parent: PostRef,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Profile {
     pub did: String,
@@ -177,6 +189,29 @@ struct UploadBlobResponse {
     blob: BlobRef,
 }
 
+#[derive(Debug, Deserialize)]
+struct GetRecordResponse {
+    uri: String,
+    cid: Option<String>,
+    value: GetRecordValue,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetRecordValue {
+    reply: Option<GetRecordReply>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetRecordReply {
+    root: GetRecordStrongRef,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetRecordStrongRef {
+    uri: String,
+    cid: String,
+}
+
 #[derive(Debug)]
 pub struct ImageUpload {
     pub blob: BlobRef,
@@ -258,13 +293,41 @@ impl AtprotoClient {
         text: &str,
         images: Vec<ImageUpload>,
     ) -> Result<CreatedRecord> {
+        self.create_post_record(text, None, images).await
+    }
+
+    pub async fn create_reply_with_images(
+        &mut self,
+        text: &str,
+        reply: ReplyTarget,
+        images: Vec<ImageUpload>,
+    ) -> Result<CreatedRecord> {
+        self.create_post_record(text, Some(reply), images).await
+    }
+
+    async fn create_post_record(
+        &mut self,
+        text: &str,
+        reply: Option<ReplyTarget>,
+        images: Vec<ImageUpload>,
+    ) -> Result<CreatedRecord> {
         self.ensure_session().await?;
         let token = self.token()?;
+        let reply = reply.as_ref().map(|target| ReplyRef {
+            root: StrongRef {
+                uri: &target.root.uri,
+                cid: &target.root.cid,
+            },
+            parent: StrongRef {
+                uri: &target.parent.uri,
+                cid: &target.parent.cid,
+            },
+        });
         let record = PostRecord {
             record_type: "app.bsky.feed.post",
             text,
             created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            reply: None,
+            reply,
             embed: image_embed(images),
         };
 
@@ -297,6 +360,41 @@ impl AtprotoClient {
         Ok(uploaded.blob)
     }
 
+    pub async fn resolve_reply_target(&mut self, uri: &str) -> Result<ReplyTarget> {
+        let (repo, collection, rkey) = parse_at_uri(uri)?;
+        if collection != "app.bsky.feed.post" {
+            return Err(anyhow!(
+                "ATProto replies currently require an app.bsky.feed.post URI"
+            ));
+        }
+        let record: GetRecordResponse = self
+            .get_json(
+                &self.service,
+                "com.atproto.repo.getRecord",
+                &[
+                    ("repo", repo.as_str()),
+                    ("collection", collection),
+                    ("rkey", rkey.as_str()),
+                ],
+            )
+            .await?;
+        let parent = PostRef {
+            uri: record.uri,
+            cid: record
+                .cid
+                .ok_or_else(|| anyhow!("reply target record is missing cid"))?,
+        };
+        let root = record
+            .value
+            .reply
+            .map(|reply| PostRef {
+                uri: reply.root.uri,
+                cid: reply.root.cid,
+            })
+            .unwrap_or_else(|| parent.clone());
+        Ok(ReplyTarget { root, parent })
+    }
+
     pub async fn reply_post(
         &mut self,
         text: &str,
@@ -305,34 +403,19 @@ impl AtprotoClient {
         root_uri: &str,
         root_cid: &str,
     ) -> Result<CreatedRecord> {
-        self.ensure_session().await?;
-        let token = self.token()?;
-        let record = PostRecord {
-            record_type: "app.bsky.feed.post",
+        self.create_reply_with_images(
             text,
-            created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            reply: Some(ReplyRef {
-                root: StrongRef {
-                    uri: root_uri,
-                    cid: root_cid,
+            ReplyTarget {
+                root: PostRef {
+                    uri: root_uri.to_string(),
+                    cid: root_cid.to_string(),
                 },
-                parent: StrongRef {
-                    uri: parent_uri,
-                    cid: parent_cid,
+                parent: PostRef {
+                    uri: parent_uri.to_string(),
+                    cid: parent_cid.to_string(),
                 },
-            }),
-            embed: None,
-        };
-
-        self.post_json(
-            &self.service,
-            "com.atproto.repo.createRecord",
-            json!({
-                "repo": self.did,
-                "collection": "app.bsky.feed.post",
-                "record": record,
-            }),
-            Some(token),
+            },
+            Vec::new(),
         )
         .await
     }
@@ -633,6 +716,31 @@ fn image_embed(images: Vec<ImageUpload>) -> Option<ImageEmbed> {
             })
             .collect(),
     })
+}
+
+fn parse_at_uri(uri: &str) -> Result<(String, &str, String)> {
+    let rest = uri
+        .strip_prefix("at://")
+        .ok_or_else(|| anyhow!("ATProto reply target must be an at:// URI"))?;
+    let mut parts = rest.split('/');
+    let repo = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("ATProto URI missing repo"))?
+        .to_string();
+    let collection = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("ATProto URI missing collection"))?;
+    let rkey = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("ATProto URI missing record key"))?
+        .to_string();
+    if parts.next().is_some() {
+        return Err(anyhow!("ATProto URI has too many path segments"));
+    }
+    Ok((repo, collection, rkey))
 }
 
 async fn decode_response<T: for<'de> Deserialize<'de>>(response: reqwest::Response) -> Result<T> {
