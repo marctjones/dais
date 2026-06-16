@@ -152,6 +152,15 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             api_json(&serde_json::json!({ "ok": true }), 200)
         }
         (worker::Method::Get, "/moderation") => api_json(&owner_moderation(&env).await?, 200),
+        (worker::Method::Post, "/moderation/unblock") => {
+            let body = read_json(&mut req).await;
+            let Some(value) = body_string_any(&body, &["value", "actor_id", "actorId", "domain"])
+            else {
+                return api_json(&serde_json::json!({ "error": "value is required" }), 400);
+            };
+            owner_unblock(&env, &value).await?;
+            api_json(&serde_json::json!({ "ok": true }), 200)
+        }
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
             501,
@@ -1106,6 +1115,16 @@ async fn owner_delete_source(env: &Env, id: &str) -> Result<()> {
     Ok(())
 }
 
+async fn owner_unblock(env: &Env, value: &str) -> Result<()> {
+    let db = env.d1("DB")?;
+    let value_arg = D1Type::Text(value);
+    db.prepare("DELETE FROM blocks WHERE id = ?1 OR actor_id = ?1 OR blocked_domain = ?1")
+        .bind_refs(&value_arg)?
+        .run()
+        .await?;
+    Ok(())
+}
+
 fn normalize_source_item(row: Map<String, Value>) -> Map<String, Value> {
     let mut item = Map::new();
     item.insert("id".to_string(), row_value_or_null(&row, "id"));
@@ -1197,6 +1216,11 @@ fn required_body_string(value: Option<&Value>) -> Option<String> {
         Some(Value::Bool(true)) => Some("true".to_string()),
         _ => None,
     }
+}
+
+fn body_string_any(body: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| required_body_string(body.get(*key)))
 }
 
 fn clamp_limit(value: Option<String>) -> i32 {
