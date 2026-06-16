@@ -104,6 +104,8 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/xrpc/com.atproto.sync.listRepos", handle_list_repos)
         .get_async("/xrpc/com.atproto.repo.describeRepo", handle_describe_repo)
         .get_async("/xrpc/com.atproto.repo.getRecord", handle_get_record)
+        .get_async("/xrpc/app.bsky.actor.getProfile", handle_get_profile)
+        .get_async("/xrpc/app.bsky.actor.getProfiles", handle_get_profiles)
         .get_async("/xrpc/app.bsky.feed.getAuthorFeed", handle_get_author_feed)
         .get_async("/xrpc/app.bsky.feed.getTimeline", handle_get_timeline)
         .get_async(
@@ -232,6 +234,30 @@ async fn handle_get_record(req: Request, ctx: RouteContext<()>) -> Result<Respon
         return Response::error("Record not found", 404);
     };
     json_response(record_response(&identity, row))
+}
+
+async fn handle_get_profile(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let actor = required_query(&url, "actor")?;
+    let identity = identity(&ctx.env);
+    if actor != identity.did && actor != identity.handle {
+        return json_response(profile_view(&identity, &actor, "", ""));
+    }
+    json_response(local_profile_view(&ctx.env, &identity).await?)
+}
+
+async fn handle_get_profiles(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let identity = identity(&ctx.env);
+    let mut profiles = Vec::new();
+    for (_, actor) in url.query_pairs().filter(|(name, _)| name == "actors") {
+        if actor == identity.did || actor == identity.handle {
+            profiles.push(local_profile_view(&ctx.env, &identity).await?);
+        } else {
+            profiles.push(profile_view(&identity, actor.as_ref(), "", ""));
+        }
+    }
+    json_response(serde_json::json!({ "profiles": profiles }))
 }
 
 async fn handle_get_author_feed(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -412,6 +438,12 @@ struct RepoStats {
     records: usize,
 }
 
+struct ProfileCounts {
+    posts: u64,
+    followers: u64,
+    follows: u64,
+}
+
 fn identity(env: &Env) -> Identity {
     let handle = env
         .var("DOMAIN")
@@ -468,6 +500,30 @@ async fn repo_stats(env: &Env) -> Result<RepoStats> {
         head: stable_cid(&rev),
         rev,
         records,
+    })
+}
+
+async fn profile_counts(env: &Env) -> Result<ProfileCounts> {
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare(
+            r#"
+            SELECT
+              (SELECT COUNT(*) FROM posts
+               WHERE visibility = 'public'
+                 AND encrypted_message IS NULL
+                 AND content NOT LIKE '%End-to-end encrypted message%') AS posts,
+              (SELECT COUNT(*) FROM followers WHERE status = 'approved') AS followers,
+              (SELECT COUNT(*) FROM following WHERE status = 'accepted') AS follows
+            "#,
+        )
+        .first::<serde_json::Map<String, Value>>(None)
+        .await?
+        .unwrap_or_default();
+    Ok(ProfileCounts {
+        posts: row.get("posts").and_then(Value::as_u64).unwrap_or(0),
+        followers: row.get("followers").and_then(Value::as_u64).unwrap_or(0),
+        follows: row.get("follows").and_then(Value::as_u64).unwrap_or(0),
     })
 }
 
@@ -653,6 +709,20 @@ fn profile_view(identity: &Identity, actor_id: &str, handle: &str, display_name:
         "handle": handle,
         "displayName": display_name
     })
+}
+
+async fn local_profile_view(env: &Env, identity: &Identity) -> Result<Value> {
+    let counts = profile_counts(env).await?;
+    Ok(serde_json::json!({
+        "did": identity.did,
+        "handle": identity.handle,
+        "displayName": "dais",
+        "description": "Private-by-default social server.",
+        "followersCount": counts.followers,
+        "followsCount": counts.follows,
+        "postsCount": counts.posts,
+        "indexedAt": "1970-01-01T00:00:00Z"
+    }))
 }
 
 fn actor_handle(actor_id: &str) -> String {

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.43] - 2026-06-16
+
+### Added
+- Added Bluesky AppView-compatible profile read endpoints with local account
+  counts to the PDS worker and covered them in the Bluesky conformance gate.
+
 ## [1.28.42] - 2026-06-16
 
 ### Added

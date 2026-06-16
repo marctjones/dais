@@ -124,6 +124,27 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-PROFILE-01", "Profile endpoints expose local account shape and counts", async () => {
+    const profile = await request(`/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(did())}`);
+    const profiles = await request(
+      `/xrpc/app.bsky.actor.getProfiles?actors=${encodeURIComponent(did())}&actors=${encodeURIComponent(config.acctDomain)}`,
+    );
+    if (profile.status !== 200 || profiles.status !== 200) {
+      throw new Error(`expected 200/200, got ${profile.status}/${profiles.status}`);
+    }
+    if (profile.json?.did !== did() || profile.json?.handle !== config.acctDomain) {
+      throw new Error("profile identity shape mismatch");
+    }
+    for (const field of ["followersCount", "followsCount", "postsCount"]) {
+      if (!Number.isInteger(profile.json?.[field])) throw new Error(`profile missing integer ${field}`);
+    }
+    expectArray(profiles.json?.profiles, "profiles");
+    if (profiles.json.profiles.length !== 2) throw new Error("getProfiles did not return both requested profiles");
+    if (!profiles.json.profiles.every((item) => item.did === did())) {
+      throw new Error("getProfiles local identities did not resolve to dais DID");
+    }
+  }),
+
   requirement("BLUESKY-APPVIEW-01", "Personal AppView read endpoints return client-safe arrays", async () => {
     const notifications = await request("/xrpc/app.bsky.notification.listNotifications?limit=5");
     const followers = await request(`/xrpc/app.bsky.graph.getFollowers?actor=${encodeURIComponent(did())}&limit=5`);
