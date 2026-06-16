@@ -587,9 +587,13 @@ async fn process_delivery(
 }
 
 fn is_delivery_id(value: &str) -> bool {
-    value
-        .strip_prefix("delivery-")
-        .is_some_and(|suffix| suffix.len() >= 12 && suffix.chars().all(|ch| ch.is_ascii_hexdigit()))
+    value.strip_prefix("delivery-").is_some_and(|suffix| {
+        suffix.len() >= 5
+            && suffix.len() <= 32
+            && suffix
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+    })
 }
 
 fn accept_suffix(value: &str) -> String {
@@ -757,6 +761,30 @@ fn poll_option_values(options: &[String]) -> Vec<serde_json::Value> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_delivery_id;
+
+    #[test]
+    fn delivery_id_accepts_owner_api_generated_ids() {
+        assert!(is_delivery_id("delivery-34eqe"));
+        assert!(is_delivery_id("delivery-1398fgt"));
+        assert!(is_delivery_id("delivery-1234567890abcdef"));
+    }
+
+    #[test]
+    fn delivery_id_rejects_malformed_values() {
+        assert!(!is_delivery_id("34eqe"));
+        assert!(!is_delivery_id("delivery-"));
+        assert!(!is_delivery_id("delivery-abcd"));
+        assert!(!is_delivery_id("delivery-ABCDEF"));
+        assert!(!is_delivery_id("delivery-abc_def"));
+        assert!(!is_delivery_id(
+            "delivery-123456789012345678901234567890123"
+        ));
+    }
 }
 
 fn hashtag_tag(token: &str) -> Option<serde_json::Value> {
