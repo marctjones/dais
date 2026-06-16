@@ -33,7 +33,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 }
 
-async fn handle_owner_api(req: Request, env: Env, url: &worker::Url) -> Result<Response> {
+async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Result<Response> {
     if req.method() == worker::Method::Options {
         return api_json(&serde_json::json!({}), 204);
     }
@@ -108,6 +108,14 @@ async fn handle_owner_api(req: Request, env: Env, url: &worker::Url) -> Result<R
             },
             200,
         ),
+        (worker::Method::Post, "/notifications/read") => {
+            let body = read_json(&mut req).await;
+            let Some(id) = required_body_string(body.get("id")) else {
+                return api_json(&serde_json::json!({ "error": "id is required" }), 400);
+            };
+            owner_mark_notification_read(&env, &id).await?;
+            api_json(&serde_json::json!({ "ok": true }), 200)
+        }
         (worker::Method::Get, "/deliveries") => api_json(
             &OwnerItems {
                 items: owner_deliveries(&env, limit).await?,
@@ -906,6 +914,16 @@ async fn owner_notifications(env: &Env, limit: i32) -> Result<Vec<Map<String, Va
     .results::<Map<String, Value>>()
 }
 
+async fn owner_mark_notification_read(env: &Env, id: &str) -> Result<()> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare("UPDATE notifications SET read = 1 WHERE id = ?1")
+        .bind_refs(&id_arg)?
+        .run()
+        .await?;
+    Ok(())
+}
+
 async fn owner_deliveries(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
     let db = env.d1("DB")?;
     let limit_arg = D1Type::Integer(limit);
@@ -1137,6 +1155,30 @@ fn decode_component(value: &str) -> String {
     urlencoding::decode(value)
         .map(|decoded| decoded.into_owned())
         .unwrap_or_else(|_| value.to_string())
+}
+
+async fn read_json(req: &mut Request) -> Value {
+    req.json::<Value>()
+        .await
+        .unwrap_or_else(|_| serde_json::json!({}))
+}
+
+fn required_body_string(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Some(Value::Number(number)) if number.as_i64().unwrap_or(1) != 0 => {
+            Some(number.to_string())
+        }
+        Some(Value::Bool(true)) => Some("true".to_string()),
+        _ => None,
+    }
 }
 
 fn clamp_limit(value: Option<String>) -> i32 {
