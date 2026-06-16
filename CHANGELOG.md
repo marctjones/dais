@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.45] - 2026-06-16
+
+### Added
+- Added read-only `com.atproto.sync.getBlob` support for public image
+  attachments exposed through Bluesky-compatible feed records, backed by the
+  production media R2 bucket and covered by the Bluesky conformance gate.
+
 ## [1.28.44] - 2026-06-16
 
 ### Added

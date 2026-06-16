@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 /// Refactored PDS (Personal Data Server) worker for AT Protocol
 ///
@@ -10,12 +10,18 @@ use serde_json::Value;
 /// Endpoints:
 /// - GET /xrpc/com.atproto.server.describeServer
 /// - GET /xrpc/com.atproto.sync.getRepo
+/// - GET /xrpc/com.atproto.sync.getBlob
 /// - GET /xrpc/com.atproto.sync.getRepoStatus
 /// - GET /xrpc/com.atproto.sync.listRepos
 /// - GET /xrpc/com.atproto.repo.describeRepo
 /// - GET /xrpc/com.atproto.repo.getRecord
+/// - GET /xrpc/app.bsky.actor.getProfile
+/// - GET /xrpc/app.bsky.actor.getProfiles
 /// - GET /xrpc/app.bsky.feed.getAuthorFeed
 /// - GET /xrpc/app.bsky.feed.getTimeline
+/// - GET /xrpc/app.bsky.feed.searchPosts
+/// - GET /xrpc/app.bsky.actor.searchActors
+/// - GET /xrpc/app.bsky.actor.searchActorsTypeahead
 /// - GET /xrpc/app.bsky.notification.listNotifications
 /// - GET /xrpc/app.bsky.feed.getLikes
 /// - GET /xrpc/app.bsky.graph.getFollowers
@@ -97,6 +103,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         )
         .get_async("/.well-known/did.json", handle_did_document)
         .get_async("/xrpc/com.atproto.sync.getRepo", handle_get_repo)
+        .get_async("/xrpc/com.atproto.sync.getBlob", handle_get_blob)
         .get_async(
             "/xrpc/com.atproto.sync.getRepoStatus",
             handle_get_repo_status,
@@ -171,6 +178,39 @@ async fn handle_get_repo(req: Request, ctx: RouteContext<()>) -> Result<Response
         "blocks": [],
         "warning": "dais exposes a JSON compatibility floor here; full CAR/MST repo export is not implemented"
     }))
+}
+
+async fn handle_get_blob(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let did = required_query(&url, "did")?;
+    let cid = required_query(&url, "cid")?;
+    let identity = identity(&ctx.env);
+    if did != identity.did && did != identity.handle {
+        return Response::error("Blob not found", 404);
+    }
+
+    let Some(blob) = public_media_by_cid(&ctx.env, &cid).await? else {
+        return Response::error("Blob not found", 404);
+    };
+    let bucket = ctx.env.bucket("MEDIA_BUCKET")?;
+    let Some(object) = bucket.get(blob.key).execute().await? else {
+        return Response::error("Blob not found", 404);
+    };
+    let content_type = object
+        .http_metadata()
+        .content_type
+        .unwrap_or(blob.media_type);
+    let Some(body) = object.body() else {
+        return Response::error("Blob has no body", 404);
+    };
+    let mut response = Response::from_bytes(body.bytes().await?)?;
+    response
+        .headers_mut()
+        .set("Content-Type", content_type.as_str())?;
+    response
+        .headers_mut()
+        .set("Cache-Control", "public, max-age=31536000, immutable")?;
+    Ok(response)
 }
 
 async fn handle_get_repo_status(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -480,6 +520,20 @@ struct ProfileCounts {
     follows: u64,
 }
 
+#[derive(Clone, Deserialize)]
+struct MediaAttachment {
+    url: String,
+    #[serde(default, rename = "mediaType")]
+    media_type: String,
+    #[serde(default)]
+    name: String,
+}
+
+struct PublicMediaBlob {
+    key: String,
+    media_type: String,
+}
+
 fn identity(env: &Env) -> Identity {
     let handle = env
         .var("DOMAIN")
@@ -568,7 +622,7 @@ async fn public_posts(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<Strin
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               atproto_uri, atproto_cid
+               atproto_uri, atproto_cid, media_attachments
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -589,21 +643,20 @@ async fn search_public_posts(
     limit: u32,
 ) -> Result<Vec<serde_json::Map<String, Value>>> {
     let db = env.d1("DB")?;
-    let pattern = format!("%{}%", query.trim());
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               atproto_uri, atproto_cid
+               atproto_uri, atproto_cid, media_attachments
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
           AND content NOT LIKE '%End-to-end encrypted message%'
-          AND content LIKE ?1
+          AND instr(LOWER(content), LOWER(?1)) > 0
         ORDER BY published_at DESC
         LIMIT ?2
         "#,
     )
-    .bind(&[pattern.into(), limit.into()])?
+    .bind(&[query.trim().into(), limit.into()])?
     .all()
     .await?
     .results::<serde_json::Map<String, Value>>()
@@ -689,7 +742,7 @@ async fn find_public_post(env: &Env, rkey: &str) -> Result<Option<serde_json::Ma
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               atproto_uri, atproto_cid
+               atproto_uri, atproto_cid, media_attachments
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -707,6 +760,46 @@ async fn find_public_post(env: &Env, rkey: &str) -> Result<Option<serde_json::Ma
     .bind(&[rkey.into(), format!("%{uri_suffix}").into()])?
     .first::<serde_json::Map<String, Value>>(None)
     .await
+}
+
+async fn public_media_by_cid(env: &Env, cid: &str) -> Result<Option<PublicMediaBlob>> {
+    let db = env.d1("DB")?;
+    let rows = db
+        .prepare(
+            r#"
+            SELECT media_attachments
+            FROM posts
+            WHERE visibility = 'public'
+              AND encrypted_message IS NULL
+              AND content NOT LIKE '%End-to-end encrypted message%'
+              AND media_attachments IS NOT NULL
+              AND media_attachments != ''
+            ORDER BY published_at DESC
+            LIMIT 200
+            "#,
+        )
+        .all()
+        .await?
+        .results::<serde_json::Map<String, Value>>()?;
+
+    for row in rows {
+        for attachment in media_attachments(&row) {
+            if stable_cid(&attachment.url) == cid {
+                let Some(key) = r2_key_from_media_url(&attachment.url) else {
+                    continue;
+                };
+                if !attachment.media_type.starts_with("image/") {
+                    continue;
+                }
+                return Ok(Some(PublicMediaBlob {
+                    key,
+                    media_type: attachment.media_type,
+                }));
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 fn record_response(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
@@ -805,11 +898,38 @@ fn actor_handle(actor_id: &str) -> String {
 }
 
 fn record_value(row: serde_json::Map<String, Value>) -> Value {
-    serde_json::json!({
+    let mut record = serde_json::json!({
         "$type": "app.bsky.feed.post",
         "text": row.get("content").and_then(Value::as_str).unwrap_or(""),
         "createdAt": row.get("published_at").and_then(Value::as_str).unwrap_or("")
-    })
+    });
+    let images: Vec<Value> = media_attachments(&row)
+        .into_iter()
+        .filter(|attachment| attachment.media_type.starts_with("image/"))
+        .map(|attachment| {
+            serde_json::json!({
+                "alt": attachment.name,
+                "image": {
+                    "$type": "blob",
+                    "ref": { "$link": stable_cid(&attachment.url) },
+                    "mimeType": attachment.media_type,
+                    "size": 0
+                }
+            })
+        })
+        .collect();
+    if !images.is_empty() {
+        if let Some(object) = record.as_object_mut() {
+            object.insert(
+                "embed".to_string(),
+                serde_json::json!({
+                    "$type": "app.bsky.embed.images",
+                    "images": images
+                }),
+            );
+        }
+    }
+    record
 }
 
 fn at_uri(identity: &Identity, row: &serde_json::Map<String, Value>) -> String {
@@ -829,6 +949,27 @@ fn stable_cid(value: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
     format!("bafy{:016x}", hasher.finish())
+}
+
+fn media_attachments(row: &serde_json::Map<String, Value>) -> Vec<MediaAttachment> {
+    let raw = row
+        .get("media_attachments")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    serde_json::from_str::<Vec<MediaAttachment>>(raw).unwrap_or_default()
+}
+
+fn r2_key_from_media_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    if parsed.scheme() != "https" || parsed.host_str()? != "social.dais.social" {
+        return None;
+    }
+    let path = parsed.path();
+    let key = path.strip_prefix("/media/")?;
+    if key.contains("_private") || key.contains("../") || !key.starts_with("uploads/") {
+        return None;
+    }
+    Some(key.to_string())
 }
 
 fn json_response(value: Value) -> Result<Response> {

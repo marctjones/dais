@@ -15,6 +15,10 @@ binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media"
+
 # NOTE: The RELAY_SUBSCRIPTION Durable Object (firehose/subscribeRepos) from the
 # v1.0 pds is intentionally omitted — the refactored (core-based) pds does not yet
 # implement the RelaySubscription class. AT Protocol firehose is experimental and
@@ -32,3 +36,7 @@ PDS_HOSTNAME = "pds.dais.social"
 binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+[[env.production.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media"

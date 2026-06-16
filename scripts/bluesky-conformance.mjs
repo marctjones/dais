@@ -2,8 +2,13 @@
 
 const config = {
   pdsBaseUrl: process.env.DAIS_PDS_BASE_URL || "https://pds.dais.social",
+  socialBaseUrl: process.env.DAIS_SOCIAL_BASE_URL || "https://social.dais.social",
   acctDomain: process.env.DAIS_ACCT_DOMAIN || "social.dais.social",
+  mastodonToken: process.env.DAIS_MASTODON_BEARER_TOKEN || "",
 };
+
+const tinyPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 const results = [];
 
@@ -20,6 +25,29 @@ async function request(path, options = {}) {
   const response = await fetch(target, {
     method: options.method || "GET",
     headers: options.headers || { Accept: "application/json" },
+    body: options.body,
+  });
+  const text = await response.text();
+  let json;
+  try {
+    json = text ? JSON.parse(text) : undefined;
+  } catch {
+    json = undefined;
+  }
+  return {
+    status: response.status,
+    contentType: response.headers.get("content-type") || "",
+    text,
+    json,
+  };
+}
+
+async function socialRequest(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (options.auth && config.mastodonToken) headers.set("Authorization", `Bearer ${config.mastodonToken}`);
+  const response = await fetch(`${config.socialBaseUrl}${path}`, {
+    method: options.method || "GET",
+    headers,
     body: options.body,
   });
   const text = await response.text();
@@ -174,6 +202,66 @@ const tests = [
     if (!typeahead.json.actors.some((actor) => actor.did === did())) throw new Error("actor typeahead missing local profile");
   }),
 
+  requirement("BLUESKY-BLOB-01", "Public image embeds expose downloadable com.atproto.sync.getBlob bytes", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for media fixture" };
+    }
+
+    let createdId = "";
+    const token = `dais Bluesky blob conformance ${new Date().toISOString()}`;
+    try {
+      const media = await socialRequest("/api/v1/media", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: "dais-bluesky-blob.png",
+          media_type: "image/png",
+          data_base64: tinyPngBase64,
+          description: "dais Bluesky blob conformance image",
+        }),
+      });
+      if (media.status !== 200) throw new Error(`media create expected 200, got ${media.status}: ${media.text}`);
+
+      const status = await socialRequest("/api/v1/statuses", {
+        method: "POST",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: token,
+          visibility: "public",
+          media_ids: [media.json.id],
+        }),
+      });
+      if (status.status !== 201) throw new Error(`status create expected 201, got ${status.status}: ${status.text}`);
+      createdId = status.json?.id || "";
+
+      let imageBlob;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const search = await request(`/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(token)}&limit=5`);
+        if (search.status !== 200) throw new Error(`search expected 200, got ${search.status}: ${search.text}`);
+        const post = search.json?.posts?.find((item) => item.record?.text === token);
+        imageBlob = post?.record?.embed?.images?.[0]?.image;
+        if (imageBlob?.ref?.$link) break;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (!imageBlob?.ref?.$link) throw new Error("search result did not expose an image blob ref");
+      if (imageBlob.mimeType !== "image/png") throw new Error(`unexpected blob mimeType ${imageBlob.mimeType}`);
+
+      const blob = await request(
+        `/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did())}&cid=${encodeURIComponent(imageBlob.ref.$link)}`,
+        { headers: { Accept: "image/png" } },
+      );
+      if (blob.status !== 200) throw new Error(`getBlob expected 200, got ${blob.status}: ${blob.text}`);
+      if (!blob.contentType.includes("image/png")) throw new Error(`getBlob content-type mismatch: ${blob.contentType}`);
+      if (blob.text.length === 0) throw new Error("getBlob returned empty body");
+    } finally {
+      if (createdId) {
+        await socialRequest(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { method: "DELETE", auth: true });
+      }
+    }
+  }),
+
   requirement("BLUESKY-PRIVACY-01", "PDS public feeds exclude private/E2EE fallback content", async () => {
     const feed = await request("/xrpc/app.bsky.feed.getTimeline?limit=20");
     if (feed.status !== 200) throw new Error(`timeline expected 200, got ${feed.status}`);
@@ -201,8 +289,12 @@ const tests = [
 
 for (const test of tests) {
   try {
-    await test.run();
-    record(test, "PASS");
+    const outcome = await test.run();
+    if (outcome?.status === "SKIP") {
+      record(test, "SKIP", outcome.detail || "");
+    } else {
+      record(test, "PASS");
+    }
   } catch (error) {
     record(test, "FAIL", error.message || String(error));
   }
@@ -210,12 +302,14 @@ for (const test of tests) {
 
 let pass = 0;
 let fail = 0;
+let skip = 0;
 console.log("\nBluesky compatibility report");
 console.log(`Target: ${config.pdsBaseUrl}`);
 for (const result of results) {
   if (result.status === "PASS") pass += 1;
   if (result.status === "FAIL") fail += 1;
+  if (result.status === "SKIP") skip += 1;
   console.log(`${result.status.padEnd(5)} ${result.id.padEnd(18)} ${result.title}${result.detail ? ` - ${result.detail}` : ""}`);
 }
-console.log(`\nSummary: PASS=${pass} FAIL=${fail}`);
+console.log(`\nSummary: PASS=${pass} FAIL=${fail} SKIP=${skip}`);
 if (fail > 0) process.exit(1);

@@ -89,10 +89,10 @@ release gates.
 
 #### `scripts/bluesky-conformance.mjs`
 
-Runs a read-only Bluesky/PDS compatibility gate for the current public XRPC
-floor. It checks identity/DID shape, repo metadata, public feed and timeline
-records, AppView-style arrays, privacy filtering, sync guidance, and explicit
-unsupported-collection errors.
+Runs a Bluesky/PDS compatibility gate for the current public XRPC floor. It
+checks identity/DID shape, repo metadata, public feed and timeline records,
+AppView-style arrays, public image blob reads, privacy filtering, sync guidance,
+and explicit unsupported-collection errors.
 
 **Usage:**
 ```bash
@@ -106,8 +106,15 @@ DAIS_ACCT_DOMAIN=social.dais.social \
 npm run test:bluesky-conformance
 ```
 
-`FAIL` exits non-zero. The script is read-only and safe to run against
-production because it does not create posts, records, sessions, or blobs.
+For the authenticated blob fixture, provide an owner token:
+
+```bash
+DAIS_MASTODON_BEARER_TOKEN=... npm run test:bluesky-conformance
+```
+
+`FAIL` exits non-zero. Without `DAIS_MASTODON_BEARER_TOKEN`, the script is
+read-only and skips the blob fixture. With the token, it creates one public
+image post, fetches the resulting PDS blob, and deletes the post before exit.
 
 #### `scripts/federation-matrix.mjs`
 

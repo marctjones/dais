@@ -137,7 +137,8 @@ Bluesky parity requires substantially more than the existing endpoints:
 - A real signed repository implementation with valid commits and CIDs.
 - XRPC conformance for `com.atproto.server`, `com.atproto.repo`, and
   `com.atproto.sync`.
-- Blob upload and `getBlob` behavior with safe content headers.
+- Blob upload and full lifecycle behavior with safe content headers. Dais now
+  has a read-only `getBlob` compatibility floor for public image attachments.
 - Lexicon-valid `app.bsky.feed.post`, `app.bsky.graph.follow`, profile, like,
   repost, and reply records.
 - OAuth/session flow compatible with Bluesky clients.
@@ -149,8 +150,9 @@ Bluesky parity requires substantially more than the existing endpoints:
 
 - `npm run test:activitypub-conformance` checks a subset of ActivityPub,
   Mastodon, dais privacy, and ATProto public-read behavior.
-- `npm run test:bluesky-conformance` checks the current read-only PDS/AppView
+- `npm run test:bluesky-conformance` checks the current PDS/AppView
   compatibility floor for identity, repo metadata, public feed records,
-  notifications, graph reads, privacy filtering, and sync guidance.
+  public image blob reads, search, profiles, notifications, graph reads,
+  privacy filtering, and sync guidance.
 - The conformance runner should grow alongside this document.
 - Gaps found by the runner should be filed as GitHub issues under epic #70.
