@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "smoke": "npm run build && node ../../scripts/owner-tauri-smoke.mjs",
     "tauri:run": "npm run build && cargo run --manifest-path src-tauri/Cargo.toml",
     "tauri:build": "tauri build"
   },

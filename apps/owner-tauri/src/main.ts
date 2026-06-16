@@ -339,8 +339,11 @@ const sections = [
   "Diagnostics"
 ];
 
+const smokeMode = new URLSearchParams(window.location.search).get("smoke") === "1";
+const smokePostId = "https://social.dais.social/users/social/posts/smoke-post";
+
 let snapshot: OwnerSnapshot | null = null;
-let active = "Home";
+let active = smokeSection() || "Home";
 let notice = "";
 let draftAttachments: string[] = [];
 let draftReplyTo = "";
@@ -356,10 +359,251 @@ let searchQuery = "";
 let searchResults: OwnerSearchResult = { posts: [], users: [], sources: [], source_items: [] };
 let ownerStats: OwnerStats | null = null;
 
+async function ownerInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!smokeMode) {
+    return invoke<T>(command, args);
+  }
+  return smokeInvoke<T>(command, args);
+}
+
+async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const data = smokeSnapshot();
+  if (command === "owner_snapshot") return data as T;
+  if (command === "owner_post_detail") return smokePostDetail(String(args?.objectId || smokePostId)) as T;
+  if (command === "owner_sources") {
+    return {
+      subscriptions: [smokeSourceSubscription()],
+      items: data.sources
+    } as T;
+  }
+  if (command === "owner_stats") {
+    return {
+      followers_total: data.followers.length,
+      followers_approved: data.followers.filter((row) => row.status === "approved").length,
+      followers_pending: data.followers.filter((row) => row.status === "pending").length,
+      followers_rejected: data.followers.filter((row) => row.status === "rejected").length,
+      following_total: data.following.length,
+      posts_total: data.posts.length,
+      activities_total: 4,
+      deliveries_total: 3,
+      deliveries_failed: 0,
+      deliveries_queued: 1,
+      deliveries_retry: 0,
+      deliveries_delivered: 2,
+      dual_protocol_posts: 0,
+      public_posts: 1,
+      private_posts: 1,
+      direct_posts: 0,
+      encrypted_posts: 0,
+      media_posts: 1,
+      notifications_unread: 1,
+      blocks_total: 0,
+      allowlist_hosts: 1,
+      closed_network: false
+    } as T;
+  }
+  if (command === "owner_notifications") return [] as T;
+  if (command === "owner_deliveries") return [] as T;
+  if (command === "owner_direct_messages") return [] as T;
+  if (command === "owner_diagnostics") return data.diagnostics as T;
+  if (command === "owner_moderation") return data.moderation as T;
+  if (command === "owner_search") {
+    return {
+      posts: data.posts.map((post) => ({
+        id: post.id,
+        content: post.content,
+        visibility: String(post.visibility),
+        protocol: String(post.protocol),
+        published_at: post.published_at || null
+      })),
+      users: data.following.map((row) => ({
+        actor_id: row.target_actor_id,
+        relation: "following",
+        status: row.status,
+        created_at: row.created_at || null
+      })),
+      sources: [smokeSourceSubscription()],
+      source_items: data.sources.map((item) => ({
+        id: item.id,
+        source_id: "source-smoke",
+        source_type: item.source_type,
+        title: item.title,
+        canonical_url: item.canonical_url,
+        excerpt: item.excerpt,
+        published_at: null,
+        read: item.read,
+        rights_policy_json: "{}",
+        created_at: null
+      }))
+    } as T;
+  }
+  if (command === "owner_interaction") {
+    return {
+      ok: true,
+      activity_id: `${smokePostId}#${String(args?.interaction || "like")}`,
+      interaction: String(args?.interaction || "like"),
+      object_id: String(args?.objectId || smokePostId),
+      delivery_ids: ["delivery-smoke"]
+    } as T;
+  }
+  return {} as T;
+}
+
+function smokeSection() {
+  if (!smokeMode) return "";
+  const value = new URLSearchParams(window.location.search).get("section") || "";
+  return sections.includes(value) ? value : "Home";
+}
+
+function smokeSnapshot(): OwnerSnapshot {
+  return {
+    settings: {
+      instance_url: "https://social.dais.social",
+      owner_token_present: true,
+      default_visibility: "Followers",
+      default_protocol: "ActivityPub"
+    },
+    profile: {
+      id: "actor-social",
+      username: "social",
+      actor_type: "Person",
+      display_name: "Dais Smoke Account",
+      summary: "Private-by-default social server smoke profile.",
+      public_handle: "@social@dais.social",
+      actor_url: "https://social.dais.social/users/social"
+    },
+    active_section: "Home",
+    home_timeline: [
+      {
+        id: "timeline-smoke",
+        object_id: smokePostId,
+        actor_id: "https://mastodon.example/users/alice",
+        actor_username: "alice",
+        actor_display_name: "Alice Example",
+        content: "A followed public post with reply, like, and boost actions.",
+        visibility: "public",
+        published_at: "2026-06-16T14:00:00Z",
+        protocol: "activitypub",
+        reply_count: 1,
+        like_count: 2,
+        boost_count: 1
+      }
+    ],
+    posts: [
+      {
+        id: smokePostId,
+        title: "Smoke public post",
+        content: "Dais Desk smoke post detail content.",
+        visibility: "Public",
+        protocol: "ActivityPub",
+        encrypted: false,
+        attachments: [{ url: "https://social.dais.social/media/smoke.png", mediaType: "image/png", name: "smoke.png" }],
+        reply_count: 1,
+        like_count: 2,
+        boost_count: 1,
+        published_at: "2026-06-16T14:00:00Z"
+      }
+    ],
+    followers: [
+      {
+        id: "follower-smoke",
+        actor_id: "https://social.dais.social/users/social",
+        follower_actor_id: "https://mastodon.example/users/alice",
+        follower_inbox: "https://mastodon.example/inbox",
+        status: "approved"
+      }
+    ],
+    friends: [
+      {
+        friend_actor_id: "https://mastodon.example/users/alice",
+        friend_inbox: "https://mastodon.example/inbox",
+        accepted_at: "2026-06-16T14:00:00Z"
+      }
+    ],
+    following: [
+      {
+        id: "following-smoke",
+        actor_id: "https://social.dais.social/users/social",
+        target_actor_id: "https://mastodon.example/users/alice",
+        target_inbox: "https://mastodon.example/inbox",
+        status: "accepted",
+        accepted_at: "2026-06-16T14:00:00Z"
+      }
+    ],
+    sources: [
+      {
+        id: "source-item-smoke",
+        title: "Smoke source item",
+        source_type: "rss",
+        canonical_url: "https://example.com/source-item",
+        excerpt: "A private reader item rendered from a public source.",
+        read: false
+      }
+    ],
+    moderation: {
+      closed_network: false,
+      block_count: 0,
+      allowlist_count: 1,
+      blocks: [],
+      allowlist: [{ host: "mastodon.example", enabled: true }]
+    },
+    diagnostics: [{ key: "owner-api", ok: true, detail: "Smoke fixture owner API" }]
+  };
+}
+
+function smokePostDetail(objectId: string): OwnerPostDetail {
+  return {
+    ...smokeSnapshot().posts[0],
+    id: objectId || smokePostId,
+    in_reply_to: null,
+    replies: [
+      {
+        id: `${smokePostId}#reply`,
+        actor_id: "https://mastodon.example/users/alice",
+        actor_display_name: "Alice Example",
+        content: "Smoke reply rendered in post detail.",
+        published_at: "2026-06-16T14:05:00Z"
+      }
+    ],
+    likes: [
+      {
+        id: `${smokePostId}#like`,
+        actor_id: "https://mastodon.example/users/alice",
+        actor_display_name: "Alice Example",
+        created_at: "2026-06-16T14:06:00Z"
+      }
+    ],
+    boosts: [
+      {
+        id: `${smokePostId}#boost`,
+        actor_id: "https://mastodon.example/users/alice",
+        actor_display_name: "Alice Example",
+        created_at: "2026-06-16T14:07:00Z"
+      }
+    ]
+  };
+}
+
+function smokeSourceSubscription(): SourceSubscription {
+  return {
+    id: "source-smoke",
+    source_type: "rss",
+    url: "https://example.com/feed.xml",
+    title: "Smoke source",
+    status: "active",
+    refresh_cadence_minutes: 60,
+    error_count: 0,
+    policy_json: "{}"
+  };
+}
+
 async function load() {
   render();
-  snapshot = await invoke<OwnerSnapshot>("owner_snapshot");
+  snapshot = await ownerInvoke<OwnerSnapshot>("owner_snapshot");
   active = active || snapshot.active_section || "Home";
+  if (smokeMode && active === "Posts") {
+    selectedPostDetail = await ownerInvoke<OwnerPostDetail>("owner_post_detail", { objectId: smokePostId });
+  }
   render();
   await loadLiveSection(active);
 }
@@ -1274,7 +1518,7 @@ function list(items: string[], emptyText: string) {
 async function saveSettings(event: SubmitEvent) {
   event.preventDefault();
   const form = new FormData(event.target as HTMLFormElement);
-  await invoke("save_owner_settings", {
+  await ownerInvoke("save_owner_settings", {
     instanceUrl: String(form.get("instance") || ""),
     ownerToken: String(form.get("token") || "")
   });
@@ -1285,7 +1529,7 @@ async function saveSettings(event: SubmitEvent) {
 async function saveProfile(event: SubmitEvent) {
   event.preventDefault();
   const form = new FormData(event.currentTarget as HTMLFormElement);
-  const updated = await invoke<OwnerSnapshot["profile"]>("update_owner_profile", {
+  const updated = await ownerInvoke<OwnerSnapshot["profile"]>("update_owner_profile", {
     actorType: String(form.get("actor_type") || "Person"),
     displayName: String(form.get("display_name") || ""),
     summary: String(form.get("summary") || ""),
@@ -1326,7 +1570,7 @@ async function publishPost(event: SubmitEvent) {
     render();
     return;
   }
-  const created = await invoke<CreatedPost>("create_owner_post", {
+  const created = await ownerInvoke<CreatedPost>("create_owner_post", {
     text,
     visibility,
     protocol,
@@ -1373,7 +1617,7 @@ async function uploadSelectedMedia() {
   }
   const access = visibility === "Followers" || visibility === "Direct" ? "private" : "public";
   const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
-  const uploaded = await invoke<UploadedMedia>("upload_owner_media", {
+  const uploaded = await ownerInvoke<UploadedMedia>("upload_owner_media", {
     filename: file.name,
     mediaType: file.type || null,
     access,
@@ -1386,7 +1630,7 @@ async function uploadSelectedMedia() {
 
 async function setFollowerStatus(followerActorId: string, status: string) {
   if (!followerActorId || !status) return;
-  await invoke("set_follower_status", {
+  await ownerInvoke("set_follower_status", {
     followerActorId,
     status
   });
@@ -1412,7 +1656,7 @@ async function followTarget(target: string) {
     render();
     return;
   }
-  const result = await invoke<FollowResult>("follow_actor", { target });
+  const result = await ownerInvoke<FollowResult>("follow_actor", { target });
   notice = `Follow requested for ${actorLabel(result.following.target_actor_id)}.`;
   discoveredActor =
     discoveredActor?.id === result.following.target_actor_id
@@ -1430,14 +1674,14 @@ async function discoverActor(event: SubmitEvent) {
     render();
     return;
   }
-  discoveredActor = await invoke<DiscoveredActor>("discover_actor", { target });
+  discoveredActor = await ownerInvoke<DiscoveredActor>("discover_actor", { target });
   notice = `Resolved ${discoveredActor.handle || actorLabel(discoveredActor.id)}.`;
   render();
 }
 
 async function unfollowActor(target: string) {
   if (!target) return;
-  const result = await invoke<FollowResult>("unfollow_actor", { target });
+  const result = await ownerInvoke<FollowResult>("unfollow_actor", { target });
   notice = `Unfollow requested for ${actorLabel(result.following.target_actor_id)}.`;
   await load();
 }
@@ -1453,7 +1697,7 @@ async function addSource(event: SubmitEvent) {
   }
   const title = String(form.get("title") || "").trim();
   const cadence = Number(form.get("cadence_minutes") || 60);
-  const result = await invoke<{ source: SourceSubscription }>("add_owner_source", {
+  const result = await ownerInvoke<{ source: SourceSubscription }>("add_owner_source", {
     sourceType: String(form.get("source_type") || "rss"),
     url,
     title: title || null,
@@ -1464,7 +1708,7 @@ async function addSource(event: SubmitEvent) {
 }
 
 async function refreshSource(id: string | null) {
-  const result = await invoke<{ ok: boolean; items: Array<{ id: string; ok: boolean; error?: string | null }> }>(
+  const result = await ownerInvoke<{ ok: boolean; items: Array<{ id: string; ok: boolean; error?: string | null }> }>(
     "refresh_owner_source",
     { id }
   );
@@ -1477,7 +1721,7 @@ async function refreshSource(id: string | null) {
 
 async function removeSource(id: string) {
   if (!id) return;
-  await invoke("remove_owner_source", { id });
+  await ownerInvoke("remove_owner_source", { id });
   notice = `Removed ${id}.`;
   await loadLiveSection("Sources");
 }
@@ -1491,7 +1735,7 @@ async function blockActor(event: SubmitEvent) {
     render();
     return;
   }
-  await invoke("block_owner_actor", { actorId, reason: null });
+  await ownerInvoke("block_owner_actor", { actorId, reason: null });
   notice = `Blocked ${shortUrl(actorId)}.`;
   await loadLiveSection("Moderation");
 }
@@ -1505,14 +1749,14 @@ async function blockDomain(event: SubmitEvent) {
     render();
     return;
   }
-  await invoke("block_owner_domain", { domain, reason: null });
+  await ownerInvoke("block_owner_domain", { domain, reason: null });
   notice = `Blocked ${domain}.`;
   await loadLiveSection("Moderation");
 }
 
 async function unblockValue(value: string) {
   if (!value) return;
-  await invoke("unblock_owner_value", { value });
+  await ownerInvoke("unblock_owner_value", { value });
   notice = `Unblocked ${value}.`;
   await loadLiveSection("Moderation");
 }
@@ -1526,35 +1770,35 @@ async function allowHost(event: SubmitEvent) {
     render();
     return;
   }
-  await invoke("allow_owner_host", { host, note: null });
+  await ownerInvoke("allow_owner_host", { host, note: null });
   notice = `Allowed ${host}.`;
   await loadLiveSection("Moderation");
 }
 
 async function disallowHost(host: string) {
   if (!host) return;
-  await invoke("disallow_owner_host", { host });
+  await ownerInvoke("disallow_owner_host", { host });
   notice = `Removed ${host} from allowlist.`;
   await loadLiveSection("Moderation");
 }
 
 async function ownerInteraction(objectId: string, interaction: string) {
   if (!objectId || !interaction) return;
-  const result = await invoke<InteractionResult>("owner_interaction", {
+  const result = await ownerInvoke<InteractionResult>("owner_interaction", {
     objectId,
     interaction
   });
   notice = `${result.interaction} queued for ${shortUrl(result.object_id)}.`;
   await load();
   if (active === "Posts" && selectedPostDetail?.id === objectId) {
-    selectedPostDetail = await invoke<OwnerPostDetail>("owner_post_detail", { objectId });
+    selectedPostDetail = await ownerInvoke<OwnerPostDetail>("owner_post_detail", { objectId });
     render();
   }
 }
 
 async function loadPostDetail(objectId: string) {
   if (!objectId) return;
-  selectedPostDetail = await invoke<OwnerPostDetail>("owner_post_detail", { objectId });
+  selectedPostDetail = await ownerInvoke<OwnerPostDetail>("owner_post_detail", { objectId });
   notice = `Loaded ${shortUrl(objectId)}.`;
   render();
 }
@@ -1575,28 +1819,28 @@ function openLink(url: string) {
 
 async function loadLiveSection(section: string) {
   if (section === "Notifications") {
-    notifications = await invoke<OwnerNotification[]>("owner_notifications");
+    notifications = await ownerInvoke<OwnerNotification[]>("owner_notifications");
     render();
   } else if (section === "Deliveries") {
-    deliveries = await invoke<OwnerDelivery[]>("owner_deliveries");
+    deliveries = await ownerInvoke<OwnerDelivery[]>("owner_deliveries");
     render();
   } else if (section === "DMs") {
-    directMessages = await invoke<OwnerDirectMessage[]>("owner_direct_messages");
+    directMessages = await ownerInvoke<OwnerDirectMessage[]>("owner_direct_messages");
     render();
   } else if (section === "Stats") {
-    ownerStats = await invoke<OwnerStats>("owner_stats");
+    ownerStats = await ownerInvoke<OwnerStats>("owner_stats");
     render();
   } else if (section === "Diagnostics") {
-    const diagnostics = await invoke<OwnerSnapshot["diagnostics"]>("owner_diagnostics");
+    const diagnostics = await ownerInvoke<OwnerSnapshot["diagnostics"]>("owner_diagnostics");
     snapshot = snapshot ? { ...snapshot, diagnostics } : snapshot;
     render();
   } else if (section === "Sources") {
-    const sources = await invoke<OwnerSources>("owner_sources");
+    const sources = await ownerInvoke<OwnerSources>("owner_sources");
     sourceSubscriptions = sources.subscriptions;
     sourceItems = sources.items;
     render();
   } else if (section === "Moderation") {
-    moderationState = await invoke<ModerationState>("owner_moderation");
+    moderationState = await ownerInvoke<ModerationState>("owner_moderation");
     render();
   }
 }
@@ -1607,7 +1851,7 @@ async function runSearch(event: Event) {
   const query = String(new FormData(form).get("query") || "").trim();
   searchQuery = query;
   searchResults = query
-    ? await invoke<OwnerSearchResult>("owner_search", { query })
+    ? await ownerInvoke<OwnerSearchResult>("owner_search", { query })
     : { posts: [], users: [], sources: [], source_items: [] };
   notice = query
     ? `Search returned ${searchResults.posts.length} posts, ${searchResults.users.length} actors, ${(searchResults.sources || []).length} sources, and ${(searchResults.source_items || []).length} source items.`
@@ -1617,7 +1861,7 @@ async function runSearch(event: Event) {
 
 async function markNotificationRead(id: string) {
   if (!id) return;
-  await invoke("mark_owner_notification_read", { id });
+  await ownerInvoke("mark_owner_notification_read", { id });
   notice = `Marked notification ${id} read.`;
   await loadLiveSection("Notifications");
 }
