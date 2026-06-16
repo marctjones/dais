@@ -291,6 +291,13 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
             let body = read_mastodon_body(&mut req).await;
             api_json(&mastodon_report(&body), 201)
         }
+        (worker::Method::Post, "/api/v1/statuses") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let body = read_mastodon_body(&mut req).await;
+            mastodon_create_status(&env, &body).await
+        }
         (worker::Method::Post, "/api/v1/notifications/clear") => {
             if let Some(response) = require_mastodon_bearer(&req, &env)? {
                 return Ok(response);
@@ -303,6 +310,23 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
             }
             let id = mastodon_notification_dismiss_path(path).unwrap_or_default();
             mastodon_dismiss_notification(&env, &decode_component(&id)).await
+        }
+        (worker::Method::Put, _) | (worker::Method::Patch, _)
+            if mastodon_status_path(path).is_some() =>
+        {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let id = mastodon_status_path(path).unwrap_or_default();
+            let body = read_mastodon_body(&mut req).await;
+            mastodon_update_status(&env, &decode_component(&id), &body).await
+        }
+        (worker::Method::Delete, _) if mastodon_status_path(path).is_some() => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let id = mastodon_status_path(path).unwrap_or_default();
+            mastodon_delete_status(&env, &decode_component(&id)).await
         }
         (worker::Method::Delete, _) if mastodon_suggestion_dismiss(path) => {
             if let Some(response) = require_mastodon_bearer(&req, &env)? {
@@ -779,6 +803,242 @@ fn mastodon_status_source_json(row: &Map<String, Value>) -> Value {
         "text": mastodon_status_content(row),
         "spoiler_text": string_field(Some(row), "summary").unwrap_or_default(),
     })
+}
+
+async fn mastodon_create_status(env: &Env, body: &Value) -> Result<Response> {
+    let text = body_string_any(body, &["status", "text"]).unwrap_or_default();
+    if text.trim().is_empty() {
+        return api_json(&serde_json::json!({ "error": "status is required" }), 400);
+    }
+    let visibility = normalize_mastodon_visibility(
+        &body
+            .get("visibility")
+            .and_then(optional_body_string)
+            .unwrap_or_else(|| "private".to_string()),
+    )
+    .unwrap_or_else(|| "followers".to_string());
+    let poll = match mastodon_poll_from_body(body) {
+        Ok(poll) => poll,
+        Err(message) => return api_json(&serde_json::json!({ "error": message }), 400),
+    };
+    let media_ids = request_body_array(body, "media_ids");
+    let attachments = match mastodon_attachments_for_media_ids(&media_ids, &visibility) {
+        Ok(attachments) => attachments,
+        Err(message) => return api_json(&serde_json::json!({ "error": message }), 400),
+    };
+    let in_reply_to = body.get("in_reply_to_id").and_then(optional_body_string);
+    let summary = body.get("spoiler_text").and_then(optional_body_string);
+    let object_type = if poll.is_some() { "Question" } else { "Note" };
+    match owner_create_post(
+        env,
+        text.trim(),
+        &visibility,
+        "activitypub",
+        Vec::new(),
+        attachments,
+        false,
+        in_reply_to.clone(),
+        object_type,
+        summary.clone(),
+        poll.clone(),
+    )
+    .await
+    {
+        Ok(created) => {
+            let account = mastodon_account(env).await?;
+            api_json(
+                &mastodon_status_json(&mastodon_created_status_row(created), &account),
+                201,
+            )
+        }
+        Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+    }
+}
+
+async fn mastodon_update_status(env: &Env, id: &str, body: &Value) -> Result<Response> {
+    if mastodon_status(env, id).await?.is_none() {
+        return api_json(&serde_json::json!({ "error": "Record not found" }), 404);
+    }
+    let text = body_string_any(body, &["status", "text"]).unwrap_or_default();
+    let summary = body.get("spoiler_text").and_then(optional_body_string);
+
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    if text.trim().is_empty() {
+        let summary_arg = summary.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+        db.prepare("UPDATE posts SET updated_at = CURRENT_TIMESTAMP, summary = ?1 WHERE id = ?2")
+            .bind_refs([&summary_arg, &id_arg])?
+            .run()
+            .await?;
+    } else {
+        let content_html = format!("<p>{}</p>", escape_html(text.trim()).replace('\n', "<br>"));
+        let text_arg = D1Type::Text(text.trim());
+        let html_arg = D1Type::Text(&content_html);
+        let summary_arg = summary.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+        db.prepare(
+            "UPDATE posts SET updated_at = CURRENT_TIMESTAMP, content = ?1, content_html = ?2, summary = ?3 WHERE id = ?4",
+        )
+        .bind_refs([&text_arg, &html_arg, &summary_arg, &id_arg])?
+        .run()
+        .await?;
+    }
+
+    match mastodon_status(env, id).await? {
+        Some(value) => api_json(&value, 200),
+        None => api_json(&serde_json::json!({ "error": "Record not found" }), 404),
+    }
+}
+
+async fn mastodon_delete_status(env: &Env, id: &str) -> Result<Response> {
+    let Some(existing) = mastodon_status(env, id).await? else {
+        return api_json(&serde_json::json!({ "error": "Record not found" }), 404);
+    };
+    owner_delete_post(env, id).await?;
+    api_json(&existing, 200)
+}
+
+fn mastodon_created_status_row(created: Map<String, Value>) -> Map<String, Value> {
+    let mut row = Map::new();
+    for key in [
+        "id",
+        "actor_id",
+        "content",
+        "content_html",
+        "object_type",
+        "summary",
+        "visibility",
+        "published_at",
+        "in_reply_to",
+        "poll_options",
+    ] {
+        row.insert(key.to_string(), row_value_or_null(&created, key));
+    }
+    let attachments = created
+        .get("attachments")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    row.insert(
+        "media_attachments".to_string(),
+        if attachments.as_array().map(Vec::is_empty).unwrap_or(true) {
+            Value::Null
+        } else {
+            Value::String(attachments.to_string())
+        },
+    );
+    row.insert("reply_count".to_string(), Value::from(0));
+    row.insert("like_count".to_string(), Value::from(0));
+    row.insert("boost_count".to_string(), Value::from(0));
+    row.insert("favourited".to_string(), Value::Bool(false));
+    row.insert("reblogged".to_string(), Value::Bool(false));
+    row
+}
+
+fn normalize_mastodon_visibility(value: &str) -> Option<String> {
+    match value.to_ascii_lowercase().as_str() {
+        "public" => Some("public".to_string()),
+        "unlisted" => Some("unlisted".to_string()),
+        "private" | "followers" => Some("followers".to_string()),
+        "direct" => Some("direct".to_string()),
+        _ => None,
+    }
+}
+
+fn mastodon_poll_from_body(body: &Value) -> std::result::Result<Option<Value>, String> {
+    let options = mastodon_poll_options_from_body(body);
+    let multiple = mastodon_poll_multiple_from_body(body);
+    if options.is_empty() {
+        if multiple {
+            return Err("poll[multiple] requires poll[options][]".to_string());
+        }
+        return Ok(None);
+    }
+    if options.len() < 2 || options.len() > 4 {
+        return Err("polls require between two and four options".to_string());
+    }
+    for option in &options {
+        if option.trim().is_empty() {
+            return Err("poll options must not be empty".to_string());
+        }
+        if option.chars().count() > 200 {
+            return Err("poll options must be 200 characters or fewer".to_string());
+        }
+    }
+    Ok(Some(
+        serde_json::json!({ "multiple": multiple, "options": options }),
+    ))
+}
+
+fn mastodon_poll_options_from_body(body: &Value) -> Vec<String> {
+    let poll = body.get("poll").and_then(Value::as_object);
+    let candidates = [
+        poll.and_then(|poll| poll.get("options")),
+        body.get("poll[options]"),
+        body.get("poll[options][]"),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find_map(|value| {
+            let values = array_from_body_value(value)
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>();
+            (!values.is_empty()).then_some(values)
+        })
+        .unwrap_or_default()
+}
+
+fn mastodon_poll_multiple_from_body(body: &Value) -> bool {
+    let poll = body.get("poll").and_then(Value::as_object);
+    let value = poll
+        .and_then(|poll| poll.get("multiple"))
+        .or_else(|| body.get("poll[multiple]"));
+    value
+        .map(|value| {
+            matches!(
+                value
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "true" | "1" | "on" | "yes"
+            ) || matches!(value, Value::Bool(true))
+        })
+        .unwrap_or(false)
+}
+
+fn mastodon_attachments_for_media_ids(
+    media_ids: &[String],
+    visibility: &str,
+) -> std::result::Result<Vec<Value>, String> {
+    let mut attachments = Vec::new();
+    for id in media_ids {
+        let url = id.trim();
+        if url.is_empty() {
+            continue;
+        }
+        let attachment = serde_json::json!({ "url": url });
+        if matches!(visibility, "followers" | "direct") && !is_private_media_attachment(&attachment)
+        {
+            return Err("Mastodon API private media posts require private media URLs".to_string());
+        }
+        attachments.push(serde_json::json!({
+            "type": "Document",
+            "url": url,
+            "mediaType": media_type_for_filename(url),
+            "name": decode_component(url.rsplit('/').next().unwrap_or("media")),
+        }));
+    }
+    Ok(attachments)
+}
+
+fn array_from_body_value(value: &Value) -> Vec<String> {
+    match value {
+        Value::Array(items) => items.iter().filter_map(optional_body_string).collect(),
+        Value::Null => Vec::new(),
+        value => optional_body_string(value).into_iter().collect(),
+    }
 }
 
 async fn mastodon_status_action(env: &Env, status_id: &str, action: &str) -> Result<Response> {
@@ -1889,6 +2149,9 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 attachments,
                 encrypt,
                 in_reply_to,
+                "Note",
+                None,
+                None,
             )
             .await
             {
@@ -3041,6 +3304,9 @@ async fn owner_create_post(
     attachments: Vec<Value>,
     encrypt: bool,
     in_reply_to: Option<String>,
+    object_type: &str,
+    summary: Option<String>,
+    poll_options: Option<Value>,
 ) -> std::result::Result<Map<String, Value>, String> {
     let db = env.d1("DB").map_err(|error| error.to_string())?;
     let actor = db
@@ -3105,8 +3371,8 @@ async fn owner_create_post(
     let post_arg = D1Type::Text(&post_id);
     let text_arg = D1Type::Text(text);
     let content_arg = D1Type::Text(&content_html);
-    let object_type_arg = D1Type::Text("Note");
-    let summary_arg = D1Type::Null;
+    let object_type_arg = D1Type::Text(object_type);
+    let summary_arg = summary.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
     let visibility_arg = D1Type::Text(visibility);
     let protocol_arg = D1Type::Text(protocol);
     let now_arg = D1Type::Text(&now);
@@ -3118,7 +3384,11 @@ async fn owner_create_post(
         .as_deref()
         .map(D1Type::Text)
         .unwrap_or(D1Type::Null);
-    let poll_arg = D1Type::Null;
+    let poll_options_json = poll_options.as_ref().map(Value::to_string);
+    let poll_arg = poll_options_json
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
     db.prepare(
         r#"
         INSERT INTO posts (
@@ -3164,8 +3434,14 @@ async fn owner_create_post(
     response.insert("actor_id".to_string(), Value::String(actor_id));
     response.insert("content".to_string(), Value::String(text.to_string()));
     response.insert("content_html".to_string(), Value::String(content_html));
-    response.insert("object_type".to_string(), Value::String("Note".to_string()));
-    response.insert("summary".to_string(), Value::Null);
+    response.insert(
+        "object_type".to_string(),
+        Value::String(object_type.to_string()),
+    );
+    response.insert(
+        "summary".to_string(),
+        summary.map(Value::String).unwrap_or(Value::Null),
+    );
     response.insert(
         "visibility".to_string(),
         Value::String(visibility.to_string()),
@@ -3176,7 +3452,10 @@ async fn owner_create_post(
         "in_reply_to".to_string(),
         in_reply_to.map(Value::String).unwrap_or(Value::Null),
     );
-    response.insert("poll_options".to_string(), Value::Null);
+    response.insert(
+        "poll_options".to_string(),
+        poll_options_json.map(Value::String).unwrap_or(Value::Null),
+    );
     response.insert(
         "recipients".to_string(),
         Value::Array(recipients.into_iter().map(Value::String).collect()),
