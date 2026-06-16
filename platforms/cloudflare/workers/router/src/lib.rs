@@ -1,10 +1,11 @@
 use serde::Serialize;
+use serde_json::{Map, Value};
 use worker::{event, Context, Env, Headers, Request, Response, Result};
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
 
 #[event(fetch)]
-async fn main(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
+async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
 
     let url = req.url()?;
@@ -14,6 +15,10 @@ async fn main(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
     if host == "social.dais.social" && path == "/" {
         let target = url.join("/users/social")?;
         return Response::redirect(target);
+    }
+
+    if path.starts_with("/api/dais/owner/") {
+        return handle_owner_api(req, env, path).await;
     }
 
     match path {
@@ -26,6 +31,246 @@ async fn main(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
             501,
         ),
     }
+}
+
+async fn handle_owner_api(req: Request, env: Env, path: &str) -> Result<Response> {
+    if req.method() == worker::Method::Options {
+        return api_json(&serde_json::json!({}), 204);
+    }
+
+    let owner_path = path
+        .strip_prefix("/api/dais/owner")
+        .filter(|value| !value.is_empty())
+        .unwrap_or("/");
+    if let Some(response) = require_owner_bearer(
+        &req,
+        &env,
+        owner_api_required_scopes(req.method(), owner_path),
+    )? {
+        return Ok(response);
+    }
+
+    match (req.method(), owner_path) {
+        (worker::Method::Get, "/profile") => api_json(&owner_profile(&env).await?, 200),
+        _ => api_json(
+            &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
+            501,
+        ),
+    }
+}
+
+fn owner_api_required_scopes(method: worker::Method, path: &str) -> &'static [&'static str] {
+    match method {
+        worker::Method::Get => &["read"],
+        worker::Method::Delete => &["write"],
+        _ if path == "/discovery/actor" => &["read"],
+        _ if path == "/followers/status"
+            || path == "/following/follow"
+            || path == "/following/unfollow" =>
+        {
+            &["follow"]
+        }
+        _ if path.starts_with("/moderation/") => &["moderation"],
+        _ if path == "/media" || path == "/media/revoke" => &["media"],
+        _ => &["write"],
+    }
+}
+
+async fn owner_profile(env: &Env) -> Result<OwnerProfile> {
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare(
+            r#"
+            SELECT id, username, COALESCE(actor_type, 'Person') AS actor_type,
+                   display_name, summary, icon, image, avatar_url, header_url
+            FROM actors
+            WHERE username = 'social'
+            LIMIT 1
+            "#,
+        )
+        .first::<Map<String, Value>>(None)
+        .await?;
+    let username = string_field(row.as_ref(), "username").unwrap_or_else(|| "social".to_string());
+    let actor_url = string_field(row.as_ref(), "id")
+        .unwrap_or_else(|| "https://social.dais.social/users/social".to_string());
+    let actor_type =
+        string_field(row.as_ref(), "actor_type").unwrap_or_else(|| "Person".to_string());
+    let handle_domain = env
+        .var("DOMAIN")
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| "dais.social".to_string());
+    let icon = string_field(row.as_ref(), "icon");
+    let image = string_field(row.as_ref(), "image");
+    Ok(OwnerProfile {
+        id: actor_url.clone(),
+        username: username.clone(),
+        actor_type,
+        display_name: string_field(row.as_ref(), "display_name"),
+        summary: string_field(row.as_ref(), "summary"),
+        avatar_url: string_field(row.as_ref(), "avatar_url").or_else(|| icon.clone()),
+        header_url: string_field(row.as_ref(), "header_url").or_else(|| image.clone()),
+        icon,
+        image,
+        public_handle: format!("@{username}@{handle_domain}"),
+        actor_url,
+    })
+}
+
+fn string_field(row: Option<&Map<String, Value>>, key: &str) -> Option<String> {
+    row.and_then(|fields| fields.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn require_owner_bearer(
+    req: &Request,
+    env: &Env,
+    required_scopes: &[&str],
+) -> Result<Option<Response>> {
+    let tokens = owner_bearer_tokens(env);
+    if tokens.is_empty()
+        && env
+            .var("ENVIRONMENT")
+            .map(|value| value.to_string() == "production")
+            .unwrap_or(false)
+    {
+        return Ok(Some(api_json(
+            &serde_json::json!({ "error": "OWNER_API_TOKEN is not configured" }),
+            503,
+        )?));
+    }
+    let auth = req.headers().get("Authorization")?.unwrap_or_default();
+    let provided = auth.strip_prefix("Bearer ").map(str::trim).unwrap_or("");
+    let token = tokens.iter().find(|entry| entry.token == provided);
+    match token {
+        Some(entry) if owner_token_has_scopes(&entry.scopes, required_scopes) => Ok(None),
+        Some(_) => Ok(Some(api_json(
+            &serde_json::json!({
+                "error": "Owner bearer token lacks required scope",
+                "required_scopes": required_scopes,
+            }),
+            403,
+        )?)),
+        None => Ok(Some(api_json(
+            &serde_json::json!({ "error": "Owner bearer token required" }),
+            401,
+        )?)),
+    }
+}
+
+fn owner_bearer_tokens(env: &Env) -> Vec<OwnerToken> {
+    let mut tokens = Vec::new();
+    let configured = env
+        .var("OWNER_API_TOKEN")
+        .or_else(|_| env.var("DAIS_OWNER_TOKEN"))
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| {
+            if env
+                .var("ENVIRONMENT")
+                .map(|value| value.to_string() == "production")
+                .unwrap_or(false)
+            {
+                String::new()
+            } else {
+                "dais-local-owner-token".to_string()
+            }
+        });
+    if !configured.is_empty() {
+        tokens.push(OwnerToken {
+            token: configured,
+            scopes: vec!["owner".to_string()],
+        });
+    }
+    tokens.extend(scoped_owner_tokens(env));
+    tokens
+}
+
+fn scoped_owner_tokens(env: &Env) -> Vec<OwnerToken> {
+    let raw = env
+        .var("OWNER_API_SCOPED_TOKENS")
+        .or_else(|_| env.var("DAIS_OWNER_SCOPED_TOKENS"))
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    if raw.trim().is_empty() {
+        return Vec::new();
+    }
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(Value::Object(map)) => map
+            .into_iter()
+            .filter_map(|(token, scopes)| {
+                let scopes = normalize_scopes(scopes);
+                if token.trim().is_empty() || scopes.is_empty() {
+                    None
+                } else {
+                    Some(OwnerToken { token, scopes })
+                }
+            })
+            .collect(),
+        Ok(Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| {
+                let token = value
+                    .get("token")
+                    .or_else(|| value.get("value"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let scopes = normalize_scopes(
+                    value
+                        .get("scopes")
+                        .or_else(|| value.get("scope"))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+                if token.is_empty() || scopes.is_empty() {
+                    None
+                } else {
+                    Some(OwnerToken { token, scopes })
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn normalize_scopes(value: Value) -> Vec<String> {
+    match value {
+        Value::Array(values) => values
+            .into_iter()
+            .filter_map(|value| value.as_str().map(normalize_scope))
+            .filter(|scope| !scope.is_empty())
+            .collect(),
+        Value::String(scopes) => scopes
+            .split(|character: char| character == ',' || character.is_whitespace())
+            .map(normalize_scope)
+            .filter(|scope| !scope.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn normalize_scope(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn owner_token_has_scopes(scopes: &[String], required_scopes: &[&str]) -> bool {
+    scopes
+        .iter()
+        .any(|scope| scope == "owner" || scope == "admin" || scope == "*")
+        || required_scopes
+            .iter()
+            .all(|required| scopes.iter().any(|scope| scope == required))
+}
+
+fn api_json<T: Serialize>(value: &T, status: u16) -> Result<Response> {
+    let mut response = Response::from_json(value)?.with_status(status);
+    let headers = Headers::new();
+    headers.set("Content-Type", "application/json; charset=utf-8")?;
+    response = response.with_headers(headers);
+    Ok(response)
 }
 
 fn fixture_actor_response(url: &worker::Url) -> Result<Response> {
@@ -225,4 +470,24 @@ struct FixtureOutbox<'a> {
     total_items: u8,
     #[serde(rename = "orderedItems")]
     ordered_items: Vec<FixtureCreate<'a>>,
+}
+
+#[derive(Serialize)]
+struct OwnerProfile {
+    id: String,
+    username: String,
+    actor_type: String,
+    display_name: Option<String>,
+    summary: Option<String>,
+    icon: Option<String>,
+    image: Option<String>,
+    avatar_url: Option<String>,
+    header_url: Option<String>,
+    public_handle: String,
+    actor_url: String,
+}
+
+struct OwnerToken {
+    token: String,
+    scopes: Vec<String>,
 }

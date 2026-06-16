@@ -62,5 +62,6 @@ Thumbs.db
 .idlergear/
 .claude/
 .codex/tmp/
+tmp/codex/
 .mcp.json
 .idlergear.retired/
