@@ -479,6 +479,88 @@ async function ownerReaderInteractionFixture() {
   }
 }
 
+async function ownerSnapshotFixture() {
+  const snapshot = await ownerApi("/snapshot");
+  return snapshot.json;
+}
+
+async function ownerReaderLifecycleFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner reader lifecycle fixture" };
+  }
+  const fixture = generateFixtureActor();
+  const token = `dais-reader-lifecycle-${Date.now()}`;
+  const objectId = `${fixture.actorUrl}#posts/${token}`;
+  let accepted = false;
+  try {
+    const follow = await ownerApi("/following/follow", {
+      method: "POST",
+      body: JSON.stringify({ target: fixture.actorUrl }),
+    });
+    const followId = follow.json?.following?.id;
+    if (!followId) {
+      throw new Error(`follow response missing following id: ${summarizeJson(follow.json)}`);
+    }
+
+    const accept = JSON.stringify({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      id: `${fixture.actorUrl}#activities/accept-${token}`,
+      type: "Accept",
+      actor: fixture.actorUrl,
+      object: {
+        id: followId,
+        type: "Follow",
+        actor: actorUrl,
+        object: fixture.actorUrl,
+      },
+    });
+    const acceptRes = await signedActivityPost(fixture, accept);
+    if (acceptRes.status < 200 || acceptRes.status >= 300) {
+      throw new Error(`Accept expected 2xx, got ${acceptRes.status}: ${acceptRes.text}`);
+    }
+    accepted = true;
+
+    const create = JSON.stringify({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      id: `${fixture.actorUrl}#activities/create-${token}`,
+      type: "Create",
+      actor: fixture.actorUrl,
+      published: new Date().toISOString(),
+      to: ["https://www.w3.org/ns/activitystreams#Public"],
+      object: {
+        id: objectId,
+        type: "Note",
+        attributedTo: fixture.actorUrl,
+        to: ["https://www.w3.org/ns/activitystreams#Public"],
+        content: `<p>${token} home timeline fixture</p>`,
+        published: new Date().toISOString(),
+      },
+    });
+    const createRes = await signedActivityPost(fixture, create);
+    if (createRes.status < 200 || createRes.status >= 300) {
+      throw new Error(`Create expected 2xx, got ${createRes.status}: ${createRes.text}`);
+    }
+
+    const snapshot = await ownerSnapshotFixture();
+    const timelinePost = (snapshot.home_timeline || []).find((post) => post.object_id === objectId);
+    return { fixture, objectId, token, accepted, createRes, timelinePost };
+  } finally {
+    const deleteActivity = JSON.stringify({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      id: `${fixture.actorUrl}#activities/delete-${token}`,
+      type: "Delete",
+      actor: fixture.actorUrl,
+      object: objectId,
+      published: new Date().toISOString(),
+    });
+    await signedActivityPost(fixture, deleteActivity).catch(() => {});
+    await ownerApi("/following/unfollow", {
+      method: "POST",
+      body: JSON.stringify({ target: fixture.actorUrl }),
+    }).catch(() => {});
+  }
+}
+
 function rkeyFromAtUri(uri) {
   return typeof uri === "string" ? uri.split("/").pop() : "";
 }
@@ -878,6 +960,24 @@ const tests = [
       return t.fail(`boost_count expected ${beforeBoosts + 1}, got ${afterBoosts}`);
     }
     t.pass(`like=${result.like.delivery_ids.length} boost=${result.boost.delivery_ids.length} delivery row(s) for ${result.objectId}`);
+  }),
+
+  requirement("OWNER-READER-02", "DAIS-OWNER", "Follow acceptance and inbound Create populate the owner home timeline", async (t) => {
+    const result = await ownerReaderLifecycleFixture();
+    if (result.skipped) return t.info(result.detail);
+    if (!result.accepted) {
+      return t.fail("fixture follow was not accepted");
+    }
+    if (!result.timelinePost) {
+      return t.fail(`home_timeline missing fixture object ${result.objectId}`);
+    }
+    if (result.timelinePost.actor_id !== result.fixture.actorUrl) {
+      return t.fail(`timeline actor mismatch: ${summarizeJson(result.timelinePost)}`);
+    }
+    if (!String(result.timelinePost.content || "").includes(result.token)) {
+      return t.fail(`timeline content missing fixture token: ${summarizeJson(result.timelinePost)}`);
+    }
+    t.pass(`home_timeline contains signed fixture post ${result.objectId}`);
   }),
 
   requirement("PDS-ATPROTO-01", "MASTODON-ADJACENT", "ATProto public read endpoints stay available", async (t) => {
