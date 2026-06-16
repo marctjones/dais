@@ -561,6 +561,44 @@ async function ownerReaderLifecycleFixture() {
   }
 }
 
+async function ownerReaderReplyFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner reader reply fixture" };
+  }
+  const replyTarget = knownPublicObjectId();
+  const token = `dais-reader-reply-${Date.now()}`;
+  let createdId = "";
+  try {
+    const created = await ownerApi("/posts", {
+      method: "POST",
+      body: JSON.stringify({
+        text: `${token} temporary conformance reply`,
+        visibility: "public",
+        protocol: "activitypub",
+        in_reply_to: replyTarget,
+      }),
+    });
+    if (created.status && created.status >= 400) {
+      throw new Error(`post create returned ${created.status}: ${created.text}`);
+    }
+    createdId = created.json?.id || "";
+    if (!createdId) {
+      throw new Error(`reply create response missing id: ${summarizeJson(created.json)}`);
+    }
+    const object = await request(new URL(createdId).pathname, {
+      headers: { Accept: "application/activity+json" },
+      noCache: true,
+    });
+    return { token, replyTarget, createdId, created: created.json, object };
+  } finally {
+    if (createdId) {
+      await ownerApi(`/posts/${encodeURIComponent(createdId)}`, {
+        method: "DELETE",
+      }).catch(() => {});
+    }
+  }
+}
+
 function rkeyFromAtUri(uri) {
   return typeof uri === "string" ? uri.split("/").pop() : "";
 }
@@ -978,6 +1016,25 @@ const tests = [
       return t.fail(`timeline content missing fixture token: ${summarizeJson(result.timelinePost)}`);
     }
     t.pass(`home_timeline contains signed fixture post ${result.objectId}`);
+  }),
+
+  requirement("OWNER-READER-03", "DAIS-OWNER", "Reader reply compose generates an ActivityPub reply object", async (t) => {
+    const result = await ownerReaderReplyFixture();
+    if (result.skipped) return t.info(result.detail);
+    if (result.object.status !== 200) {
+      return t.fail(`reply object fetch expected 200, got ${result.object.status}: ${result.object.text}`);
+    }
+    const note = result.object.json;
+    if (note?.type !== "Note") {
+      return t.fail(`reply object expected Note, got ${note?.type}`);
+    }
+    if (note.inReplyTo !== result.replyTarget) {
+      return t.fail(`inReplyTo expected ${result.replyTarget}, got ${note.inReplyTo}`);
+    }
+    if (!String(note.content || "").includes(result.token)) {
+      return t.fail(`reply content missing fixture token: ${summarizeJson(note)}`);
+    }
+    t.pass(`temporary public reply ${result.createdId} pointed at ${result.replyTarget}`);
   }),
 
   requirement("PDS-ATPROTO-01", "MASTODON-ADJACENT", "ATProto public read endpoints stay available", async (t) => {
