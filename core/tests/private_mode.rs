@@ -17,6 +17,7 @@ struct FakeDb {
 struct FakeDbState {
     actors: HashMap<String, Row>,
     posts: Vec<Row>,
+    pending_following: HashSet<String>,
     approved_following: HashSet<String>,
     approved_followers: HashSet<String>,
     friends_rows: Vec<Row>,
@@ -57,6 +58,30 @@ impl FakeDb {
             .unwrap()
             .approved_following
             .insert(actor_id.to_string());
+    }
+
+    fn request_following(&self, actor_id: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .pending_following
+            .insert(actor_id.to_string());
+    }
+
+    fn pending_following(&self, actor_id: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .pending_following
+            .contains(actor_id)
+    }
+
+    fn accepted_following(&self, actor_id: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .approved_following
+            .contains(actor_id)
     }
 
     fn insert_actor(&self, username: &str, actor_id: &str) {
@@ -254,6 +279,20 @@ impl DatabaseProvider for FakeDb {
             return Ok(vec![count_row(
                 (state.approved_following.contains(actor_id)) as u64,
             )]);
+        }
+
+        if sql.contains("UPDATE following SET status = 'accepted'") {
+            let actor_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            if state.pending_following.remove(actor_id) {
+                state.approved_following.insert(actor_id.to_string());
+            }
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("DELETE FROM following") && sql.contains("status = 'pending'") {
+            let actor_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            state.pending_following.remove(actor_id);
+            return Ok(Vec::new());
         }
 
         if sql.contains("SELECT COUNT(*) as count FROM followers")
@@ -878,6 +917,68 @@ async fn inbox_update_refreshes_question_timeline_post() {
     .unwrap();
     assert_eq!(raw_object["type"], "Question");
     assert_eq!(raw_object["oneOf"][0]["replies"]["totalItems"], 3);
+}
+
+#[tokio::test]
+async fn inbox_accept_marks_pending_following_accepted() {
+    let db = FakeDb::default();
+    let actor = "https://remote.example/users/alice";
+    db.request_following(actor);
+
+    let accept = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Accept".to_string(),
+        id: "https://remote.example/activities/accept-follow".to_string(),
+        actor: actor.to_string(),
+        object: Some(json!({
+            "type": "Follow",
+            "actor": "https://social.dais.social/users/social",
+            "object": actor
+        })),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T14:00:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::inbox::handle_accept(&db, &accept)
+        .await
+        .expect("accept should mark following accepted");
+
+    assert!(!db.pending_following(actor));
+    assert!(db.accepted_following(actor));
+}
+
+#[tokio::test]
+async fn inbox_reject_removes_pending_following() {
+    let db = FakeDb::default();
+    let actor = "https://remote.example/users/alice";
+    db.request_following(actor);
+
+    let reject = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Reject".to_string(),
+        id: "https://remote.example/activities/reject-follow".to_string(),
+        actor: actor.to_string(),
+        object: Some(json!({
+            "type": "Follow",
+            "actor": "https://social.dais.social/users/social",
+            "object": actor
+        })),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T14:00:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::inbox::handle_reject(&db, &reject)
+        .await
+        .expect("reject should remove pending following");
+
+    assert!(!db.pending_following(actor));
+    assert!(!db.accepted_following(actor));
 }
 
 #[tokio::test]

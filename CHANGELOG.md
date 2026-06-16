@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.67] - 2026-06-16
+
+### Added
+- Added core private-mode regression tests proving incoming ActivityPub
+  `Accept(Follow)` marks pending following rows accepted and `Reject(Follow)`
+  removes pending following rows.
+
 ## [1.28.66] - 2026-06-16
 
 ### Added
