@@ -152,6 +152,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             api_json(&serde_json::json!({ "ok": true }), 200)
         }
         (worker::Method::Get, "/moderation") => api_json(&owner_moderation(&env).await?, 200),
+        (worker::Method::Post, "/moderation/block") => {
+            let body = read_json(&mut req).await;
+            match owner_block(&env, &body).await {
+                Ok(block) => api_json(&block, 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Post, "/moderation/unblock") => {
             let body = read_json(&mut req).await;
             let Some(value) = body_string_any(&body, &["value", "actor_id", "actorId", "domain"])
@@ -1148,6 +1155,64 @@ async fn owner_unblock(env: &Env, value: &str) -> Result<()> {
     Ok(())
 }
 
+async fn owner_block(env: &Env, body: &Value) -> std::result::Result<Map<String, Value>, String> {
+    let reason = body.get("reason").and_then(optional_body_string);
+    let actor_id = body_string_any(body, &["actor_id", "actorId"]);
+    let domain = body_string_any(body, &["domain", "blocked_domain", "blockedDomain"]);
+
+    if let Some(actor_id) = actor_id {
+        let actor_url = public_https_url(&actor_id, "actor_id")?;
+        let id = format!("block-{}", stable_id(&actor_url));
+        insert_block(env, &id, &actor_url, None, reason.as_deref()).await?;
+
+        let mut response = Map::new();
+        response.insert("ok".to_string(), Value::Bool(true));
+        response.insert("id".to_string(), Value::String(id));
+        response.insert("actor_id".to_string(), Value::String(actor_url));
+        return Ok(response);
+    }
+
+    if let Some(domain) = domain {
+        let host = normalize_host_value(&domain).map_err(ToOwned::to_owned)?;
+        let id = format!("block-domain-{host}");
+        insert_block(env, &id, &host, Some(&host), reason.as_deref()).await?;
+
+        let mut response = Map::new();
+        response.insert("ok".to_string(), Value::Bool(true));
+        response.insert("id".to_string(), Value::String(id));
+        response.insert("blocked_domain".to_string(), Value::String(host));
+        return Ok(response);
+    }
+
+    Err("actor_id or domain is required".to_string())
+}
+
+async fn insert_block(
+    env: &Env,
+    id: &str,
+    actor_id: &str,
+    blocked_domain: Option<&str>,
+    reason: Option<&str>,
+) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(id);
+    let actor_arg = D1Type::Text(actor_id);
+    let domain_arg = blocked_domain.map(D1Type::Text).unwrap_or(D1Type::Null);
+    let reason_arg = reason.map(D1Type::Text).unwrap_or(D1Type::Null);
+    db.prepare(
+        r#"
+        INSERT OR REPLACE INTO blocks (id, actor_id, blocked_domain, reason, created_at)
+        VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)
+        "#,
+    )
+    .bind_refs([&id_arg, &actor_arg, &domain_arg, &reason_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 async fn owner_delete_allowlist_host(env: &Env, host: &str) -> Result<()> {
     let db = env.d1("DB")?;
     let host_arg = D1Type::Text(host);
@@ -1327,7 +1392,70 @@ fn normalize_host_value(value: &str) -> std::result::Result<String, &'static str
     {
         return Err("host must be a domain name");
     }
+    if host_not_allowed(&host) {
+        return Err("host is not allowed");
+    }
     Ok(host)
+}
+
+fn public_https_url(value: &str, field: &str) -> std::result::Result<String, String> {
+    let url = worker::Url::parse(value).map_err(|_| format!("{field} must be a valid URL"))?;
+    if url.scheme() != "https" {
+        return Err(format!("{field} must use https"));
+    }
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    if host_not_allowed(&host) || host == "::1" {
+        return Err(format!("{field} host is not allowed"));
+    }
+    Ok(url.to_string())
+}
+
+fn host_not_allowed(host: &str) -> bool {
+    host == "localhost"
+        || host.ends_with(".local")
+        || host == "127.0.0.1"
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || host.starts_with("169.254.")
+        || private_172_host(host)
+}
+
+fn private_172_host(host: &str) -> bool {
+    let Some(rest) = host.strip_prefix("172.") else {
+        return false;
+    };
+    let Some(second) = rest
+        .split('.')
+        .next()
+        .and_then(|part| part.parse::<u8>().ok())
+    else {
+        return false;
+    };
+    (16..=31).contains(&second)
+}
+
+fn stable_id(value: &str) -> String {
+    let mut hash = 5381u32;
+    for code in value.encode_utf16() {
+        hash = hash.wrapping_shl(5).wrapping_add(hash) ^ u32::from(code);
+    }
+    base36(hash)
+}
+
+fn base36(mut value: u32) -> String {
+    if value == 0 {
+        return "0".to_string();
+    }
+    let mut chars = Vec::new();
+    while value > 0 {
+        let digit = (value % 36) as u8;
+        chars.push(match digit {
+            0..=9 => char::from(b'0' + digit),
+            _ => char::from(b'a' + digit - 10),
+        });
+        value /= 36;
+    }
+    chars.into_iter().rev().collect()
 }
 
 fn clamp_limit(value: Option<String>) -> i32 {
