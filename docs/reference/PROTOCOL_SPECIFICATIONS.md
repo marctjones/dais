@@ -138,7 +138,9 @@ Bluesky parity requires substantially more than the existing endpoints:
 - XRPC conformance for `com.atproto.server`, `com.atproto.repo`, and
   `com.atproto.sync`.
 - Blob upload and full lifecycle behavior with safe content headers. Dais now
-  has a read-only `getBlob` compatibility floor for public image attachments.
+  has an owner-token `uploadBlob` and `getBlob` compatibility floor for public
+  image attachments used by `app.bsky.embed.images`; arbitrary blob lifecycle
+  behavior remains out of scope for the current floor.
 - Lexicon-valid `app.bsky.feed.post`, `app.bsky.graph.follow`, profile, like,
   repost, and reply records.
 - OAuth/session flow compatible with Bluesky clients.
@@ -146,10 +148,11 @@ Bluesky parity requires substantially more than the existing endpoints:
 - AppView-like read APIs for feeds, author feeds, profiles, notifications, and
   interaction counts.
 - Owner-token authenticated compatibility writes for public
-  `app.bsky.feed.post`, `app.bsky.feed.like`, `app.bsky.feed.repost`, and
-  `app.bsky.graph.follow` records through `createSession`, `createRecord`,
-  `listRecords`, and `deleteRecord`. Full OAuth, signed repository commits, and
-  arbitrary record collections remain out of scope for the current floor.
+  `app.bsky.feed.post` records, feed-post image embeds, `app.bsky.feed.like`,
+  `app.bsky.feed.repost`, and `app.bsky.graph.follow` records through
+  `createSession`, `uploadBlob`, `createRecord`, `listRecords`, and
+  `deleteRecord`. Full OAuth, signed repository commits, and arbitrary record
+  collections remain out of scope for the current floor.
 
 ## Current Test Hooks
 

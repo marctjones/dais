@@ -10,6 +10,7 @@ use serde_json::Value;
 /// Endpoints:
 /// - GET /xrpc/com.atproto.server.describeServer
 /// - POST /xrpc/com.atproto.server.createSession
+/// - POST /xrpc/com.atproto.repo.uploadBlob
 /// - GET /xrpc/com.atproto.sync.getRepo
 /// - GET /xrpc/com.atproto.sync.getBlob
 /// - GET /xrpc/com.atproto.sync.getRepoStatus
@@ -109,6 +110,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "/xrpc/com.atproto.server.createSession",
             handle_create_session,
         )
+        .post_async("/xrpc/com.atproto.repo.uploadBlob", handle_upload_blob)
         .get_async("/.well-known/did.json", handle_did_document)
         .get_async("/xrpc/com.atproto.sync.getRepo", handle_get_repo)
         .get_async("/xrpc/com.atproto.sync.getBlob", handle_get_blob)
@@ -176,6 +178,53 @@ async fn handle_create_session(mut req: Request, ctx: RouteContext<()>) -> Resul
         "handle": identity.handle,
         "did": identity.did,
         "active": true
+    }))
+}
+
+async fn handle_upload_blob(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    if !owner_bearer_matches(&req, &ctx.env)? {
+        return Response::error("Unauthorized", 401);
+    }
+    let content_type = req
+        .headers()
+        .get("Content-Type")?
+        .and_then(|value| {
+            value
+                .split(';')
+                .next()
+                .map(str::trim)
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    if !content_type.starts_with("image/") {
+        return Response::error("Only public image blobs are supported", 400);
+    }
+    let bytes = req.bytes().await?;
+    if bytes.is_empty() {
+        return Response::error("Blob body is required", 400);
+    }
+    let size = bytes.len() as u64;
+    let cid = stable_cid(&format!(
+        "{}:{}",
+        content_type,
+        bytes.iter().fold(0u64, |acc, byte| acc
+            .wrapping_mul(31)
+            .wrapping_add(*byte as u64))
+    ));
+    let ext = extension_for_media_type(&content_type);
+    let key = format!("uploads/atproto/{cid}.{ext}");
+    ctx.env
+        .bucket("MEDIA_BUCKET")?
+        .put(key, bytes)
+        .execute()
+        .await?;
+    json_response(serde_json::json!({
+        "blob": {
+            "$type": "blob",
+            "ref": { "$link": cid },
+            "mimeType": content_type,
+            "size": size
+        }
     }))
 }
 
@@ -414,6 +463,13 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
     let cid = stable_cid(&record_json);
     let content_html = format!("<p>{}</p>", html_escape(text).replace('\n', "<br>"));
+    let media_attachments = atproto_media_attachments(&body.record)?;
+    let media_attachments_json = if media_attachments.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(&media_attachments)
+            .map_err(|error| worker::Error::RustError(error.to_string()))?
+    };
     let in_reply_to = body
         .record
         .get("reply")
@@ -429,8 +485,8 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
             r#"
             INSERT INTO posts (
               id, actor_id, content, content_html, object_type, visibility, protocol,
-              published_at, in_reply_to, atproto_uri, atproto_cid, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, 'Note', 'public', 'atproto', ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+              published_at, in_reply_to, atproto_uri, atproto_cid, media_attachments, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, 'Note', 'public', 'atproto', ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             "#,
         )
         .bind(&[
@@ -442,6 +498,7 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
             in_reply_to.into(),
             atproto_uri.clone().into(),
             cid.clone().into(),
+            media_attachments_json.into(),
         ])?
         .run()
         .await?;
@@ -749,13 +806,23 @@ struct ProfileCounts {
     follows: u64,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct MediaAttachment {
+    #[serde(default = "default_image_attachment_type", rename = "type")]
+    attachment_type: String,
     url: String,
     #[serde(default, rename = "mediaType")]
     media_type: String,
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    cid: String,
+    #[serde(default)]
+    size: u64,
+}
+
+fn default_image_attachment_type() -> String {
+    "Image".to_string()
 }
 
 struct PublicMediaBlob {
@@ -1050,7 +1117,7 @@ async fn public_media_by_cid(env: &Env, cid: &str) -> Result<Option<PublicMediaB
 
     for row in rows {
         for attachment in media_attachments(&row) {
-            if stable_cid(&attachment.url) == cid {
+            if media_attachment_cid(&attachment) == cid {
                 let Some(key) = r2_key_from_media_url(&attachment.url) else {
                     continue;
                 };
@@ -1365,13 +1432,14 @@ fn record_value(row: serde_json::Map<String, Value>) -> Value {
         .into_iter()
         .filter(|attachment| attachment.media_type.starts_with("image/"))
         .map(|attachment| {
+            let cid = media_attachment_cid(&attachment);
             serde_json::json!({
                 "alt": attachment.name,
                 "image": {
                     "$type": "blob",
-                    "ref": { "$link": stable_cid(&attachment.url) },
+                    "ref": { "$link": cid },
                     "mimeType": attachment.media_type,
-                    "size": 0
+                    "size": attachment.size
                 }
             })
         })
@@ -1476,6 +1544,55 @@ fn media_attachments(row: &serde_json::Map<String, Value>) -> Vec<MediaAttachmen
     serde_json::from_str::<Vec<MediaAttachment>>(raw).unwrap_or_default()
 }
 
+fn atproto_media_attachments(record: &Value) -> Result<Vec<MediaAttachment>> {
+    let Some(embed) = record.get("embed") else {
+        return Ok(Vec::new());
+    };
+    if embed.get("$type").and_then(Value::as_str) != Some("app.bsky.embed.images") {
+        return Err(worker::Error::RustError(
+            "Only image embeds are supported in dais PDS compatibility mode".to_string(),
+        ));
+    }
+    let images = embed
+        .get("images")
+        .and_then(Value::as_array)
+        .ok_or_else(|| worker::Error::RustError("embed.images must be an array".to_string()))?;
+    let mut attachments = Vec::new();
+    for image in images.iter().take(4) {
+        let blob = image
+            .get("image")
+            .ok_or_else(|| worker::Error::RustError("image blob is required".to_string()))?;
+        let cid = blob
+            .get("ref")
+            .and_then(|ref_value| ref_value.get("$link"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| worker::Error::RustError("image.ref.$link is required".to_string()))?;
+        let media_type = blob
+            .get("mimeType")
+            .and_then(Value::as_str)
+            .unwrap_or("image/png");
+        if !media_type.starts_with("image/") {
+            return Err(worker::Error::RustError(
+                "Only image embeds are supported".to_string(),
+            ));
+        }
+        let ext = extension_for_media_type(media_type);
+        attachments.push(MediaAttachment {
+            attachment_type: "Image".to_string(),
+            url: format!("https://social.dais.social/media/uploads/atproto/{cid}.{ext}"),
+            media_type: media_type.to_string(),
+            name: image
+                .get("alt")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            cid: cid.to_string(),
+            size: blob.get("size").and_then(Value::as_u64).unwrap_or_default(),
+        });
+    }
+    Ok(attachments)
+}
+
 fn r2_key_from_media_url(url: &str) -> Option<String> {
     let parsed = Url::parse(url).ok()?;
     if parsed.scheme() != "https" || parsed.host_str()? != "social.dais.social" {
@@ -1487,6 +1604,23 @@ fn r2_key_from_media_url(url: &str) -> Option<String> {
         return None;
     }
     Some(key.to_string())
+}
+
+fn media_attachment_cid(attachment: &MediaAttachment) -> String {
+    if attachment.cid.is_empty() {
+        stable_cid(&attachment.url)
+    } else {
+        attachment.cid.clone()
+    }
+}
+
+fn extension_for_media_type(media_type: &str) -> &'static str {
+    match media_type {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    }
 }
 
 fn json_response(value: Value) -> Result<Response> {

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.48] - 2026-06-16
+
+### Added
+- Added owner-token AT Protocol `uploadBlob` compatibility for public image
+  blobs, storing uploads in the production media bucket and exposing them through
+  PDS `getBlob` once attached to public feed posts.
+- Added Dais PDS support for `app.bsky.embed.images` on owner-token public feed
+  writes, including round-trip `getRecord` image embeds and public blob reads.
+- Added Rust client AT Protocol image attachment support for `dais post create
+  --protocol atproto` and `--protocol both`.
+- Expanded the Bluesky conformance gate with authenticated upload, image-post
+  readback, blob fetch, and cleanup coverage.
+
 ## [1.28.47] - 2026-06-16
 
 ### Added

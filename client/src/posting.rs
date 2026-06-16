@@ -4,7 +4,7 @@ use std::fs;
 use anyhow::{anyhow, Result};
 use reqwest::Url;
 
-use crate::atproto::AtprotoClient;
+use crate::atproto::{AtprotoClient, ImageUpload};
 use crate::cli::{ActivityObjectType, CreatePostArgs, E2eeFallbackMode};
 use crate::config::ConfigStore;
 use crate::d1::{ActivityDeliveryInsert, D1Client, EncryptedPostInsert};
@@ -325,11 +325,6 @@ pub async fn publish_post(
     let effective = effective_protocol(draft.protocol, draft.visibility);
     validate_media_attachments(&draft.attachments, draft.visibility)?;
     validate_poll(&draft)?;
-    if !draft.attachments.is_empty() && effective != Protocol::ActivityPub {
-        anyhow::bail!(
-            "media attachments currently require ActivityPub routing; AT Protocol media upload is not implemented yet"
-        );
-    }
     if draft.visibility == Visibility::Direct && draft.to.is_empty() {
         anyhow::bail!("direct posts require at least one --to actor URL");
     }
@@ -406,7 +401,8 @@ pub async fn publish_post(
     match effective {
         Protocol::Atproto => {
             let mut client = AtprotoClient::from_config(&store.load_bluesky()?)?;
-            let created = client.create_post(&draft.text).await?;
+            let images = upload_atproto_images(&mut client, &draft.attachments).await?;
+            let created = client.create_post_with_images(&draft.text, images).await?;
             Ok(PostOutcome::Bluesky { uri: created.uri })
         }
         Protocol::Both => {
@@ -455,7 +451,8 @@ pub async fn publish_post(
                 create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
 
             let mut client = AtprotoClient::from_config(&store.load_bluesky()?)?;
-            let created = client.create_post(&draft.text).await?;
+            let images = upload_atproto_images(&mut client, &draft.attachments).await?;
+            let created = client.create_post_with_images(&draft.text, images).await?;
             Ok(PostOutcome::Both {
                 post_id,
                 uri: created.uri,
@@ -532,6 +529,52 @@ async fn create_deliveries(
 
     db.create_follower_deliveries(post_id, actor_id, activity_json)
         .await
+}
+
+async fn upload_atproto_images(
+    client: &mut AtprotoClient,
+    attachments: &[String],
+) -> Result<Vec<ImageUpload>> {
+    let values = attachment_values(attachments)?;
+    let http = reqwest::Client::builder()
+        .user_agent("dais-client/0.1")
+        .build()?;
+    let mut images = Vec::new();
+    for value in values {
+        let url = value
+            .get("url")
+            .and_then(|field| field.as_str())
+            .ok_or_else(|| anyhow!("AT Protocol image attachments require a url"))?;
+        let media_type_hint = value
+            .get("mediaType")
+            .and_then(|field| field.as_str())
+            .map(ToString::to_string);
+        let alt = value
+            .get("name")
+            .and_then(|field| field.as_str())
+            .unwrap_or("")
+            .to_string();
+        let response = http.get(url).send().await?.error_for_status()?;
+        let media_type = media_type_hint
+            .or_else(|| {
+                response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.split(';').next())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+            })
+            .unwrap_or_else(|| media_type_for_url(url).to_string());
+        if !media_type.starts_with("image/") {
+            anyhow::bail!("AT Protocol attachments currently support public images only");
+        }
+        let bytes = response.bytes().await?.to_vec();
+        let blob = client.upload_blob(bytes, &media_type).await?;
+        images.push(ImageUpload { blob, alt });
+    }
+    Ok(images)
 }
 
 fn build_create_activity_json(input: CreateActivityInput<'_>) -> Result<String> {
@@ -700,6 +743,22 @@ fn attachment_values(attachments: &[String]) -> Result<Vec<serde_json::Value>> {
             }
         })
         .collect()
+}
+
+fn media_type_for_url(url: &str) -> &'static str {
+    let path = Url::parse(url)
+        .ok()
+        .map(|parsed| parsed.path().to_ascii_lowercase())
+        .unwrap_or_else(|| url.to_ascii_lowercase());
+    if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if path.ends_with(".gif") {
+        "image/gif"
+    } else if path.ends_with(".webp") {
+        "image/webp"
+    } else {
+        "image/png"
+    }
 }
 
 fn poll_option_values(options: &[String]) -> Vec<serde_json::Value> {

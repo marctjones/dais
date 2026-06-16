@@ -327,6 +327,85 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-UPLOAD-01", "Owner-token uploadBlob can attach a public image to a feed post", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for upload fixture" };
+    }
+
+    let createdRkey = "";
+    const token = `dais Bluesky upload conformance ${new Date().toISOString()}`;
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const authHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.json.accessJwt}`,
+    };
+    try {
+      const upload = await request("/xrpc/com.atproto.repo.uploadBlob", {
+        method: "POST",
+        headers: {
+          "Content-Type": "image/png",
+          Authorization: `Bearer ${session.json.accessJwt}`,
+        },
+        body: Buffer.from(tinyPngBase64, "base64"),
+      });
+      if (upload.status !== 200) throw new Error(`uploadBlob expected 200, got ${upload.status}: ${upload.text}`);
+      const blob = upload.json?.blob;
+      if (blob?.mimeType !== "image/png" || !blob?.ref?.$link) throw new Error("uploadBlob shape mismatch");
+
+      const create = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.feed.post",
+          record: {
+            $type: "app.bsky.feed.post",
+            text: token,
+            createdAt: new Date().toISOString(),
+            embed: {
+              $type: "app.bsky.embed.images",
+              images: [{ alt: "dais upload conformance", image: blob }],
+            },
+          },
+        }),
+      });
+      if (create.status !== 200) throw new Error(`createRecord expected 200, got ${create.status}: ${create.text}`);
+      createdRkey = rkeyFromAtUri(create.json?.uri);
+
+      const record = await request(
+        `/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did())}&collection=app.bsky.feed.post&rkey=${encodeURIComponent(createdRkey)}`,
+      );
+      if (record.status !== 200) throw new Error(`getRecord expected 200, got ${record.status}: ${record.text}`);
+      const image = record.json?.value?.embed?.images?.[0]?.image;
+      if (image?.ref?.$link !== blob.ref.$link) throw new Error("created image blob ref did not round-trip");
+      if (!image?.size) throw new Error("created image blob size did not round-trip");
+
+      const downloaded = await request(
+        `/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did())}&cid=${encodeURIComponent(blob.ref.$link)}`,
+        { headers: { Accept: "image/png" } },
+      );
+      if (downloaded.status !== 200) throw new Error(`getBlob expected 200, got ${downloaded.status}: ${downloaded.text}`);
+      if (downloaded.text.length === 0) throw new Error("getBlob returned empty uploaded body");
+    } finally {
+      if (createdRkey) {
+        await request("/xrpc/com.atproto.repo.deleteRecord", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            repo: did(),
+            collection: "app.bsky.feed.post",
+            rkey: createdRkey,
+          }),
+        });
+      }
+    }
+  }),
+
   requirement("BLUESKY-SOCIAL-WRITE-01", "Owner-token ATProto like, repost, and follow records round-trip", async () => {
     if (!config.mastodonToken) {
       return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for social write fixture" };

@@ -435,9 +435,10 @@ ORDER BY created_at ASC;
 - `/xrpc/com.atproto.server.describeServer` - PDS identity metadata
 - `/xrpc/com.atproto.server.createSession` - Owner-token compatibility session
 - `/xrpc/com.atproto.repo.describeRepo` - Repository metadata
+- `/xrpc/com.atproto.repo.uploadBlob` - Owner-token public image blob upload
 - `/xrpc/com.atproto.repo.getRecord` - Public feed-post record read
 - `/xrpc/com.atproto.repo.listRecords` - Owner-token record listing for feed posts, likes, reposts, and follows
-- `/xrpc/com.atproto.repo.createRecord` - Owner-token feed-post, like, repost, and follow create
+- `/xrpc/com.atproto.repo.createRecord` - Owner-token feed-post, image-post, like, repost, and follow create
 - `/xrpc/com.atproto.repo.deleteRecord` - Owner-token feed-post, like, repost, and follow delete
 - `/xrpc/com.atproto.sync.getRepo` - JSON compatibility repo floor
 - `/xrpc/com.atproto.sync.getRepoStatus` - Repo status metadata

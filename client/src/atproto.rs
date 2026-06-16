@@ -126,6 +126,8 @@ struct PostRecord<'a> {
     created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     reply: Option<ReplyRef<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    embed: Option<ImageEmbed>,
 }
 
 #[derive(Debug, Serialize)]
@@ -138,6 +140,47 @@ struct ReplyRef<'a> {
 struct StrongRef<'a> {
     uri: &'a str,
     cid: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct ImageEmbed {
+    #[serde(rename = "$type")]
+    record_type: &'static str,
+    images: Vec<ImageEmbedItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct ImageEmbedItem {
+    alt: String,
+    image: BlobRef,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BlobRef {
+    #[serde(rename = "$type")]
+    pub blob_type: Option<String>,
+    #[serde(rename = "ref")]
+    pub ref_: BlobLink,
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BlobLink {
+    #[serde(rename = "$link")]
+    pub link: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UploadBlobResponse {
+    blob: BlobRef,
+}
+
+#[derive(Debug)]
+pub struct ImageUpload {
+    pub blob: BlobRef,
+    pub alt: String,
 }
 
 impl AtprotoClient {
@@ -207,6 +250,14 @@ impl AtprotoClient {
     }
 
     pub async fn create_post(&mut self, text: &str) -> Result<CreatedRecord> {
+        self.create_post_with_images(text, Vec::new()).await
+    }
+
+    pub async fn create_post_with_images(
+        &mut self,
+        text: &str,
+        images: Vec<ImageUpload>,
+    ) -> Result<CreatedRecord> {
         self.ensure_session().await?;
         let token = self.token()?;
         let record = PostRecord {
@@ -214,6 +265,7 @@ impl AtprotoClient {
             text,
             created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             reply: None,
+            embed: image_embed(images),
         };
 
         self.post_json(
@@ -227,6 +279,22 @@ impl AtprotoClient {
             Some(token),
         )
         .await
+    }
+
+    pub async fn upload_blob(&mut self, bytes: Vec<u8>, content_type: &str) -> Result<BlobRef> {
+        self.ensure_session().await?;
+        let token = self.token()?;
+        let url = format!("{}/xrpc/com.atproto.repo.uploadBlob", self.service);
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(token)
+            .header("Content-Type", content_type)
+            .body(bytes)
+            .send()
+            .await?;
+        let uploaded: UploadBlobResponse = decode_response(response).await?;
+        Ok(uploaded.blob)
     }
 
     pub async fn reply_post(
@@ -253,6 +321,7 @@ impl AtprotoClient {
                     cid: parent_cid,
                 },
             }),
+            embed: None,
         };
 
         self.post_json(
@@ -548,6 +617,22 @@ impl AtprotoClient {
         let response = request.send().await?;
         decode_response(response).await
     }
+}
+
+fn image_embed(images: Vec<ImageUpload>) -> Option<ImageEmbed> {
+    if images.is_empty() {
+        return None;
+    }
+    Some(ImageEmbed {
+        record_type: "app.bsky.embed.images",
+        images: images
+            .into_iter()
+            .map(|image| ImageEmbedItem {
+                alt: image.alt,
+                image: image.blob,
+            })
+            .collect(),
+    })
 }
 
 async fn decode_response<T: for<'de> Deserialize<'de>>(response: reqwest::Response) -> Result<T> {
