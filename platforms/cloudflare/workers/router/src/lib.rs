@@ -161,6 +161,22 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             owner_unblock(&env, &value).await?;
             api_json(&serde_json::json!({ "ok": true }), 200)
         }
+        (worker::Method::Post, "/moderation/allowlist") => {
+            let body = read_json(&mut req).await;
+            let host = match normalize_host_value(
+                body.get("host")
+                    .and_then(optional_body_string)
+                    .as_deref()
+                    .unwrap_or_default(),
+            ) {
+                Ok(host) => host,
+                Err(message) => {
+                    return api_json(&serde_json::json!({ "error": message }), 400);
+                }
+            };
+            let note = body.get("note").and_then(optional_body_string);
+            api_json(&owner_allow_host(&env, &host, note.as_deref()).await?, 201)
+        }
         (worker::Method::Delete, _) if owner_path.starts_with("/moderation/allowlist/") => {
             let host = normalize_host(&decode_component(
                 owner_path.trim_start_matches("/moderation/allowlist/"),
@@ -1142,6 +1158,30 @@ async fn owner_delete_allowlist_host(env: &Env, host: &str) -> Result<()> {
     Ok(())
 }
 
+async fn owner_allow_host(env: &Env, host: &str, note: Option<&str>) -> Result<Map<String, Value>> {
+    let db = env.d1("DB")?;
+    let host_arg = D1Type::Text(host);
+    let note_arg = note.map(D1Type::Text).unwrap_or(D1Type::Null);
+    db.prepare(
+        r#"
+        INSERT INTO federation_allowlist (host, note, enabled, created_at, updated_at)
+        VALUES (?1, ?2, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(host) DO UPDATE SET
+          note = excluded.note,
+          enabled = 1,
+          updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind_refs([&host_arg, &note_arg])?
+    .run()
+    .await?;
+
+    let mut response = Map::new();
+    response.insert("ok".to_string(), Value::Bool(true));
+    response.insert("host".to_string(), Value::String(host.to_string()));
+    Ok(response)
+}
+
 fn normalize_source_item(row: Map<String, Value>) -> Map<String, Value> {
     let mut item = Map::new();
     item.insert("id".to_string(), row_value_or_null(&row, "id"));
@@ -1235,15 +1275,35 @@ fn required_body_string(value: Option<&Value>) -> Option<String> {
     }
 }
 
+fn optional_body_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Number(number) if number.as_i64().unwrap_or(1) != 0 => Some(number.to_string()),
+        Value::Bool(true) => Some("true".to_string()),
+        _ => None,
+    }
+}
+
 fn body_string_any(body: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| required_body_string(body.get(*key)))
 }
 
 fn normalize_host(value: &str) -> Result<String> {
+    normalize_host_value(value).map_err(|message| worker::Error::RustError(message.to_string()))
+}
+
+fn normalize_host_value(value: &str) -> std::result::Result<String, &'static str> {
     let raw = value.trim();
     if raw.is_empty() {
-        return Err(worker::Error::RustError("host is required".to_string()));
+        return Err("host is required");
     }
     let lower_raw = raw.to_ascii_lowercase();
     let without_scheme = lower_raw
@@ -1265,9 +1325,7 @@ fn normalize_host(value: &str) -> Result<String> {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'-'
         })
     {
-        return Err(worker::Error::RustError(
-            "host must be a domain name".to_string(),
-        ));
+        return Err("host must be a domain name");
     }
     Ok(host)
 }
