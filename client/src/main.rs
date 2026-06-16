@@ -1132,6 +1132,18 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 println!("delivery_ids={}", created.delivery_ids.join(","));
             }
         }
+        OwnerCommand::PostDelete(args) => {
+            let deleted = owner_api(&args.api)
+                .delete_post(&args.object_id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Deleted owner API post");
+            println!("id={}", deleted.id);
+            println!("deleted={}", deleted.deleted);
+            if !deleted.delivery_ids.is_empty() {
+                println!("delivery_ids={}", deleted.delivery_ids.join(","));
+            }
+        }
         OwnerCommand::Sources(args) => {
             let sources = owner_api(&args)
                 .sources()
@@ -1159,6 +1171,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                     media_type,
                     access: args.access,
                     expires_in_seconds: args.expires_in_seconds,
+                    require_authorized_fetch: args.require_authorized_fetch.then_some(true),
                     data_base64: STANDARD.encode(data),
                 })
                 .await
@@ -1170,6 +1183,9 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
             }
             if let Some(access) = uploaded.access {
                 println!("access={access}");
+            }
+            if let Some(authorized_fetch) = uploaded.authorized_fetch {
+                println!("authorized_fetch={authorized_fetch}");
             }
             if let Some(expires_at) = uploaded.expires_at {
                 println!("expires_at={expires_at}");

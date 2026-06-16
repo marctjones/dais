@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.61] - 2026-06-16
+
+### Added
+- Added opt-in recipient-bound authorized fetch for private owner media uploads
+  with signed `/media/_private_signed/...` URLs.
+- Added ActivityPub conformance coverage proving unsigned signed-media fetches
+  are denied while signed approved-follower fetches can retrieve the media.
+- Added `dais owner media-upload --require-authorized-fetch` for CLI access to
+  signed private media uploads.
+- Added owner-authenticated post deletion with `dais owner post-delete` so live
+  fixtures and clients can remove private owner posts through the owner API.
+
 ## [1.28.60] - 2026-06-16
 
 ### Added

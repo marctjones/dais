@@ -340,11 +340,14 @@ async function handleMedia(request, env, path) {
   if (!mediaPath) {
     return new Response('Missing filename', { status: 400 });
   }
-  const privateMedia = mediaPath.startsWith('_private/');
+  const signedPrivateMedia = mediaPath.startsWith('_private_signed/');
+  const privateMedia = mediaPath.startsWith('_private/') || signedPrivateMedia;
   if (mediaPath.startsWith('private/')) {
     return new Response('Not Found', { status: 404 });
   }
-  const filename = privateMedia ? `private/${mediaPath.slice('_private/'.length)}` : mediaPath;
+  const filename = privateMedia
+    ? `private/${mediaPath.slice(signedPrivateMedia ? '_private_signed/'.length : '_private/'.length)}`
+    : mediaPath;
 
   try {
     // Fetch from R2 bucket
@@ -355,6 +358,12 @@ async function handleMedia(request, env, path) {
     }
     if (privateMedia && mediaExpired(object)) {
       return new Response('Not Found', { status: 404 });
+    }
+    if (signedPrivateMedia) {
+      const authorized = await authorizedPrivateMediaFetch(env, request, path);
+      if (!authorized.ok) {
+        return new Response(authorized.error || 'Forbidden', { status: authorized.status || 403 });
+      }
     }
 
     // Determine Content-Type from file extension
@@ -1018,6 +1027,11 @@ async function handleOwnerApi(request, env, url) {
     if (!post) return apiJson({ error: 'post not found' }, 404);
     return apiJson(post);
   }
+  if (request.method === 'DELETE' && postDetail) {
+    const deleted = await ownerDeletePost(env, decodeURIComponent(postDetail[1]));
+    if (!deleted) return apiJson({ error: 'post not found' }, 404);
+    return apiJson(deleted);
+  }
 
   if (request.method === 'GET' && path === '/timeline/home') {
     return apiJson({
@@ -1551,12 +1565,16 @@ async function ownerUploadMedia(env, body) {
   const dataBase64 = optionalString(body.data_base64);
   const mediaType = optionalString(body.media_type) || mediaTypeForFilename(filename || '');
   const access = optionalString(body.access) || 'public';
+  const requireAuthorizedFetch = Boolean(body.require_authorized_fetch || body.requireAuthorizedFetch);
   const expiresAt = privateMediaExpiresAt(body.expires_in_seconds ?? body.expiresInSeconds);
   if (!filename) throw new Error('filename is required');
   if (!dataBase64) throw new Error('data_base64 is required');
   if (!allowedMediaType(mediaType)) throw new Error('unsupported media type');
   if (!['public', 'private'].includes(access)) throw new Error('access must be public or private');
   if (expiresAt && access !== 'private') throw new Error('media expiration is only supported for private uploads');
+  if (requireAuthorizedFetch && access !== 'private') {
+    throw new Error('authorized-fetch media is only supported for private uploads');
+  }
 
   const bytes = base64ToBytes(dataBase64);
   if (bytes.byteLength > 8 * 1024 * 1024) {
@@ -1572,12 +1590,13 @@ async function ownerUploadMedia(env, body) {
   const description = optionalString(body.description);
   if (description) customMetadata.description = description;
   if (expiresAt) customMetadata.expires_at = expiresAt;
+  if (requireAuthorizedFetch) customMetadata.authorized_fetch = 'required';
   await env.MEDIA_BUCKET.put(key, bytes, {
     httpMetadata: { contentType: mediaType },
     customMetadata: Object.keys(customMetadata).length ? customMetadata : undefined,
   });
   const url = access === 'private'
-    ? `https://social.dais.social/media/_private/${token}/${safeName}`
+    ? `https://social.dais.social/media/${requireAuthorizedFetch ? '_private_signed' : '_private'}/${token}/${safeName}`
     : `https://social.dais.social/media/${key}`;
   const attachment = {
     type: mediaType.startsWith('image/') ? 'Image' : 'Document',
@@ -1585,7 +1604,15 @@ async function ownerUploadMedia(env, body) {
     url,
     name: safeName,
   };
-  return { url, media_type: mediaType, access, attachment, description, expires_at: expiresAt };
+  return {
+    url,
+    media_type: mediaType,
+    access,
+    authorized_fetch: requireAuthorizedFetch,
+    attachment,
+    description,
+    expires_at: expiresAt,
+  };
 }
 
 async function ownerRevokeMedia(env, body) {
@@ -1626,10 +1653,175 @@ function mediaR2KeyFromUrl(value) {
   if (parsed.pathname.startsWith('/media/_private/')) {
     return `private/${decodeURIComponent(parsed.pathname.slice('/media/_private/'.length))}`;
   }
+  if (parsed.pathname.startsWith('/media/_private_signed/')) {
+    return `private/${decodeURIComponent(parsed.pathname.slice('/media/_private_signed/'.length))}`;
+  }
   if (parsed.pathname.startsWith('/media/uploads/')) {
     return decodeURIComponent(parsed.pathname.slice('/media/'.length));
   }
   return null;
+}
+
+async function authorizedPrivateMediaFetch(env, request, path) {
+  const signer = await signedRequestActor(request);
+  if (!signer.ok) return signer;
+  const actorId = signer.actorId;
+  const approved = await env.DB.prepare(
+    `SELECT 1
+     FROM followers
+     WHERE follower_actor_id = ?1
+       AND status = 'approved'
+     LIMIT 1`,
+  ).bind(actorId).first();
+  if (!approved) {
+    return { ok: false, status: 403, error: 'Signed media fetch requires an approved follower' };
+  }
+
+  const mediaUrl = `https://social.dais.social${path}`;
+  const attached = await privateMediaAttachedPost(env, mediaUrl);
+  if (!attached) {
+    return { ok: false, status: 404, error: 'Not Found' };
+  }
+
+  return { ok: true, actorId };
+}
+
+async function privateMediaAttachedPost(env, mediaUrl) {
+  const rows = await env.DB.prepare(
+    `SELECT id, media_attachments
+     FROM posts
+     WHERE visibility IN ('followers', 'direct')
+       AND media_attachments IS NOT NULL
+       AND media_attachments != ''
+     ORDER BY published_at DESC
+     LIMIT 250`,
+  ).all();
+  return (rows.results || []).find((row) => (
+    String(row.media_attachments || '').includes(mediaUrl)
+  )) || null;
+}
+
+async function signedRequestActor(request) {
+  const signatureHeader = request.headers.get('Signature');
+  if (!signatureHeader) {
+    return { ok: false, status: 401, error: 'HTTP Signature required' };
+  }
+  const parsed = parseSignatureHeader(signatureHeader);
+  const keyId = parsed.keyId;
+  const signature = parsed.signature;
+  const headers = (parsed.headers || 'date')
+    .split(/\s+/)
+    .map((header) => header.trim().toLowerCase())
+    .filter(Boolean);
+  if (!keyId || !signature || headers.length === 0) {
+    return { ok: false, status: 401, error: 'Invalid HTTP Signature' };
+  }
+
+  let actorUrl;
+  try {
+    const keyUrl = new URL(keyId);
+    keyUrl.hash = '';
+    actorUrl = keyUrl.toString();
+  } catch {
+    return { ok: false, status: 401, error: 'Invalid Signature keyId' };
+  }
+
+  const actor = fixtureActorFromKeyUrl(actorUrl)
+    || await fetchSignatureActor(actorUrl);
+  if (!actor) {
+    return { ok: false, status: 401, error: 'Could not fetch Signature actor' };
+  }
+  const publicKey = actor?.publicKey;
+  const publicKeyPem = publicKey?.publicKeyPem;
+  if (!publicKeyPem || (publicKey.id && publicKey.id !== keyId)) {
+    return { ok: false, status: 401, error: 'Signature public key mismatch' };
+  }
+
+  const signingString = signatureSigningString(request, headers);
+  const verified = await verifyRsaSha256(publicKeyPem, signingString, signature);
+  if (!verified) {
+    return { ok: false, status: 401, error: 'HTTP Signature verification failed' };
+  }
+
+  return { ok: true, actorId: actor.id || actorUrl };
+}
+
+async function fetchSignatureActor(actorUrl) {
+  const actorResponse = await fetch(actorUrl, {
+    headers: { Accept: 'application/activity+json, application/ld+json' },
+  });
+  if (!actorResponse.ok) return null;
+  return actorResponse.json();
+}
+
+function fixtureActorFromKeyUrl(actorUrl) {
+  let url;
+  try {
+    url = new URL(actorUrl);
+  } catch {
+    return null;
+  }
+  if (url.pathname !== '/__dais-fixtures/activitypub/actor') return null;
+  const publicKeyPem = decodeFixturePublicKey(url.searchParams.get('pk') || '');
+  if (!publicKeyPem) return null;
+  const canonical = url.toString();
+  return {
+    id: canonical,
+    publicKey: {
+      id: `${canonical}#main-key`,
+      owner: canonical,
+      publicKeyPem,
+    },
+  };
+}
+
+function parseSignatureHeader(value) {
+  const parsed = {};
+  for (const part of String(value || '').split(',')) {
+    const [rawKey, ...rawValue] = part.split('=');
+    const key = rawKey.trim();
+    const joined = rawValue.join('=').trim();
+    if (!key || !joined) continue;
+    parsed[key] = joined.replace(/^"|"$/g, '');
+  }
+  return parsed;
+}
+
+function signatureSigningString(request, headers) {
+  const url = new URL(request.url);
+  return headers
+    .map((header) => {
+      if (header === '(request-target)') {
+        return `(request-target): ${request.method.toLowerCase()} ${url.pathname}${url.search}`;
+      }
+      const value = request.headers.get(header);
+      return `${header}: ${value || ''}`;
+    })
+    .join('\n');
+}
+
+async function verifyRsaSha256(publicKeyPem, signingString, signature) {
+  const key = await crypto.subtle.importKey(
+    'spki',
+    pemToArrayBuffer(publicKeyPem),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  return crypto.subtle.verify(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    base64ToBytes(signature),
+    new TextEncoder().encode(signingString),
+  );
+}
+
+function pemToArrayBuffer(pem) {
+  const body = String(pem)
+    .replace(/-----BEGIN PUBLIC KEY-----/g, '')
+    .replace(/-----END PUBLIC KEY-----/g, '')
+    .replace(/\s+/g, '');
+  return base64ToBytes(body).buffer;
 }
 
 function randomToken() {
@@ -2485,6 +2677,47 @@ async function ownerCreatePost(env, {
   };
 }
 
+async function ownerDeletePost(env, id) {
+  const existing = await env.DB.prepare(
+    `SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+            name, summary, visibility, COALESCE(protocol, 'activitypub') AS protocol,
+            atproto_uri, atproto_cid, encrypted_message, media_attachments,
+            published_at, created_at, updated_at, in_reply_to
+     FROM posts
+     WHERE id = ?1
+     LIMIT 1`,
+  ).bind(id).first();
+  if (!existing) return null;
+
+  let deliveryIds = [];
+  if ((existing.protocol === 'activitypub' || existing.protocol === 'both') && existing.visibility !== 'direct') {
+    const now = new Date().toISOString();
+    const deleteId = `${existing.actor_id}#deletes/${stableId(`${id}\n${now}`).slice(0, 16)}`;
+    const activity = {
+      '@context': 'https://www.w3.org/ns/activitystreams',
+      id: deleteId,
+      type: 'Delete',
+      actor: existing.actor_id,
+      published: now,
+      to: ['https://www.w3.org/ns/activitystreams#Public'],
+      cc: [`${existing.actor_id}/followers`],
+      object: {
+        id,
+        type: 'Tombstone',
+      },
+    };
+    const rows = await env.DB.prepare(
+      `SELECT COALESCE(NULLIF(follower_shared_inbox, ''), follower_inbox) AS inbox
+       FROM followers
+       WHERE status = 'approved'`,
+    ).all();
+    deliveryIds = await insertDeliveryRows(env, id, (rows.results || []).map((row) => row.inbox), 'Delete', JSON.stringify(activity));
+  }
+
+  await env.DB.prepare("DELETE FROM posts WHERE id = ?1").bind(id).run();
+  return { ok: true, id, deleted: true, delivery_ids: deliveryIds };
+}
+
 function normalizeAttachments(values) {
   const attachments = [];
   for (const value of values || []) {
@@ -2521,7 +2754,8 @@ function normalizeAttachments(values) {
 function isPrivateMediaAttachment(attachment) {
   try {
     const url = new URL(attachment.url);
-    return url.hostname === 'social.dais.social' && url.pathname.startsWith('/media/_private/');
+    return url.hostname === 'social.dais.social'
+      && (url.pathname.startsWith('/media/_private/') || url.pathname.startsWith('/media/_private_signed/'));
   } catch {
     return false;
   }

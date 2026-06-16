@@ -813,6 +813,8 @@ pub enum OwnerCommand {
     Diagnostics(OwnerApiArgs),
     /// Create a post through the live owner API.
     PostCreate(OwnerPostCreateArgs),
+    /// Delete a post through the live owner API.
+    PostDelete(OwnerObjectArgs),
     /// List live owner API source subscriptions and reader items.
     Sources(OwnerApiArgs),
     /// Upload media through the live owner API and print attachment JSON.
@@ -956,6 +958,9 @@ pub struct OwnerMediaUploadArgs {
     /// Expire a private capability URL after this many seconds. Maximum 30 days.
     #[arg(long)]
     pub expires_in_seconds: Option<u64>,
+    /// Require ActivityPub authorized fetch from an approved follower to serve this private URL.
+    #[arg(long)]
+    pub require_authorized_fetch: bool,
 }
 
 #[derive(Args, Clone, Debug)]

@@ -227,7 +227,7 @@ async function mastodonApi(path, options = {}) {
   return res;
 }
 
-async function signedGetFixture(fixture, path) {
+async function signedGetFixture(fixture, path, accept = "application/activity+json") {
   const host = new URL(config.socialBaseUrl).host;
   const date = new Date().toUTCString();
   const headersToSign = ["(request-target)", "host", "date", "accept"];
@@ -235,12 +235,12 @@ async function signedGetFixture(fixture, path) {
     `(request-target): get ${path}`,
     `host: ${host}`,
     `date: ${date}`,
-    "accept: application/activity+json",
+    `accept: ${accept}`,
   ].join("\n");
   const signature = signHttpSignature(fixture.privateKey, signingString);
   return request(path, {
     headers: {
-      Accept: "application/activity+json",
+      Accept: accept,
       Date: date,
       Signature:
         `keyId="${fixture.actorUrl}#main-key",algorithm="rsa-sha256",headers="${headersToSign.join(" ")}",signature="${signature}"`,
@@ -285,6 +285,86 @@ async function authorizedFetchFixture() {
     const signedGet = await signedGetFixture(fixture, config.knownPrivatePost);
     return { signedGet };
   } finally {
+    await signedActivityPost(fixture, undo).catch(() => {});
+  }
+}
+
+async function signedPrivateMediaFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live signed private media fixture" };
+  }
+  const fixture = generateFixtureActor();
+  const followId = `${fixture.actorUrl}#activities/follow-${Date.now()}`;
+  const follow = JSON.stringify({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: followId,
+    type: "Follow",
+    actor: fixture.actorUrl,
+    object: actorUrl,
+  });
+  const undo = JSON.stringify({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: `${fixture.actorUrl}#activities/undo-${Date.now()}`,
+    type: "Undo",
+    actor: fixture.actorUrl,
+    object: {
+      id: followId,
+      type: "Follow",
+      actor: fixture.actorUrl,
+      object: actorUrl,
+    },
+  });
+  let mediaUrl = "";
+  let createdId = "";
+  try {
+    const followRes = await signedActivityPost(fixture, follow);
+    if (followRes.status < 200 || followRes.status >= 300) {
+      throw new Error(`signed Follow expected 2xx, got ${followRes.status}: ${followRes.text}`);
+    }
+    await ownerApi("/followers/status", {
+      method: "POST",
+      body: JSON.stringify({ follower_actor_id: fixture.actorUrl, status: "approved" }),
+    });
+    const media = await ownerApi("/media", {
+      method: "POST",
+      body: JSON.stringify({
+        filename: "signed-private-media.png",
+        media_type: "image/png",
+        access: "private",
+        require_authorized_fetch: true,
+        data_base64: tinyPngBase64,
+      }),
+    });
+    mediaUrl = media.json?.url || "";
+    if (!mediaUrl.includes("/media/_private_signed/")) {
+      throw new Error(`signed private upload returned unexpected URL: ${mediaUrl}`);
+    }
+    const created = await ownerApi("/posts", {
+      method: "POST",
+      body: JSON.stringify({
+        text: "signed private media conformance fixture",
+        visibility: "followers",
+        protocol: "activitypub",
+        attachments: [media.json.attachment],
+      }),
+    });
+    createdId = created.json?.id || "";
+    const mediaPath = new URL(mediaUrl).pathname;
+    const unsigned = await request(mediaPath, { headers: { Accept: "image/png" } });
+    const signed = await signedGetFixture(fixture, mediaPath, "image/png");
+    return { unsigned, signed, mediaUrl };
+  } finally {
+    if (createdId) {
+      await ownerApi(`/posts/${encodeURIComponent(createdId)}`, {
+        method: "DELETE",
+      }).catch(() => {});
+    }
+    if (mediaUrl) {
+      await ownerApi("/media/revoke", {
+        method: "POST",
+        body: JSON.stringify({ url: mediaUrl }),
+      }).catch(() => {});
+    }
     await signedActivityPost(fixture, undo).catch(() => {});
   }
 }
@@ -501,6 +581,21 @@ const tests = [
       return t.fail(`private post response mismatch: ${summarizeJson(res.json)}`);
     }
     t.pass("valid signed approved-follower GET can fetch private post");
+  }),
+
+  requirement("MASTODON-SECURITY-03", "MASTODON", "Private media supports recipient-bound authorized fetch", async (t) => {
+    const result = await signedPrivateMediaFixture();
+    if (result.skipped) return t.info(result.detail);
+    if (result.unsigned.status !== 401) {
+      return t.fail(`unsigned signed-media GET expected 401, got ${result.unsigned.status}: ${result.unsigned.text}`);
+    }
+    if (result.signed.status !== 200) {
+      return t.fail(`signed approved-follower media GET expected 200, got ${result.signed.status}: ${result.signed.text}`);
+    }
+    if (!hasContentType(result.signed.contentType, "image/png")) {
+      return t.fail(`signed media expected image/png, got ${result.signed.contentType || "none"}`);
+    }
+    t.pass("signed approved follower can fetch private media while unsigned fetch is denied");
   }),
 
   requirement("MASTODON-CONTENT-01", "MASTODON", "Mastodon status payload basics are present", async (t) => {

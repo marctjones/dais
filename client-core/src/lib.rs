@@ -31,6 +31,11 @@ impl OwnerApiClient {
             .await
     }
 
+    pub async fn delete_post(&self, id: &str) -> ClientResult<OwnerDeletedPost> {
+        self.delete(&format!("/api/dais/owner/posts/{}", url_encode(id)))
+            .await
+    }
+
     pub async fn discover_actor(&self, target: &str) -> ClientResult<OwnerDiscoveredActor> {
         self.post("/api/dais/owner/discovery/actor", &FollowTarget { target })
             .await
@@ -388,6 +393,14 @@ pub struct OwnerCreatedPost {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerDeletedPost {
+    pub ok: bool,
+    pub id: String,
+    pub deleted: bool,
+    pub delivery_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerInteraction {
     pub object_id: String,
     pub interaction: String,
@@ -408,6 +421,7 @@ pub struct OwnerMediaUpload {
     pub media_type: Option<String>,
     pub access: Option<String>,
     pub expires_in_seconds: Option<u64>,
+    pub require_authorized_fetch: Option<bool>,
     pub data_base64: String,
 }
 
@@ -416,6 +430,7 @@ pub struct OwnerMedia {
     pub url: String,
     pub media_type: Option<String>,
     pub access: Option<String>,
+    pub authorized_fetch: Option<bool>,
     pub expires_at: Option<String>,
     pub attachment: serde_json::Value,
 }
