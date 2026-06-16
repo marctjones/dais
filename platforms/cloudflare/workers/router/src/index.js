@@ -722,6 +722,24 @@ async function handleMastodonApi(request, env, url) {
     }
   }
 
+  const media = path.match(/^\/api\/v[12]\/media\/(.+)$/);
+  if (request.method === 'GET' && media) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const attachment = await mastodonMediaAttachmentForId(env, decodeURIComponent(media[1]));
+    if (!attachment) return apiJson({ error: 'Record not found' }, 404);
+    return apiJson(attachment);
+  }
+
+  if ((request.method === 'PUT' || request.method === 'PATCH') && media) {
+    const auth = requireBearer(request, env);
+    if (auth) return auth;
+    const body = await readRequestBody(request);
+    const attachment = await mastodonUpdateMediaAttachment(env, decodeURIComponent(media[1]), optionalString(body.description));
+    if (!attachment) return apiJson({ error: 'Record not found' }, 404);
+    return apiJson(attachment);
+  }
+
   if (request.method === 'GET' && path === '/api/v1/notifications') {
     const auth = requireBearer(request, env);
     if (auth) return auth;
@@ -1441,6 +1459,7 @@ async function ownerUploadMedia(env, body) {
   const key = access === 'private' ? `private/${token}/${safeName}` : `uploads/${publicName}`;
   await env.MEDIA_BUCKET.put(key, bytes, {
     httpMetadata: { contentType: mediaType },
+    customMetadata: optionalString(body.description) ? { description: optionalString(body.description) } : undefined,
   });
   const url = access === 'private'
     ? `https://social.dais.social/media/_private/${token}/${safeName}`
@@ -1451,7 +1470,7 @@ async function ownerUploadMedia(env, body) {
     url,
     name: safeName,
   };
-  return { url, media_type: mediaType, access, attachment };
+  return { url, media_type: mediaType, access, attachment, description: optionalString(body.description) };
 }
 
 function randomToken() {
@@ -2971,6 +2990,7 @@ async function mastodonUploadMedia(request, env) {
     data_base64: dataBase64,
     media_type: mediaType || mediaTypeForFilename(filename),
     access: 'public',
+    description: body.description || null,
   });
   return mastodonMediaAttachmentFromUpload(uploaded, body.description || null);
 }
@@ -2988,9 +3008,62 @@ function mastodonMediaAttachmentFromUpload(uploaded, description = null) {
     preview_remote_url: null,
     text_url: null,
     meta: {},
-    description: description || attachment.name || null,
+    description: description || uploaded.description || attachment.name || null,
     blurhash: null,
   };
+}
+
+async function mastodonMediaAttachmentForId(env, id) {
+  const key = mastodonMediaR2Key(id);
+  if (!key) return null;
+  const object = await env.MEDIA_BUCKET.get(key);
+  if (!object) return null;
+  const mediaType = object.httpMetadata?.contentType || mediaTypeForFilename(key);
+  const url = `https://social.dais.social/media/${key}`;
+  return {
+    id: url,
+    type: mediaType.startsWith('image/') ? 'image' : mediaType.startsWith('video/') ? 'video' : 'unknown',
+    url,
+    preview_url: url,
+    remote_url: null,
+    preview_remote_url: null,
+    text_url: null,
+    meta: {},
+    description: object.customMetadata?.description || decodeURIComponent(key.split('/').pop() || 'media'),
+    blurhash: null,
+  };
+}
+
+async function mastodonUpdateMediaAttachment(env, id, description) {
+  const key = mastodonMediaR2Key(id);
+  if (!key) return null;
+  const object = await env.MEDIA_BUCKET.get(key);
+  if (!object) return null;
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  const mediaType = object.httpMetadata?.contentType || mediaTypeForFilename(key);
+  const customMetadata = { ...(object.customMetadata || {}) };
+  if (description) {
+    customMetadata.description = description;
+  } else {
+    delete customMetadata.description;
+  }
+  await env.MEDIA_BUCKET.put(key, bytes, {
+    httpMetadata: { contentType: mediaType },
+    customMetadata,
+  });
+  return mastodonMediaAttachmentForId(env, id);
+}
+
+function mastodonMediaR2Key(id) {
+  let parsed;
+  try {
+    parsed = new URL(id);
+  } catch {
+    return null;
+  }
+  if (parsed.hostname !== 'social.dais.social') return null;
+  if (!parsed.pathname.startsWith('/media/uploads/')) return null;
+  return parsed.pathname.replace(/^\/media\//, '');
 }
 
 async function mastodonAttachmentsForMediaIds(env, mediaIds, visibility) {

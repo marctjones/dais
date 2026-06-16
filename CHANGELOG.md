@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.41] - 2026-06-16
+
+### Added
+- Added Mastodon-compatible media metadata read/update endpoints for uploaded
+  public media and covered them in the Mastodon API conformance gate.
+
 ## [1.28.40] - 2026-06-16
 
 ### Added

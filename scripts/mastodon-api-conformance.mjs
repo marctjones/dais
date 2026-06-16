@@ -287,6 +287,23 @@ const tests = [
       if (media.status !== 200) throw new Error(`media upload expected 200, got ${media.status}: ${media.text}`);
       if (!media.json?.id || media.json.type !== "image" || !media.json.url) throw new Error("media upload shape incomplete");
 
+      const mediaRead = await request(`/api/v1/media/${encodeURIComponent(media.json.id)}`, { auth: true });
+      if (mediaRead.status !== 200) throw new Error(`media read expected 200, got ${mediaRead.status}: ${mediaRead.text}`);
+      if (mediaRead.json?.url !== media.json.url || mediaRead.json?.description !== "dais conformance pixel") {
+        throw new Error("media read did not return uploaded attachment metadata");
+      }
+
+      const mediaUpdate = await request(`/api/v1/media/${encodeURIComponent(media.json.id)}`, {
+        method: "PUT",
+        auth: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: "updated dais conformance pixel" }),
+      });
+      if (mediaUpdate.status !== 200) throw new Error(`media update expected 200, got ${mediaUpdate.status}: ${mediaUpdate.text}`);
+      if (mediaUpdate.json?.description !== "updated dais conformance pixel") {
+        throw new Error("media update did not return updated description");
+      }
+
       const create = await request("/api/v1/statuses", {
         method: "POST",
         auth: true,
