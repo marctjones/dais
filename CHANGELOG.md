@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.42] - 2026-06-16
+
+### Added
+- Added a dedicated Bluesky/PDS compatibility conformance gate covering the
+  current XRPC identity, repo, feed, AppView, privacy, and sync floor.
+
 ## [1.28.41] - 2026-06-16
 
 ### Added

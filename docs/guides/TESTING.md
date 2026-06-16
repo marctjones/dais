@@ -87,13 +87,34 @@ The report uses separate result groups:
 compatibility gaps that should be tracked as GitHub issues before becoming hard
 release gates.
 
+#### `scripts/bluesky-conformance.mjs`
+
+Runs a read-only Bluesky/PDS compatibility gate for the current public XRPC
+floor. It checks identity/DID shape, repo metadata, public feed and timeline
+records, AppView-style arrays, privacy filtering, sync guidance, and explicit
+unsupported-collection errors.
+
+**Usage:**
+```bash
+npm run test:bluesky-conformance
+```
+
+**Environment overrides:**
+```bash
+DAIS_PDS_BASE_URL=https://pds.dais.social \
+DAIS_ACCT_DOMAIN=social.dais.social \
+npm run test:bluesky-conformance
+```
+
+`FAIL` exits non-zero. The script is read-only and safe to run against
+production because it does not create posts, records, sessions, or blobs.
+
 #### `scripts/federation-matrix.mjs`
 
 Runs a compatibility matrix for the current dais deployment and optional remote
 fediverse targets. This is the v0.15 federation-lab gate: it checks discovery,
 actor shape, public outbox safety, anonymous private/E2EE denial, unsigned inbox
-rejection, the read-only Mastodon API floor, and the AT Protocol PDS
-`describeServer` endpoint.
+rejection, the read-only Mastodon API floor, and the AT Protocol PDS floor.
 
 **Usage:**
 ```bash

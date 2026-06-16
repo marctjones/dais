@@ -149,5 +149,8 @@ Bluesky parity requires substantially more than the existing endpoints:
 
 - `npm run test:activitypub-conformance` checks a subset of ActivityPub,
   Mastodon, dais privacy, and ATProto public-read behavior.
+- `npm run test:bluesky-conformance` checks the current read-only PDS/AppView
+  compatibility floor for identity, repo metadata, public feed records,
+  notifications, graph reads, privacy filtering, and sync guidance.
 - The conformance runner should grow alongside this document.
 - Gaps found by the runner should be filed as GitHub issues under epic #70.
