@@ -53,6 +53,7 @@ async fn handle_owner_api(req: Request, env: Env, url: &worker::Url) -> Result<R
     }
 
     match (req.method(), owner_path) {
+        (worker::Method::Get, "/snapshot") => api_json(&owner_snapshot(&env).await?, 200),
         (worker::Method::Get, "/profile") => api_json(&owner_profile(&env).await?, 200),
         (worker::Method::Get, "/stats") => api_json(&owner_stats(&env).await?, 200),
         (worker::Method::Get, "/diagnostics") => api_json(
@@ -350,6 +351,193 @@ async fn owner_settings(env: &Env) -> Result<Map<String, Value>> {
             settings.insert("closed_network".to_string(), Value::from(0));
             settings
         }))
+}
+
+async fn owner_snapshot(env: &Env) -> Result<Map<String, Value>> {
+    let profile = owner_profile(env).await?;
+    let home_timeline = owner_home_timeline(env, 20, false).await?;
+    let posts = owner_posts(env, 20).await?;
+    let followers = owner_followers(env, 100).await?;
+    let friends = owner_friends(env, 100).await?;
+    let following = owner_following(env, 100).await?;
+    let sources = owner_source_items(env, 20).await?;
+    let moderation = owner_moderation(env).await?;
+    let diagnostics = owner_diagnostics(env).await?;
+    let settings = owner_settings(env).await?;
+
+    let mut snapshot_settings = Map::new();
+    snapshot_settings.insert(
+        "instance_url".to_string(),
+        Value::String("https://social.dais.social".to_string()),
+    );
+    snapshot_settings.insert("owner_token_present".to_string(), Value::Bool(true));
+    let default_visibility = string_field(Some(&settings), "default_visibility")
+        .unwrap_or_else(|| "followers".to_string());
+    snapshot_settings.insert(
+        "default_visibility".to_string(),
+        Value::String(title_visibility(Some(default_visibility.as_str()))),
+    );
+    snapshot_settings.insert(
+        "default_protocol".to_string(),
+        Value::String("Both".to_string()),
+    );
+
+    let mut snapshot = Map::new();
+    snapshot.insert("settings".to_string(), Value::Object(snapshot_settings));
+    snapshot.insert(
+        "active_section".to_string(),
+        Value::String("Home".to_string()),
+    );
+    snapshot.insert("profile".to_string(), serde_json::json!(profile));
+    snapshot.insert(
+        "home_timeline".to_string(),
+        Value::Array(
+            home_timeline
+                .into_iter()
+                .map(shape_snapshot_home_timeline_item)
+                .map(Value::Object)
+                .collect(),
+        ),
+    );
+    snapshot.insert(
+        "posts".to_string(),
+        Value::Array(
+            posts
+                .into_iter()
+                .map(shape_snapshot_post)
+                .map(Value::Object)
+                .collect(),
+        ),
+    );
+    snapshot.insert(
+        "followers".to_string(),
+        Value::Array(followers.into_iter().map(Value::Object).collect()),
+    );
+    snapshot.insert(
+        "friends".to_string(),
+        Value::Array(friends.into_iter().map(Value::Object).collect()),
+    );
+    snapshot.insert(
+        "following".to_string(),
+        Value::Array(following.into_iter().map(Value::Object).collect()),
+    );
+    snapshot.insert(
+        "sources".to_string(),
+        Value::Array(sources.into_iter().map(Value::Object).collect()),
+    );
+    snapshot.insert("moderation".to_string(), serde_json::json!(moderation));
+    snapshot.insert("diagnostics".to_string(), serde_json::json!(diagnostics));
+    Ok(snapshot)
+}
+
+fn shape_snapshot_home_timeline_item(post: Map<String, Value>) -> Map<String, Value> {
+    let mut item = Map::new();
+    item.insert("id".to_string(), row_value_or_null(&post, "id"));
+    item.insert(
+        "object_id".to_string(),
+        row_value_or_null(&post, "object_id"),
+    );
+    item.insert("actor_id".to_string(), row_value_or_null(&post, "actor_id"));
+    item.insert(
+        "actor_username".to_string(),
+        row_value_or_null(&post, "actor_username"),
+    );
+    item.insert(
+        "actor_display_name".to_string(),
+        row_value_or_null(&post, "actor_display_name"),
+    );
+    item.insert(
+        "actor_avatar_url".to_string(),
+        row_value_or_null(&post, "actor_avatar_url"),
+    );
+    item.insert(
+        "content".to_string(),
+        string_value_or_default(&post, "content"),
+    );
+    item.insert(
+        "content_html".to_string(),
+        row_value_or_null(&post, "content_html"),
+    );
+    item.insert(
+        "visibility".to_string(),
+        Value::String(
+            string_field(Some(&post), "visibility").unwrap_or_else(|| "public".to_string()),
+        ),
+    );
+    item.insert(
+        "in_reply_to".to_string(),
+        row_value_or_null(&post, "in_reply_to"),
+    );
+    item.insert(
+        "published_at".to_string(),
+        row_value_or_null(&post, "published_at"),
+    );
+    item.insert(
+        "protocol".to_string(),
+        Value::String(
+            string_field(Some(&post), "protocol").unwrap_or_else(|| "activitypub".to_string()),
+        ),
+    );
+    item.insert(
+        "reply_count".to_string(),
+        Value::from(integer_field(Some(&post), "reply_count")),
+    );
+    item.insert(
+        "like_count".to_string(),
+        Value::from(integer_field(Some(&post), "like_count")),
+    );
+    item.insert(
+        "boost_count".to_string(),
+        Value::from(integer_field(Some(&post), "boost_count")),
+    );
+    item
+}
+
+fn shape_snapshot_post(post: Map<String, Value>) -> Map<String, Value> {
+    let mut item = Map::new();
+    item.insert("id".to_string(), row_value_or_null(&post, "id"));
+    item.insert("title".to_string(), row_value_or_null(&post, "name"));
+    item.insert(
+        "content".to_string(),
+        string_value_or_default(&post, "content"),
+    );
+    item.insert(
+        "visibility".to_string(),
+        Value::String(title_visibility(
+            string_field(Some(&post), "visibility").as_deref(),
+        )),
+    );
+    item.insert(
+        "protocol".to_string(),
+        Value::String(title_protocol(
+            string_field(Some(&post), "protocol").as_deref(),
+        )),
+    );
+    item.insert(
+        "encrypted".to_string(),
+        Value::Bool(non_empty_value(&post, "encrypted_message").is_some()),
+    );
+    item.insert(
+        "attachments".to_string(),
+        Value::Array(parse_attachment_array(post.get("media_attachments"))),
+    );
+    item.insert(
+        "reply_count".to_string(),
+        Value::from(integer_field(Some(&post), "reply_count")),
+    );
+    item.insert(
+        "like_count".to_string(),
+        Value::from(integer_field(Some(&post), "like_count")),
+    );
+    item.insert(
+        "boost_count".to_string(),
+        Value::from(integer_field(Some(&post), "boost_count")),
+    );
+    item.insert(
+        "published_at".to_string(),
+        row_value_or_null(&post, "published_at"),
+    );
+    item
 }
 
 async fn owner_moderation(env: &Env) -> Result<OwnerModeration> {
