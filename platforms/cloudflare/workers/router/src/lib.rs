@@ -267,6 +267,13 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
                 None => api_json(&serde_json::json!({ "error": "Record not found" }), 404),
             }
         }
+        (worker::Method::Post, _) if mastodon_status_action_path(path).is_some() => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let (id, action) = mastodon_status_action_path(path).unwrap_or_default();
+            mastodon_status_action(&env, &decode_component(&id), &action).await
+        }
         (worker::Method::Get, _) if mastodon_status_path(path).is_some() => {
             let id = mastodon_status_path(path).unwrap_or_default();
             match mastodon_status(&env, &decode_component(&id)).await? {
@@ -283,6 +290,19 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
             }
             let body = read_mastodon_body(&mut req).await;
             api_json(&mastodon_report(&body), 201)
+        }
+        (worker::Method::Post, "/api/v1/notifications/clear") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            mastodon_clear_notifications(&env).await
+        }
+        (worker::Method::Post, _) if mastodon_notification_dismiss_path(path).is_some() => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            let id = mastodon_notification_dismiss_path(path).unwrap_or_default();
+            mastodon_dismiss_notification(&env, &decode_component(&id)).await
         }
         (worker::Method::Delete, _) if mastodon_suggestion_dismiss(path) => {
             if let Some(response) = require_mastodon_bearer(&req, &env)? {
@@ -759,6 +779,78 @@ fn mastodon_status_source_json(row: &Map<String, Value>) -> Value {
         "text": mastodon_status_content(row),
         "spoiler_text": string_field(Some(row), "summary").unwrap_or_default(),
     })
+}
+
+async fn mastodon_status_action(env: &Env, status_id: &str, action: &str) -> Result<Response> {
+    let Some(existing) = mastodon_status(env, status_id).await? else {
+        return api_json(&serde_json::json!({ "error": "Record not found" }), 404);
+    };
+    mastodon_toggle_status_interaction(env, status_id, action).await?;
+    let value = mastodon_status(env, status_id).await?.unwrap_or(existing);
+    api_json(&value, 200)
+}
+
+async fn mastodon_toggle_status_interaction(
+    env: &Env,
+    status_id: &str,
+    action: &str,
+) -> Result<()> {
+    let local_actor = owner_local_actor(env).await?;
+    let interaction_type = match action {
+        "favourite" | "unfavourite" => "like",
+        "reblog" | "unreblog" => "boost",
+        _ => return Ok(()),
+    };
+    let suffix: String = stable_id(status_id).chars().take(16).collect();
+    let interaction_id = format!("{}#{}s/{}", local_actor.id, interaction_type, suffix);
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(&interaction_id);
+
+    if matches!(action, "unfavourite" | "unreblog") {
+        db.prepare("DELETE FROM interactions WHERE id = ?1")
+            .bind_refs(&id_arg)?
+            .run()
+            .await?;
+        return Ok(());
+    }
+
+    let type_arg = D1Type::Text(interaction_type);
+    let actor_arg = D1Type::Text(&local_actor.id);
+    let object_arg = D1Type::Text(status_id);
+    let now = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let now_arg = D1Type::Text(&now);
+    db.prepare(
+        r#"
+        INSERT OR REPLACE INTO interactions (
+          id, type, actor_id, object_url, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5)
+        "#,
+    )
+    .bind_refs([&id_arg, &type_arg, &actor_arg, &object_arg, &now_arg])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+async fn mastodon_clear_notifications(env: &Env) -> Result<Response> {
+    env.d1("DB")?
+        .prepare("UPDATE notifications SET read = 1")
+        .run()
+        .await?;
+    api_json(&serde_json::json!({}), 200)
+}
+
+async fn mastodon_dismiss_notification(env: &Env, id: &str) -> Result<Response> {
+    let id_arg = D1Type::Text(id);
+    env.d1("DB")?
+        .prepare("UPDATE notifications SET read = 1 WHERE id = ?1")
+        .bind_refs(&id_arg)?
+        .run()
+        .await?;
+    api_json(&serde_json::json!({}), 200)
 }
 
 async fn mastodon_blocks(env: &Env, limit: i32) -> Result<Value> {
@@ -1587,6 +1679,17 @@ fn mastodon_status_source_path(path: &str) -> Option<String> {
     mastodon_status_subpath(path, "source")
 }
 
+fn mastodon_status_action_path(path: &str) -> Option<(String, String)> {
+    let rest = path.strip_prefix("/api/v1/statuses/")?;
+    for action in ["favourite", "unfavourite", "reblog", "unreblog"] {
+        let suffix = format!("/{action}");
+        if let Some(id) = rest.strip_suffix(&suffix).filter(|id| !id.is_empty()) {
+            return Some((id.to_string(), action.to_string()));
+        }
+    }
+    None
+}
+
 fn mastodon_status_subpath(path: &str, suffix: &str) -> Option<String> {
     let rest = path.strip_prefix("/api/v1/statuses/")?;
     let needle = format!("/{suffix}");
@@ -1597,6 +1700,12 @@ fn mastodon_status_subpath(path: &str, suffix: &str) -> Option<String> {
 fn mastodon_status_path(path: &str) -> Option<String> {
     let rest = path.strip_prefix("/api/v1/statuses/")?;
     (!rest.is_empty() && !rest.contains('/')).then(|| rest.to_string())
+}
+
+fn mastodon_notification_dismiss_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/api/v1/notifications/")?;
+    let id = rest.strip_suffix("/dismiss")?;
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 async fn public_status_count(env: &Env) -> Result<i64> {
