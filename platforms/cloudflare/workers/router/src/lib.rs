@@ -32,6 +32,17 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return handle_mastodon_api(req, env, &url).await;
     }
 
+    if path.starts_with("/media/") {
+        return handle_media(req, env, &url).await;
+    }
+
+    if path == "/.well-known/webfinger" && req.method() == worker::Method::Get {
+        return activitypub_webfinger(&url);
+    }
+    if activitypub_public_path(path) {
+        return handle_activitypub_public(req, env, &url).await;
+    }
+
     match path {
         "/__dais-fixtures/activitypub/actor" => fixture_actor_response(&url),
         "/__dais-fixtures/activitypub/outbox" => fixture_outbox_response(&url),
@@ -443,6 +454,886 @@ async fn nodeinfo_document(env: &Env) -> Result<Value> {
     }))
 }
 
+fn activitypub_public_path(path: &str) -> bool {
+    path == "/users/social"
+        || path == "/users/social/outbox"
+        || path == "/users/social/followers"
+        || path == "/users/social/following"
+        || path == "/users/social/followers_synchronization"
+        || path == "/users/social/inbox"
+        || path.starts_with("/users/social/posts/")
+}
+
+async fn handle_activitypub_public(
+    mut req: Request,
+    env: Env,
+    url: &worker::Url,
+) -> Result<Response> {
+    let path = url.path();
+    match (req.method(), path) {
+        (worker::Method::Get, "/users/social") => {
+            if query_param(url, "format").as_deref() == Some("json") || accepts_activity_json(&req)
+            {
+                activitypub_actor(&env, url).await
+            } else {
+                activitypub_actor_html(&env).await
+            }
+        }
+        (worker::Method::Get, "/users/social/outbox") => activitypub_outbox(&env, url).await,
+        (worker::Method::Get, "/users/social/followers")
+        | (worker::Method::Get, "/users/social/following") => {
+            activitypub_graph_collection(&env, url, path.trim_start_matches("/users/social/")).await
+        }
+        (worker::Method::Get, "/users/social/followers_synchronization") => {
+            activitypub_followers_synchronization(&env, url, &req).await
+        }
+        (worker::Method::Options, "/users/social/inbox") => activitypub_inbox_options(),
+        (worker::Method::Post, "/users/social/inbox") => {
+            activitypub_inbox_post(&env, &mut req).await
+        }
+        (worker::Method::Get, _) if path.starts_with("/users/social/posts/") => {
+            activitypub_post(&env, url, &req).await
+        }
+        _ => Response::error("Not found", 404),
+    }
+}
+
+fn activitypub_webfinger(url: &worker::Url) -> Result<Response> {
+    let resource = query_param(url, "resource").unwrap_or_default();
+    let normalized = resource.trim().to_ascii_lowercase();
+    if !matches!(
+        normalized.as_str(),
+        "acct:social@dais.social" | "acct:social@social.dais.social"
+    ) && !normalized.starts_with("acct:social@router-rust-candidate.")
+    {
+        return Response::error("Resource not found", 404);
+    }
+    let actor_url = format!("{}/users/social", origin(url));
+    jrd_json(
+        &serde_json::json!({
+            "subject": resource,
+            "aliases": [actor_url],
+            "links": [
+                {
+                    "rel": "self",
+                    "type": "application/activity+json",
+                    "href": actor_url,
+                }
+            ],
+        }),
+        200,
+    )
+}
+
+async fn activitypub_actor(env: &Env, url: &worker::Url) -> Result<Response> {
+    let origin = origin(url);
+    let row = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, username, COALESCE(actor_type, 'Person') AS actor_type, display_name,
+                   summary, avatar_url, header_url, icon, image, public_key
+            FROM actors
+            WHERE username = 'social'
+            LIMIT 1
+            "#,
+        )
+        .first::<Map<String, Value>>(None)
+        .await?;
+    let username = string_field(row.as_ref(), "username").unwrap_or_else(|| "social".to_string());
+    let actor_url = format!("{origin}/users/{username}");
+    let display_name =
+        string_field(row.as_ref(), "display_name").unwrap_or_else(|| username.clone());
+    let summary = string_field(row.as_ref(), "summary").unwrap_or_default();
+    let public_key = string_field(row.as_ref(), "public_key").unwrap_or_default();
+    let icon =
+        string_field(row.as_ref(), "icon").or_else(|| string_field(row.as_ref(), "avatar_url"));
+    let image =
+        string_field(row.as_ref(), "image").or_else(|| string_field(row.as_ref(), "header_url"));
+
+    let mut actor = serde_json::json!({
+        "@context": [
+            "https://www.w3.org/ns/activitystreams",
+            "https://w3id.org/security/v1"
+        ],
+        "id": actor_url,
+        "type": string_field(row.as_ref(), "actor_type").unwrap_or_else(|| "Person".to_string()),
+        "preferredUsername": username,
+        "name": display_name,
+        "summary": summary,
+        "url": format!("{origin}/@social"),
+        "inbox": format!("{actor_url}/inbox"),
+        "outbox": format!("{actor_url}/outbox"),
+        "followers": format!("{actor_url}/followers"),
+        "following": format!("{actor_url}/following"),
+        "manuallyApprovesFollowers": true,
+        "discoverable": false,
+        "publicKey": {
+            "id": format!("{actor_url}#main-key"),
+            "owner": actor_url,
+            "publicKeyPem": public_key,
+        },
+        "endpoints": {
+            "sharedInbox": format!("{actor_url}/inbox"),
+        },
+    });
+    if let Value::Object(ref mut object) = actor {
+        if let Some(icon) = icon {
+            object.insert(
+                "icon".to_string(),
+                serde_json::json!({ "type": "Image", "mediaType": media_type_for_filename(&icon), "url": icon }),
+            );
+        }
+        if let Some(image) = image {
+            object.insert(
+                "image".to_string(),
+                serde_json::json!({ "type": "Image", "mediaType": media_type_for_filename(&image), "url": image }),
+            );
+        }
+    }
+    activity_json(&actor)
+}
+
+async fn activitypub_actor_html(env: &Env) -> Result<Response> {
+    let profile = owner_profile(env).await?;
+    let display_name = profile
+        .display_name
+        .clone()
+        .unwrap_or_else(|| profile.username.clone());
+    let summary = profile.summary.clone().unwrap_or_default();
+    text_response(
+        &format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title></head><body><h1>{}</h1><p>{}</p></body></html>",
+            escape_html(&display_name),
+            escape_html(&display_name),
+            summary,
+        ),
+        "text/html; charset=utf-8",
+    )
+}
+
+async fn activitypub_outbox(env: &Env, url: &worker::Url) -> Result<Response> {
+    let origin = origin(url);
+    let actor_url = format!("{origin}/users/social");
+    let rows = mastodon_status_rows(env, "posts", 20, url).await?;
+    let total = public_status_count(env).await?;
+    let ordered_items = rows
+        .iter()
+        .map(|row| {
+            let object = activitypub_note_object(row, &origin);
+            let id = object
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or(&actor_url)
+                .to_string();
+            serde_json::json!({
+                "id": format!("{id}#create"),
+                "type": "Create",
+                "actor": actor_url,
+                "published": row_value_or_null(row, "published_at"),
+                "to": [PUBLIC_COLLECTION],
+                "cc": [format!("{actor_url}/followers")],
+                "object": object,
+            })
+        })
+        .collect::<Vec<_>>();
+    activity_json(&serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!("{actor_url}/outbox"),
+        "type": "OrderedCollection",
+        "totalItems": total,
+        "orderedItems": ordered_items,
+    }))
+}
+
+async fn activitypub_post(env: &Env, url: &worker::Url, req: &Request) -> Result<Response> {
+    let origin = origin(url);
+    let id = format!("https://social.dais.social{}", url.path());
+    let row = match mastodon_status_row(env, &id).await? {
+        Some(row) => row,
+        None => {
+            let Some(row) = activitypub_any_post_row(env, &id).await? else {
+                return Response::error("Not found", 404);
+            };
+            if !signed_approved_follower(env, req).await? {
+                return Response::error("Not found", 404);
+            }
+            row
+        }
+    };
+    if !accepts_activity_json(req) && query_param(url, "format").as_deref() != Some("json") {
+        let content = mastodon_status_content(&row);
+        return text_response(
+            &format!(
+                "<!doctype html><html><head><meta charset=\"utf-8\"><title>dais post</title></head><body>{}</body></html>",
+                content,
+            ),
+            "text/html; charset=utf-8",
+        );
+    }
+    activity_json(&activitypub_note_object(&row, &origin))
+}
+
+async fn activitypub_any_post_row(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
+    let canonical_id = canonical_mastodon_status_id(id);
+    let id_arg = D1Type::Text(&canonical_id);
+    env.d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+                   name, summary, visibility, published_at, in_reply_to, poll_options, media_attachments,
+                   (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+                   (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+                   (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
+            FROM posts
+            WHERE id = ?1
+              AND encrypted_message IS NULL
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&id_arg)?
+        .first::<Map<String, Value>>(None)
+        .await
+}
+
+async fn signed_approved_follower(env: &Env, req: &Request) -> Result<bool> {
+    let Some(actor_id) = signature_actor_id(req)? else {
+        return Ok(false);
+    };
+    let actor_arg = D1Type::Text(&actor_id);
+    Ok(env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT 1 AS allowed
+            FROM followers
+            WHERE follower_actor_id = ?1 AND status = 'approved'
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&actor_arg)?
+        .first::<Map<String, Value>>(None)
+        .await?
+        .is_some())
+}
+
+async fn activitypub_graph_collection(
+    env: &Env,
+    url: &worker::Url,
+    name: &str,
+) -> Result<Response> {
+    let count_query = if name == "following" {
+        "SELECT COUNT(*) AS count FROM following WHERE status = 'accepted'"
+    } else {
+        "SELECT COUNT(*) AS count FROM followers WHERE status = 'approved'"
+    };
+    let row = env
+        .d1("DB")?
+        .prepare(count_query)
+        .first::<Map<String, Value>>(None)
+        .await?;
+    let origin = origin(url);
+    let collection_url = format!("{origin}/users/social/{name}");
+    let first = format!("{collection_url}?page=1");
+    let mut body = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": collection_url,
+        "type": "OrderedCollection",
+        "totalItems": integer_field(row.as_ref(), "count"),
+        "first": first,
+    });
+    if query_param(url, "page").is_some() {
+        body = serde_json::json!({
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": first,
+            "partOf": collection_url,
+            "type": "OrderedCollectionPage",
+            "totalItems": integer_field(row.as_ref(), "count"),
+            "orderedItems": [],
+        });
+    }
+    activity_json(&body)
+}
+
+async fn activitypub_followers_synchronization(
+    env: &Env,
+    url: &worker::Url,
+    req: &Request,
+) -> Result<Response> {
+    let Some(actor_id) = signature_actor_id(req)? else {
+        return activitypub_error("HTTP Signature required", 401);
+    };
+    let domain = query_param(url, "domain")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    if domain.is_empty() || actor_domain(&actor_id) != domain {
+        return activitypub_error("Signature actor must be on requested domain", 403);
+    }
+    let local_actor = owner_local_actor(env).await?;
+    let actor_arg = D1Type::Text(&local_actor.id);
+    let rows = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT follower_actor_id
+            FROM followers
+            WHERE actor_id = ?1 AND status = 'approved'
+            ORDER BY follower_actor_id ASC
+            "#,
+        )
+        .bind_refs(&actor_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    let mut ordered_items = Vec::new();
+    for row in rows {
+        let Some(follower) = string_field(Some(&row), "follower_actor_id") else {
+            continue;
+        };
+        if actor_domain(&follower) == domain && !ordered_items.contains(&follower) {
+            ordered_items.push(follower);
+        }
+    }
+    activity_json(&serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!(
+            "{}/users/social/followers_synchronization?domain={}",
+            origin(url),
+            urlencoding::encode(&domain)
+        ),
+        "type": "OrderedCollection",
+        "totalItems": ordered_items.len(),
+        "orderedItems": ordered_items,
+    }))
+}
+
+fn activitypub_note_object(row: &Map<String, Value>, origin: &str) -> Value {
+    let id = display_local_url(origin, &string_field(Some(row), "id").unwrap_or_default());
+    let actor = format!("{origin}/users/social");
+    let content = mastodon_status_content(row);
+    let mut note = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": id,
+        "type": string_field(Some(row), "object_type").unwrap_or_else(|| "Note".to_string()),
+        "url": id,
+        "attributedTo": actor,
+        "content": content,
+        "contentMap": { "en": content },
+        "published": row_value_or_null(row, "published_at"),
+        "to": [PUBLIC_COLLECTION],
+        "cc": [format!("{actor}/followers")],
+        "replies": {
+            "type": "Collection",
+            "totalItems": integer_field(Some(row), "reply_count"),
+        },
+        "likes": {
+            "type": "Collection",
+            "totalItems": integer_field(Some(row), "like_count"),
+        },
+        "shares": {
+            "type": "Collection",
+            "totalItems": integer_field(Some(row), "boost_count"),
+        },
+    });
+    if let Value::Object(ref mut object) = note {
+        insert_optional_activity_string(object, "name", string_field(Some(row), "name"));
+        insert_optional_activity_string(object, "summary", string_field(Some(row), "summary"));
+        if let Some(reply) = string_field(Some(row), "in_reply_to") {
+            object.insert(
+                "inReplyTo".to_string(),
+                Value::String(display_local_url(origin, &reply)),
+            );
+        }
+        let attachments = activitypub_attachments(row);
+        if !attachments.is_empty() {
+            object.insert("attachment".to_string(), Value::Array(attachments));
+        }
+        let tags = activitypub_tags(row);
+        if !tags.is_empty() {
+            object.insert("tag".to_string(), Value::Array(tags));
+        }
+        if let Some(poll) = activitypub_poll(row) {
+            let multiple = poll
+                .get("multiple")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let key = if multiple { "anyOf" } else { "oneOf" };
+            let options = poll
+                .get("options")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .map(|name| {
+                    serde_json::json!({
+                        "type": "Note",
+                        "name": name,
+                        "replies": { "type": "Collection", "totalItems": 0 },
+                    })
+                })
+                .collect::<Vec<_>>();
+            object.insert(key.to_string(), Value::Array(options));
+            object.insert("votersCount".to_string(), Value::from(0));
+        }
+    }
+    note
+}
+
+fn insert_optional_activity_string(
+    object: &mut Map<String, Value>,
+    key: &str,
+    value: Option<String>,
+) {
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        object.insert(key.to_string(), Value::String(value));
+    }
+}
+
+fn activitypub_attachments(row: &Map<String, Value>) -> Vec<Value> {
+    parse_attachment_array(row.get("media_attachments"))
+        .into_iter()
+        .filter_map(|attachment| {
+            let object = attachment.as_object()?;
+            let url = string_field(Some(object), "url")?;
+            let media_type = string_field(Some(object), "mediaType")
+                .unwrap_or_else(|| media_type_for_filename(&url));
+            let attachment_type = if media_type.starts_with("image/") {
+                "Image"
+            } else {
+                "Document"
+            };
+            let mut item = Map::new();
+            item.insert(
+                "type".to_string(),
+                Value::String(attachment_type.to_string()),
+            );
+            item.insert("url".to_string(), Value::String(url));
+            item.insert("mediaType".to_string(), Value::String(media_type));
+            insert_optional_activity_string(&mut item, "name", string_field(Some(object), "name"));
+            Some(Value::Object(item))
+        })
+        .collect()
+}
+
+fn activitypub_poll(row: &Map<String, Value>) -> Option<Value> {
+    if string_field(Some(row), "object_type").as_deref() != Some("Question") {
+        return None;
+    }
+    match row.get("poll_options")? {
+        Value::String(text) => serde_json::from_str::<Value>(text).ok(),
+        value => Some(value.clone()),
+    }
+}
+
+fn activitypub_tags(row: &Map<String, Value>) -> Vec<Value> {
+    let mut tags = Vec::new();
+    if let Value::Array(mentions) = mastodon_mentions(row) {
+        for mention in mentions {
+            let Some(mention) = mention.as_object() else {
+                continue;
+            };
+            let Some(acct) = string_field(Some(mention), "acct") else {
+                continue;
+            };
+            tags.push(serde_json::json!({
+                "type": "Mention",
+                "name": format!("@{acct}"),
+                "href": string_field(Some(mention), "url").unwrap_or_default(),
+            }));
+        }
+    }
+    if let Value::Array(hashtags) = mastodon_tags(row) {
+        for hashtag in hashtags {
+            let Some(hashtag) = hashtag.as_object() else {
+                continue;
+            };
+            let Some(name) = string_field(Some(hashtag), "name") else {
+                continue;
+            };
+            tags.push(serde_json::json!({
+                "type": "Hashtag",
+                "name": format!("#{name}"),
+                "href": string_field(Some(hashtag), "url").unwrap_or_default(),
+            }));
+        }
+    }
+    tags
+}
+
+fn display_local_url(origin: &str, value: &str) -> String {
+    worker::Url::parse(value)
+        .ok()
+        .and_then(|url| {
+            let path = url.path();
+            (url.host_str() == Some("social.dais.social") && path.starts_with("/users/social/"))
+                .then(|| format!("{origin}{path}"))
+        })
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn accepts_activity_json(req: &Request) -> bool {
+    req.headers()
+        .get("Accept")
+        .ok()
+        .flatten()
+        .map(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains("activity+json")
+                || value.contains("application/ld+json")
+                || value.contains("application/json")
+        })
+        .unwrap_or(false)
+}
+
+fn signature_actor_id(req: &Request) -> Result<Option<String>> {
+    let Some(header) = req.headers().get("Signature")? else {
+        return Ok(None);
+    };
+    let Some(key_id) = signature_header_value(&header, "keyId") else {
+        return Ok(None);
+    };
+    let actor_id = key_id
+        .split('#')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    Ok((!actor_id.is_empty()).then_some(actor_id))
+}
+
+fn signature_header_value(header: &str, key: &str) -> Option<String> {
+    for part in header.split(',') {
+        let mut pieces = part.splitn(2, '=');
+        let name = pieces.next()?.trim();
+        let value = pieces.next()?.trim().trim_matches('"');
+        if name.eq_ignore_ascii_case(key) && !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn actor_domain(actor_id: &str) -> String {
+    worker::Url::parse(actor_id)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
+        .unwrap_or_default()
+}
+
+fn activitypub_inbox_options() -> Result<Response> {
+    let headers = Headers::new();
+    headers.set("Access-Control-Allow-Origin", "*")?;
+    headers.set(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type, Date, Digest, Signature",
+    )?;
+    headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")?;
+    Ok(Response::empty()?.with_status(200).with_headers(headers))
+}
+
+async fn activitypub_inbox_post(env: &Env, req: &mut Request) -> Result<Response> {
+    if req.headers().get("Signature")?.is_none() {
+        return activitypub_error("HTTP Signature required", 401);
+    }
+    let body = read_json(req).await;
+    let activity_type = body.get("type").and_then(Value::as_str).unwrap_or_default();
+    match activity_type {
+        "Follow" => {
+            if let Err(message) = activitypub_store_follow(env, &body).await {
+                return activitypub_error(&message, 400);
+            }
+        }
+        "Accept" => {
+            if let Err(message) = activitypub_store_accept(env, &body).await {
+                return activitypub_error(&message, 400);
+            }
+        }
+        "Create" => {
+            if let Err(message) = activitypub_store_create(env, &body).await {
+                return activitypub_error(&message, 400);
+            }
+        }
+        "Delete" => {
+            if let Err(message) = activitypub_store_delete(env, &body).await {
+                return activitypub_error(&message, 400);
+            }
+        }
+        "Undo" => {
+            if let Err(message) = activitypub_store_undo(env, &body).await {
+                return activitypub_error(&message, 400);
+            }
+        }
+        _ => {}
+    }
+    api_json(&serde_json::json!({ "accepted": true }), 202)
+}
+
+async fn activitypub_store_follow(env: &Env, body: &Value) -> std::result::Result<(), String> {
+    let actor = body
+        .get("actor")
+        .and_then(optional_body_string)
+        .ok_or_else(|| "Follow actor is required".to_string())?;
+    let follow_id = body
+        .get("id")
+        .and_then(optional_body_string)
+        .unwrap_or_else(|| format!("{actor}#follow-{}", stable_id(&actor)));
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let remote = resolve_activitypub_actor(&actor).await?;
+    let inbox = if remote.inbox.is_empty() {
+        format!("{actor}/inbox")
+    } else {
+        remote.inbox
+    };
+    let shared_inbox = remote.shared_inbox.unwrap_or_else(|| inbox.clone());
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(&follow_id);
+    let local_arg = D1Type::Text(&local_actor.id);
+    let actor_arg = D1Type::Text(&actor);
+    let inbox_arg = D1Type::Text(&inbox);
+    let shared_arg = D1Type::Text(&shared_inbox);
+    db.prepare(
+        r#"
+        INSERT INTO followers (
+            id, actor_id, follower_actor_id, follower_inbox, follower_shared_inbox, status
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending')
+        ON CONFLICT(actor_id, follower_actor_id) DO UPDATE SET
+            id = excluded.id,
+            follower_inbox = excluded.follower_inbox,
+            follower_shared_inbox = excluded.follower_shared_inbox,
+            status = CASE WHEN followers.status = 'approved' THEN 'approved' ELSE 'pending' END,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind_refs([&id_arg, &local_arg, &actor_arg, &inbox_arg, &shared_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn activitypub_store_undo(env: &Env, body: &Value) -> std::result::Result<(), String> {
+    let actor = body
+        .get("actor")
+        .and_then(optional_body_string)
+        .ok_or_else(|| "Undo actor is required".to_string())?;
+    let object_type = body
+        .get("object")
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if object_type != "Follow" {
+        return Ok(());
+    }
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let local_arg = D1Type::Text(&local_actor.id);
+    let actor_arg = D1Type::Text(&actor);
+    db.prepare("DELETE FROM followers WHERE actor_id = ?1 AND follower_actor_id = ?2")
+        .bind_refs([&local_arg, &actor_arg])
+        .map_err(|error| error.to_string())?
+        .run()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn activitypub_store_accept(env: &Env, body: &Value) -> std::result::Result<(), String> {
+    let actor = body
+        .get("actor")
+        .and_then(optional_body_string)
+        .ok_or_else(|| "Accept actor is required".to_string())?;
+    let object_type = body
+        .get("object")
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if object_type != "Follow" {
+        return Ok(());
+    }
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let actor_arg = D1Type::Text(&actor);
+    db.prepare(
+        "UPDATE following SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP WHERE target_actor_id = ?1 AND status = 'pending'",
+    )
+    .bind_refs(&actor_arg)
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn activitypub_store_create(env: &Env, body: &Value) -> std::result::Result<(), String> {
+    let actor = body
+        .get("actor")
+        .and_then(optional_body_string)
+        .ok_or_else(|| "Create actor is required".to_string())?;
+    let object = body
+        .get("object")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "Create object is required".to_string())?;
+    let object_id = object
+        .get("id")
+        .and_then(optional_body_string)
+        .ok_or_else(|| "Create object id is required".to_string())?;
+    let object_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(object_type, "Note" | "Question" | "Article") {
+        return Ok(());
+    }
+    let remote = resolve_activitypub_actor(&actor).await.ok();
+    let username = remote
+        .as_ref()
+        .and_then(|actor| actor.preferred_username.clone())
+        .unwrap_or_else(|| parse_actor_acct(&actor).0);
+    let display_name = remote
+        .as_ref()
+        .and_then(|actor| actor.name.clone())
+        .unwrap_or_else(|| username.clone());
+    let avatar = remote.and_then(|actor| actor.icon_url).unwrap_or_default();
+    let content_html = object
+        .get("content")
+        .and_then(|value| value_string(Some(value)))
+        .unwrap_or_default();
+    let content = strip_html(&content_html);
+    let visibility = if activitypub_public_recipients(body, &Value::Object(object.clone())) {
+        "public"
+    } else {
+        "followers"
+    };
+    let published = object
+        .get("published")
+        .and_then(optional_body_string)
+        .or_else(|| body.get("published").and_then(optional_body_string))
+        .unwrap_or_else(|| {
+            js_sys::Date::new_0()
+                .to_iso_string()
+                .as_string()
+                .unwrap_or_default()
+        });
+    let in_reply_to = object
+        .get("inReplyTo")
+        .and_then(|value| value_string(Some(value)))
+        .unwrap_or_default();
+    let raw_object = Value::Object(object.clone()).to_string();
+    let raw_activity = body.to_string();
+    let id = format!("timeline-{}", stable_id(&object_id));
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(&id);
+    let object_arg = D1Type::Text(&object_id);
+    let actor_arg = D1Type::Text(&actor);
+    let username_arg = D1Type::Text(&username);
+    let display_arg = D1Type::Text(&display_name);
+    let avatar_arg = D1Type::Text(&avatar);
+    let content_arg = D1Type::Text(&content);
+    let html_arg = D1Type::Text(&content_html);
+    let visibility_arg = D1Type::Text(visibility);
+    let reply_arg = if in_reply_to.is_empty() {
+        D1Type::Null
+    } else {
+        D1Type::Text(&in_reply_to)
+    };
+    let published_arg = D1Type::Text(&published);
+    let object_json_arg = D1Type::Text(&raw_object);
+    let activity_json_arg = D1Type::Text(&raw_activity);
+    db.prepare(
+        r#"
+        INSERT INTO timeline_posts (
+            id, object_id, actor_id, actor_username, actor_display_name,
+            actor_avatar_url, content, content_html, visibility, in_reply_to,
+            published_at, raw_object, raw_activity, protocol
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'activitypub')
+        ON CONFLICT(object_id) DO UPDATE SET
+            actor_id = excluded.actor_id,
+            actor_username = excluded.actor_username,
+            actor_display_name = excluded.actor_display_name,
+            actor_avatar_url = excluded.actor_avatar_url,
+            content = excluded.content,
+            content_html = excluded.content_html,
+            visibility = excluded.visibility,
+            in_reply_to = excluded.in_reply_to,
+            published_at = excluded.published_at,
+            raw_object = excluded.raw_object,
+            raw_activity = excluded.raw_activity,
+            deleted_at = NULL
+        "#,
+    )
+    .bind_refs([
+        &id_arg,
+        &object_arg,
+        &actor_arg,
+        &username_arg,
+        &display_arg,
+        &avatar_arg,
+        &content_arg,
+        &html_arg,
+        &visibility_arg,
+        &reply_arg,
+        &published_arg,
+        &object_json_arg,
+        &activity_json_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn activitypub_store_delete(env: &Env, body: &Value) -> std::result::Result<(), String> {
+    let object_id = body
+        .get("object")
+        .and_then(|value| value_string(Some(value)))
+        .or_else(|| {
+            body.get("object")
+                .and_then(Value::as_object)
+                .and_then(|object| object.get("id"))
+                .and_then(|value| value_string(Some(value)))
+        })
+        .ok_or_else(|| "Delete object is required".to_string())?;
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let object_arg = D1Type::Text(&object_id);
+    db.prepare("UPDATE timeline_posts SET deleted_at = CURRENT_TIMESTAMP WHERE object_id = ?1")
+        .bind_refs(&object_arg)
+        .map_err(|error| error.to_string())?
+        .run()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn activitypub_public_recipients(activity: &Value, object: &Value) -> bool {
+    let mut recipients = Vec::new();
+    collect_recipients(activity.get("to"), &mut recipients);
+    collect_recipients(activity.get("cc"), &mut recipients);
+    collect_recipients(object.get("to"), &mut recipients);
+    collect_recipients(object.get("cc"), &mut recipients);
+    recipients.iter().any(|value| value == PUBLIC_COLLECTION)
+}
+
+fn activitypub_error(message: &str, status: u16) -> Result<Response> {
+    api_json(&serde_json::json!({ "error": message }), status)
+}
+
+fn jrd_json<T: Serialize>(value: &T, status: u16) -> Result<Response> {
+    let headers = Headers::new();
+    headers.set("Content-Type", "application/jrd+json; charset=utf-8")?;
+    headers.set("Access-Control-Allow-Origin", "*")?;
+    Ok(Response::from_json(value)?
+        .with_status(status)
+        .with_headers(headers))
+}
+
 async fn mastodon_instance(env: &Env, v2: bool) -> Result<Value> {
     let mut instance = serde_json::json!({
         "uri": "social.dais.social",
@@ -499,6 +1390,93 @@ async fn mastodon_instance(env: &Env, v2: bool) -> Result<Value> {
         }
     }
     Ok(instance)
+}
+
+async fn handle_media(req: Request, env: Env, url: &worker::Url) -> Result<Response> {
+    let path = url.path();
+    let Some(key) = media_r2_key_from_path(path) else {
+        return Response::error("Not found", 404);
+    };
+    if path.starts_with("/media/_private_signed/") {
+        if req.headers().get("Signature")?.is_none() {
+            return Response::error("HTTP Signature required", 401);
+        }
+        if !signed_approved_follower(&env, &req).await? {
+            return Response::error("Signed media fetch requires an approved follower", 403);
+        }
+        if !private_media_attached_post(&env, path).await? {
+            return Response::error("Not found", 404);
+        }
+    } else if path.starts_with("/media/_private/") {
+        return Response::error("HTTP Signature required", 401);
+    }
+
+    let Some(object) = env
+        .bucket("MEDIA_BUCKET")?
+        .get(key.clone())
+        .execute()
+        .await?
+    else {
+        return Response::error("Not found", 404);
+    };
+    let bytes = match object.body() {
+        Some(body) => body.bytes().await?,
+        None => Vec::new(),
+    };
+    let mut response = Response::from_bytes(bytes)?;
+    let headers = Headers::new();
+    headers.set(
+        "Content-Type",
+        &object
+            .http_metadata()
+            .content_type
+            .unwrap_or_else(|| media_type_for_filename(&key)),
+    )?;
+    headers.set("Cache-Control", "private, max-age=300")?;
+    response = response.with_headers(headers);
+    Ok(response)
+}
+
+fn media_r2_key_from_path(path: &str) -> Option<String> {
+    path.strip_prefix("/media/_private_signed/")
+        .or_else(|| path.strip_prefix("/media/_private/"))
+        .map(|rest| format!("private/{}", decode_component(rest)))
+        .or_else(|| {
+            path.strip_prefix("/media/uploads/")
+                .map(|rest| decode_component(&format!("uploads/{rest}")))
+        })
+        .filter(|key| !key.trim().is_empty() && !key.contains(".."))
+}
+
+async fn private_media_attached_post(env: &Env, media_path: &str) -> Result<bool> {
+    let media_url = format!("https://social.dais.social{media_path}");
+    let rows = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT media_attachments
+            FROM posts
+            WHERE visibility IN ('followers', 'direct')
+              AND media_attachments IS NOT NULL
+              AND media_attachments != ''
+            ORDER BY published_at DESC
+            LIMIT 250
+            "#,
+        )
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    for row in rows {
+        for attachment in parse_attachment_array(row.get("media_attachments")) {
+            let Some(object) = attachment.as_object() else {
+                continue;
+            };
+            if string_field(Some(object), "url").as_deref() == Some(media_url.as_str()) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn mastodon_create_app(body: &Value) -> Value {
@@ -3477,7 +4455,8 @@ async fn owner_posts(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
 
 async fn owner_post_detail(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
     let db = env.d1("DB")?;
-    let id_arg = D1Type::Text(id);
+    let canonical_id = canonical_mastodon_status_id(id);
+    let id_arg = D1Type::Text(&canonical_id);
     let post = db
         .prepare(
             r#"
@@ -3499,9 +4478,9 @@ async fn owner_post_detail(env: &Env, id: &str) -> Result<Option<Map<String, Val
     let Some(post) = post else {
         return Ok(None);
     };
-    let replies = owner_post_replies(env, id).await?;
-    let likes = owner_post_interactions(env, id, "like").await?;
-    let boosts = owner_post_interactions(env, id, "boost").await?;
+    let replies = owner_post_replies(env, &canonical_id).await?;
+    let likes = owner_post_interactions(env, &canonical_id, "like").await?;
+    let boosts = owner_post_interactions(env, &canonical_id, "boost").await?;
     Ok(Some(shape_owner_post_detail(post, replies, likes, boosts)))
 }
 
@@ -4793,7 +5772,8 @@ async fn owner_publish_interaction(
     if object_id.is_empty() {
         return Err("object_id is required".to_string());
     }
-    let object_id = public_https_url(object_id, "object_id")?;
+    let requested_object_id = public_https_url(object_id, "object_id")?;
+    let object_id = canonical_mastodon_status_id(&requested_object_id);
     let undo = matches!(interaction, "unlike" | "unboost");
     let normalized = match interaction {
         "unlike" => "like",
@@ -4804,7 +5784,7 @@ async fn owner_publish_interaction(
     let local_actor = owner_local_actor(env)
         .await
         .map_err(|error| error.to_string())?;
-    let target_inbox = resolve_activitypub_object_inbox(&object_id).await?;
+    let target_inbox = resolve_activitypub_object_inbox(&requested_object_id).await?;
     let now = js_sys::Date::new_0()
         .to_iso_string()
         .as_string()
@@ -4846,7 +5826,7 @@ async fn owner_publish_interaction(
                 "id": activity_id,
                 "type": activity_type,
                 "actor": local_actor.id,
-                "object": object_id,
+                "object": requested_object_id,
             },
         })
     } else {
@@ -4858,7 +5838,7 @@ async fn owner_publish_interaction(
             "published": now,
             "to": [PUBLIC_COLLECTION],
             "cc": [format!("{}/followers", local_actor.id)],
-            "object": object_id,
+            "object": requested_object_id,
         })
     };
     let delivery_ids = insert_delivery_rows(
@@ -5369,12 +6349,83 @@ async fn fetch_actor_recent_public_posts(actor: &RemoteActor) -> Vec<Map<String,
 }
 
 async fn fetch_activitypub_json(url: &str, label: &str) -> std::result::Result<Value, String> {
+    if let Some(value) = local_activitypub_fixture_value(url) {
+        return Ok(value);
+    }
     fetch_json_with_accept(
         url,
         "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
         label,
     )
     .await
+}
+
+fn local_activitypub_fixture_value(url: &str) -> Option<Value> {
+    let parsed = worker::Url::parse(url).ok()?;
+    match parsed.path() {
+        "/__dais-fixtures/activitypub/actor" => {
+            let public_key = fixture_public_key(&parsed)?;
+            let actor_url = parsed.to_string();
+            let name = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "name")
+                .map(|(_, value)| value.to_string())
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "dais-s2s-fixture".to_string());
+            Some(serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": actor_url,
+                "type": "Application",
+                "preferredUsername": name,
+                "name": name,
+                "inbox": format!("{}://{}/__dais-fixtures/activitypub/inbox", parsed.scheme(), parsed.host_str().unwrap_or_default()),
+                "outbox": fixture_url_with_public_key(&parsed, "/__dais-fixtures/activitypub/outbox"),
+                "publicKey": {
+                    "id": format!("{actor_url}#main-key"),
+                    "owner": actor_url,
+                    "publicKeyPem": public_key,
+                },
+            }))
+        }
+        "/__dais-fixtures/activitypub/outbox" => {
+            let post = local_activitypub_fixture_post_value(&parsed)?;
+            let post_id = post.get("id").and_then(Value::as_str).unwrap_or_default();
+            Some(serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": parsed.to_string(),
+                "type": "OrderedCollection",
+                "totalItems": 1,
+                "orderedItems": [
+                    {
+                        "id": format!("{post_id}#create"),
+                        "type": "Create",
+                        "actor": post.get("attributedTo").cloned().unwrap_or(Value::Null),
+                        "to": post.get("to").cloned().unwrap_or(Value::Array(Vec::new())),
+                        "object": post,
+                    }
+                ],
+            }))
+        }
+        "/__dais-fixtures/activitypub/posts/public-preview" => {
+            local_activitypub_fixture_post_value(&parsed)
+        }
+        _ => None,
+    }
+}
+
+fn local_activitypub_fixture_post_value(url: &worker::Url) -> Option<Value> {
+    let post_id =
+        fixture_url_with_public_key(url, "/__dais-fixtures/activitypub/posts/public-preview");
+    Some(serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": post_id,
+        "type": "Note",
+        "attributedTo": fixture_url_with_public_key(url, "/__dais-fixtures/activitypub/actor"),
+        "to": [PUBLIC_COLLECTION],
+        "content": "<p>Dais fixture public preview post</p>",
+        "published": "2026-06-16T00:00:00Z",
+        "url": post_id,
+    }))
 }
 
 async fn fetch_json_with_accept(
@@ -5408,9 +6459,6 @@ async fn fetch_json_with_accept(
 
 fn local_object_inbox(object_id: &str) -> Option<String> {
     let url = worker::Url::parse(object_id).ok()?;
-    if url.host_str()? != "social.dais.social" {
-        return None;
-    }
     let mut parts = url.path().split('/').filter(|part| !part.is_empty());
     if parts.next()? != "users" {
         return None;
