@@ -29,7 +29,8 @@ Implemented endpoints:
 | `POST` | `/profile` | Update display name, actor type, summary, avatar/icon URL, and header image URL. |
 | `GET` | `/posts` | Recent local owner posts, including private and encrypted metadata. |
 | `POST` | `/posts` | Create a private-by-default ActivityPub owner post, with optional direct recipients, reply target, encryption flag, and ActivityStreams attachments. |
-| `POST` | `/media` | Upload public or private media and return attachment JSON for post creation. |
+| `POST` | `/media` | Upload public or private media and return attachment JSON for post creation. Private uploads may include `expires_in_seconds`, up to 30 days. |
+| `POST` | `/media/revoke` | Delete a previously uploaded media URL. |
 | `GET` | `/timeline/home` | Signed-in home timeline from accepted follows. |
 | `GET` | `/followers` | Local follower rows. |
 | `POST` | `/followers/status` | Mark a follower `approved`, `pending`, or `rejected`. |
@@ -50,7 +51,10 @@ Known gaps:
   media upload endpoint. Rich non-`Note` objects and poll creation remain
   Mastodon API or local CLI surfaces.
 - The Rust CLI can exercise live owner API compose with
-  `dais owner post-create` and media uploads with `dais owner media-upload`.
+  `dais owner post-create`, media uploads with `dais owner media-upload`, and
+  media revocation with `dais owner media-revoke`.
+- Private media capability URLs can expire automatically, but recipient-bound
+  authorized-fetch media access remains future hardening.
 - Profile updates currently cover the fields reflected in ActivityPub actor
   JSON, the HTML profile page, and Mastodon account reads. Custom profile
   fields and per-field visibility controls remain future work.

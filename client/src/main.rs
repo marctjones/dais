@@ -1137,6 +1137,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                     filename,
                     media_type,
                     access: args.access,
+                    expires_in_seconds: args.expires_in_seconds,
                     data_base64: STANDARD.encode(data),
                 })
                 .await
@@ -1146,10 +1147,24 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
             if let Some(media_type) = uploaded.media_type {
                 println!("media_type={media_type}");
             }
+            if let Some(access) = uploaded.access {
+                println!("access={access}");
+            }
+            if let Some(expires_at) = uploaded.expires_at {
+                println!("expires_at={expires_at}");
+            }
             println!(
                 "attachment={}",
                 serde_json::to_string(&uploaded.attachment)?
             );
+        }
+        OwnerCommand::MediaRevoke(args) => {
+            owner_api(&args.api)
+                .revoke_media(&args.url)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Revoked owner API media");
+            println!("url={}", args.url);
         }
         OwnerCommand::SourceAdd(args) => {
             let result = owner_api(&args.api)

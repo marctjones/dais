@@ -51,6 +51,11 @@ impl OwnerApiClient {
         self.post("/api/dais/owner/media", media).await
     }
 
+    pub async fn revoke_media(&self, url: &str) -> ClientResult<OwnerActionResult> {
+        self.post("/api/dais/owner/media/revoke", &OwnerMediaRevoke { url })
+            .await
+    }
+
     pub async fn set_follower_status(
         &self,
         follower_actor_id: &str,
@@ -402,6 +407,7 @@ pub struct OwnerMediaUpload {
     pub filename: String,
     pub media_type: Option<String>,
     pub access: Option<String>,
+    pub expires_in_seconds: Option<u64>,
     pub data_base64: String,
 }
 
@@ -409,6 +415,8 @@ pub struct OwnerMediaUpload {
 pub struct OwnerMedia {
     pub url: String,
     pub media_type: Option<String>,
+    pub access: Option<String>,
+    pub expires_at: Option<String>,
     pub attachment: serde_json::Value,
 }
 
@@ -421,6 +429,11 @@ pub struct OwnerActionResult {
 struct FollowerStatusUpdate<'a> {
     follower_actor_id: &'a str,
     status: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct OwnerMediaRevoke<'a> {
+    url: &'a str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

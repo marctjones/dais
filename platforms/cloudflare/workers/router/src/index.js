@@ -353,6 +353,9 @@ async function handleMedia(request, env, path) {
     if (!object) {
       return new Response('Not Found', { status: 404 });
     }
+    if (privateMedia && mediaExpired(object)) {
+      return new Response('Not Found', { status: 404 });
+    }
 
     // Determine Content-Type from file extension
     const ext = filename.split('.').pop().toLowerCase();
@@ -894,6 +897,15 @@ async function handleOwnerApi(request, env, url) {
       return apiJson(await ownerUploadMedia(env, body), 201);
     } catch (error) {
       return apiJson({ error: error.message || 'media upload failed' }, 400);
+    }
+  }
+
+  if (request.method === 'POST' && path === '/media/revoke') {
+    const body = await readJson(request);
+    try {
+      return apiJson(await ownerRevokeMedia(env, body));
+    } catch (error) {
+      return apiJson({ error: error.message || 'media revoke failed' }, 400);
     }
   }
 
@@ -1442,10 +1454,12 @@ async function ownerUploadMedia(env, body) {
   const dataBase64 = optionalString(body.data_base64);
   const mediaType = optionalString(body.media_type) || mediaTypeForFilename(filename || '');
   const access = optionalString(body.access) || 'public';
+  const expiresAt = privateMediaExpiresAt(body.expires_in_seconds ?? body.expiresInSeconds);
   if (!filename) throw new Error('filename is required');
   if (!dataBase64) throw new Error('data_base64 is required');
   if (!allowedMediaType(mediaType)) throw new Error('unsupported media type');
   if (!['public', 'private'].includes(access)) throw new Error('access must be public or private');
+  if (expiresAt && access !== 'private') throw new Error('media expiration is only supported for private uploads');
 
   const bytes = base64ToBytes(dataBase64);
   if (bytes.byteLength > 8 * 1024 * 1024) {
@@ -1457,9 +1471,13 @@ async function ownerUploadMedia(env, body) {
   const token = randomToken();
   const publicName = `${timestamp}-${stableId(`${safeName}\n${dataBase64}`).slice(0, 12)}-${safeName}`;
   const key = access === 'private' ? `private/${token}/${safeName}` : `uploads/${publicName}`;
+  const customMetadata = {};
+  const description = optionalString(body.description);
+  if (description) customMetadata.description = description;
+  if (expiresAt) customMetadata.expires_at = expiresAt;
   await env.MEDIA_BUCKET.put(key, bytes, {
     httpMetadata: { contentType: mediaType },
-    customMetadata: optionalString(body.description) ? { description: optionalString(body.description) } : undefined,
+    customMetadata: Object.keys(customMetadata).length ? customMetadata : undefined,
   });
   const url = access === 'private'
     ? `https://social.dais.social/media/_private/${token}/${safeName}`
@@ -1470,7 +1488,51 @@ async function ownerUploadMedia(env, body) {
     url,
     name: safeName,
   };
-  return { url, media_type: mediaType, access, attachment, description: optionalString(body.description) };
+  return { url, media_type: mediaType, access, attachment, description, expires_at: expiresAt };
+}
+
+async function ownerRevokeMedia(env, body) {
+  const url = optionalString(body.url || body.media_url || body.id);
+  const key = mediaR2KeyFromUrl(url);
+  if (!key) throw new Error('valid media url is required');
+  await env.MEDIA_BUCKET.delete(key);
+  return { ok: true, url, key };
+}
+
+function mediaExpired(object) {
+  const expiresAt = optionalString(object?.customMetadata?.expires_at);
+  if (!expiresAt) return false;
+  const expires = Date.parse(expiresAt);
+  return Number.isFinite(expires) && expires <= Date.now();
+}
+
+function privateMediaExpiresAt(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error('expires_in_seconds must be a positive number');
+  }
+  if (seconds > 30 * 24 * 60 * 60) {
+    throw new Error('expires_in_seconds must be 30 days or less');
+  }
+  return new Date(Date.now() + Math.floor(seconds) * 1000).toISOString();
+}
+
+function mediaR2KeyFromUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (parsed.hostname !== 'social.dais.social') return null;
+  if (parsed.pathname.startsWith('/media/_private/')) {
+    return `private/${decodeURIComponent(parsed.pathname.slice('/media/_private/'.length))}`;
+  }
+  if (parsed.pathname.startsWith('/media/uploads/')) {
+    return decodeURIComponent(parsed.pathname.slice('/media/'.length));
+  }
+  return null;
 }
 
 function randomToken() {

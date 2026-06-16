@@ -804,6 +804,8 @@ pub enum OwnerCommand {
     Sources(OwnerApiArgs),
     /// Upload media through the live owner API and print attachment JSON.
     MediaUpload(OwnerMediaUploadArgs),
+    /// Revoke/delete media uploaded through the live owner API.
+    MediaRevoke(OwnerMediaRevokeArgs),
     /// Add a source subscription through the live owner API.
     SourceAdd(OwnerSourceAddArgs),
     /// Remove a live owner API source subscription.
@@ -934,6 +936,16 @@ pub struct OwnerMediaUploadArgs {
     /// Media access mode: public or private.
     #[arg(long)]
     pub access: Option<String>,
+    /// Expire a private capability URL after this many seconds. Maximum 30 days.
+    #[arg(long)]
+    pub expires_in_seconds: Option<u64>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerMediaRevokeArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub url: String,
 }
 
 #[derive(Args, Clone, Debug)]

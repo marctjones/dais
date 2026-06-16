@@ -438,6 +438,7 @@ async fn upload_owner_media(
             filename,
             media_type,
             access,
+            expires_in_seconds: None,
             data_base64,
         })
         .await

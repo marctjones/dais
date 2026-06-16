@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.53] - 2026-06-16
+
+### Added
+- Added private owner media capability expiration via
+  `expires_in_seconds`/`--expires-in-seconds`, enforced by the router media
+  serving path.
+- Added owner media revocation with `POST /api/dais/owner/media/revoke` and
+  `dais owner media-revoke`.
+
 ## [1.28.52] - 2026-06-16
 
 ### Added
