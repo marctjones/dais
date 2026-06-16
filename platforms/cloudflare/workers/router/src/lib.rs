@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use worker::{event, Context, Env, Headers, Request, Response, Result};
+use worker::{event, Context, D1Type, Env, Headers, Request, Response, Result};
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
 
@@ -18,7 +18,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 
     if path.starts_with("/api/dais/owner/") {
-        return handle_owner_api(req, env, path).await;
+        return handle_owner_api(req, env, &url).await;
     }
 
     match path {
@@ -33,15 +33,17 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 }
 
-async fn handle_owner_api(req: Request, env: Env, path: &str) -> Result<Response> {
+async fn handle_owner_api(req: Request, env: Env, url: &worker::Url) -> Result<Response> {
     if req.method() == worker::Method::Options {
         return api_json(&serde_json::json!({}), 204);
     }
 
+    let path = url.path();
     let owner_path = path
         .strip_prefix("/api/dais/owner")
         .filter(|value| !value.is_empty())
         .unwrap_or("/");
+    let limit = clamp_limit(query_param(url, "limit"));
     if let Some(response) = require_owner_bearer(
         &req,
         &env,
@@ -55,6 +57,24 @@ async fn handle_owner_api(req: Request, env: Env, path: &str) -> Result<Response
         (worker::Method::Get, "/stats") => api_json(&owner_stats(&env).await?, 200),
         (worker::Method::Get, "/diagnostics") => api_json(
             &serde_json::json!({ "items": owner_diagnostics(&env).await? }),
+            200,
+        ),
+        (worker::Method::Get, "/followers") => api_json(
+            &OwnerItems {
+                items: owner_followers(&env, limit).await?,
+            },
+            200,
+        ),
+        (worker::Method::Get, "/friends") => api_json(
+            &OwnerItems {
+                items: owner_friends(&env, limit).await?,
+            },
+            200,
+        ),
+        (worker::Method::Get, "/following") => api_json(
+            &OwnerItems {
+                items: owner_following(&env, limit).await?,
+            },
             200,
         ),
         _ => api_json(
@@ -246,6 +266,89 @@ async fn owner_diagnostics(env: &Env) -> Result<Vec<OwnerDiagnostic>> {
             detail: delivery_detail,
         },
     ])
+}
+
+async fn owner_followers(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, actor_id, follower_actor_id, follower_inbox, follower_shared_inbox,
+               status, created_at, updated_at
+        FROM followers
+        ORDER BY
+          CASE status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+          updated_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_friends(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let local_actor = owner_local_actor(env).await?;
+    let actor_arg = D1Type::Text(&local_actor.id);
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT friend_actor_id, friend_inbox, friend_shared_inbox,
+               follower_since, following_since, accepted_at
+        FROM friends
+        WHERE local_actor_id = ?1
+        ORDER BY COALESCE(accepted_at, following_since, follower_since) DESC
+        LIMIT ?2
+        "#,
+    )
+    .bind_refs([&actor_arg, &limit_arg])?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_following(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, actor_id, target_actor_id, target_inbox, status, created_at, accepted_at
+        FROM following
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_local_actor(env: &Env) -> Result<LocalActor> {
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare("SELECT id, username FROM actors WHERE username = 'social' LIMIT 1")
+        .first::<Map<String, Value>>(None)
+        .await?;
+    Ok(LocalActor {
+        id: string_field(row.as_ref(), "id")
+            .unwrap_or_else(|| "https://social.dais.social/users/social".to_string()),
+    })
+}
+
+fn query_param(url: &worker::Url, key: &str) -> Option<String> {
+    url.query_pairs()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
+}
+
+fn clamp_limit(value: Option<String>) -> i32 {
+    value
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(20)
+        .clamp(1, 80)
 }
 
 fn string_field(row: Option<&Map<String, Value>>, key: &str) -> Option<String> {
@@ -671,6 +774,11 @@ struct OwnerStats {
 }
 
 #[derive(Serialize)]
+struct OwnerItems<T> {
+    items: Vec<T>,
+}
+
+#[derive(Serialize)]
 struct OwnerDiagnostic {
     key: &'static str,
     ok: bool,
@@ -681,6 +789,10 @@ struct OwnerDiagnostic {
 struct DeliveryCount {
     status: String,
     count: i64,
+}
+
+struct LocalActor {
+    id: String,
 }
 
 struct OwnerToken {
