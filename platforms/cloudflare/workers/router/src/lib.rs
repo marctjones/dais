@@ -77,6 +77,23 @@ async fn handle_owner_api(req: Request, env: Env, url: &worker::Url) -> Result<R
             },
             200,
         ),
+        (worker::Method::Get, "/posts") => api_json(
+            &OwnerItems {
+                items: owner_posts(&env, limit).await?,
+            },
+            200,
+        ),
+        (worker::Method::Get, "/timeline/home") => api_json(
+            &OwnerItems {
+                items: owner_home_timeline(
+                    &env,
+                    limit,
+                    query_param(url, "include_replies").as_deref() == Some("true"),
+                )
+                .await?,
+            },
+            200,
+        ),
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
             501,
@@ -321,6 +338,58 @@ async fn owner_following(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>
         "#,
     )
     .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_posts(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
+               name, summary, visibility, COALESCE(protocol, 'activitypub') AS protocol,
+               atproto_uri, atproto_cid, encrypted_message, media_attachments,
+               published_at, created_at, updated_at,
+               (SELECT COUNT(*) FROM replies r WHERE r.post_id = posts.id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+               (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'like') AS like_count,
+               (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = posts.id OR i.object_url = posts.id) AND i.type = 'boost') AS boost_count
+        FROM posts
+        ORDER BY published_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_home_timeline(
+    env: &Env,
+    limit: i32,
+    include_replies: bool,
+) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let include_replies_arg = D1Type::Integer(if include_replies { 1 } else { 0 });
+    db.prepare(
+        r#"
+        SELECT id, object_id, actor_id, actor_username, actor_display_name, actor_avatar_url,
+               content, content_html, visibility, in_reply_to, published_at, updated_at,
+               protocol, created_at,
+               (SELECT COUNT(*) FROM replies r WHERE r.post_id = timeline_posts.object_id AND (r.hidden IS NULL OR r.hidden = 0)) AS reply_count,
+               (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = timeline_posts.object_id OR i.object_url = timeline_posts.object_id) AND i.type = 'like') AS like_count,
+               (SELECT COUNT(*) FROM interactions i WHERE (i.post_id = timeline_posts.object_id OR i.object_url = timeline_posts.object_id) AND i.type = 'boost') AS boost_count
+        FROM timeline_posts
+        WHERE deleted_at IS NULL
+          AND (?2 = 1 OR in_reply_to IS NULL OR in_reply_to = '')
+        ORDER BY published_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs([&limit_arg, &include_replies_arg])?
     .all()
     .await?
     .results::<Map<String, Value>>()
