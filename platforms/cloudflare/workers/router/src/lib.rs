@@ -52,6 +52,7 @@ async fn handle_owner_api(req: Request, env: Env, path: &str) -> Result<Response
 
     match (req.method(), owner_path) {
         (worker::Method::Get, "/profile") => api_json(&owner_profile(&env).await?, 200),
+        (worker::Method::Get, "/stats") => api_json(&owner_stats(&env).await?, 200),
         _ => api_json(
             &serde_json::json!({ "error": "Rust router migration scaffold: owner route not migrated yet" }),
             501,
@@ -116,12 +117,82 @@ async fn owner_profile(env: &Env) -> Result<OwnerProfile> {
     })
 }
 
+async fn owner_stats(env: &Env) -> Result<OwnerStats> {
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare(
+            r#"
+            SELECT
+                (SELECT COUNT(*) FROM followers) AS followers_total,
+                (SELECT COUNT(*) FROM followers WHERE status='approved') AS followers_approved,
+                (SELECT COUNT(*) FROM followers WHERE status='pending') AS followers_pending,
+                (SELECT COUNT(*) FROM followers WHERE status='rejected') AS followers_rejected,
+                (SELECT COUNT(*) FROM following) AS following_total,
+                (SELECT COUNT(*) FROM posts) AS posts_total,
+                (SELECT COUNT(*) FROM activities) AS activities_total,
+                (SELECT COUNT(*) FROM deliveries) AS deliveries_total,
+                (SELECT COUNT(*) FROM deliveries WHERE status='failed') AS deliveries_failed,
+                (SELECT COUNT(*) FROM deliveries WHERE status='queued') AS deliveries_queued,
+                (SELECT COUNT(*) FROM deliveries WHERE status='retry') AS deliveries_retry,
+                (SELECT COUNT(*) FROM deliveries WHERE status='delivered') AS deliveries_delivered,
+                (SELECT COUNT(*) FROM posts WHERE protocol='both') AS dual_protocol_posts,
+                (SELECT COUNT(*) FROM posts WHERE visibility='public') AS public_posts,
+                (SELECT COUNT(*) FROM posts WHERE visibility IN ('followers', 'unlisted')) AS private_posts,
+                (SELECT COUNT(*) FROM posts WHERE visibility='direct') AS direct_posts,
+                (SELECT COUNT(*) FROM posts WHERE encrypted_message IS NOT NULL) AS encrypted_posts,
+                (SELECT COUNT(*) FROM posts WHERE media_attachments IS NOT NULL AND media_attachments != '') AS media_posts,
+                (SELECT COUNT(*) FROM notifications WHERE read = 0 OR read IS NULL) AS notifications_unread,
+                (SELECT COUNT(*) FROM blocks) AS blocks_total,
+                (SELECT COUNT(*) FROM federation_allowlist WHERE enabled = 1) AS allowlist_hosts,
+                (SELECT closed_network FROM instance_settings WHERE id = 1) AS closed_network
+            "#,
+        )
+        .first::<Map<String, Value>>(None)
+        .await?;
+    Ok(OwnerStats {
+        followers_total: integer_field(row.as_ref(), "followers_total"),
+        followers_approved: integer_field(row.as_ref(), "followers_approved"),
+        followers_pending: integer_field(row.as_ref(), "followers_pending"),
+        followers_rejected: integer_field(row.as_ref(), "followers_rejected"),
+        following_total: integer_field(row.as_ref(), "following_total"),
+        posts_total: integer_field(row.as_ref(), "posts_total"),
+        activities_total: integer_field(row.as_ref(), "activities_total"),
+        deliveries_total: integer_field(row.as_ref(), "deliveries_total"),
+        deliveries_failed: integer_field(row.as_ref(), "deliveries_failed"),
+        deliveries_queued: integer_field(row.as_ref(), "deliveries_queued"),
+        deliveries_retry: integer_field(row.as_ref(), "deliveries_retry"),
+        deliveries_delivered: integer_field(row.as_ref(), "deliveries_delivered"),
+        dual_protocol_posts: integer_field(row.as_ref(), "dual_protocol_posts"),
+        public_posts: integer_field(row.as_ref(), "public_posts"),
+        private_posts: integer_field(row.as_ref(), "private_posts"),
+        direct_posts: integer_field(row.as_ref(), "direct_posts"),
+        encrypted_posts: integer_field(row.as_ref(), "encrypted_posts"),
+        media_posts: integer_field(row.as_ref(), "media_posts"),
+        notifications_unread: integer_field(row.as_ref(), "notifications_unread"),
+        blocks_total: integer_field(row.as_ref(), "blocks_total"),
+        allowlist_hosts: integer_field(row.as_ref(), "allowlist_hosts"),
+        closed_network: integer_field(row.as_ref(), "closed_network") != 0,
+    })
+}
+
 fn string_field(row: Option<&Map<String, Value>>, key: &str) -> Option<String> {
     row.and_then(|fields| fields.get(key))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn integer_field(row: Option<&Map<String, Value>>, key: &str) -> i64 {
+    row.and_then(|fields| fields.get(key))
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+                .or_else(|| value.as_f64().map(|number| number as i64))
+                .or_else(|| value.as_str().and_then(|text| text.parse::<i64>().ok()))
+        })
+        .unwrap_or(0)
 }
 
 fn require_owner_bearer(
@@ -485,6 +556,32 @@ struct OwnerProfile {
     header_url: Option<String>,
     public_handle: String,
     actor_url: String,
+}
+
+#[derive(Serialize)]
+struct OwnerStats {
+    followers_total: i64,
+    followers_approved: i64,
+    followers_pending: i64,
+    followers_rejected: i64,
+    following_total: i64,
+    posts_total: i64,
+    activities_total: i64,
+    deliveries_total: i64,
+    deliveries_failed: i64,
+    deliveries_queued: i64,
+    deliveries_retry: i64,
+    deliveries_delivered: i64,
+    dual_protocol_posts: i64,
+    public_posts: i64,
+    private_posts: i64,
+    direct_posts: i64,
+    encrypted_posts: i64,
+    media_posts: i64,
+    notifications_unread: i64,
+    blocks_total: i64,
+    allowlist_hosts: i64,
+    closed_network: bool,
 }
 
 struct OwnerToken {
