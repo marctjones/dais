@@ -26,6 +26,14 @@
           "status": "pass",
           "detail": "Followers-only and public Create delivery covered by live smoke path."
         },
+        "update": {
+          "status": "pass",
+          "detail": "Core inbox regression covers Mastodon-style Update(Note) modifying stored timeline rows."
+        },
+        "delete": {
+          "status": "pass",
+          "detail": "Core inbox regression covers Mastodon-style Delete(Note) removing stored timeline rows."
+        },
         "reply": {
           "status": "pass",
           "detail": "Covered by the live toot inbound reply smoke gate and owner post-detail assertion."
@@ -37,6 +45,18 @@
         "announce": {
           "status": "pass",
           "detail": "Covered by core inbox Announce/Undo regression tests for Mastodon-style boosts."
+        },
+        "undo": {
+          "status": "pass",
+          "detail": "Core inbox regression covers Undo of Like and Announce interactions."
+        },
+        "idempotency": {
+          "status": "pass",
+          "detail": "Follower and following writes use conflict-safe upserts; inbox interaction regressions verify stable object state after Undo cleanup."
+        },
+        "content_shape": {
+          "status": "pass",
+          "detail": "ActivityPub conformance and Mastodon API conformance cover Note basics, replies/likes/shares, media attachments, mentions, hashtags, and Question/poll rendering."
         },
         "authorized_fetch": {
           "status": "pass",
@@ -72,6 +92,14 @@
           "status": "manual",
           "detail": "Deliver public and followers-only Create to approved Pleroma follower."
         },
+        "update": {
+          "status": "manual",
+          "detail": "Update a Pleroma-visible Note and verify the remote timeline/rendered object changes."
+        },
+        "delete": {
+          "status": "manual",
+          "detail": "Delete a Pleroma-visible Note and verify the remote tombstone/delete state."
+        },
         "reply": {
           "status": "manual",
           "detail": "Reply from Pleroma and verify inbox ingestion."
@@ -83,6 +111,18 @@
         "announce": {
           "status": "manual",
           "detail": "Repeat from Pleroma and verify Announce ingestion."
+        },
+        "undo": {
+          "status": "manual",
+          "detail": "Undo a Pleroma favourite/announce and verify local interaction cleanup."
+        },
+        "idempotency": {
+          "status": "manual",
+          "detail": "Replay duplicate Pleroma activities and verify local rows remain idempotent."
+        },
+        "content_shape": {
+          "status": "manual",
+          "detail": "Verify Pleroma rendering for mentions, hashtags, media attachments, and Question/poll objects."
         },
         "authorized_fetch": {
           "status": "manual",
@@ -118,6 +158,14 @@
           "status": "manual",
           "detail": "Deliver Create and inspect Misskey timeline rendering."
         },
+        "update": {
+          "status": "manual",
+          "detail": "Update a Misskey-visible Note and verify rendered object/timeline changes."
+        },
+        "delete": {
+          "status": "manual",
+          "detail": "Delete a Misskey-visible Note and verify remote deletion/tombstone behavior."
+        },
         "reply": {
           "status": "manual",
           "detail": "Reply from Misskey and verify inbox ingestion."
@@ -129,6 +177,18 @@
         "announce": {
           "status": "manual",
           "detail": "Renote from Misskey and verify Announce-compatible ingestion."
+        },
+        "undo": {
+          "status": "manual",
+          "detail": "Undo Misskey reaction/renote activity where exposed and verify local cleanup."
+        },
+        "idempotency": {
+          "status": "manual",
+          "detail": "Replay duplicate Misskey activities and verify local rows remain idempotent."
+        },
+        "content_shape": {
+          "status": "manual",
+          "detail": "Verify Misskey rendering for mentions, hashtags, media attachments, polls, and quote-related extensions where present."
         },
         "authorized_fetch": {
           "status": "manual",
@@ -164,6 +224,14 @@
           "status": "manual",
           "detail": "Deliver Note fallback; media-specific rendering belongs to later media work."
         },
+        "update": {
+          "status": "manual",
+          "detail": "Update a Pixelfed-visible Note/media post and verify rendered object changes where supported."
+        },
+        "delete": {
+          "status": "manual",
+          "detail": "Delete a Pixelfed-visible Note/media post and verify remote deletion behavior."
+        },
         "reply": {
           "status": "manual",
           "detail": "Reply/comment from Pixelfed and verify inbox ingestion."
@@ -175,6 +243,18 @@
         "announce": {
           "status": "manual",
           "detail": "Pixelfed boost/share behavior varies; record observed behavior as compatibility data."
+        },
+        "undo": {
+          "status": "manual",
+          "detail": "Undo Pixelfed like/share behavior where exposed and verify local cleanup."
+        },
+        "idempotency": {
+          "status": "manual",
+          "detail": "Replay duplicate Pixelfed activities and verify local rows remain idempotent."
+        },
+        "content_shape": {
+          "status": "manual",
+          "detail": "Verify Pixelfed rendering for image/video attachments, captions, mentions, hashtags, and Note fallback behavior."
         },
         "authorized_fetch": {
           "status": "manual",

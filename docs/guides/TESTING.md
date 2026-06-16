@@ -122,13 +122,16 @@ is not configured and do not block release by themselves.
 Validates the checked-in Mastodon-family compatibility profile. This is the
 offline v0.15 gate for making sure Mastodon, Pleroma/Akkoma, Misskey/Firefish,
 and Pixelfed all have explicit coverage rows before live target credentials are
-available.
+available. Rows cover discovery, actor shape, follow/accept, Create/Update/
+Delete, replies, Like/Announce/Undo, idempotency, rich content shape, signed
+authorized fetch, and private visibility.
 
 **Usage:**
 ```bash
 npm run test:federation-lab
 node scripts/federation-lab.mjs --json
 node scripts/federation-lab.mjs --profile docs/reference/federation-lab-targets.json
+npm run test:federation-lab -- --require-pass mastodon
 ```
 
 Statuses:

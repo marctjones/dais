@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.39] - 2026-06-16
+
+### Changed
+- Expanded the Mastodon-family federation lab profile to track Update, Delete,
+  Undo, idempotency, and rich content-shape coverage alongside the existing
+  follow, delivery, reply, favourite, boost, authorized-fetch, and privacy rows.
+
 ## [1.28.38] - 2026-06-16
 
 ### Fixed
