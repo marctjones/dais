@@ -6101,6 +6101,7 @@ async fn owner_direct_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, 
 struct OwnerSearchFlags {
     include_local: bool,
     include_public: bool,
+    confirm_public_sensitive: bool,
 }
 
 fn owner_search_flags(url: &worker::Url) -> OwnerSearchFlags {
@@ -6116,10 +6117,15 @@ fn owner_search_flags(url: &worker::Url) -> OwnerSearchFlags {
     if query_param(url, "include_local").as_deref() == Some("false") {
         include_local = false;
     }
+    let confirm_public_sensitive = matches!(
+        query_param(url, "confirm_public_sensitive").as_deref(),
+        Some("true" | "1" | "yes" | "on")
+    );
 
     OwnerSearchFlags {
         include_local,
         include_public,
+        confirm_public_sensitive,
     }
 }
 
@@ -6139,6 +6145,7 @@ async fn owner_search(
             public_posts: Vec::new(),
             public_actors: Vec::new(),
             provider_errors: Vec::new(),
+            public_search_guard: OwnerPublicSearchGuard::default(),
         });
     }
 
@@ -6147,7 +6154,14 @@ async fn owner_search(
     } else {
         (Vec::new(), Vec::new(), Vec::new(), Vec::new())
     };
-    let public = if flags.include_public {
+    let public_categories = if flags.include_public {
+        detect_sensitive_categories(&term)
+    } else {
+        Vec::new()
+    };
+    let public_guard =
+        owner_public_search_guard(&public_categories, flags.confirm_public_sensitive);
+    let public = if flags.include_public && !public_guard.blocked {
         owner_public_search(&term, limit).await
     } else {
         OwnerPublicSearch::default()
@@ -6161,7 +6175,31 @@ async fn owner_search(
         public_posts: public.posts,
         public_actors: public.actors,
         provider_errors: public.provider_errors,
+        public_search_guard: public_guard,
     })
+}
+
+fn owner_public_search_guard(
+    categories: &[String],
+    confirm_public_sensitive: bool,
+) -> OwnerPublicSearchGuard {
+    let requires_confirmation = !categories.is_empty();
+    let confirmed = requires_confirmation && confirm_public_sensitive;
+    let blocked = requires_confirmation && !confirmed;
+    let message = if blocked {
+        Some("Public provider search skipped until the operator confirms this sensitive query.")
+    } else if confirmed {
+        Some("Sensitive public search was explicitly confirmed by the operator.")
+    } else {
+        None
+    };
+    OwnerPublicSearchGuard {
+        blocked,
+        requires_confirmation,
+        confirmed,
+        categories: categories.to_vec(),
+        message: message.map(str::to_string),
+    }
 }
 
 type OwnerLocalSearchRows = (
@@ -9499,6 +9537,8 @@ fn api_json<T: Serialize>(value: &T, status: u16) -> Result<Response> {
         "Access-Control-Allow-Methods",
         "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     )?;
+    headers.set("Cache-Control", "no-store")?;
+    headers.set("Vary", "Authorization, Accept")?;
     let mut response = if status == 204 {
         Response::empty()?.with_status(status)
     } else {
@@ -9812,6 +9852,16 @@ struct OwnerSearch {
     public_posts: Vec<Map<String, Value>>,
     public_actors: Vec<Map<String, Value>>,
     provider_errors: Vec<Map<String, Value>>,
+    public_search_guard: OwnerPublicSearchGuard,
+}
+
+#[derive(Default, Serialize)]
+struct OwnerPublicSearchGuard {
+    blocked: bool,
+    requires_confirmation: bool,
+    confirmed: bool,
+    categories: Vec<String>,
+    message: Option<String>,
 }
 
 #[derive(Serialize)]

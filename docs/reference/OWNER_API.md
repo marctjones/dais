@@ -38,7 +38,7 @@ Implemented endpoints:
 | `GET` | `/notifications` | Local notifications. |
 | `POST` | `/notifications/read` | Mark a notification as read. |
 | `GET` | `/deliveries` | ActivityPub delivery jobs. |
-| `GET` | `/search?q=<term>&scope=local\|public\|all` | Operator search. `local` searches Dais posts, follows, sources, and reader items. `public` queries explicit public Bluesky and Mastodon-compatible providers. `all` returns both. |
+| `GET` | `/search?q=<term>&scope=local\|public\|all` | Operator search. `local` searches Dais posts, follows, sources, and reader items. `public` queries explicit public Bluesky and Mastodon-compatible providers. `all` returns both. Sensitive-looking public queries return `public_search_guard.blocked=true` and skip provider calls unless `confirm_public_sensitive=true` is supplied. |
 | `GET` | `/sources` | Public source subscriptions and private reader items. |
 | `GET` | `/moderation` | Closed-network, block, allowlist, and follower policy state. |
 | `GET` | `/diagnostics` | Owner API, private default, ActivityPub, and delivery health. |
@@ -51,10 +51,15 @@ Known gaps:
   and direct posts, and accepts ActivityStreams attachment JSON from the owner
   media upload endpoint. Rich non-`Note` objects and poll creation remain
   Mastodon API or local CLI surfaces.
+- Search responses include local arrays (`posts`, `users`, `sources`,
+  `source_items`), public arrays (`public_posts`, `public_actors`,
+  `provider_errors`), and `public_search_guard` so clients can show when a
+  public-provider query was paused for operator confirmation.
 - The Rust CLI can exercise live owner API compose with
   `dais owner post-create`, media uploads with `dais owner media-upload`, and
   media revocation with `dais owner media-revoke`. It can opt into public search
-  with `dais owner search --scope public <term>`.
+  with `dais owner search --scope public <term>` and can confirm a sensitive
+  public search with `--confirm-public-sensitive`.
 - Private media capability URLs can expire automatically, but recipient-bound
   authorized-fetch media access remains future hardening.
 - Profile updates currently cover the fields reflected in ActivityPub actor

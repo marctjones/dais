@@ -283,7 +283,9 @@ async function ownerApi(path, options = {}) {
     headers: {
       ...(options.headers || {}),
       Authorization: `Bearer ${config.ownerToken}`,
+      "Cache-Control": "no-cache",
       "Content-Type": "application/json",
+      Pragma: "no-cache",
     },
   });
   if (res.status < 200 || res.status >= 300) {
@@ -1293,12 +1295,21 @@ const tests = [
     if (!config.ownerToken) {
       return t.info("set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner public search fixture");
     }
-    const search = await ownerApi("/search?q=dais&scope=all&limit=5");
+    const search = await ownerApi(`/search?q=dais&scope=all&limit=5&cache_bust=${Date.now()}`);
     const body = search.json || {};
     for (const key of ["posts", "users", "sources", "source_items", "public_posts", "public_actors", "provider_errors"]) {
       if (!Array.isArray(body[key])) {
         return t.fail(`owner search missing ${key} array: ${summarizeJson(body)}`);
       }
+    }
+    if (!body.public_search_guard || typeof body.public_search_guard !== "object") {
+      return t.fail(`owner search missing public_search_guard: ${summarizeJson(body)}`);
+    }
+    if (body.public_search_guard.blocked) {
+      return t.fail(`non-sensitive owner search unexpectedly blocked: ${summarizeJson(body.public_search_guard)}`);
+    }
+    if (!Array.isArray(body.public_search_guard.categories)) {
+      return t.fail(`owner search guard missing categories array: ${summarizeJson(body.public_search_guard)}`);
     }
     for (const post of body.public_posts) {
       if (!post.provider || !post.network || !post.id || !post.url) {
@@ -1311,6 +1322,28 @@ const tests = [
       }
     }
     t.pass("owner search returned explicit local and public provider buckets");
+  }),
+
+  requirement("OWNER-SEARCH-02", "DAIS-OWNER", "Owner public search blocks sensitive queries before external provider calls", async (t) => {
+    if (!config.ownerToken) {
+      return t.info("set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner public search guard fixture");
+    }
+    const search = await ownerApi(`/search?q=medical%20appointment&scope=public&limit=5&cache_bust=${Date.now()}`);
+    const body = search.json || {};
+    const guard = body.public_search_guard || {};
+    if (!guard.blocked || !guard.requires_confirmation || guard.confirmed) {
+      return t.fail(`sensitive public search was not blocked for confirmation: ${summarizeJson(guard)}`);
+    }
+    if (!Array.isArray(guard.categories) || !guard.categories.includes("medical")) {
+      return t.fail(`sensitive public search guard missing medical category: ${summarizeJson(guard)}`);
+    }
+    if (!Array.isArray(body.public_posts) || body.public_posts.length !== 0) {
+      return t.fail(`blocked sensitive public search returned public posts: ${summarizeJson(body.public_posts)}`);
+    }
+    if (!Array.isArray(body.public_actors) || body.public_actors.length !== 0) {
+      return t.fail(`blocked sensitive public search returned public actors: ${summarizeJson(body.public_actors)}`);
+    }
+    t.pass("sensitive owner public search paused before public provider queries");
   }),
 
   requirement("OWNER-SECURITY-01", "DAIS-OWNER", "Owner API rejects anonymous and invalid bearer requests", async (t) => {

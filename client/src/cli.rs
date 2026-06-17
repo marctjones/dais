@@ -884,6 +884,9 @@ pub struct OwnerSearchArgs {
     /// Search scope: local, public, or all.
     #[arg(long, default_value = "local")]
     pub scope: String,
+    /// Allow sensitive-looking queries to be sent to public search providers.
+    #[arg(long)]
+    pub confirm_public_sensitive: bool,
     pub query: String,
 }
 

@@ -183,6 +183,7 @@ async fn owner_search(
     app: tauri::AppHandle,
     query: String,
     scope: Option<String>,
+    confirm_public_sensitive: Option<bool>,
 ) -> Result<OwnerSearchResult, String> {
     let stored = load_settings(&app)?;
     let token = stored
@@ -192,7 +193,11 @@ async fn owner_search(
         .ok_or_else(|| "owner token is required".to_string())?;
     let client = OwnerApiClient::new(&stored.instance_url, token);
     client
-        .search_with_scope(&query, scope.as_deref().unwrap_or("local"))
+        .search_with_scope_confirmation(
+            &query,
+            scope.as_deref().unwrap_or("local"),
+            confirm_public_sensitive.unwrap_or(false),
+        )
         .await
         .map_err(|error| error.to_string())
 }

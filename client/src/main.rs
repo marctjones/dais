@@ -1081,7 +1081,11 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
         }
         OwnerCommand::Search(args) => {
             let results = owner_api(&args.api)
-                .search_with_scope(&args.query, &args.scope)
+                .search_with_scope_confirmation(
+                    &args.query,
+                    &args.scope,
+                    args.confirm_public_sensitive,
+                )
                 .await
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_search(&results);
@@ -1654,6 +1658,19 @@ fn print_owner_direct_messages(messages: &[OwnerDirectMessage]) {
 }
 
 fn print_owner_search(results: &OwnerSearchResult) {
+    let guard = &results.public_search_guard;
+    if guard.blocked || guard.requires_confirmation || !guard.categories.is_empty() {
+        println!(
+            "public_search_guard=blocked:{} requires_confirmation:{} confirmed:{}",
+            guard.blocked, guard.requires_confirmation, guard.confirmed
+        );
+        if !guard.categories.is_empty() {
+            println!("public_search_categories={}", guard.categories.join(","));
+        }
+        if let Some(message) = guard.message.as_deref() {
+            println!("public_search_message={message}");
+        }
+    }
     println!("posts={}", results.posts.len());
     for post in &results.posts {
         println!(

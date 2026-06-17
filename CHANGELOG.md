@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.91] - 2026-06-17
+
+### Added
+- Added sensitive-query guardrails for owner public search. Public provider
+  search now pauses sensitive-looking queries until the operator explicitly
+  confirms, while local search results remain available and clients receive a
+  structured `public_search_guard` response.
+- Added `no-store` cache headers to router JSON API responses so authenticated
+  owner API results are not cached at the edge.
+
 ## [1.28.90] - 2026-06-17
 
 ### Added

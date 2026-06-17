@@ -389,6 +389,13 @@ type OwnerSearchResult = {
     network: string;
     error: string;
   }>;
+  public_search_guard: {
+    blocked: boolean;
+    requires_confirmation: boolean;
+    confirmed: boolean;
+    categories: string[];
+    message?: string | null;
+  };
 };
 
 type OwnerStats = {
@@ -477,7 +484,14 @@ function emptySearchResults(): OwnerSearchResult {
     source_items: [],
     public_posts: [],
     public_actors: [],
-    provider_errors: []
+    provider_errors: [],
+    public_search_guard: {
+      blocked: false,
+      requires_confirmation: false,
+      confirmed: false,
+      categories: [],
+      message: null
+    }
   };
 }
 
@@ -599,22 +613,29 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
     } as T;
   }
   if (command === "owner_search") {
+    const scope = String(args?.scope || "local").toLowerCase();
+    const query = String(args?.query || "");
+    const includeLocal = scope !== "public" && scope !== "remote";
+    const includePublic = scope === "public" || scope === "remote" || scope === "all";
+    const publicCategories = includePublic ? sensitiveCategoriesForText(query) : [];
+    const confirmedPublicSensitive = Boolean(args?.confirmPublicSensitive || args?.confirm_public_sensitive);
+    const publicBlocked = includePublic && publicCategories.length > 0 && !confirmedPublicSensitive;
     return {
-      posts: data.posts.map((post) => ({
+      posts: includeLocal ? data.posts.map((post) => ({
         id: post.id,
         content: post.content,
         visibility: String(post.visibility),
         protocol: String(post.protocol),
         published_at: post.published_at || null
-      })),
-      users: data.following.map((row) => ({
+      })) : [],
+      users: includeLocal ? data.following.map((row) => ({
         actor_id: row.target_actor_id,
         relation: "following",
         status: row.status,
         created_at: row.created_at || null
-      })),
-      sources: [smokeSourceSubscription()],
-      source_items: data.sources.map((item) => ({
+      })) : [],
+      sources: includeLocal ? [smokeSourceSubscription()] : [],
+      source_items: includeLocal ? data.sources.map((item) => ({
         id: item.id,
         source_id: "source-smoke",
         source_type: item.source_type,
@@ -625,8 +646,8 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
         read: item.read,
         rights_policy_json: "{}",
         created_at: null
-      })),
-      public_posts: [
+      })) : [],
+      public_posts: includePublic && !publicBlocked ? [
         {
           provider: "bluesky",
           network: "atproto",
@@ -636,8 +657,8 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
           actor_handle: "smoke.example",
           published_at: "2026-06-17T12:00:00Z"
         }
-      ],
-      public_actors: [
+      ] : [],
+      public_actors: includePublic && !publicBlocked ? [
         {
           provider: "mastodon.social",
           network: "activitypub",
@@ -645,8 +666,17 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
           handle: "smoke@mastodon.social",
           display_name: "Smoke"
         }
-      ],
-      provider_errors: []
+      ] : [],
+      provider_errors: [],
+      public_search_guard: {
+        blocked: publicBlocked,
+        requires_confirmation: includePublic && publicCategories.length > 0,
+        confirmed: includePublic && publicCategories.length > 0 && confirmedPublicSensitive,
+        categories: publicCategories,
+        message: publicBlocked
+          ? "Public provider search skipped until the operator confirms this sensitive query."
+          : null
+      }
     } as T;
   }
   if (command === "owner_interaction") {
@@ -912,6 +942,9 @@ function render() {
   app.querySelector<HTMLFormElement>("#discover-form")?.addEventListener("submit", discoverActor);
   app.querySelector<HTMLFormElement>("#source-form")?.addEventListener("submit", addSource);
   app.querySelector<HTMLFormElement>("#search-form")?.addEventListener("submit", runSearch);
+  app.querySelector<HTMLButtonElement>("[data-confirm-public-search]")?.addEventListener("click", () => {
+    void executeSearch(searchQuery, searchScope, true);
+  });
   app.querySelector<HTMLFormElement>("#block-actor-form")?.addEventListener("submit", blockActor);
   app.querySelector<HTMLFormElement>("#block-domain-form")?.addEventListener("submit", blockDomain);
   app.querySelector<HTMLFormElement>("#allow-host-form")?.addEventListener("submit", allowHost);
@@ -1119,6 +1152,7 @@ function searchView() {
         </select>
         <button type="submit">Search</button>
       </form>
+      ${searchPublicGuardHtml(searchResults.public_search_guard)}
       <h2 class="section-label">Posts</h2>
       ${list(searchResults.posts.map(searchPostCard), "No matching posts.")}
       <h2 class="section-label">Public posts</h2>
@@ -1139,6 +1173,19 @@ function searchView() {
       ${list((searchResults.provider_errors || []).map(searchProviderErrorCard), "Providers returned normally.")}
     </article>
   </section>`;
+}
+
+function searchPublicGuardHtml(guard: OwnerSearchResult["public_search_guard"]) {
+  if (!guard || (!guard.blocked && !guard.requires_confirmation && !(guard.categories || []).length)) {
+    return "";
+  }
+  const categories = guard.categories || [];
+  return `<div class="privacy-note">
+    <strong>${guard.blocked ? "Public search paused" : "Public search confirmed"}</strong>
+    ${guard.message ? `<p>${escapeHtml(guard.message)}</p>` : ""}
+    ${categories.length ? `<div class="sensitivity-tags">${categories.map((label) => `<span class="sensitive-chip">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
+    ${guard.blocked ? `<button type="button" data-confirm-public-search>Search public providers</button>` : ""}
+  </div>`;
 }
 
 function statsView(data: OwnerSnapshot) {
@@ -2627,15 +2674,29 @@ async function runSearch(event: Event) {
   const form = event.currentTarget as HTMLFormElement;
   const query = String(new FormData(form).get("query") || "").trim();
   const scope = String(new FormData(form).get("scope") || "local").trim() || "local";
+  await executeSearch(query, scope, false);
+}
+
+async function executeSearch(query: string, scope: string, confirmPublicSensitive: boolean) {
   searchQuery = query;
   searchScope = scope;
   searchResults = query
-    ? normalizeSearchResults(await ownerInvoke<OwnerSearchResult>("owner_search", { query, scope }))
+    ? normalizeSearchResults(await ownerInvoke<OwnerSearchResult>("owner_search", {
+        query,
+        scope,
+        confirmPublicSensitive
+      }))
     : emptySearchResults();
   notice = query
-    ? `Search returned ${searchResults.posts.length} posts, ${searchResults.users.length} actors, ${(searchResults.sources || []).length} sources, ${(searchResults.source_items || []).length} source items, ${(searchResults.public_posts || []).length} public posts, and ${(searchResults.public_actors || []).length} public actors.`
+    ? searchNotice(searchResults)
     : "";
   render();
+}
+
+function searchNotice(results: OwnerSearchResult) {
+  const guard = results.public_search_guard;
+  const base = `Search returned ${results.posts.length} posts, ${results.users.length} actors, ${(results.sources || []).length} sources, ${(results.source_items || []).length} source items, ${(results.public_posts || []).length} public posts, and ${(results.public_actors || []).length} public actors.`;
+  return guard?.blocked ? `${base} Public provider search needs confirmation.` : base;
 }
 
 function normalizeSearchResults(results: OwnerSearchResult): OwnerSearchResult {
@@ -2648,7 +2709,12 @@ function normalizeSearchResults(results: OwnerSearchResult): OwnerSearchResult {
     source_items: results.source_items || [],
     public_posts: results.public_posts || [],
     public_actors: results.public_actors || [],
-    provider_errors: results.provider_errors || []
+    provider_errors: results.provider_errors || [],
+    public_search_guard: {
+      ...emptySearchResults().public_search_guard,
+      ...(results.public_search_guard || {}),
+      categories: results.public_search_guard?.categories || []
+    }
   };
 }
 

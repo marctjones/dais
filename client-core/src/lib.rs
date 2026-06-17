@@ -167,12 +167,25 @@ impl OwnerApiClient {
         query: &str,
         scope: &str,
     ) -> ClientResult<OwnerSearchResult> {
-        self.get(&format!(
+        self.search_with_scope_confirmation(query, scope, false)
+            .await
+    }
+
+    pub async fn search_with_scope_confirmation(
+        &self,
+        query: &str,
+        scope: &str,
+        confirm_public_sensitive: bool,
+    ) -> ClientResult<OwnerSearchResult> {
+        let mut path = format!(
             "/api/dais/owner/search?q={}&scope={}",
             url_encode(query),
             url_encode(scope)
-        ))
-        .await
+        );
+        if confirm_public_sensitive {
+            path.push_str("&confirm_public_sensitive=true");
+        }
+        self.get(&path).await
     }
 
     pub async fn stats(&self) -> ClientResult<OwnerStats> {
@@ -708,6 +721,21 @@ pub struct OwnerSearchResult {
     pub public_actors: Vec<OwnerPublicSearchActor>,
     #[serde(default)]
     pub provider_errors: Vec<OwnerSearchProviderError>,
+    #[serde(default)]
+    pub public_search_guard: OwnerPublicSearchGuard,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerPublicSearchGuard {
+    #[serde(default)]
+    pub blocked: bool,
+    #[serde(default)]
+    pub requires_confirmation: bool,
+    #[serde(default)]
+    pub confirmed: bool,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    pub message: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
