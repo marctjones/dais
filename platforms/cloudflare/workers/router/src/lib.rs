@@ -3569,6 +3569,32 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             }
         }
         (worker::Method::Get, "/moderation") => api_json(&owner_moderation(&env).await?, 200),
+        (worker::Method::Get, "/moderation/replies") => api_json(
+            &OwnerItems {
+                items: owner_moderation_replies(&env, limit).await?,
+            },
+            200,
+        ),
+        (worker::Method::Post, "/moderation/replies/status") => {
+            let body = read_json(&mut req).await;
+            let Some(reply_id) = body_string_any(&body, &["reply_id", "replyId", "id"]) else {
+                return api_json(&serde_json::json!({ "error": "reply_id is required" }), 400);
+            };
+            let Some(status) = body_string_any(&body, &["status"]) else {
+                return api_json(&serde_json::json!({ "error": "status is required" }), 400);
+            };
+            match owner_set_reply_moderation_status(&env, &reply_id, &status).await {
+                Ok(reply) => api_json(&reply, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Post, "/moderation/settings") => {
+            let body = read_json(&mut req).await;
+            match owner_update_moderation_settings(&env, &body).await {
+                Ok(settings) => api_json(&settings, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Post, "/moderation/block") => {
             let body = read_json(&mut req).await;
             match owner_block(&env, &body).await {
@@ -3628,8 +3654,6 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
 
 fn owner_api_required_scopes(method: worker::Method, path: &str) -> &'static [&'static str] {
     match method {
-        worker::Method::Get => &["read"],
-        worker::Method::Delete => &["write"],
         _ if path == "/discovery/actor" => &["read"],
         _ if path == "/followers/status"
             || path == "/following/follow"
@@ -3638,6 +3662,8 @@ fn owner_api_required_scopes(method: worker::Method, path: &str) -> &'static [&'
             &["follow"]
         }
         _ if path.starts_with("/moderation/") => &["moderation"],
+        worker::Method::Get => &["read"],
+        worker::Method::Delete => &["write"],
         _ if path == "/media" || path == "/media/revoke" => &["media"],
         _ => &["write"],
     }
@@ -4268,7 +4294,9 @@ fn shape_snapshot_post(post: Map<String, Value>) -> Map<String, Value> {
 
 async fn owner_moderation(env: &Env) -> Result<OwnerModeration> {
     let db = env.d1("DB")?;
+    owner_refresh_reply_moderation(env, 120).await?;
     let settings = owner_settings(env).await?;
+    let moderation_settings = owner_moderation_settings(env).await?;
     let blocks = db
         .prepare("SELECT COUNT(*) AS count FROM blocks")
         .first::<Map<String, Value>>(None)
@@ -4277,15 +4305,444 @@ async fn owner_moderation(env: &Env) -> Result<OwnerModeration> {
         .prepare("SELECT COUNT(*) AS count FROM federation_allowlist WHERE enabled = 1")
         .first::<Map<String, Value>>(None)
         .await?;
+    let reply_counts = db
+        .prepare(
+            r#"
+            SELECT
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN moderation_status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                SUM(CASE WHEN moderation_status = 'hidden' THEN 1 ELSE 0 END) AS hidden_count,
+                SUM(CASE WHEN moderation_status = 'rejected' THEN 1 ELSE 0 END) AS rejected_count,
+                SUM(
+                    CASE
+                        WHEN moderation_flags IS NOT NULL
+                         AND moderation_flags != ''
+                         AND moderation_flags != '[]'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS flagged_count
+            FROM replies
+            "#,
+        )
+        .first::<Map<String, Value>>(None)
+        .await?;
     Ok(OwnerModeration {
         closed_network: bool_field(Some(&settings), "closed_network"),
         block_count: integer_field(blocks.as_ref(), "count"),
         allowlist_count: integer_field(allowlist.as_ref(), "count"),
         require_authorized_fetch: bool_field(Some(&settings), "require_authorized_fetch"),
         manually_approves_followers: bool_field(Some(&settings), "manually_approves_followers"),
+        reply_policy: string_field(moderation_settings.as_ref(), "reply_policy")
+            .unwrap_or_else(|| "warn".to_string()),
+        ai_enabled: bool_field(moderation_settings.as_ref(), "ai_enabled"),
+        ai_model: string_field(moderation_settings.as_ref(), "ai_model"),
+        ai_daily_budget: integer_field(moderation_settings.as_ref(), "ai_daily_budget"),
+        reply_queue_count: integer_field(reply_counts.as_ref(), "pending_count"),
+        flagged_reply_count: integer_field(reply_counts.as_ref(), "flagged_count"),
+        hidden_reply_count: integer_field(reply_counts.as_ref(), "hidden_count"),
+        rejected_reply_count: integer_field(reply_counts.as_ref(), "rejected_count"),
         blocks: owner_blocks(env).await?,
         allowlist: owner_allowlist(env).await?,
     })
+}
+
+async fn owner_moderation_settings(env: &Env) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT id, reply_policy, ai_enabled, ai_model, ai_daily_budget
+        FROM moderation_settings
+        WHERE id = 1
+        LIMIT 1
+        "#,
+    )
+    .first::<Map<String, Value>>(None)
+    .await
+}
+
+async fn owner_moderation_replies(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    owner_refresh_reply_moderation(env, limit).await?;
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, post_id, actor_id, actor_username, actor_display_name, actor_avatar_url,
+                   content, published_at, created_at, moderation_status, moderation_score,
+                   moderation_flags, moderation_checked_at, hidden
+            FROM replies
+            WHERE moderation_status != 'approved'
+               OR (hidden IS NOT NULL AND hidden != 0)
+               OR (moderation_flags IS NOT NULL AND moderation_flags != '' AND moderation_flags != '[]')
+            ORDER BY published_at DESC, created_at DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(rows
+        .into_iter()
+        .map(shape_owner_moderation_reply)
+        .collect())
+}
+
+async fn owner_set_reply_moderation_status(
+    env: &Env,
+    reply_id: &str,
+    status: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    let normalized = normalize_reply_moderation_status(status)?;
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let reply_arg = D1Type::Text(reply_id);
+    let status_arg = D1Type::Text(&normalized);
+    let hidden_arg = D1Type::Integer(if normalized == "approved" { 0 } else { 1 });
+    db.prepare(
+        r#"
+        UPDATE replies
+        SET moderation_status = ?2,
+            hidden = ?3,
+            moderation_checked_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+        "#,
+    )
+    .bind_refs([&reply_arg, &status_arg, &hidden_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    owner_moderation_reply(env, reply_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "reply not found".to_string())
+}
+
+async fn owner_update_moderation_settings(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<OwnerModeration, String> {
+    let reply_policy = normalize_reply_policy(
+        body_string_any(body, &["reply_policy", "replyPolicy"])
+            .unwrap_or_else(|| "warn".to_string())
+            .as_str(),
+    )?
+    .to_string();
+    let ai_enabled = body
+        .get("ai_enabled")
+        .or_else(|| body.get("aiEnabled"))
+        .and_then(|value| value.as_bool().or_else(|| optional_body_string(value).map(|v| v == "true" || v == "1")))
+        .unwrap_or(false);
+    let ai_model = body
+        .get("ai_model")
+        .or_else(|| body.get("aiModel"))
+        .and_then(optional_body_string);
+    let ai_daily_budget = body
+        .get("ai_daily_budget")
+        .or_else(|| body.get("aiDailyBudget"))
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|number| u64::try_from(number).ok()))
+                .or_else(|| value.as_str().and_then(|text| text.parse::<u64>().ok()))
+        })
+        .unwrap_or(0);
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let policy_arg = D1Type::Text(&reply_policy);
+    let ai_enabled_arg = D1Type::Integer(if ai_enabled { 1 } else { 0 });
+    let ai_model_arg = ai_model.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let ai_daily_budget_i32 = i32::try_from(ai_daily_budget).unwrap_or(i32::MAX);
+    let ai_budget_arg = D1Type::Integer(ai_daily_budget_i32);
+    db.prepare(
+        r#"
+        INSERT INTO moderation_settings (
+            id, reply_policy, ai_enabled, ai_model, ai_daily_budget, updated_at
+        ) VALUES (1, ?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+            reply_policy = excluded.reply_policy,
+            ai_enabled = excluded.ai_enabled,
+            ai_model = excluded.ai_model,
+            ai_daily_budget = excluded.ai_daily_budget,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind_refs([&policy_arg, &ai_enabled_arg, &ai_model_arg, &ai_budget_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    owner_reclassify_recent_replies(env, 120)
+        .await
+        .map_err(|error| error.to_string())?;
+    owner_moderation(env).await.map_err(|error| error.to_string())
+}
+
+async fn owner_reclassify_recent_replies(env: &Env, limit: i32) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, content
+            FROM replies
+            ORDER BY published_at DESC, created_at DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)
+        .map_err(|error| error.to_string())?
+        .all()
+        .await
+        .map_err(|error| error.to_string())?
+        .results::<Map<String, Value>>()
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        let Some(reply_id) = string_field(Some(&row), "id") else {
+            continue;
+        };
+        let content = string_field(Some(&row), "content").unwrap_or_default();
+        classify_reply_in_db(env, &reply_id, &content).await?;
+    }
+    Ok(())
+}
+
+async fn owner_refresh_reply_moderation(env: &Env, limit: i32) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, content
+            FROM replies
+            WHERE moderation_checked_at IS NULL
+            ORDER BY published_at DESC, created_at DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)
+        .map_err(|error| error.to_string())?
+        .all()
+        .await
+        .map_err(|error| error.to_string())?
+        .results::<Map<String, Value>>()
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        let Some(reply_id) = string_field(Some(&row), "id") else {
+            continue;
+        };
+        let content = string_field(Some(&row), "content").unwrap_or_default();
+        classify_reply_in_db(env, &reply_id, &content).await?;
+    }
+    Ok(())
+}
+
+async fn classify_reply_in_db(
+    env: &Env,
+    reply_id: &str,
+    content: &str,
+) -> std::result::Result<(), String> {
+    let settings = owner_moderation_settings(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let policy = settings
+        .as_ref()
+        .and_then(|row| string_field(Some(row), "reply_policy"))
+        .unwrap_or_else(|| "warn".to_string());
+    let result = classify_reply_content(content, &policy)?;
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let reply_arg = D1Type::Text(reply_id);
+    let status_arg = D1Type::Text(&result.status);
+    let score_arg = D1Type::Real(result.score);
+    let flags_json = serde_json::to_string(&result.flags).map_err(|error| error.to_string())?;
+    let flags_arg = D1Type::Text(&flags_json);
+    let hidden_arg = D1Type::Integer(if result.hidden { 1 } else { 0 });
+    db.prepare(
+        r#"
+        UPDATE replies
+        SET moderation_status = ?2,
+            moderation_score = ?3,
+            moderation_flags = ?4,
+            moderation_checked_at = CURRENT_TIMESTAMP,
+            hidden = ?5
+        WHERE id = ?1
+        "#,
+    )
+    .bind_refs([&reply_arg, &status_arg, &score_arg, &flags_arg, &hidden_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn classify_reply_content(
+    content: &str,
+    policy: &str,
+) -> std::result::Result<ReplyModerationDecision, String> {
+    let normalized_policy = normalize_reply_policy(policy)?;
+    let lower = content.to_ascii_lowercase();
+    let mut flags = Vec::new();
+    let mut score: f64 = 0.0;
+    if lower.contains("http://")
+        || lower.contains("https://")
+        || lower.contains("buy now")
+        || lower.contains("crypto")
+        || lower.contains("telegram")
+        || lower.contains("whatsapp")
+    {
+        flags.push("spam".to_string());
+        score = 0.95;
+    }
+    if lower.contains("kill yourself")
+        || lower.contains("go die")
+        || lower.contains("idiot")
+        || lower.contains("stupid")
+        || lower.contains("moron")
+    {
+        if !flags.contains(&"harassment".to_string()) {
+            flags.push("harassment".to_string());
+        }
+        score = score.max(0.85);
+    }
+    for category in detect_sensitive_categories(content) {
+        if !flags.contains(&category) {
+            flags.push(category);
+        }
+        score = score.max(0.55);
+    }
+    let (status, hidden) = if flags.is_empty() || normalized_policy == "off" {
+        ("approved".to_string(), false)
+    } else {
+        match normalized_policy {
+            "warn" => ("approved".to_string(), false),
+            "review" => ("pending".to_string(), true),
+            "hide" => ("hidden".to_string(), true),
+            "reject" => ("rejected".to_string(), true),
+            _ => ("approved".to_string(), false),
+        }
+    };
+    Ok(ReplyModerationDecision {
+        status,
+        score,
+        flags,
+        hidden,
+    })
+}
+
+fn detect_sensitive_categories(content: &str) -> Vec<String> {
+    let lower = content.to_ascii_lowercase();
+    let mut categories = Vec::new();
+    for (label, keywords) in [
+        (
+            "medical",
+            &[
+                "medical",
+                "doctor",
+                "clinic",
+                "hospital",
+                "therapy",
+                "medication",
+                "prescription",
+                "surgery",
+                "diagnosis",
+                "health",
+            ][..],
+        ),
+        (
+            "adult",
+            &["adult", "nsfw", "sexual", "sex", "porn", "erotic", "explicit"][..],
+        ),
+        (
+            "political",
+            &[
+                "political",
+                "politics",
+                "election",
+                "vote",
+                "campaign",
+                "senate",
+                "congress",
+                "democrat",
+                "republican",
+            ][..],
+        ),
+        (
+            "family-only",
+            &["family", "kids", "child", "children", "baby", "spouse", "partner", "wedding"][..],
+        ),
+        (
+            "work-sensitive",
+            &[
+                "work",
+                "company",
+                "employer",
+                "client",
+                "salary",
+                "interview",
+                "manager",
+                "confidential",
+                "internal",
+                "project",
+            ][..],
+        ),
+    ] {
+        if keywords.iter().any(|keyword| lower.contains(keyword)) {
+            categories.push(label.to_string());
+        }
+    }
+    categories
+}
+
+fn normalize_reply_policy(value: &str) -> std::result::Result<&'static str, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "off" => Ok("off"),
+        "warn" => Ok("warn"),
+        "review" => Ok("review"),
+        "hide" => Ok("hide"),
+        "reject" => Ok("reject"),
+        _ => Err("reply_policy must be one of off, warn, review, hide, reject".to_string()),
+    }
+}
+
+fn normalize_reply_moderation_status(value: &str) -> std::result::Result<String, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "approved" => Ok("approved".to_string()),
+        "pending" => Ok("pending".to_string()),
+        "hidden" => Ok("hidden".to_string()),
+        "rejected" => Ok("rejected".to_string()),
+        _ => Err("status must be approved, pending, hidden, or rejected".to_string()),
+    }
+}
+
+async fn owner_moderation_reply(env: &Env, reply_id: &str) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let reply_arg = D1Type::Text(reply_id);
+    let row = db
+        .prepare(
+            r#"
+            SELECT id, post_id, actor_id, actor_username, actor_display_name, actor_avatar_url,
+                   content, published_at, created_at, moderation_status, moderation_score,
+                   moderation_flags, moderation_checked_at, hidden
+            FROM replies
+            WHERE id = ?1
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&reply_arg)?
+        .first::<Map<String, Value>>(None)
+        .await?;
+    Ok(row.map(shape_owner_moderation_reply))
+}
+
+fn shape_owner_moderation_reply(row: Map<String, Value>) -> Map<String, Value> {
+    let mut item = row.clone();
+    let flags = string_vec_json_field(Some(&row), "moderation_flags");
+    item.insert(
+        "moderation_flags".to_string(),
+        Value::Array(flags.into_iter().map(Value::String).collect()),
+    );
+    item
 }
 
 async fn owner_blocks(env: &Env) -> Result<Vec<Map<String, Value>>> {
@@ -8593,8 +9050,23 @@ struct OwnerModeration {
     allowlist_count: i64,
     require_authorized_fetch: bool,
     manually_approves_followers: bool,
+    reply_policy: String,
+    ai_enabled: bool,
+    ai_model: Option<String>,
+    ai_daily_budget: i64,
+    reply_queue_count: i64,
+    flagged_reply_count: i64,
+    hidden_reply_count: i64,
+    rejected_reply_count: i64,
     blocks: Vec<Map<String, Value>>,
     allowlist: Vec<Map<String, Value>>,
+}
+
+struct ReplyModerationDecision {
+    status: String,
+    score: f64,
+    flags: Vec<String>,
+    hidden: bool,
 }
 
 #[derive(Serialize)]

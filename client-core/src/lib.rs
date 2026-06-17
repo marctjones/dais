@@ -254,6 +254,32 @@ impl OwnerApiClient {
             .await
     }
 
+    pub async fn moderation_replies(&self) -> ClientResult<Vec<ModerationReplyRow>> {
+        let response: OwnerItems<ModerationReplyRow> =
+            self.get("/api/dais/owner/moderation/replies").await?;
+        Ok(response.items)
+    }
+
+    pub async fn set_reply_moderation_status(
+        &self,
+        reply_id: &str,
+        status: &str,
+    ) -> ClientResult<ModerationReplyRow> {
+        self.post(
+            "/api/dais/owner/moderation/replies/status",
+            &ModerationReplyStatus { reply_id, status },
+        )
+        .await
+    }
+
+    pub async fn update_moderation_settings(
+        &self,
+        settings: &ModerationSettingsUpdate,
+    ) -> ClientResult<ModerationState> {
+        self.post("/api/dais/owner/moderation/settings", settings)
+            .await
+    }
+
     pub async fn follow_actor(&self, target: &str) -> ClientResult<OwnerFollowResult> {
         self.post("/api/dais/owner/following/follow", &FollowTarget { target })
             .await
@@ -838,6 +864,26 @@ pub struct ModerationState {
     pub block_count: u64,
     pub allowlist_count: u64,
     #[serde(default)]
+    pub require_authorized_fetch: bool,
+    #[serde(default)]
+    pub manually_approves_followers: bool,
+    #[serde(default)]
+    pub reply_policy: String,
+    #[serde(default)]
+    pub ai_enabled: bool,
+    #[serde(default)]
+    pub ai_model: Option<String>,
+    #[serde(default)]
+    pub ai_daily_budget: u64,
+    #[serde(default)]
+    pub reply_queue_count: u64,
+    #[serde(default)]
+    pub flagged_reply_count: u64,
+    #[serde(default)]
+    pub hidden_reply_count: u64,
+    #[serde(default)]
+    pub rejected_reply_count: u64,
+    #[serde(default)]
     pub blocks: Vec<ModerationBlockRow>,
     #[serde(default)]
     pub allowlist: Vec<ModerationAllowlistHost>,
@@ -861,6 +907,25 @@ pub struct ModerationAllowlistHost {
     pub updated_at: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModerationReplyRow {
+    pub id: String,
+    pub post_id: String,
+    pub actor_id: String,
+    pub actor_username: Option<String>,
+    pub actor_display_name: Option<String>,
+    pub actor_avatar_url: Option<String>,
+    pub content: String,
+    pub published_at: Option<String>,
+    pub created_at: Option<String>,
+    pub moderation_status: Option<String>,
+    pub moderation_score: Option<f64>,
+    #[serde(default)]
+    pub moderation_flags: Vec<String>,
+    pub moderation_checked_at: Option<String>,
+    pub hidden: serde_json::Value,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct ModerationBlock<'a> {
     actor_id: Option<&'a str>,
@@ -877,6 +942,20 @@ struct ModerationUnblock<'a> {
 struct ModerationAllow<'a> {
     host: &'a str,
     note: Option<&'a str>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ModerationReplyStatus<'a> {
+    reply_id: &'a str,
+    status: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ModerationSettingsUpdate {
+    pub reply_policy: String,
+    pub ai_enabled: bool,
+    pub ai_model: Option<String>,
+    pub ai_daily_budget: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

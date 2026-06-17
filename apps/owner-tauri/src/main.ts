@@ -111,6 +111,16 @@ type ModerationState = {
   closed_network: boolean;
   block_count: number;
   allowlist_count: number;
+  require_authorized_fetch?: boolean;
+  manually_approves_followers?: boolean;
+  reply_policy?: string;
+  ai_enabled?: boolean;
+  ai_model?: string | null;
+  ai_daily_budget?: number;
+  reply_queue_count?: number;
+  flagged_reply_count?: number;
+  hidden_reply_count?: number;
+  rejected_reply_count?: number;
   blocks?: ModerationBlock[];
   allowlist?: ModerationAllowlistHost[];
 };
@@ -129,6 +139,23 @@ type ModerationAllowlistHost = {
   enabled: boolean | number | string | null;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+type ModerationReply = {
+  id: string;
+  post_id: string;
+  actor_id: string;
+  actor_username?: string | null;
+  actor_display_name?: string | null;
+  actor_avatar_url?: string | null;
+  content: string;
+  published_at?: string | null;
+  created_at?: string | null;
+  moderation_status?: string | null;
+  moderation_score?: number | null;
+  moderation_flags?: string[];
+  moderation_checked_at?: string | null;
+  hidden: boolean | number | string | null;
 };
 
 type CreatedPost = {
@@ -386,6 +413,7 @@ let deliveries: OwnerDelivery[] = [];
 let sourceSubscriptions: SourceSubscription[] = [];
 let sourceItems: OwnerSnapshot["sources"] = [];
 let moderationState: ModerationState | null = null;
+let moderationReplies: ModerationReply[] = [];
 let directMessages: OwnerDirectMessage[] = [];
 let searchQuery = "";
 let searchResults: OwnerSearchResult = { posts: [], users: [], sources: [], source_items: [] };
@@ -465,6 +493,47 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
   if (command === "owner_direct_messages") return [] as T;
   if (command === "owner_diagnostics") return data.diagnostics as T;
   if (command === "owner_moderation") return data.moderation as T;
+  if (command === "owner_moderation_replies") {
+    return [
+      {
+        id: `${smokePostId}#pending-reply`,
+        post_id: smokePostId,
+        actor_id: "https://mastodon.example/users/alice",
+        actor_display_name: "Alice Example",
+        content: "This is a medical update reply that should stay in review.",
+        published_at: "2026-06-16T14:06:00Z",
+        moderation_status: "pending",
+        moderation_score: 0.72,
+        moderation_flags: ["medical"],
+        moderation_checked_at: "2026-06-16T14:06:01Z",
+        hidden: true
+      }
+    ] as T;
+  }
+  if (command === "set_owner_reply_moderation_status") {
+    return {
+      id: String(args?.replyId || args?.reply_id || `${smokePostId}#pending-reply`),
+      post_id: smokePostId,
+      actor_id: "https://mastodon.example/users/alice",
+      actor_display_name: "Alice Example",
+      content: "This is a medical update reply that should stay in review.",
+      published_at: "2026-06-16T14:06:00Z",
+      moderation_status: String(args?.status || "approved"),
+      moderation_score: 0.72,
+      moderation_flags: ["medical"],
+      moderation_checked_at: "2026-06-16T14:06:01Z",
+      hidden: String(args?.status || "approved") !== "approved"
+    } as T;
+  }
+  if (command === "save_owner_moderation_settings") {
+    return {
+      ...data.moderation,
+      reply_policy: String(args?.replyPolicy || "review"),
+      ai_enabled: Boolean(args?.aiEnabled),
+      ai_model: String(args?.aiModel || "@cf/meta/llama-guard-3-8b"),
+      ai_daily_budget: Number(args?.aiDailyBudget || 50)
+    } as T;
+  }
   if (command === "owner_search") {
     return {
       posts: data.posts.map((post) => ({
@@ -614,6 +683,16 @@ function smokeSnapshot(): OwnerSnapshot {
       closed_network: false,
       block_count: 0,
       allowlist_count: 1,
+      require_authorized_fetch: true,
+      manually_approves_followers: true,
+      reply_policy: "review",
+      ai_enabled: false,
+      ai_model: "@cf/meta/llama-guard-3-8b",
+      ai_daily_budget: 0,
+      reply_queue_count: 1,
+      flagged_reply_count: 1,
+      hidden_reply_count: 1,
+      rejected_reply_count: 0,
       blocks: [],
       allowlist: [{ host: "mastodon.example", enabled: true }]
     },
@@ -752,6 +831,7 @@ function render() {
   app.querySelector<HTMLFormElement>("#block-domain-form")?.addEventListener("submit", blockDomain);
   app.querySelector<HTMLFormElement>("#allow-host-form")?.addEventListener("submit", allowHost);
   app.querySelector<HTMLFormElement>("#audience-list-form")?.addEventListener("submit", saveAudienceList);
+  app.querySelector<HTMLFormElement>("#moderation-settings-form")?.addEventListener("submit", saveModerationSettings);
   app.querySelector<HTMLButtonElement>("[data-refresh-sources]")?.addEventListener("click", () => {
     void refreshSource(null);
   });
@@ -822,6 +902,11 @@ function render() {
   app.querySelectorAll<HTMLButtonElement>("[data-disallow-host]").forEach((button) => {
     button.addEventListener("click", () => {
       void disallowHost(button.dataset.disallowHost || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-reply-status]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void setReplyModerationStatus(button.dataset.replyId || "", button.dataset.replyStatus || "");
     });
   });
   app.querySelectorAll<HTMLButtonElement>("[data-audience-edit]").forEach((button) => {
@@ -1455,6 +1540,8 @@ function moderationView(data: OwnerSnapshot) {
       <p>Closed network: ${moderation.closed_network ? "enabled" : "disabled"}</p>
       <p>Blocked actors/domains: ${moderation.block_count}</p>
       <p>Allowed hosts: ${moderation.allowlist_count}</p>
+      <p>Reply policy: ${escapeHtml(moderation.reply_policy || "warn")}</p>
+      <p>Reply queue: ${moderation.reply_queue_count || 0} pending, ${moderation.flagged_reply_count || 0} flagged</p>
       <form id="block-actor-form" class="inline-form">
         <input name="actor_id" placeholder="https://example.social/users/name" />
         <button type="submit">Block actor</button>
@@ -1473,8 +1560,28 @@ function moderationView(data: OwnerSnapshot) {
       </form>
       ${list(allowlist.map(allowlistCard), "No allowed federation hosts.")}
       <h2 class="section-label">Policy</h2>
+      <form id="moderation-settings-form" class="compact-form">
+        <label>Reply policy
+          <select name="reply_policy">
+            ${["off", "warn", "review", "hide", "reject"].map((value) => option(value, (moderation.reply_policy || "warn") === value)).join("")}
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" name="ai_enabled"${moderation.ai_enabled ? " checked" : ""} /> Workers AI advisory mode</label>
+        <label>AI model
+          <input name="ai_model" value="${escapeAttr(moderation.ai_model || "@cf/meta/llama-guard-3-8b")}" />
+        </label>
+        <label>Daily AI budget
+          <input name="ai_daily_budget" type="number" min="0" value="${escapeAttr(String(moderation.ai_daily_budget || 0))}" />
+        </label>
+        <button type="submit">Save policy</button>
+      </form>
+      <p>Deterministic rules remain authoritative. Workers AI is advisory configuration for future classifier calls.</p>
       <p>Private posts stay off public outboxes and Bluesky routes.</p>
       <p>Public routing is explicit from compose.</p>
+    </article>
+    <article class="panel">
+      <h2>Reply queue</h2>
+      ${list(moderationReplies.map(moderationReplyCard), "No flagged or queued replies.")}
     </article>
   </section>`;
 }
@@ -1935,6 +2042,25 @@ function allowlistCard(row: ModerationAllowlistHost) {
   </article>`;
 }
 
+function moderationReplyCard(row: ModerationReply) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</h2>
+      <p>${escapeHtml(row.content)}</p>
+      ${row.moderation_flags?.length ? `<div class="sensitivity-tags">${row.moderation_flags.map((label) => `<span class="sensitive-chip">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
+    </div>
+    <footer>
+      <span>${escapeHtml(row.moderation_status || "approved")}</span>
+      ${row.moderation_score != null ? `<span>${escapeHtml(row.moderation_score.toFixed(2))}</span>` : ""}
+      <span>${isHiddenValue(row.hidden) ? "hidden" : "visible"}</span>
+      ${row.published_at ? `<time>${escapeHtml(formatTime(row.published_at))}</time>` : ""}
+      <button type="button" data-reply-id="${escapeAttr(row.id)}" data-reply-status="approved">Approve</button>
+      <button type="button" data-reply-id="${escapeAttr(row.id)}" data-reply-status="hidden">Hide</button>
+      <button type="button" data-reply-id="${escapeAttr(row.id)}" data-reply-status="rejected">Reject</button>
+    </footer>
+  </article>`;
+}
+
 function list(items: string[], emptyText: string) {
   return `<section class="list">${items.length ? items.join("") : `<article class="panel empty"><p>${escapeHtml(emptyText)}</p></article>`}</section>`;
 }
@@ -2244,6 +2370,30 @@ async function saveAudienceList(event: SubmitEvent) {
   await loadLiveSection("Audience");
 }
 
+async function saveModerationSettings(event: SubmitEvent) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  moderationState = await ownerInvoke<ModerationState>("save_owner_moderation_settings", {
+    replyPolicy: String(form.get("reply_policy") || "warn"),
+    aiEnabled: form.get("ai_enabled") === "on",
+    aiModel: String(form.get("ai_model") || "").trim() || null,
+    aiDailyBudget: Number(form.get("ai_daily_budget") || 0),
+  });
+  notice = "Saved reply moderation settings.";
+  await loadLiveSection("Moderation");
+}
+
+async function setReplyModerationStatus(replyId: string, status: string) {
+  if (!replyId || !status) return;
+  await ownerInvoke<ModerationReply>("set_owner_reply_moderation_status", { replyId, status });
+  notice = `Set reply ${shortUrl(replyId)} to ${status}.`;
+  await loadLiveSection("Moderation");
+  if (active === "Posts" && selectedPostDetail?.id) {
+    selectedPostDetail = await ownerInvoke<OwnerPostDetail>("owner_post_detail", { objectId: selectedPostDetail.id });
+    render();
+  }
+}
+
 async function deleteAudienceList(id: string) {
   if (!id) return;
   await ownerInvoke("delete_owner_audience_list", { id });
@@ -2319,6 +2469,7 @@ async function loadLiveSection(section: string) {
     render();
   } else if (section === "Moderation") {
     moderationState = await ownerInvoke<ModerationState>("owner_moderation");
+    moderationReplies = await ownerInvoke<ModerationReply[]>("owner_moderation_replies");
     render();
   } else if (section === "Audience") {
     const audienceLists = await ownerInvoke<OwnerAudienceList[]>("owner_audience_lists");
@@ -2353,6 +2504,10 @@ function isRead(value: OwnerNotification["read"]) {
 }
 
 function isEnabled(value: ModerationAllowlistHost["enabled"]) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function isHiddenValue(value: ModerationReply["hidden"]) {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 

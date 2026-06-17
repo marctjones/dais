@@ -1,10 +1,12 @@
 use dais_client_core::{
-    ComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient, OwnerAudienceList,
-    OwnerAudienceListUpsert, OwnerCreatedPost, OwnerDelivery, OwnerDiscoveredActor, OwnerFollowResult, OwnerInteraction,
-    OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification, OwnerPost,
-    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSection,
-    OwnerSettings, OwnerSnapshot, OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult,
-    OwnerSources, OwnerStats, ProtocolRoute, SourceItem, Visibility,
+    ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate,
+    ModerationState, OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert,
+    OwnerCreatedPost, OwnerDelivery, OwnerDiscoveredActor, OwnerFollowResult,
+    OwnerInteraction, OwnerInteractionResult, OwnerMedia, OwnerMediaUpload,
+    OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate,
+    OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSnapshot, OwnerSourceAdd,
+    OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources, OwnerStats,
+    ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -311,6 +313,66 @@ async fn owner_moderation(app: tauri::AppHandle) -> Result<ModerationState, Stri
 }
 
 #[tauri::command]
+async fn owner_moderation_replies(app: tauri::AppHandle) -> Result<Vec<ModerationReplyRow>, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .moderation_replies()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn set_owner_reply_moderation_status(
+    app: tauri::AppHandle,
+    reply_id: String,
+    status: String,
+) -> Result<ModerationReplyRow, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .set_reply_moderation_status(&reply_id, &status)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn save_owner_moderation_settings(
+    app: tauri::AppHandle,
+    reply_policy: String,
+    ai_enabled: bool,
+    ai_model: Option<String>,
+    ai_daily_budget: u64,
+) -> Result<ModerationState, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .update_moderation_settings(&ModerationSettingsUpdate {
+            reply_policy,
+            ai_enabled,
+            ai_model: ai_model.and_then(optional_trimmed),
+            ai_daily_budget,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn block_owner_actor(
     app: tauri::AppHandle,
     actor_id: String,
@@ -507,6 +569,16 @@ fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> Own
             closed_network: false,
             block_count: 0,
             allowlist_count: 0,
+            require_authorized_fetch: true,
+            manually_approves_followers: true,
+            reply_policy: "warn".to_string(),
+            ai_enabled: false,
+            ai_model: Some("@cf/meta/llama-guard-3-8b".to_string()),
+            ai_daily_budget: 0,
+            reply_queue_count: 0,
+            flagged_reply_count: 0,
+            hidden_reply_count: 0,
+            rejected_reply_count: 0,
             blocks: Vec::new(),
             allowlist: Vec::new(),
         },
@@ -737,6 +809,9 @@ fn main() {
             remove_owner_source,
             refresh_owner_source,
             owner_moderation,
+            owner_moderation_replies,
+            set_owner_reply_moderation_status,
+            save_owner_moderation_settings,
             block_owner_actor,
             block_owner_domain,
             unblock_owner_value,

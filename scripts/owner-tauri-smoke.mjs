@@ -111,6 +111,17 @@ for (const check of [
       "Members",
     ],
   },
+  {
+    section: "Moderation",
+    expected: [
+      "Federation safety",
+      "Reply policy: review",
+      "Reply queue",
+      "Workers AI advisory mode",
+      "This is a medical update reply that should stay in review.",
+      "Save policy",
+    ],
+  },
 ]) {
   app.innerHTML = "";
   globalThis.window = {
