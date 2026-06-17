@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
 use worker::{
     event, Context, D1Type, Env, Fetch, FormData, FormEntry, Headers, Request, RequestInit,
-    Response, Result,
+    Response, Result, ScheduleContext, ScheduledEvent,
 };
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
@@ -64,6 +64,14 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             501,
         ),
     }
+}
+
+#[event(scheduled)]
+async fn scheduled(_event: ScheduledEvent, env: Env, ctx: ScheduleContext) {
+    console_error_panic_hook::set_once();
+    ctx.wait_until(async move {
+        let _ = refresh_due_sources(&env).await;
+    });
 }
 
 async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> Result<Response> {
@@ -5311,6 +5319,21 @@ async fn owner_refresh_sources(env: &Env, id: Option<&str>) -> std::result::Resu
     Ok(serde_json::json!({ "ok": ok, "items": items }))
 }
 
+async fn refresh_due_sources(env: &Env) -> std::result::Result<(), String> {
+    let rows = due_active_sources(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    for source in rows {
+        if let Err(message) = refresh_feed_source(env, &source).await {
+            if let Some(source_id) = string_field(Some(&source), "id") {
+                let message = truncate_chars(&message, 500);
+                mark_source_error(env, &source_id, &message).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn owner_active_sources(env: &Env) -> Result<Vec<Map<String, Value>>> {
     let db = env.d1("DB")?;
     db.prepare(
@@ -5325,6 +5348,32 @@ async fn owner_active_sources(env: &Env) -> Result<Vec<Map<String, Value>>> {
         LIMIT 20
         "#,
     )
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn due_active_sources(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let now = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let now_arg = D1Type::Text(&now);
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+               policy_json, api_secret_name, created_at, updated_at
+        FROM source_subscriptions
+        WHERE status = 'active'
+          AND source_type IN ('rss', 'atom', 'api')
+          AND (next_fetch_at IS NULL OR next_fetch_at <= ?1)
+        ORDER BY COALESCE(next_fetch_at, created_at) ASC
+        LIMIT 20
+        "#,
+    )
+    .bind_refs(&now_arg)?
     .all()
     .await?
     .results::<Map<String, Value>>()

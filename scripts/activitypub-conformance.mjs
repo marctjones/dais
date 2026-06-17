@@ -134,7 +134,7 @@ function hasSelfLink(jrd, href) {
 }
 
 function summarizeJson(value) {
-  return JSON.stringify(value).slice(0, 220);
+  return String(JSON.stringify(value) ?? value).slice(0, 220);
 }
 
 function base64Url(value) {
