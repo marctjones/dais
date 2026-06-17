@@ -1196,7 +1196,7 @@ async fn activitypub_store_create(env: &Env, body: &Value) -> std::result::Resul
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !matches!(object_type, "Note" | "Question" | "Article") {
+    if !supported_timeline_object_type(object_type) {
         return Ok(());
     }
     let remote = resolve_activitypub_actor(&actor).await.ok();
@@ -1209,10 +1209,7 @@ async fn activitypub_store_create(env: &Env, body: &Value) -> std::result::Resul
         .and_then(|actor| actor.name.clone())
         .unwrap_or_else(|| username.clone());
     let avatar = remote.and_then(|actor| actor.icon_url).unwrap_or_default();
-    let content_html = object
-        .get("content")
-        .and_then(|value| value_string(Some(value)))
-        .unwrap_or_default();
+    let content_html = activitypub_object_content_html(object);
     let content = strip_html(&content_html);
     let visibility = if activitypub_public_recipients(body, &Value::Object(object.clone())) {
         "public"
@@ -1327,6 +1324,87 @@ fn activitypub_public_recipients(activity: &Value, object: &Value) -> bool {
     collect_recipients(object.get("to"), &mut recipients);
     collect_recipients(object.get("cc"), &mut recipients);
     recipients.iter().any(|value| value == PUBLIC_COLLECTION)
+}
+
+fn supported_timeline_object_type(object_type: &str) -> bool {
+    matches!(
+        object_type,
+        "Note"
+            | "Question"
+            | "Article"
+            | "Page"
+            | "Image"
+            | "Video"
+            | "Audio"
+            | "Event"
+            | "Document"
+            | "Review"
+    )
+}
+
+fn activitypub_object_content_html(object: &Map<String, Value>) -> String {
+    if let Some(content) = object
+        .get("content")
+        .and_then(|value| value_string(Some(value)))
+    {
+        return content;
+    }
+    if let Some(content_map) = object
+        .get("contentMap")
+        .and_then(Value::as_object)
+        .and_then(|map| map.get("en").or_else(|| map.values().next()))
+        .and_then(|value| value_string(Some(value)))
+    {
+        return content_map;
+    }
+
+    let object_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("Object");
+    let mut parts = Vec::new();
+    if let Some(name) = object.get("name").and_then(optional_body_string) {
+        parts.push(format!("<p><strong>{}</strong></p>", escape_html(&name)));
+    }
+    if let Some(summary) = object.get("summary").and_then(optional_body_string) {
+        parts.push(format!("<p>{}</p>", escape_html(&summary)));
+    }
+    if object_type == "Event" {
+        if let Some(start) = object.get("startTime").and_then(optional_body_string) {
+            parts.push(format!("<p>Starts: {}</p>", escape_html(&start)));
+        }
+        if let Some(end) = object.get("endTime").and_then(optional_body_string) {
+            parts.push(format!("<p>Ends: {}</p>", escape_html(&end)));
+        }
+        if let Some(location) = object.get("location").and_then(activitypub_location_label) {
+            parts.push(format!("<p>Location: {}</p>", escape_html(&location)));
+        }
+    }
+    if parts.is_empty() {
+        if let Some(url) = object
+            .get("url")
+            .or_else(|| object.get("id"))
+            .and_then(optional_body_string)
+        {
+            parts.push(format!(
+                "<p>{} from {}</p>",
+                escape_html(object_type),
+                escape_html(&url)
+            ));
+        }
+    }
+    parts.join("")
+}
+
+fn activitypub_location_label(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.trim().to_string()).filter(|text| !text.is_empty()),
+        Value::Object(object) => object
+            .get("name")
+            .or_else(|| object.get("address"))
+            .and_then(optional_body_string),
+        _ => None,
+    }
 }
 
 fn activitypub_error(message: &str, status: u16) -> Result<Response> {
@@ -7420,16 +7498,67 @@ fn local_activitypub_fixture_value(url: &str) -> Option<Value> {
 fn local_activitypub_fixture_post_value(url: &worker::Url) -> Option<Value> {
     let post_id =
         fixture_url_with_public_key(url, "/__dais-fixtures/activitypub/posts/public-preview");
-    Some(serde_json::json!({
+    let object_type = url
+        .query_pairs()
+        .find(|(key, _)| key == "kind")
+        .map(|(_, value)| value.to_string())
+        .filter(|value| supported_timeline_object_type(value))
+        .unwrap_or_else(|| "Note".to_string());
+    let actor = fixture_url_with_public_key(url, "/__dais-fixtures/activitypub/actor");
+    let mut object = serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
         "id": post_id,
-        "type": "Note",
-        "attributedTo": fixture_url_with_public_key(url, "/__dais-fixtures/activitypub/actor"),
+        "type": object_type.clone(),
+        "attributedTo": actor,
         "to": [PUBLIC_COLLECTION],
-        "content": "<p>Dais fixture public preview post</p>",
         "published": "2026-06-16T00:00:00Z",
         "url": post_id,
-    }))
+    });
+    match object_type.as_str() {
+        "Image" => {
+            object["name"] = Value::String("Dais fixture public image".to_string());
+            object["summary"] =
+                Value::String("Dais fixture public preview post from an image server.".to_string());
+            object["url"] = serde_json::json!([{
+                "type": "Link",
+                "mediaType": "image/png",
+                "href": post_id,
+            }]);
+        }
+        "Video" => {
+            object["name"] = Value::String("Dais fixture public video".to_string());
+            object["summary"] =
+                Value::String("Dais fixture public preview post from a video server.".to_string());
+        }
+        "Audio" => {
+            object["name"] = Value::String("Dais fixture public audio".to_string());
+            object["summary"] =
+                Value::String("Dais fixture public preview post from an audio server.".to_string());
+        }
+        "Event" => {
+            object["name"] = Value::String("Dais fixture public event".to_string());
+            object["summary"] =
+                Value::String("Dais fixture public preview post from an event server.".to_string());
+            object["startTime"] = Value::String("2026-06-17T18:00:00Z".to_string());
+            object["endTime"] = Value::String("2026-06-17T19:00:00Z".to_string());
+            object["location"] = serde_json::json!({
+                "type": "Place",
+                "name": "Example venue",
+            });
+        }
+        "Article" | "Page" | "Review" => {
+            object["name"] = Value::String(format!("Dais fixture public {object_type}"));
+            object["content"] = Value::String(format!(
+                "<p>Dais fixture public preview post from a {} server.</p>",
+                object_type.to_ascii_lowercase()
+            ));
+        }
+        _ => {
+            object["content"] =
+                Value::String("<p>Dais fixture public preview post</p>".to_string());
+        }
+    }
+    Some(object)
 }
 
 async fn fetch_json_with_accept(
@@ -7489,9 +7618,10 @@ fn normalize_discovered_public_post(item: &Value) -> Option<Map<String, Value>> 
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !matches!(object_type, "Note" | "Question" | "Article") {
+    if !supported_timeline_object_type(object_type) {
         return None;
     }
+    let object_map = object.as_object()?;
     let mut recipients = Vec::new();
     collect_recipients(object.get("to"), &mut recipients);
     collect_recipients(item.get("to"), &mut recipients);
@@ -7543,17 +7673,7 @@ fn normalize_discovered_public_post(item: &Value) -> Option<Map<String, Value>> 
             .map(Value::String)
             .unwrap_or(Value::Null),
     );
-    let content = object
-        .get("content")
-        .or_else(|| object.get("name"))
-        .or_else(|| object.get("summary"))
-        .and_then(|value| {
-            value
-                .as_str()
-                .map(ToOwned::to_owned)
-                .or_else(|| optional_body_string(value))
-        })
-        .unwrap_or_default();
+    let content = activitypub_object_content_html(object_map);
     post.insert(
         "content".to_string(),
         Value::String(strip_html(&content).chars().take(280).collect()),

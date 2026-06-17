@@ -26,6 +26,71 @@ const actorUrl = `${config.socialBaseUrl}${actorPath}`;
 const publicCollection = "https://www.w3.org/ns/activitystreams#Public";
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+const softwareProfiles = [
+  {
+    name: "Mastodon / GoToSocial / Pleroma / Akkoma",
+    type: "Note",
+    content: (token) => `<p>${token} microblog note profile</p>`,
+  },
+  {
+    name: "Misskey / Sharkey",
+    type: "Note",
+    contentMap: (token) => ({ en: `<p>${token} note with contentMap profile</p>` }),
+  },
+  {
+    name: "Pixelfed",
+    type: "Image",
+    nameValue: (token) => `${token} image profile`,
+    summary: "Image-only ActivityPub object with no content field.",
+    url: (objectId) => [{ type: "Link", mediaType: "image/png", href: `${objectId}.png` }],
+  },
+  {
+    name: "PeerTube / Owncast",
+    type: "Video",
+    nameValue: (token) => `${token} video profile`,
+    summary: "Video ActivityPub object preview.",
+    url: (objectId) => `${objectId}/watch`,
+  },
+  {
+    name: "Lemmy / PieFed / Mbin",
+    type: "Page",
+    nameValue: (token) => `${token} link aggregator page profile`,
+    content: (token) => `<p>${token} page body from a thread/link aggregator.</p>`,
+  },
+  {
+    name: "WriteFreely / WordPress / Ghost",
+    type: "Article",
+    nameValue: (token) => `${token} article profile`,
+    content: (token) => `<p>${token} long-form article body.</p>`,
+  },
+  {
+    name: "BookWyrm",
+    type: "Review",
+    nameValue: (token) => `${token} review profile`,
+    summary: "Book/review ActivityPub object preview.",
+  },
+  {
+    name: "Mobilizon / Gancio",
+    type: "Event",
+    nameValue: (token) => `${token} event profile`,
+    summary: "Event ActivityPub object preview.",
+    startTime: "2026-06-17T18:00:00Z",
+    endTime: "2026-06-17T19:00:00Z",
+    location: { type: "Place", name: "Example venue" },
+  },
+  {
+    name: "Funkwhale / Castopod",
+    type: "Audio",
+    nameValue: (token) => `${token} audio profile`,
+    summary: "Audio ActivityPub object preview.",
+    url: (objectId) => `${objectId}.mp3`,
+  },
+  {
+    name: "snac / microblog.pub",
+    type: "Note",
+    content: (token) => `${token} plain text note profile`,
+  },
+];
 
 const results = [];
 const cache = new Map();
@@ -712,6 +777,119 @@ async function ownerReaderReplyFixture() {
   }
 }
 
+function softwareProfileObject(profile, fixture, objectId, token) {
+  const object = {
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: objectId,
+    type: profile.type,
+    attributedTo: fixture.actorUrl,
+    to: [publicCollection],
+    published: new Date().toISOString(),
+  };
+  if (profile.content) object.content = profile.content(token);
+  if (profile.contentMap) object.contentMap = profile.contentMap(token);
+  if (profile.nameValue) object.name = profile.nameValue(token);
+  if (profile.summary) object.summary = profile.summary;
+  if (profile.startTime) object.startTime = profile.startTime;
+  if (profile.endTime) object.endTime = profile.endTime;
+  if (profile.location) object.location = profile.location;
+  if (profile.url) object.url = profile.url(objectId);
+  return object;
+}
+
+async function softwareProfileInboundFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live software-family S2S fixtures" };
+  }
+  const fixture = generateFixtureActor();
+  const token = `dais-ap-family-${Date.now()}`;
+  const objectIds = [];
+  try {
+    const follow = await ownerApi("/following/follow", {
+      method: "POST",
+      body: JSON.stringify({ target: fixture.actorUrl }),
+    });
+    const followId = follow.json?.following?.id;
+    if (!followId) {
+      throw new Error(`follow response missing following id: ${summarizeJson(follow.json)}`);
+    }
+
+    const accept = JSON.stringify({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      id: `${fixture.actorUrl}#activities/accept-${token}`,
+      type: "Accept",
+      actor: fixture.actorUrl,
+      object: {
+        id: followId,
+        type: "Follow",
+        actor: actorUrl,
+        object: fixture.actorUrl,
+      },
+    });
+    const acceptRes = await signedActivityPost(fixture, accept);
+    if (acceptRes.status < 200 || acceptRes.status >= 300) {
+      throw new Error(`Accept expected 2xx, got ${acceptRes.status}: ${acceptRes.text}`);
+    }
+
+    const delivered = [];
+    for (const [index, profile] of softwareProfiles.entries()) {
+      const objectId = `${fixture.actorUrl}#software-profiles/${token}-${index}`;
+      objectIds.push(objectId);
+      const object = softwareProfileObject(profile, fixture, objectId, `${token}-${index}`);
+      const create = JSON.stringify({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        id: `${fixture.actorUrl}#activities/create-${token}-${index}`,
+        type: "Create",
+        actor: fixture.actorUrl,
+        published: new Date().toISOString(),
+        to: [publicCollection],
+        object,
+      });
+      const createRes = await signedActivityPost(fixture, create);
+      if (createRes.status < 200 || createRes.status >= 300) {
+        throw new Error(`${profile.name} Create expected 2xx, got ${createRes.status}: ${createRes.text}`);
+      }
+      delivered.push({ profile, objectId, token: `${token}-${index}` });
+    }
+
+    const timeline = await ownerApi("/timeline/home?limit=100&include_replies=true");
+    return { fixture, delivered, timeline: timeline.json };
+  } finally {
+    for (const objectId of objectIds) {
+      const deleteActivity = JSON.stringify({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        id: `${fixture.actorUrl}#activities/delete-${Date.now()}-${base64Url(objectId).slice(0, 16)}`,
+        type: "Delete",
+        actor: fixture.actorUrl,
+        object: objectId,
+        published: new Date().toISOString(),
+      });
+      await signedActivityPost(fixture, deleteActivity).catch(() => {});
+    }
+    await ownerApi("/following/unfollow", {
+      method: "POST",
+      body: JSON.stringify({ target: fixture.actorUrl }),
+    }).catch(() => {});
+  }
+}
+
+async function softwareProfileDiscoveryFixture() {
+  if (!config.ownerToken) {
+    return { skipped: true, detail: "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live software-family discovery fixtures" };
+  }
+  const fixture = generateFixtureActor();
+  const checks = [];
+  for (const type of ["Image", "Video", "Audio", "Event", "Page", "Article", "Review"]) {
+    const postUrl = `${config.socialBaseUrl}/__dais-fixtures/activitypub/posts/public-preview?pk=${fixture.publicKeyParam}&kind=${type}`;
+    const discovery = await ownerApi("/discovery/actor", {
+      method: "POST",
+      body: JSON.stringify({ target: postUrl }),
+    });
+    checks.push({ type, postUrl, discovery: discovery.json });
+  }
+  return { fixture, checks };
+}
+
 function rkeyFromAtUri(uri) {
   return typeof uri === "string" ? uri.split("/").pop() : "";
 }
@@ -1211,6 +1389,33 @@ const tests = [
       return t.fail(`reply content missing fixture token: ${summarizeJson(note)}`);
     }
     t.pass(`temporary public reply ${result.createdId} pointed at ${result.replyTarget}`);
+  }),
+
+  requirement("AP-SOFTWARE-FAMILIES-01", "INTEROP", "Inbound Create supports major ActivityPub software object families", async (t) => {
+    const result = await softwareProfileInboundFixture();
+    if (result.skipped) return t.info(result.detail);
+    const items = result.timeline?.items || [];
+    const missingProfiles = result.delivered.filter(({ objectId, token }) => {
+      const row = items.find((post) => post.object_id === objectId);
+      return !row || !String(row.content || "").includes(token);
+    });
+    if (missingProfiles.length) {
+      return t.fail(`timeline missed profiles: ${missingProfiles.map((entry) => entry.profile.name).join(", ")}`);
+    }
+    t.pass(`stored ${result.delivered.length} software-family object profiles in the owner feed`);
+  }),
+
+  requirement("AP-SOFTWARE-FAMILIES-02", "INTEROP", "Owner discovery previews non-Note public objects from other servers", async (t) => {
+    const result = await softwareProfileDiscoveryFixture();
+    if (result.skipped) return t.info(result.detail);
+    const missing = result.checks.filter(({ type, discovery }) => {
+      const post = discovery?.target_public_post;
+      return !post || post.type !== type || !String(post.content || "").includes("Dais fixture public");
+    });
+    if (missing.length) {
+      return t.fail(`discovery missed object profiles: ${missing.map((entry) => entry.type).join(", ")}`);
+    }
+    t.pass(`discovery previewed ${result.checks.length} non-Note object profiles`);
   }),
 
   requirement("PDS-ATPROTO-01", "MASTODON-ADJACENT", "ATProto public read endpoints stay available", async (t) => {
