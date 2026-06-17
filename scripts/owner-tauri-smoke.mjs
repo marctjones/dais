@@ -89,6 +89,17 @@ for (const check of [
       "Open original",
     ],
   },
+  {
+    section: "Compose",
+    expected: [
+      "New post",
+      "Audience preview",
+      "Followers-only posts reach 1 approved follower.",
+      "No obvious sensitive content",
+      "No routing or sensitivity warnings detected for this draft.",
+      "Approved followers",
+    ],
+  },
 ]) {
   app.innerHTML = "";
   globalThis.window = {

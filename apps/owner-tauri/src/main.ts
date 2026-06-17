@@ -126,6 +126,15 @@ type CreatedPost = {
   published_at: string;
 };
 
+type ComposeDraftState = {
+  text: string;
+  visibility: Visibility;
+  protocol: ProtocolRoute;
+  encrypt: boolean;
+  recipients: string;
+  selectedRecipients: string[];
+};
+
 type FollowResult = {
   ok: boolean;
   following: OwnerSnapshot["following"][number];
@@ -368,6 +377,7 @@ let searchResults: OwnerSearchResult = { posts: [], users: [], sources: [], sour
 let ownerStats: OwnerStats | null = null;
 let showTimelineReplies = false;
 let showSourceItems = true;
+let composeState: ComposeDraftState | null = null;
 
 async function ownerInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!smokeMode) {
@@ -610,6 +620,7 @@ function smokeSourceSubscription(): SourceSubscription {
 async function load() {
   render();
   snapshot = await ownerInvoke<OwnerSnapshot>("owner_snapshot");
+  composeState ||= defaultComposeState(snapshot);
   active = active || snapshot.active_section || "Home";
   if (smokeMode && active === "Posts") {
     selectedPostDetail = await ownerInvoke<OwnerPostDetail>("owner_post_detail", { objectId: smokePostId });
@@ -670,6 +681,8 @@ function render() {
   app.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", saveSettings);
   app.querySelector<HTMLFormElement>("#profile-form")?.addEventListener("submit", saveProfile);
   app.querySelector<HTMLFormElement>("#compose-form")?.addEventListener("submit", publishPost);
+  app.querySelector<HTMLFormElement>("#compose-form")?.addEventListener("input", updateComposeStateFromForm);
+  app.querySelector<HTMLFormElement>("#compose-form")?.addEventListener("change", updateComposeStateFromForm);
   app.querySelector<HTMLButtonElement>("[data-clear-reply]")?.addEventListener("click", () => {
     draftReplyTo = "";
     render();
@@ -1015,13 +1028,14 @@ function discoveryView() {
 }
 
 function composeView(data: OwnerSnapshot) {
+  const state = ensureComposeState(data);
   const approvedFollowers = data.followers.filter((row) => row.status === "approved");
   return `<form id="compose-form" class="panel compose">
     <div class="compose-head">
       <h2>New post</h2>
       <span class="pill ok">Private default</span>
     </div>
-    <textarea name="text" placeholder="Write to approved followers by default"></textarea>
+    <textarea name="text" placeholder="Write to approved followers by default">${escapeHtml(state.text)}</textarea>
     ${
       draftReplyTo
         ? `<div class="reply-target">
@@ -1033,23 +1047,23 @@ function composeView(data: OwnerSnapshot) {
     <div class="form-grid">
       <label>Visibility
         <select name="visibility">
-          ${option("Followers", data.settings.default_visibility === "Followers")}
-          ${option("Public", data.settings.default_visibility === "Public")}
-          ${option("Unlisted", data.settings.default_visibility === "Unlisted")}
-          ${option("Direct", data.settings.default_visibility === "Direct")}
+          ${option("Followers", state.visibility === "Followers")}
+          ${option("Public", state.visibility === "Public")}
+          ${option("Unlisted", state.visibility === "Unlisted")}
+          ${option("Direct", state.visibility === "Direct")}
         </select>
       </label>
       <label>Protocol
         <select name="protocol">
-          ${option("ActivityPub", data.settings.default_protocol === "ActivityPub")}
-          ${option("Both", data.settings.default_protocol === "Both")}
-          ${option("AtProto", data.settings.default_protocol === "AtProto")}
+          ${option("ActivityPub", state.protocol === "ActivityPub")}
+          ${option("Both", state.protocol === "Both")}
+          ${option("AtProto", state.protocol === "AtProto")}
         </select>
       </label>
     </div>
     <p class="privacy-note">Public is internet-visible. Followers goes to approved followers. Direct is for named recipients only.</p>
     <label>Recipients
-      <input name="recipients" placeholder="Direct/E2EE actor URLs, comma separated" />
+      <input name="recipients" value="${escapeAttr(state.recipients)}" placeholder="Direct/E2EE actor URLs, comma separated" />
     </label>
     <section class="media-box">
       <div class="media-row">
@@ -1064,19 +1078,188 @@ function composeView(data: OwnerSnapshot) {
         "No media attached."
       )}
     </section>
+    <section id="compose-preview" class="compose-preview">
+      ${composePreviewHtml(data, state)}
+    </section>
     <fieldset class="recipient-picker">
       <legend>Approved followers</legend>
       ${
         approvedFollowers.length
-          ? approvedFollowers.map(recipientOption).join("")
+          ? approvedFollowers
+              .map((row) => recipientOption(row, state.selectedRecipients.includes(row.follower_actor_id)))
+              .join("")
           : `<p>No approved followers are available for direct selection.</p>`
       }
     </fieldset>
     <div class="compose-actions">
-      <label class="check"><input name="encrypt" type="checkbox" /> E2EE</label>
+      <label class="check"><input name="encrypt" type="checkbox"${state.encrypt ? " checked" : ""} /> E2EE</label>
       <button type="submit">Publish</button>
     </div>
   </form>`;
+}
+
+function defaultComposeState(data: OwnerSnapshot): ComposeDraftState {
+  return {
+    text: "",
+    visibility: data.settings.default_visibility,
+    protocol: data.settings.default_protocol,
+    encrypt: false,
+    recipients: "",
+    selectedRecipients: [],
+  };
+}
+
+function ensureComposeState(data: OwnerSnapshot) {
+  if (!composeState) {
+    composeState = defaultComposeState(data);
+  }
+  return composeState;
+}
+
+function readComposeState(form: HTMLFormElement, data: OwnerSnapshot): ComposeDraftState {
+  return {
+    text: String(form.get("text") || ""),
+    visibility: normalizeVisibility(String(form.get("visibility") || data.settings.default_visibility)),
+    protocol: normalizeProtocol(String(form.get("protocol") || data.settings.default_protocol)),
+    encrypt: form.get("encrypt") === "on",
+    recipients: String(form.get("recipients") || ""),
+    selectedRecipients: form
+      .getAll("follower_recipient")
+      .map((value) => String(value))
+      .filter(Boolean),
+  };
+}
+
+function syncComposePreview() {
+  if (!snapshot || !composeState) return;
+  const preview = document.querySelector<HTMLElement>("#compose-preview");
+  if (preview) {
+    preview.innerHTML = composePreviewHtml(snapshot, composeState);
+  }
+}
+
+function updateComposeStateFromForm(event: Event) {
+  const form = event.currentTarget as HTMLFormElement | null;
+  if (!form || !snapshot) return;
+  composeState = readComposeState(form, snapshot);
+  syncComposePreview();
+}
+
+function composePreviewHtml(data: OwnerSnapshot, state: ComposeDraftState) {
+  const recipients = draftRecipients(state);
+  const audience = audienceForCompose(state.visibility, data.followers.filter((row) => row.status === "approved").length, recipients.length);
+  const sensitiveCategories = sensitiveCategoriesForText(state.text);
+  const warnings = composeWarnings(state, sensitiveCategories);
+  return `<article class="preview-card">
+    <div class="section-heading">
+      <h3>Audience preview</h3>
+      <span class="pill ${state.visibility === "Public" ? "warn" : "ok"}">${escapeHtml(audienceLabel(state.visibility))}</span>
+    </div>
+    <p>${escapeHtml(audience)}</p>
+    <dl class="preview-meta">
+      <dt>Protocol</dt><dd>${escapeHtml(state.protocol)}</dd>
+      <dt>Recipients</dt><dd>${escapeHtml(recipientSummary(recipients))}</dd>
+      <dt>Reply target</dt><dd>${draftReplyTo ? escapeHtml(shortUrl(draftReplyTo)) : "none"}</dd>
+      <dt>Attachments</dt><dd>${draftAttachments.length ? escapeHtml(String(draftAttachments.length)) : "none"}</dd>
+    </dl>
+    <div class="preview-tags">
+      ${sensitiveCategories.length ? sensitiveCategories.map((label) => `<span class="sensitive-chip">${escapeHtml(label)}</span>`).join("") : `<span class="sensitive-chip neutral">No obvious sensitive content</span>`}
+    </div>
+    ${
+      warnings.length
+        ? `<div class="warning-list">${warnings.map((warning) => `<p class="privacy-warning">${escapeHtml(warning)}</p>`).join("")}</div>`
+        : `<p class="privacy-note">No routing or sensitivity warnings detected for this draft.</p>`
+    }
+    ${
+      recipients.length
+        ? `<div class="preview-recipient-list">
+            <span class="section-label">Recipients</span>
+            ${recipients.map((value) => `<span class="pill">${escapeHtml(shortUrl(value))}</span>`).join("")}
+          </div>`
+        : ""
+    }
+  </article>`;
+}
+
+function audienceForCompose(visibility: Visibility, approvedCount: number, recipientCount: number) {
+  if (visibility === "Public") return "Public posts are visible on the open web and public feeds.";
+  if (visibility === "Unlisted") return "Unlisted posts are link-visible but stay out of most public listings.";
+  if (visibility === "Followers") return `Followers-only posts reach ${approvedCount} approved follower${approvedCount === 1 ? "" : "s"}.`;
+  return recipientCount
+    ? `Direct posts reach ${recipientCount} named recipient${recipientCount === 1 ? "" : "s"}.`
+    : "Direct posts need at least one named recipient before publish.";
+}
+
+function sensitiveCategoriesForText(text: string) {
+  const lower = text.toLowerCase();
+  const rules = [
+    { label: "medical", keywords: ["medical", "doctor", "clinic", "hospital", "therapy", "medication", "prescription", "surgery", "diagnosis", "health"] },
+    { label: "adult", keywords: ["adult", "nsfw", "sexual", "sex", "porn", "erotic", "explicit"] },
+    { label: "political", keywords: ["political", "politics", "election", "vote", "campaign", "senate", "congress", "democrat", "republican"] },
+    { label: "family-only", keywords: ["family", "kids", "child", "children", "baby", "spouse", "partner", "wedding"] },
+    { label: "work-sensitive", keywords: ["work", "company", "employer", "client", "salary", "interview", "manager", "confidential", "internal", "project"] },
+  ];
+  return rules.filter((rule) => rule.keywords.some((keyword) => lower.includes(keyword))).map((rule) => rule.label);
+}
+
+function sensitivityBadgesHtml(text: string) {
+  const categories = sensitiveCategoriesForText(text);
+  return categories.length
+    ? `<div class="sensitivity-tags">${categories.map((label) => `<span class="sensitive-chip">${escapeHtml(label)}</span>`).join("")}</div>`
+    : "";
+}
+
+function composeWarnings(state: ComposeDraftState, sensitiveCategories: string[]) {
+  const warnings: string[] = [];
+  if (state.protocol !== "ActivityPub") {
+    if (state.visibility === "Public") {
+      warnings.push("Public Bluesky routing is visible outside the private ActivityPub audience.");
+    } else if (state.visibility === "Direct") {
+      warnings.push("Direct posts cannot be represented on Bluesky; route ActivityPub only.");
+    } else {
+      warnings.push("Private ActivityPub visibility is not representable on Bluesky.");
+    }
+  }
+  if (state.visibility === "Direct" && draftRecipients(state).length === 0) {
+    warnings.push("Direct posts need at least one named recipient.");
+  }
+  if (sensitiveCategories.length) {
+    const categoryList = sensitiveCategories.join(", ");
+    if (state.visibility === "Public") {
+      warnings.push(`Sensitive content detected (${categoryList}). Public posts are hard to retract.`);
+    } else if (state.visibility === "Unlisted") {
+      warnings.push(`Sensitive content detected (${categoryList}). Unlisted posts still spread by link.`);
+    } else if (state.visibility === "Followers") {
+      warnings.push(`Sensitive content detected (${categoryList}). Approved followers can still include people you do not expect.`);
+    } else {
+      warnings.push(`Sensitive content detected (${categoryList}). Only the named recipients will see this post.`);
+    }
+  }
+  if (draftAttachments.length > 0 && state.protocol !== "ActivityPub") {
+    warnings.push("Media attachments currently require ActivityPub routing.");
+  }
+  if (draftAttachments.length > 0 && state.encrypt) {
+    warnings.push("E2EE media attachments are not implemented yet.");
+  }
+  return warnings;
+}
+
+function draftRecipients(state: ComposeDraftState) {
+  const explicitRecipients = state.recipients
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return Array.from(new Set([...state.selectedRecipients, ...explicitRecipients]));
+}
+
+function recipientSummary(recipients: string[]) {
+  if (!recipients.length) {
+    return "No named recipients selected.";
+  }
+  if (recipients.length === 1) {
+    return `1 recipient: ${shortUrl(recipients[0])}`;
+  }
+  return `${recipients.length} recipients selected.`;
 }
 
 function followersView(data: OwnerSnapshot) {
@@ -1179,6 +1362,7 @@ function postCard(post: OwnerSnapshot["posts"][number]) {
     <div>
       <h2>${escapeHtml(post.title || post.id)}</h2>
       <p>${escapeHtml(post.content)}</p>
+      ${sensitivityBadgesHtml(post.content)}
     </div>
     <footer>
       <span title="${escapeAttr(audienceDescription(post.visibility))}">${escapeHtml(audienceLabel(post.visibility))}</span>
@@ -1227,6 +1411,7 @@ function postDetailReplies(rows: PostReply[]) {
         ? rows.map((row) => `<article>
             <strong>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</strong>
             <p>${escapeHtml(row.content || row.id)}</p>
+            ${row.content ? sensitivityBadgesHtml(row.content) : ""}
             ${row.published_at || row.created_at ? `<time>${escapeHtml(formatTime(row.published_at || row.created_at || ""))}</time>` : ""}
           </article>`).join("")
         : `<p>None</p>`
@@ -1255,6 +1440,7 @@ function timelineCard(post: OwnerSnapshot["home_timeline"][number]) {
     <div>
       <h2>${escapeHtml(author)}</h2>
       <p>${escapeHtml(post.content)}</p>
+      ${sensitivityBadgesHtml(post.content)}
     </div>
     <footer>
       <span title="${escapeAttr(audienceDescription(post.visibility))}">${escapeHtml(audienceLabel(post.visibility))}</span>
@@ -1378,6 +1564,7 @@ function searchPostCard(row: OwnerSearchResult["posts"][number]) {
     <div>
       <h2>${escapeHtml(row.name || shortUrl(row.id))}</h2>
       <p>${escapeHtml(row.content)}</p>
+      ${sensitivityBadgesHtml([row.name || "", row.summary || "", row.content || ""].join(" "))}
     </div>
     <footer>
       <span title="${escapeAttr(audienceDescription(row.visibility))}">${escapeHtml(audienceLabel(row.visibility))}</span>
@@ -1481,6 +1668,7 @@ function discoveredActorCard(actor: DiscoveredActor) {
       ${actor.actor_type ? `<p>${escapeHtml(actor.actor_type)}</p>` : ""}
       ${actor.handle ? `<p>${escapeHtml(actor.handle)}</p>` : ""}
       ${actor.summary ? `<p>${escapeHtml(stripTags(actor.summary))}</p>` : ""}
+      ${sensitivityBadgesHtml([title, actor.handle || "", actor.summary || "", actor.id].join(" "))}
       ${actor.target_public_post ? `
         <h2 class="section-label">Requested public post</h2>
         ${discoveredPostCard(actor.target_public_post)}
@@ -1503,6 +1691,7 @@ function discoveredPostCard(post: DiscoveredPost) {
     <div>
       <h2>${escapeHtml(title)}</h2>
       ${post.content && post.content !== title ? `<p>${escapeHtml(post.content)}</p>` : ""}
+      ${sensitivityBadgesHtml([post.name || "", post.summary || "", post.content || ""].join(" "))}
     </div>
     <footer>
       <span>${escapeHtml(post.type)}</span>
@@ -1513,10 +1702,10 @@ function discoveredPostCard(post: DiscoveredPost) {
   </article>`;
 }
 
-function recipientOption(row: OwnerSnapshot["followers"][number]) {
+function recipientOption(row: OwnerSnapshot["followers"][number], checked: boolean) {
   const value = row.follower_actor_id;
   return `<label class="recipient-option">
-    <input type="checkbox" name="follower_recipient" value="${escapeAttr(value)}" />
+    <input type="checkbox" name="follower_recipient" value="${escapeAttr(value)}"${checked ? " checked" : ""} />
     <span>${escapeHtml(actorLabel(value))}</span>
   </label>`;
 }
@@ -1597,6 +1786,9 @@ async function publishPost(event: SubmitEvent) {
     render();
     return;
   }
+  if (snapshot) {
+    composeState = readComposeState(event.target as HTMLFormElement, snapshot);
+  }
   const visibility = String(form.get("visibility") || "Followers");
   const protocol = String(form.get("protocol") || "ActivityPub");
   if (draftAttachments.length > 0 && protocol !== "ActivityPub") {
@@ -1635,6 +1827,7 @@ async function publishPost(event: SubmitEvent) {
   });
   draftAttachments = [];
   draftReplyTo = "";
+  composeState = null;
   notice = `Published ${created.visibility} post.`;
   active = "Posts";
   await load();
@@ -1924,6 +2117,21 @@ function isEnabled(value: ModerationAllowlistHost["enabled"]) {
 
 function option(value: string, selected: boolean) {
   return `<option value="${escapeAttr(value)}"${selected ? " selected" : ""}>${escapeHtml(value)}</option>`;
+}
+
+function normalizeVisibility(value: string): Visibility {
+  const normalized = value.toLowerCase();
+  if (normalized === "public") return "Public";
+  if (normalized === "unlisted") return "Unlisted";
+  if (normalized === "direct") return "Direct";
+  return "Followers";
+}
+
+function normalizeProtocol(value: string): ProtocolRoute {
+  const normalized = value.toLowerCase();
+  if (normalized === "atproto") return "AtProto";
+  if (normalized === "both") return "Both";
+  return "ActivityPub";
 }
 
 function sectionSubtitle(section: string) {

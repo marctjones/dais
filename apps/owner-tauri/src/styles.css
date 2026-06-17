@@ -376,6 +376,81 @@ select {
   background: #f7f8f5;
 }
 
+.compose-preview {
+  display: grid;
+}
+
+.preview-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d9ded7;
+  border-radius: 7px;
+  background: #f8faf8;
+}
+
+.preview-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.preview-meta dt {
+  color: #5b665e;
+  font-weight: 700;
+}
+
+.preview-meta dd {
+  margin: 0;
+  color: #28322d;
+}
+
+.preview-tags,
+.preview-recipient-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sensitivity-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sensitive-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #dcecdf;
+  color: #194d2b;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.sensitive-chip.neutral {
+  background: #e8ede7;
+  color: #3f4a43;
+}
+
+.warning-list {
+  display: grid;
+  gap: 6px;
+}
+
+.privacy-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #edc0af;
+  border-radius: 7px;
+  background: #fff2eb;
+  color: #7d281d;
+}
+
 .media-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
