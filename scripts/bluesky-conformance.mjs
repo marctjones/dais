@@ -162,12 +162,18 @@ const tests = [
 
   requirement("BLUESKY-REPO-01", "Repo status, listRepos, describeRepo, and getRepo expose the public repo floor", async () => {
     const status = await request(`/xrpc/com.atproto.sync.getRepoStatus?did=${encodeURIComponent(did())}`);
+    const latest = await request(`/xrpc/com.atproto.sync.getLatestCommit?did=${encodeURIComponent(did())}`);
     const repos = await request("/xrpc/com.atproto.sync.listRepos");
     const repo = await request(`/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(did())}`);
     const car = await request(`/xrpc/com.atproto.sync.getRepo?did=${encodeURIComponent(did())}`);
-    const statuses = [status, repos, repo, car].map((res) => res.status);
+    const blobs = await request(`/xrpc/com.atproto.sync.listBlobs?did=${encodeURIComponent(did())}&limit=5`);
+    const statuses = [status, latest, repos, repo, car, blobs].map((res) => res.status);
     if (statuses.some((value) => value !== 200)) throw new Error(`expected all 200, got ${statuses.join("/")}`);
     if (status.json?.did !== did() || status.json?.status !== "active") throw new Error("repo status shape mismatch");
+    if (!latest.json?.cid || !latest.json?.rev) throw new Error("getLatestCommit shape mismatch");
+    if (latest.json.cid !== status.json?.head || latest.json.rev !== status.json?.rev) {
+      throw new Error("getLatestCommit and getRepoStatus metadata diverged");
+    }
     if (!repos.json?.repos?.some((entry) => entry.did === did())) throw new Error("listRepos missing dais DID");
     for (const collection of [
       "app.bsky.actor.profile",
@@ -181,6 +187,7 @@ const tests = [
     if (car.json?.did !== did() || !car.json?.warning || !Number.isInteger(car.json?.records)) {
       throw new Error("getRepo compatibility floor shape mismatch");
     }
+    expectArray(blobs.json?.cids, "listBlobs cids");
   }),
 
   requirement("BLUESKY-REPO-02", "Repo metadata advances when exposed record collections change", async () => {
@@ -557,6 +564,10 @@ const tests = [
       if (blob.status !== 200) throw new Error(`getBlob expected 200, got ${blob.status}: ${blob.text}`);
       if (!blob.contentType.includes("image/png")) throw new Error(`getBlob content-type mismatch: ${blob.contentType}`);
       if (blob.text.length === 0) throw new Error("getBlob returned empty body");
+
+      const blobs = await request(`/xrpc/com.atproto.sync.listBlobs?did=${encodeURIComponent(did())}&limit=20`);
+      if (blobs.status !== 200) throw new Error(`listBlobs expected 200, got ${blobs.status}: ${blobs.text}`);
+      if (!blobs.json?.cids?.includes(imageBlob.ref.$link)) throw new Error("listBlobs did not include fixture image CID");
     } finally {
       if (createdId) {
         await socialRequest(`/api/v1/statuses/${encodeURIComponent(createdId)}`, { method: "DELETE", auth: true });

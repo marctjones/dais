@@ -12,7 +12,9 @@ use serde_json::Value;
 /// - POST /xrpc/com.atproto.server.createSession
 /// - POST /xrpc/com.atproto.repo.uploadBlob
 /// - GET /xrpc/com.atproto.sync.getRepo
+/// - GET /xrpc/com.atproto.sync.getLatestCommit
 /// - GET /xrpc/com.atproto.sync.getBlob
+/// - GET /xrpc/com.atproto.sync.listBlobs
 /// - GET /xrpc/com.atproto.sync.getRepoStatus
 /// - GET /xrpc/com.atproto.sync.listRepos
 /// - GET /xrpc/com.atproto.repo.describeRepo
@@ -117,7 +119,12 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/xrpc/com.atproto.repo.uploadBlob", handle_upload_blob)
         .get_async("/.well-known/did.json", handle_did_document)
         .get_async("/xrpc/com.atproto.sync.getRepo", handle_get_repo)
+        .get_async(
+            "/xrpc/com.atproto.sync.getLatestCommit",
+            handle_get_latest_commit,
+        )
         .get_async("/xrpc/com.atproto.sync.getBlob", handle_get_blob)
+        .get_async("/xrpc/com.atproto.sync.listBlobs", handle_list_blobs)
         .get_async(
             "/xrpc/com.atproto.sync.getRepoStatus",
             handle_get_repo_status,
@@ -274,6 +281,20 @@ async fn handle_get_repo(req: Request, ctx: RouteContext<()>) -> Result<Response
     }))
 }
 
+async fn handle_get_latest_commit(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let did = required_query(&url, "did")?;
+    let identity = identity(&ctx.env);
+    if did != identity.did && did != identity.handle {
+        return Response::error("Repo not found", 404);
+    }
+    let stats = repo_stats(&ctx.env, &identity).await?;
+    json_response(serde_json::json!({
+        "cid": stats.head,
+        "rev": stats.rev
+    }))
+}
+
 async fn handle_get_blob(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let url = req.url()?;
     let did = required_query(&url, "did")?;
@@ -305,6 +326,18 @@ async fn handle_get_blob(req: Request, ctx: RouteContext<()>) -> Result<Response
         .headers_mut()
         .set("Cache-Control", "public, max-age=31536000, immutable")?;
     Ok(response)
+}
+
+async fn handle_list_blobs(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let did = required_query(&url, "did")?;
+    let identity = identity(&ctx.env);
+    if did != identity.did && did != identity.handle {
+        return Response::error("Repo not found", 404);
+    }
+    let page = query_page(&url);
+    let cids = public_blob_cids(&ctx.env, page).await?;
+    paged_array_response("cids", cids.into_iter().map(Value::String).collect(), page)
 }
 
 async fn handle_get_repo_status(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -1386,6 +1419,50 @@ async fn public_media_by_cid(env: &Env, cid: &str) -> Result<Option<PublicMediaB
     }
 
     Ok(None)
+}
+
+async fn public_blob_cids(env: &Env, page: Page) -> Result<Vec<String>> {
+    let db = env.d1("DB")?;
+    let rows = db
+        .prepare(
+            r#"
+            SELECT media_attachments
+            FROM posts
+            WHERE visibility = 'public'
+              AND encrypted_message IS NULL
+              AND content NOT LIKE '%End-to-end encrypted message%'
+              AND media_attachments IS NOT NULL
+              AND media_attachments != ''
+            ORDER BY published_at DESC
+            LIMIT 500
+            "#,
+        )
+        .all()
+        .await?
+        .results::<serde_json::Map<String, Value>>()?;
+
+    let mut cids = Vec::new();
+    for row in rows {
+        for attachment in media_attachments(&row) {
+            if !attachment.media_type.starts_with("image/") {
+                continue;
+            }
+            if r2_key_from_media_url(&attachment.url).is_none() {
+                continue;
+            }
+            let cid = media_attachment_cid(&attachment);
+            if !cid.is_empty() && !cids.contains(&cid) {
+                cids.push(cid);
+            }
+        }
+    }
+
+    let start = page.offset as usize;
+    if start >= cids.len() {
+        return Ok(Vec::new());
+    }
+    let end = cids.len().min(start + page_size(page) as usize);
+    Ok(cids[start..end].to_vec())
 }
 
 async fn create_subject_record(
