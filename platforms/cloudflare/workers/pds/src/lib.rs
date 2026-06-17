@@ -1259,7 +1259,43 @@ async fn public_posts(env: &Env, page: Page) -> Result<Vec<serde_json::Map<Strin
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json
+               summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json,
+               (
+                 SELECT COUNT(*)
+                 FROM replies r
+                 WHERE r.post_id = posts.id
+                   AND (r.hidden IS NULL OR r.hidden = 0)
+               ) + (
+                 SELECT COUNT(*)
+                 FROM posts child
+                 WHERE child.visibility = 'public'
+                   AND child.encrypted_message IS NULL
+                   AND child.content NOT LIKE '%End-to-end encrypted message%'
+                   AND (
+                     child.in_reply_to = posts.id
+                     OR (posts.atproto_uri IS NOT NULL AND child.in_reply_to = posts.atproto_uri)
+                   )
+               ) AS reply_count,
+               (
+                 SELECT COUNT(*)
+                 FROM interactions i
+                 WHERE i.type = 'like'
+                   AND (
+                     i.post_id = posts.id
+                     OR i.object_url = posts.id
+                     OR (posts.atproto_uri IS NOT NULL AND i.object_url = posts.atproto_uri)
+                   )
+               ) AS like_count,
+               (
+                 SELECT COUNT(*)
+                 FROM interactions i
+                 WHERE i.type = 'boost'
+                   AND (
+                     i.post_id = posts.id
+                     OR i.object_url = posts.id
+                     OR (posts.atproto_uri IS NOT NULL AND i.object_url = posts.atproto_uri)
+                   )
+               ) AS repost_count
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -1283,7 +1319,43 @@ async fn search_public_posts(
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json
+               summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json,
+               (
+                 SELECT COUNT(*)
+                 FROM replies r
+                 WHERE r.post_id = posts.id
+                   AND (r.hidden IS NULL OR r.hidden = 0)
+               ) + (
+                 SELECT COUNT(*)
+                 FROM posts child
+                 WHERE child.visibility = 'public'
+                   AND child.encrypted_message IS NULL
+                   AND child.content NOT LIKE '%End-to-end encrypted message%'
+                   AND (
+                     child.in_reply_to = posts.id
+                     OR (posts.atproto_uri IS NOT NULL AND child.in_reply_to = posts.atproto_uri)
+                   )
+               ) AS reply_count,
+               (
+                 SELECT COUNT(*)
+                 FROM interactions i
+                 WHERE i.type = 'like'
+                   AND (
+                     i.post_id = posts.id
+                     OR i.object_url = posts.id
+                     OR (posts.atproto_uri IS NOT NULL AND i.object_url = posts.atproto_uri)
+                   )
+               ) AS like_count,
+               (
+                 SELECT COUNT(*)
+                 FROM interactions i
+                 WHERE i.type = 'boost'
+                   AND (
+                     i.post_id = posts.id
+                     OR i.object_url = posts.id
+                     OR (posts.atproto_uri IS NOT NULL AND i.object_url = posts.atproto_uri)
+                   )
+               ) AS repost_count
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -1383,7 +1455,43 @@ async fn find_public_post(env: &Env, rkey: &str) -> Result<Option<serde_json::Ma
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json
+               summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json,
+               (
+                 SELECT COUNT(*)
+                 FROM replies r
+                 WHERE r.post_id = posts.id
+                   AND (r.hidden IS NULL OR r.hidden = 0)
+               ) + (
+                 SELECT COUNT(*)
+                 FROM posts child
+                 WHERE child.visibility = 'public'
+                   AND child.encrypted_message IS NULL
+                   AND child.content NOT LIKE '%End-to-end encrypted message%'
+                   AND (
+                     child.in_reply_to = posts.id
+                     OR (posts.atproto_uri IS NOT NULL AND child.in_reply_to = posts.atproto_uri)
+                   )
+               ) AS reply_count,
+               (
+                 SELECT COUNT(*)
+                 FROM interactions i
+                 WHERE i.type = 'like'
+                   AND (
+                     i.post_id = posts.id
+                     OR i.object_url = posts.id
+                     OR (posts.atproto_uri IS NOT NULL AND i.object_url = posts.atproto_uri)
+                   )
+               ) AS like_count,
+               (
+                 SELECT COUNT(*)
+                 FROM interactions i
+                 WHERE i.type = 'boost'
+                   AND (
+                     i.post_id = posts.id
+                     OR i.object_url = posts.id
+                     OR (posts.atproto_uri IS NOT NULL AND i.object_url = posts.atproto_uri)
+                   )
+               ) AS repost_count
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -1836,9 +1944,9 @@ fn post_view(identity: &Identity, row: serde_json::Map<String, Value>) -> Value 
             "displayName": "dais"
         },
         "record": record_value(row.clone()),
-        "replyCount": 0,
-        "repostCount": 0,
-        "likeCount": 0,
+        "replyCount": u64_field(&row, "reply_count"),
+        "repostCount": u64_field(&row, "repost_count"),
+        "likeCount": u64_field(&row, "like_count"),
         "indexedAt": row.get("published_at").and_then(Value::as_str).unwrap_or("")
     })
 }
@@ -2370,6 +2478,10 @@ fn string_field(row: &serde_json::Map<String, Value>, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+fn u64_field(row: &serde_json::Map<String, Value>, key: &str) -> u64 {
+    row.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
 fn bool_field(row: &serde_json::Map<String, Value>, key: &str) -> bool {

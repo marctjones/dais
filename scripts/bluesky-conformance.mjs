@@ -979,6 +979,108 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-APPVIEW-COUNTS-01", "AppView post views expose reply, repost, and like counts", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for AppView count fixture" };
+    }
+
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const authHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.json.accessJwt}`,
+    };
+    const token = `dais Bluesky count conformance ${new Date().toISOString()}`;
+    const created = [];
+    try {
+      const parent = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.feed.post",
+          record: {
+            $type: "app.bsky.feed.post",
+            text: token,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+      });
+      if (parent.status !== 200) throw new Error(`parent createRecord expected 200, got ${parent.status}: ${parent.text}`);
+      const parentRef = { uri: parent.json?.uri, cid: parent.json?.cid };
+      if (!parentRef.uri || !parentRef.cid) throw new Error("parent createRecord missing uri/cid");
+      created.push({ collection: "app.bsky.feed.post", rkey: rkeyFromAtUri(parentRef.uri) });
+
+      for (const collection of ["app.bsky.feed.like", "app.bsky.feed.repost"]) {
+        const create = await request("/xrpc/com.atproto.repo.createRecord", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            repo: did(),
+            collection,
+            record: {
+              $type: collection,
+              subject: parentRef,
+              createdAt: new Date().toISOString(),
+            },
+          }),
+        });
+        if (create.status !== 200) throw new Error(`${collection} create expected 200, got ${create.status}: ${create.text}`);
+        created.push({ collection, rkey: rkeyFromAtUri(create.json?.uri) });
+      }
+
+      const reply = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.feed.post",
+          record: {
+            $type: "app.bsky.feed.post",
+            text: `${token} reply`,
+            createdAt: new Date().toISOString(),
+            reply: {
+              root: parentRef,
+              parent: parentRef,
+            },
+          },
+        }),
+      });
+      if (reply.status !== 200) throw new Error(`reply createRecord expected 200, got ${reply.status}: ${reply.text}`);
+      created.push({ collection: "app.bsky.feed.post", rkey: rkeyFromAtUri(reply.json?.uri) });
+
+      let counted;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const search = await request(`/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(token)}&limit=10`);
+        if (search.status !== 200) throw new Error(`search expected 200, got ${search.status}: ${search.text}`);
+        counted = search.json?.posts?.find((post) => post.uri === parentRef.uri);
+        if (counted?.likeCount >= 1 && counted?.repostCount >= 1 && counted?.replyCount >= 1) break;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (!counted) throw new Error("count fixture parent post was not visible in AppView search");
+      if (counted.likeCount < 1) throw new Error(`likeCount did not include fixture like: ${counted.likeCount}`);
+      if (counted.repostCount < 1) throw new Error(`repostCount did not include fixture repost: ${counted.repostCount}`);
+      if (counted.replyCount < 1) throw new Error(`replyCount did not include fixture reply: ${counted.replyCount}`);
+    } finally {
+      for (const item of created.reverse()) {
+        if (!item.rkey) continue;
+        await request("/xrpc/com.atproto.repo.deleteRecord", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            repo: did(),
+            collection: item.collection,
+            rkey: item.rkey,
+          }),
+        });
+      }
+    }
+  }),
+
   requirement("BLUESKY-PRIVACY-01", "PDS public feeds exclude private/E2EE fallback content", async () => {
     const feed = await request("/xrpc/app.bsky.feed.getTimeline?limit=20");
     if (feed.status !== 200) throw new Error(`timeline expected 200, got ${feed.status}`);
