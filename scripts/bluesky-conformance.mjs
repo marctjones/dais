@@ -29,7 +29,8 @@ async function request(path, options = {}) {
     headers: options.headers || { Accept: "application/json" },
     body: options.body,
   });
-  const text = await response.text();
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const text = new TextDecoder().decode(bytes);
   let json;
   try {
     json = text ? JSON.parse(text) : undefined;
@@ -39,6 +40,7 @@ async function request(path, options = {}) {
   return {
     status: response.status,
     contentType: response.headers.get("content-type") || "",
+    bytes,
     text,
     json,
   };
@@ -110,6 +112,30 @@ function websocketUrl(path) {
   return base.toString();
 }
 
+function readUvarint(bytes, offset = 0) {
+  let value = 0;
+  let shift = 0;
+  let index = offset;
+  while (index < bytes.length) {
+    const byte = bytes[index];
+    value |= (byte & 0x7f) << shift;
+    index += 1;
+    if ((byte & 0x80) === 0) return { value, next: index };
+    shift += 7;
+  }
+  throw new Error("truncated uvarint");
+}
+
+function assertCarLooksValid(bytes) {
+  const { value: headerLength, next } = readUvarint(bytes, 0);
+  if (!Number.isInteger(headerLength) || headerLength <= 0) {
+    throw new Error("CAR header length is invalid");
+  }
+  if (next + headerLength >= bytes.length) {
+    throw new Error("CAR payload is truncated");
+  }
+}
+
 function subscribeReposMessages(timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const messages = [];
@@ -156,11 +182,18 @@ const tests = [
       throw new Error("availableUserDomains missing account domain");
     }
     if (didDoc.json?.id !== did()) throw new Error("DID document id mismatch");
+    if (didDoc.json?.alsoKnownAs?.[0] !== `at://${config.acctDomain}`) {
+      throw new Error("DID alsoKnownAs handle mismatch");
+    }
+    const signingKey = didDoc.json?.verificationMethod?.find((entry) => entry.id === "#atproto");
+    if (signingKey?.type !== "Multikey" || !String(signingKey?.publicKeyMultibase || "").startsWith("zQ3")) {
+      throw new Error("DID signing key is missing or malformed");
+    }
     const service = didDoc.json?.service?.find((entry) => entry.id === "#atproto_pds");
     if (service?.serviceEndpoint !== config.pdsBaseUrl) throw new Error("DID PDS service endpoint mismatch");
   }),
 
-  requirement("BLUESKY-REPO-01", "Repo status, listRepos, describeRepo, and getRepo expose the public repo floor", async () => {
+  requirement("BLUESKY-REPO-01", "Repo status, listRepos, describeRepo, and getRepo expose the public signed repo floor", async () => {
     const status = await request(`/xrpc/com.atproto.sync.getRepoStatus?did=${encodeURIComponent(did())}`);
     const latest = await request(`/xrpc/com.atproto.sync.getLatestCommit?did=${encodeURIComponent(did())}`);
     const repos = await request("/xrpc/com.atproto.sync.listRepos");
@@ -184,9 +217,10 @@ const tests = [
     ]) {
       if (!repo.json?.collections?.includes(collection)) throw new Error(`describeRepo missing ${collection} collection`);
     }
-    if (car.json?.did !== did() || !car.json?.warning || !Number.isInteger(car.json?.records)) {
-      throw new Error("getRepo compatibility floor shape mismatch");
+    if (!car.contentType.startsWith("application/vnd.ipld.car")) {
+      throw new Error(`getRepo content-type mismatch: ${car.contentType}`);
     }
+    assertCarLooksValid(car.bytes);
     expectArray(blobs.json?.cids, "listBlobs cids");
   }),
 
@@ -200,6 +234,7 @@ const tests = [
     if (beforeStatus.status !== 200 || beforeRepo.status !== 200) {
       throw new Error(`repo metadata before expected 200/200, got ${beforeStatus.status}/${beforeRepo.status}`);
     }
+    const beforeRepoBytes = beforeRepo.bytes.length;
 
     const session = await request("/xrpc/com.atproto.server.createSession", {
       method: "POST",
@@ -235,14 +270,11 @@ const tests = [
       if (afterStatus.status !== 200 || afterRepo.status !== 200) {
         throw new Error(`repo metadata after expected 200/200, got ${afterStatus.status}/${afterRepo.status}`);
       }
-      if (afterRepo.json.records !== beforeRepo.json.records + 1) {
-        throw new Error(`repo record count did not include follow record: before=${beforeRepo.json.records} after=${afterRepo.json.records}`);
+      if (afterRepo.bytes.length <= beforeRepoBytes) {
+        throw new Error(`repo CAR did not grow after record create: before=${beforeRepoBytes} after=${afterRepo.bytes.length}`);
       }
       if (afterStatus.json.rev === beforeStatus.json.rev || afterStatus.json.head === beforeStatus.json.head) {
         throw new Error("repo status rev/head did not advance after record create");
-      }
-      if (afterRepo.json.rev !== afterStatus.json.rev || afterRepo.json.head !== afterStatus.json.head) {
-        throw new Error("getRepo and getRepoStatus metadata diverged after record create");
       }
     } finally {
       if (rkey) {
@@ -263,8 +295,8 @@ const tests = [
 
     const restoredRepo = await request(`/xrpc/com.atproto.sync.getRepo?did=${encodeURIComponent(did())}`);
     if (restoredRepo.status !== 200) throw new Error(`repo metadata restored expected 200, got ${restoredRepo.status}`);
-    if (restoredRepo.json.records !== beforeRepo.json.records) {
-      throw new Error(`repo record count did not return after cleanup: before=${beforeRepo.json.records} restored=${restoredRepo.json.records}`);
+    if (restoredRepo.bytes.length !== beforeRepoBytes) {
+      throw new Error(`repo CAR size did not return after cleanup: before=${beforeRepoBytes} restored=${restoredRepo.bytes.length}`);
     }
   }),
 

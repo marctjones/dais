@@ -1,5 +1,10 @@
+use cid::Cid;
+use ipld_core::ipld::Ipld;
+use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 /// Refactored PDS (Personal Data Server) worker for AT Protocol
 ///
 /// This worker implements the AT Protocol endpoints for Bluesky compatibility.
@@ -253,12 +258,20 @@ async fn handle_upload_blob(mut req: Request, ctx: RouteContext<()>) -> Result<R
 
 async fn handle_did_document(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let identity = identity(&ctx.env);
+    let public_key_multibase = atproto_public_multikey(&ctx.env)?;
     json_response(serde_json::json!({
         "@context": [
             "https://www.w3.org/ns/did/v1",
             "https://w3id.org/security/suites/secp256k1-2019/v1"
         ],
         "id": identity.did,
+        "alsoKnownAs": [format!("at://{}", identity.handle)],
+        "verificationMethod": [{
+            "id": "#atproto",
+            "type": "Multikey",
+            "controller": identity.did,
+            "publicKeyMultibase": public_key_multibase
+        }],
         "service": [{
             "id": "#atproto_pds",
             "type": "AtprotoPersonalDataServer",
@@ -272,15 +285,18 @@ async fn handle_get_repo(req: Request, ctx: RouteContext<()>) -> Result<Response
     let did = required_query(&url, "did")?;
     console_log!("Getting repo for DID: {}", did);
     let identity = identity(&ctx.env);
-    let stats = repo_stats(&ctx.env, &identity).await?;
-    json_response(serde_json::json!({
-        "did": did,
-        "head": stats.head,
-        "rev": stats.rev,
-        "records": stats.records,
-        "blocks": [],
-        "warning": "dais exposes a JSON compatibility floor here; full CAR/MST repo export is not implemented"
-    }))
+    if did != identity.did && did != identity.handle {
+        return Response::error("Repo not found", 404);
+    }
+    let snapshot = repo_snapshot(&ctx.env, &identity).await?;
+    let mut response = Response::from_bytes(snapshot.car_bytes)?;
+    response
+        .headers_mut()
+        .set("Content-Type", "application/vnd.ipld.car")?;
+    response
+        .headers_mut()
+        .set("Cache-Control", "no-store")?;
+    Ok(response)
 }
 
 async fn handle_get_latest_commit(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -605,14 +621,7 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
         .run()
         .await?;
 
-    json_response(serde_json::json!({
-        "uri": atproto_uri,
-        "cid": cid,
-        "commit": {
-            "cid": stable_cid(&format!("commit:{}", post_id)),
-            "rev": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
-        }
-    }))
+    create_record_response(&ctx.env, &identity, &atproto_uri, &body.record).await
 }
 
 async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -633,7 +642,7 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
             .bind(&[atproto_uri.into(), format!("%{id_suffix}").into()])?
             .run()
             .await?;
-        return delete_record_response(&body.rkey);
+        return delete_record_response(&ctx.env, &identity, &body.rkey).await;
     }
     if body.collection == "app.bsky.graph.follow" {
         let atproto_uri = record_uri(&identity, &body.collection, &body.rkey);
@@ -644,7 +653,7 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
             .bind(&[atproto_uri.into(), format!("%{id_suffix}").into()])?
             .run()
             .await?;
-        return delete_record_response(&body.rkey);
+        return delete_record_response(&ctx.env, &identity, &body.rkey).await;
     }
     if body.collection == "app.bsky.actor.profile" {
         if body.rkey != "self" {
@@ -664,7 +673,7 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
             .bind(&[local_actor_id(&identity).into()])?
             .run()
             .await?;
-        return delete_record_response(&body.rkey);
+        return delete_record_response(&ctx.env, &identity, &body.rkey).await;
     }
     if body.collection != "app.bsky.feed.post" {
         return Response::error(
@@ -687,7 +696,7 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
         .bind(&[atproto_uri.into(), format!("%{id_suffix}").into()])?
         .run()
         .await?;
-    delete_record_response(&body.rkey)
+    delete_record_response(&ctx.env, &identity, &body.rkey).await
 }
 
 async fn handle_get_profile(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -996,7 +1005,7 @@ async fn handle_websocket(ws: WebSocket, _env: Env) -> Result<()> {
     ws.send_with_str(info_msg)?;
 
     let identity = identity(&_env);
-    let stats = repo_stats(&_env, &identity).await?;
+    let snapshot = repo_snapshot(&_env, &identity).await?;
     let posts = public_posts(
         &_env,
         Page {
@@ -1008,7 +1017,7 @@ async fn handle_websocket(ws: WebSocket, _env: Env) -> Result<()> {
     let mut ops = vec![serde_json::json!({
         "action": "update",
         "path": "app.bsky.actor.profile/self",
-        "cid": { "$link": stable_cid(&format!("profile:{}", stats.rev)) }
+        "cid": { "$link": profile_record_response(&_env, &identity).await?.get("cid").cloned().unwrap_or(Value::String(String::new())) }
     })];
     for row in posts.into_iter().take(99) {
         let uri = at_uri(&identity, &row);
@@ -1030,12 +1039,12 @@ async fn handle_websocket(ws: WebSocket, _env: Env) -> Result<()> {
     let commit_msg = serde_json::json!({
         "t": "#commit",
         "commit": {
-            "seq": repo_seq(&stats.rev),
+            "seq": repo_seq(&snapshot.rev),
             "rebase": false,
             "tooBig": false,
             "repo": identity.did,
-            "commit": { "$link": stats.head },
-            "rev": stats.rev,
+            "commit": { "$link": snapshot.commit_cid.to_string() },
+            "rev": snapshot.rev,
             "since": null,
             "blocks": "",
             "ops": ops,
@@ -1058,7 +1067,32 @@ struct Identity {
 struct RepoStats {
     head: String,
     rev: String,
-    records: usize,
+}
+
+#[derive(Clone)]
+struct RepoRecord {
+    path: String,
+    value: Value,
+}
+
+#[derive(Clone)]
+struct RepoRecordBlock {
+    path: String,
+    cid: Cid,
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct CarBlock {
+    cid: Cid,
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct RepoSnapshot {
+    rev: String,
+    commit_cid: Cid,
+    car_bytes: Vec<u8>,
 }
 
 struct ProfileCounts {
@@ -1216,49 +1250,10 @@ fn paged_array_response(key: &str, mut values: Vec<Value>, page: Page) -> Result
 }
 
 async fn repo_stats(env: &Env, identity: &Identity) -> Result<RepoStats> {
-    let db = env.d1("DB")?;
-    let actor_id = local_actor_id(identity);
-    let row = db
-        .prepare(
-            r#"
-            SELECT COUNT(*) AS records, MAX(rev) AS rev
-            FROM (
-              SELECT COALESCE(updated_at, created_at) AS rev
-              FROM actors
-              WHERE id = ?1
-              UNION ALL
-              SELECT COALESCE(updated_at, published_at) AS rev
-              FROM posts
-              WHERE visibility = 'public'
-                AND encrypted_message IS NULL
-                AND content NOT LIKE '%End-to-end encrypted message%'
-              UNION ALL
-              SELECT created_at AS rev
-              FROM interactions
-              WHERE actor_id = ?1
-                AND type IN ('like', 'boost')
-              UNION ALL
-              SELECT COALESCE(accepted_at, created_at) AS rev
-              FROM following
-              WHERE actor_id = ?1
-                AND status IN ('accepted', 'pending')
-            )
-            "#,
-        )
-        .bind(&[actor_id.into()])?
-        .first::<serde_json::Map<String, Value>>(None)
-        .await?
-        .unwrap_or_default();
-    let records = row.get("records").and_then(Value::as_u64).unwrap_or(0) as usize;
-    let rev = row
-        .get("rev")
-        .and_then(Value::as_str)
-        .unwrap_or("0")
-        .to_string();
+    let snapshot = repo_snapshot(env, identity).await?;
     Ok(RepoStats {
-        head: stable_cid(&rev),
-        rev,
-        records,
+        head: snapshot.commit_cid.to_string(),
+        rev: snapshot.rev,
     })
 }
 
@@ -1742,7 +1737,7 @@ async fn create_subject_record(
         ])?
         .run()
         .await?;
-    create_record_response(&uri, &body.record)
+    create_record_response(env, identity, &uri, &body.record).await
 }
 
 async fn create_follow_record(
@@ -1785,7 +1780,7 @@ async fn create_follow_record(
         ])?
         .run()
         .await?;
-    create_record_response(&uri, &body.record)
+    create_record_response(env, identity, &uri, &body.record).await
 }
 
 async fn create_profile_record(
@@ -1830,7 +1825,7 @@ async fn create_profile_record(
         .run()
         .await?;
     let uri = record_uri(identity, "app.bsky.actor.profile", "self");
-    create_record_response(&uri, &body.record)
+    create_record_response(env, identity, &uri, &body.record).await
 }
 
 async fn subject_records(
@@ -1907,17 +1902,21 @@ fn subject_record_value(
 ) -> Value {
     let subject_uri = string_field(row, "object_url");
     let uri = record_uri_from_row(identity, collection, row);
+    let value = serde_json::json!({
+        "$type": collection,
+        "subject": {
+            "uri": subject_uri,
+            "cid": stable_cid(&subject_uri)
+        },
+        "createdAt": string_field(row, "created_at")
+    });
+    let cid = repo_record_block(repo_path_from_at_uri(&uri).unwrap_or_default(), value.clone())
+        .map(|block| block.cid.to_string())
+        .unwrap_or_else(|_| stable_cid(&format!("{}:{}", collection, subject_uri)));
     serde_json::json!({
         "uri": uri,
-        "cid": stable_cid(&format!("{}:{}", collection, subject_uri)),
-        "value": {
-            "$type": collection,
-            "subject": {
-                "uri": subject_uri,
-                "cid": stable_cid(&subject_uri)
-            },
-            "createdAt": string_field(row, "created_at")
-        }
+        "cid": cid,
+        "value": value
     })
 }
 
@@ -1977,68 +1976,74 @@ async fn find_follow_record(env: &Env, identity: &Identity, rkey: &str) -> Resul
 fn follow_record_value(identity: &Identity, row: &serde_json::Map<String, Value>) -> Value {
     let subject = string_field(row, "target_actor_id");
     let uri = record_uri_from_row(identity, "app.bsky.graph.follow", row);
+    let value = serde_json::json!({
+        "$type": "app.bsky.graph.follow",
+        "subject": subject,
+        "createdAt": string_field(row, "created_at")
+    });
+    let cid = repo_record_block(repo_path_from_at_uri(&uri).unwrap_or_default(), value.clone())
+        .map(|block| block.cid.to_string())
+        .unwrap_or_else(|_| stable_cid(&format!("app.bsky.graph.follow:{subject}")));
     serde_json::json!({
         "uri": uri,
-        "cid": stable_cid(&format!("app.bsky.graph.follow:{subject}")),
-        "value": {
-            "$type": "app.bsky.graph.follow",
-            "subject": subject,
-            "createdAt": string_field(row, "created_at")
-        }
+        "cid": cid,
+        "value": value
     })
 }
 
 async fn profile_record_response(env: &Env, identity: &Identity) -> Result<Value> {
     let profile = actor_profile(env, identity).await?;
     let value = profile_record_value(&profile);
+    let block = repo_record_block("app.bsky.actor.profile/self".to_string(), value.clone())?;
     Ok(serde_json::json!({
         "uri": record_uri(identity, "app.bsky.actor.profile", "self"),
-        "cid": stable_cid(&serde_json::to_string(&value).unwrap_or_default()),
+        "cid": block.cid.to_string(),
         "value": value
     }))
 }
 
 fn record_response(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
     let uri = at_uri(identity, &row);
-    let cid = row
-        .get("atproto_cid")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| stable_cid(&uri));
+    let value = record_value(row);
+    let cid = repo_record_block(repo_path_from_at_uri(&uri).unwrap_or_default(), value.clone())
+        .map(|block| block.cid.to_string())
+        .unwrap_or_else(|_| stable_cid(&uri));
     serde_json::json!({
         "uri": uri,
         "cid": cid,
-        "value": record_value(row)
+        "value": value
     })
 }
 
-fn create_record_response(uri: &str, record: &Value) -> Result<Response> {
+async fn create_record_response(env: &Env, identity: &Identity, uri: &str, record: &Value) -> Result<Response> {
+    let block = repo_record_block(repo_path_from_at_uri(uri)?, record.clone())?;
+    let snapshot = repo_snapshot(env, identity).await?;
     json_response(serde_json::json!({
         "uri": uri,
-        "cid": stable_cid(&serde_json::to_string(record).unwrap_or_default()),
+        "cid": block.cid.to_string(),
         "commit": {
-            "cid": stable_cid(&format!("commit:{uri}")),
-            "rev": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
+            "cid": snapshot.commit_cid.to_string(),
+            "rev": snapshot.rev
         }
     }))
 }
 
-fn delete_record_response(rkey: &str) -> Result<Response> {
+async fn delete_record_response(env: &Env, identity: &Identity, _rkey: &str) -> Result<Response> {
+    let snapshot = repo_snapshot(env, identity).await?;
     json_response(serde_json::json!({
         "commit": {
-            "cid": stable_cid(&format!("delete:{rkey}")),
-            "rev": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
+            "cid": snapshot.commit_cid.to_string(),
+            "rev": snapshot.rev
         }
     }))
 }
 
 fn post_view(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
     let uri = at_uri(identity, &row);
-    let cid = row
-        .get("atproto_cid")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| stable_cid(&uri));
+    let record = record_value(row.clone());
+    let cid = repo_record_block(repo_path_from_at_uri(&uri).unwrap_or_default(), record.clone())
+        .map(|block| block.cid.to_string())
+        .unwrap_or_else(|_| stable_cid(&uri));
     serde_json::json!({
         "uri": uri,
         "cid": cid,
@@ -2047,7 +2052,7 @@ fn post_view(identity: &Identity, row: serde_json::Map<String, Value>) -> Value 
             "handle": identity.handle,
             "displayName": "dais"
         },
-        "record": record_value(row.clone()),
+        "record": record,
         "replyCount": u64_field(&row, "reply_count"),
         "repostCount": u64_field(&row, "repost_count"),
         "likeCount": u64_field(&row, "like_count"),
@@ -2483,9 +2488,683 @@ fn repo_seq(value: &str) -> u64 {
     hasher.finish().max(1)
 }
 
+fn dag_cbor_cid(bytes: &[u8]) -> Cid {
+    use multihash_codetable::{Code, MultihashDigest};
+
+    Cid::new_v1(0x71, Code::Sha2_256.digest(bytes))
+}
+
+fn dag_cbor_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    serde_ipld_dagcbor::to_vec(value)
+        .map_err(|error| worker::Error::RustError(format!("dag-cbor encode failed: {error}")))
+}
+
+fn cid_link_or_fallback(value: &str, fallback_seed: &str) -> Result<Ipld> {
+    match value.parse::<Cid>() {
+        Ok(cid) => Ok(Ipld::Link(cid)),
+        Err(_) => stable_cid(fallback_seed)
+            .parse::<Cid>()
+            .map(Ipld::Link)
+            .map_err(|error| worker::Error::RustError(format!("invalid cid '{value}': {error}"))),
+    }
+}
+
+fn repo_record_block(path: String, value: Value) -> Result<RepoRecordBlock> {
+    let ipld = record_value_to_ipld(&value)?;
+    let bytes = dag_cbor_bytes(&ipld)?;
+    Ok(RepoRecordBlock {
+        path,
+        cid: dag_cbor_cid(&bytes),
+        bytes,
+    })
+}
+
+fn record_value_to_ipld(value: &Value) -> Result<Ipld> {
+    let Some(record_type) = value.get("$type").and_then(Value::as_str) else {
+        return Err(worker::Error::RustError(
+            "record is missing $type".to_string(),
+        ));
+    };
+    match record_type {
+        "app.bsky.actor.profile" => profile_record_ipld(value),
+        "app.bsky.feed.post" => post_record_ipld(value),
+        "app.bsky.feed.like" | "app.bsky.feed.repost" => subject_record_ipld(value, record_type),
+        "app.bsky.graph.follow" => follow_record_ipld(value),
+        other => Err(worker::Error::RustError(format!(
+            "unsupported record type for repo export: {other}"
+        ))),
+    }
+}
+
+fn map_ipld(entries: impl IntoIterator<Item = (impl Into<String>, Ipld)>) -> Ipld {
+    let mut map = BTreeMap::new();
+    for (key, value) in entries {
+        map.insert(key.into(), value);
+    }
+    Ipld::Map(map)
+}
+
+fn profile_record_ipld(value: &Value) -> Result<Ipld> {
+    let mut entries = vec![("$type".to_string(), Ipld::String("app.bsky.actor.profile".to_string()))];
+    if let Some(display_name) = value.get("displayName").and_then(Value::as_str) {
+        entries.push(("displayName".to_string(), Ipld::String(display_name.to_string())));
+    }
+    if let Some(description) = value.get("description").and_then(Value::as_str) {
+        entries.push(("description".to_string(), Ipld::String(description.to_string())));
+    }
+    Ok(map_ipld(entries))
+}
+
+fn post_record_ipld(value: &Value) -> Result<Ipld> {
+    let mut entries = vec![
+        ("$type".to_string(), Ipld::String("app.bsky.feed.post".to_string())),
+        (
+            "text".to_string(),
+            Ipld::String(
+                value.get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+        ),
+        (
+            "createdAt".to_string(),
+            Ipld::String(
+                value.get("createdAt")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+        ),
+    ];
+    if let Some(langs) = value.get("langs").and_then(Value::as_array) {
+        entries.push((
+            "langs".to_string(),
+            Ipld::List(
+                langs
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|entry| Ipld::String(entry.to_string()))
+                    .collect(),
+            ),
+        ));
+    }
+    if let Some(facets) = value.get("facets").and_then(Value::as_array) {
+        entries.push(("facets".to_string(), json_array_to_ipld(facets)?));
+    }
+    if let Some(tags) = value.get("tags").and_then(Value::as_array) {
+        entries.push((
+            "tags".to_string(),
+            Ipld::List(
+                tags.iter()
+                    .filter_map(Value::as_str)
+                    .map(|tag| Ipld::String(tag.to_string()))
+                    .collect(),
+            ),
+        ));
+    }
+    if let Some(labels) = value.get("labels") {
+        entries.push(("labels".to_string(), json_to_plain_ipld(labels)?));
+    }
+    if let Some(reply) = value.get("reply").and_then(Value::as_object) {
+        entries.push(("reply".to_string(), reply_ref_ipld(reply)?));
+    }
+    if let Some(embed) = value.get("embed").and_then(Value::as_object) {
+        entries.push(("embed".to_string(), embed_ipld(embed)?));
+    }
+    Ok(map_ipld(entries))
+}
+
+fn reply_ref_ipld(value: &serde_json::Map<String, Value>) -> Result<Ipld> {
+    let root = value
+        .get("root")
+        .and_then(Value::as_object)
+        .ok_or_else(|| worker::Error::RustError("reply.root is required".to_string()))?;
+    let parent = value
+        .get("parent")
+        .and_then(Value::as_object)
+        .ok_or_else(|| worker::Error::RustError("reply.parent is required".to_string()))?;
+    Ok(map_ipld([
+        ("root", strong_ref_ipld(root)?),
+        ("parent", strong_ref_ipld(parent)?),
+    ]))
+}
+
+fn strong_ref_ipld(value: &serde_json::Map<String, Value>) -> Result<Ipld> {
+    let uri = value.get("uri").and_then(Value::as_str).unwrap_or_default();
+    Ok(map_ipld([
+        (
+            "uri",
+            Ipld::String(
+                uri.to_string(),
+            ),
+        ),
+        (
+            "cid",
+            cid_link_or_fallback(
+                value.get("cid").and_then(Value::as_str).unwrap_or_default(),
+                uri,
+            )?,
+        ),
+    ]))
+}
+
+fn embed_ipld(value: &serde_json::Map<String, Value>) -> Result<Ipld> {
+    if value.get("$type").and_then(Value::as_str) != Some("app.bsky.embed.images") {
+        return Err(worker::Error::RustError(
+            "only image embeds are supported in repo export".to_string(),
+        ));
+    }
+    let images = value
+        .get("images")
+        .and_then(Value::as_array)
+        .ok_or_else(|| worker::Error::RustError("embed.images must be an array".to_string()))?;
+    let images = images
+        .iter()
+        .map(|image| {
+            let Some(image) = image.as_object() else {
+                return Err(worker::Error::RustError("embed image must be an object".to_string()));
+            };
+            let blob = image
+                .get("image")
+                .and_then(Value::as_object)
+                .ok_or_else(|| worker::Error::RustError("embed image blob is required".to_string()))?;
+            Ok(map_ipld([
+                (
+                    "alt",
+                    Ipld::String(
+                        image.get("alt").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    ),
+                ),
+                (
+                    "image",
+                    map_ipld([
+                        ("$type", Ipld::String("blob".to_string())),
+                        (
+                            "ref",
+                            cid_link_or_fallback(
+                                blob.get("ref")
+                                    .and_then(Value::as_object)
+                                    .and_then(|value| value.get("$link"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default(),
+                                image.get("alt").and_then(Value::as_str).unwrap_or("blob"),
+                            )?,
+                        ),
+                        (
+                            "mimeType",
+                            Ipld::String(
+                                blob.get("mimeType")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("image/png")
+                                    .to_string(),
+                            ),
+                        ),
+                        (
+                            "size",
+                            Ipld::Integer(
+                                blob.get("size").and_then(Value::as_u64).unwrap_or_default().into(),
+                            ),
+                        ),
+                    ]),
+                ),
+            ]))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(map_ipld([
+        ("$type", Ipld::String("app.bsky.embed.images".to_string())),
+        ("images", Ipld::List(images)),
+    ]))
+}
+
+fn subject_record_ipld(value: &Value, record_type: &str) -> Result<Ipld> {
+    let subject = value
+        .get("subject")
+        .and_then(Value::as_object)
+        .ok_or_else(|| worker::Error::RustError("subject is required".to_string()))?;
+    let subject_uri = subject
+        .get("uri")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Ok(map_ipld([
+        ("$type", Ipld::String(record_type.to_string())),
+        (
+            "subject",
+            map_ipld([
+                (
+                    "uri",
+                    Ipld::String(subject_uri.to_string()),
+                ),
+                (
+                    "cid",
+                    cid_link_or_fallback(
+                        subject.get("cid").and_then(Value::as_str).unwrap_or_default(),
+                        subject_uri,
+                    )?,
+                ),
+            ]),
+        ),
+        (
+            "createdAt",
+            Ipld::String(
+                value.get("createdAt")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+        ),
+    ]))
+}
+
+fn follow_record_ipld(value: &Value) -> Result<Ipld> {
+    Ok(map_ipld([
+        ("$type", Ipld::String("app.bsky.graph.follow".to_string())),
+        (
+            "subject",
+            Ipld::String(
+                value.get("subject")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+        ),
+        (
+            "createdAt",
+            Ipld::String(
+                value.get("createdAt")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+        ),
+    ]))
+}
+
+fn json_array_to_ipld(values: &[Value]) -> Result<Ipld> {
+    Ok(Ipld::List(
+        values
+            .iter()
+            .map(json_to_plain_ipld)
+            .collect::<Result<Vec<_>>>()?,
+    ))
+}
+
+fn json_to_plain_ipld(value: &Value) -> Result<Ipld> {
+    match value {
+        Value::Null => Ok(Ipld::Null),
+        Value::Bool(value) => Ok(Ipld::Bool(*value)),
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(Ipld::Integer(value.into()))
+            } else if let Some(value) = value.as_u64() {
+                Ok(Ipld::Integer(value.into()))
+            } else {
+                Err(worker::Error::RustError(
+                    "floating-point values are not supported in repo export".to_string(),
+                ))
+            }
+        }
+        Value::String(value) => Ok(Ipld::String(value.clone())),
+        Value::Array(values) => json_array_to_ipld(values),
+        Value::Object(map) => Ok(Ipld::Map(
+            map.iter()
+                .map(|(key, value)| Ok((key.clone(), json_to_plain_ipld(value)?)))
+                .collect::<Result<BTreeMap<_, _>>>()?,
+        )),
+    }
+}
+
+fn repo_key_depth(key: &[u8]) -> usize {
+    let digest = Sha256::digest(key);
+    let mut zero_bits = 0usize;
+    for byte in digest {
+        let count = byte.leading_zeros() as usize;
+        zero_bits += count;
+        if count != 8 {
+            break;
+        }
+    }
+    zero_bits / 2
+}
+
+fn common_prefix_len(left: &[u8], right: &[u8]) -> usize {
+    left.iter()
+        .zip(right.iter())
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+fn mst_node_block(
+    records: &[RepoRecordBlock],
+    left: Option<Cid>,
+    local_positions: &[usize],
+    entry_ranges: &[std::ops::Range<usize>],
+    level: usize,
+) -> Result<(CarBlock, Vec<CarBlock>)> {
+    let mut node_entries = Vec::new();
+    let mut ordered_blocks = Vec::new();
+    if let Some(range) = entry_ranges.first().filter(|range| !range.is_empty()) {
+        let (_, blocks) = mst_subtree(records, range.clone(), level + 1)?;
+        ordered_blocks.extend(blocks);
+    }
+    let mut previous_key = Vec::<u8>::new();
+    for (index, position) in local_positions.iter().enumerate() {
+        let record = &records[*position];
+        let key = record.path.as_bytes().to_vec();
+        let prefix_len = if index == 0 {
+            0
+        } else {
+            common_prefix_len(&previous_key, &key)
+        };
+        previous_key = key.clone();
+        let mut entry = BTreeMap::new();
+        entry.insert("p".to_string(), Ipld::Integer((prefix_len as i64).into()));
+        entry.insert("k".to_string(), Ipld::Bytes(key[prefix_len..].to_vec()));
+        entry.insert("v".to_string(), Ipld::Link(record.cid));
+        if let Some(range) = entry_ranges.get(index + 1).filter(|range| !range.is_empty()) {
+            let (child_cid, blocks) = mst_subtree(records, range.clone(), level + 1)?;
+            entry.insert("t".to_string(), Ipld::Link(child_cid));
+            ordered_blocks.push(record.clone().into());
+            ordered_blocks.extend(blocks);
+        } else {
+            ordered_blocks.push(record.clone().into());
+        }
+        node_entries.push(Ipld::Map(entry));
+    }
+    let mut node = BTreeMap::new();
+    node.insert(
+        "l".to_string(),
+        left.map(Ipld::Link).unwrap_or(Ipld::Null),
+    );
+    node.insert("e".to_string(), Ipld::List(node_entries));
+    let bytes = dag_cbor_bytes(&Ipld::Map(node))?;
+    let cid = dag_cbor_cid(&bytes);
+    let mut blocks = vec![CarBlock { cid, bytes }];
+    blocks.extend(ordered_blocks);
+    Ok((blocks[0].clone(), blocks))
+}
+
+fn mst_subtree(
+    records: &[RepoRecordBlock],
+    range: std::ops::Range<usize>,
+    level: usize,
+) -> Result<(Cid, Vec<CarBlock>)> {
+    if range.is_empty() {
+        let bytes = dag_cbor_bytes(&map_ipld([("l", Ipld::Null), ("e", Ipld::List(vec![]))]))?;
+        let cid = dag_cbor_cid(&bytes);
+        return Ok((cid, vec![CarBlock { cid, bytes }]));
+    }
+    let slice = &records[range.clone()];
+    let local_positions: Vec<usize> = slice
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| (repo_key_depth(record.path.as_bytes()) == level).then_some(index))
+        .collect();
+    if local_positions.is_empty() {
+        let (child_cid, child_blocks) = mst_subtree(records, range, level + 1)?;
+        let bytes = dag_cbor_bytes(&map_ipld([("l", Ipld::Link(child_cid)), ("e", Ipld::List(vec![]))]))?;
+        let cid = dag_cbor_cid(&bytes);
+        let mut blocks = vec![CarBlock { cid, bytes }];
+        blocks.extend(child_blocks);
+        return Ok((cid, blocks));
+    }
+
+    let mut child_ranges = Vec::new();
+    let mut start = range.start;
+    for position in &local_positions {
+        let absolute = range.start + position;
+        child_ranges.push(start..absolute);
+        start = absolute + 1;
+    }
+    child_ranges.push(start..range.end);
+    let left = if child_ranges.first().is_some_and(|range| !range.is_empty()) {
+        let (cid, _) = mst_subtree(records, child_ranges[0].clone(), level + 1)?;
+        Some(cid)
+    } else {
+        None
+    };
+    let absolute_positions: Vec<usize> = local_positions
+        .iter()
+        .map(|position| range.start + position)
+        .collect();
+    let (node_block, mut blocks) =
+        mst_node_block(records, left, &absolute_positions, &child_ranges, level)?;
+    blocks[0] = node_block.clone();
+    Ok((node_block.cid, blocks))
+}
+
+fn encode_car(root: Cid, blocks: &[CarBlock]) -> Result<Vec<u8>> {
+    let header = map_ipld([
+        ("version", Ipld::Integer(1.into())),
+        ("roots", Ipld::List(vec![Ipld::Link(root)])),
+    ]);
+    let header_bytes = dag_cbor_bytes(&header)?;
+    let mut output = Vec::new();
+    write_uvarint(header_bytes.len() as u64, &mut output);
+    output.extend(header_bytes);
+    for block in blocks {
+        let cid_bytes = block.cid.to_bytes();
+        write_uvarint((cid_bytes.len() + block.bytes.len()) as u64, &mut output);
+        output.extend(cid_bytes);
+        output.extend(&block.bytes);
+    }
+    Ok(output)
+}
+
+fn write_uvarint(mut value: u64, output: &mut Vec<u8>) {
+    while value >= 0x80 {
+        output.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    output.push(value as u8);
+}
+
+fn atproto_signing_key(env: &Env) -> Result<SigningKey> {
+    let digest = Sha256::digest(owner_api_token(env)?.as_bytes());
+    SigningKey::from_bytes((&digest).into())
+        .map_err(|error| worker::Error::RustError(format!("invalid signing seed: {error}")))
+}
+
+fn atproto_public_multikey(env: &Env) -> Result<String> {
+    let key = atproto_signing_key(env)?;
+    let verifying = VerifyingKey::from(&key);
+    let mut bytes = vec![0xE7, 0x01];
+    bytes.extend(verifying.to_encoded_point(true).as_bytes());
+    Ok(multibase::encode(multibase::Base::Base58Btc, bytes))
+}
+
+async fn repo_snapshot(env: &Env, identity: &Identity) -> Result<RepoSnapshot> {
+    let rev = repo_revision(env, identity).await?;
+    let mut records = Vec::new();
+    records.push(RepoRecord {
+        path: "app.bsky.actor.profile/self".to_string(),
+        value: profile_record_response(env, identity).await?
+            .get("value")
+            .cloned()
+            .unwrap_or(Value::Null),
+    });
+
+    let mut page = Page { limit: 100, offset: 0 };
+    loop {
+        let rows = public_posts(env, page).await?;
+        let done = rows.len() <= page.limit as usize;
+        for row in rows.into_iter().take(page.limit as usize) {
+            let uri = at_uri(identity, &row);
+            records.push(RepoRecord {
+                path: repo_path_from_at_uri(&uri)?,
+                value: record_value(row),
+            });
+        }
+        if done {
+            break;
+        }
+        page.offset += page.limit;
+    }
+
+    for (collection, interaction_type) in [
+        ("app.bsky.feed.like", "like"),
+        ("app.bsky.feed.repost", "boost"),
+    ] {
+        let mut page = Page { limit: 100, offset: 0 };
+        loop {
+            let values = subject_records(env, identity, collection, interaction_type, page).await?;
+            let done = values.len() <= page.limit as usize;
+            for record in values.into_iter().take(page.limit as usize) {
+                let uri = record.get("uri").and_then(Value::as_str).unwrap_or_default();
+                records.push(RepoRecord {
+                    path: repo_path_from_at_uri(uri)?,
+                    value: record.get("value").cloned().unwrap_or(Value::Null),
+                });
+            }
+            if done {
+                break;
+            }
+            page.offset += page.limit;
+        }
+    }
+
+    let mut page = Page { limit: 100, offset: 0 };
+    loop {
+        let values = follow_records(env, identity, page).await?;
+        let done = values.len() <= page.limit as usize;
+        for record in values.into_iter().take(page.limit as usize) {
+            let uri = record.get("uri").and_then(Value::as_str).unwrap_or_default();
+            records.push(RepoRecord {
+                path: repo_path_from_at_uri(uri)?,
+                value: record.get("value").cloned().unwrap_or(Value::Null),
+            });
+        }
+        if done {
+            break;
+        }
+        page.offset += page.limit;
+    }
+
+    let mut blocks = records
+        .into_iter()
+        .map(|record| repo_record_block(record.path, record.value))
+        .collect::<Result<Vec<_>>>()?;
+    blocks.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let (root_cid, mut car_blocks) = if blocks.is_empty() {
+        let bytes = dag_cbor_bytes(&map_ipld([("l", Ipld::Null), ("e", Ipld::List(vec![]))]))?;
+        let cid = dag_cbor_cid(&bytes);
+        (cid, vec![CarBlock { cid, bytes }])
+    } else {
+        let min_depth = blocks
+            .iter()
+            .map(|record| repo_key_depth(record.path.as_bytes()))
+            .min()
+            .unwrap_or(0);
+        mst_subtree(&blocks, 0..blocks.len(), min_depth)?
+    };
+
+    let key = atproto_signing_key(env)?;
+    let unsigned_commit = map_ipld([
+        ("did", Ipld::String(identity.did.clone())),
+        ("version", Ipld::Integer(3.into())),
+        ("rev", Ipld::String(rev.clone())),
+        ("prev", Ipld::Null),
+        ("data", Ipld::Link(root_cid)),
+    ]);
+    let unsigned_bytes = dag_cbor_bytes(&unsigned_commit)?;
+    let digest = Sha256::digest(&unsigned_bytes);
+    let signature: Signature = key
+        .sign_prehash(&digest)
+        .map_err(|error| worker::Error::RustError(format!("commit signing failed: {error}")))?;
+    let signed_commit = map_ipld([
+        ("did", Ipld::String(identity.did.clone())),
+        ("version", Ipld::Integer(3.into())),
+        ("rev", Ipld::String(rev.clone())),
+        ("prev", Ipld::Null),
+        ("data", Ipld::Link(root_cid)),
+        ("sig", Ipld::Bytes(signature.to_bytes().to_vec())),
+    ]);
+    let commit_bytes = dag_cbor_bytes(&signed_commit)?;
+    let commit_cid = dag_cbor_cid(&commit_bytes);
+    car_blocks.insert(
+        0,
+        CarBlock {
+            cid: commit_cid,
+            bytes: commit_bytes.clone(),
+        },
+    );
+    let car_bytes = encode_car(commit_cid, &car_blocks)?;
+    Ok(RepoSnapshot {
+        rev,
+        commit_cid,
+        car_bytes,
+    })
+}
+
+async fn repo_revision(env: &Env, identity: &Identity) -> Result<String> {
+    let db = env.d1("DB")?;
+    let actor_id = local_actor_id(identity);
+    let row = db
+        .prepare(
+            r#"
+            SELECT MAX(rev) AS rev
+            FROM (
+              SELECT COALESCE(updated_at, created_at) AS rev
+              FROM actors
+              WHERE id = ?1
+              UNION ALL
+              SELECT COALESCE(updated_at, published_at) AS rev
+              FROM posts
+              WHERE visibility = 'public'
+                AND encrypted_message IS NULL
+                AND content NOT LIKE '%End-to-end encrypted message%'
+              UNION ALL
+              SELECT created_at AS rev
+              FROM interactions
+              WHERE actor_id = ?1
+                AND type IN ('like', 'boost')
+              UNION ALL
+              SELECT COALESCE(accepted_at, created_at) AS rev
+              FROM following
+              WHERE actor_id = ?1
+                AND status IN ('accepted', 'pending')
+            )
+            "#,
+        )
+        .bind(&[actor_id.into()])?
+        .first::<serde_json::Map<String, Value>>(None)
+        .await?
+        .unwrap_or_default();
+    Ok(row
+        .get("rev")
+        .and_then(Value::as_str)
+        .unwrap_or("0")
+        .to_string())
+}
+
+fn repo_path_from_at_uri(uri: &str) -> Result<String> {
+    let without_prefix = uri
+        .strip_prefix("at://")
+        .ok_or_else(|| worker::Error::RustError(format!("invalid at-uri: {uri}")))?;
+    let mut parts = without_prefix.splitn(3, '/');
+    let _repo = parts.next();
+    let collection = parts.next().unwrap_or_default();
+    let rkey = parts.next().unwrap_or_default();
+    if collection.is_empty() || rkey.is_empty() {
+        return Err(worker::Error::RustError(format!("invalid at-uri path: {uri}")));
+    }
+    Ok(format!("{collection}/{rkey}"))
+}
+
+impl From<RepoRecordBlock> for CarBlock {
+    fn from(value: RepoRecordBlock) -> Self {
+        Self {
+            cid: value.cid,
+            bytes: value.bytes,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::stable_cid;
+    use super::{encode_car, mst_subtree, repo_key_depth, repo_record_block, stable_cid};
+    use serde_json::json;
 
     #[test]
     fn stable_cid_is_real_cidv1() {
@@ -2498,6 +3177,57 @@ mod tests {
     #[test]
     fn stable_cid_changes_with_input() {
         assert_ne!(stable_cid("dais-a"), stable_cid("dais-b"));
+    }
+
+    #[test]
+    fn mst_subtree_handles_multi_level_ranges() {
+        let mut records = vec![
+            repo_record_block(
+                "app.bsky.actor.profile/self".to_string(),
+                json!({
+                    "$type": "app.bsky.actor.profile",
+                    "displayName": "dais"
+                }),
+            )
+            .expect("profile block"),
+            repo_record_block(
+                "app.bsky.feed.post/aaa".to_string(),
+                json!({
+                    "$type": "app.bsky.feed.post",
+                    "text": "one",
+                    "createdAt": "2026-06-17T00:00:00.000Z"
+                }),
+            )
+            .expect("post block"),
+            repo_record_block(
+                "app.bsky.feed.post/bbb".to_string(),
+                json!({
+                    "$type": "app.bsky.feed.post",
+                    "text": "two",
+                    "createdAt": "2026-06-17T00:00:01.000Z"
+                }),
+            )
+            .expect("post block"),
+            repo_record_block(
+                "app.bsky.graph.follow/ccc".to_string(),
+                json!({
+                    "$type": "app.bsky.graph.follow",
+                    "subject": "did:plc:example",
+                    "createdAt": "2026-06-17T00:00:02.000Z"
+                }),
+            )
+            .expect("follow block"),
+        ];
+        records.sort_by(|left, right| left.path.cmp(&right.path));
+        let min_depth = records
+            .iter()
+            .map(|record| repo_key_depth(record.path.as_bytes()))
+            .min()
+            .expect("min depth");
+        let (root, blocks) = mst_subtree(&records, 0..records.len(), min_depth).expect("mst");
+        let car = encode_car(root, &blocks).expect("car");
+        assert!(!blocks.is_empty(), "mst should emit at least one block");
+        assert!(car.len() > 8, "car should contain header and blocks");
     }
 }
 
