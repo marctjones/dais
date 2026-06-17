@@ -27,6 +27,9 @@ bucket_name = "dais-media"
 
 [env.production]
 name = "pds-production"
+routes = [
+  { pattern = "pds.dais.social", custom_domain = true }
+]
 
 [env.production.vars]
 DOMAIN = "social.dais.social"
