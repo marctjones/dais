@@ -1113,6 +1113,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                     protocol: owner_protocol(args.protocol),
                     encrypt: args.encrypt,
                     in_reply_to: args.reply_to,
+                    audience_list_id: None,
                     recipients: args.recipients,
                     attachments: args.attachments,
                 })

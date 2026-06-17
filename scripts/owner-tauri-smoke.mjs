@@ -100,6 +100,17 @@ for (const check of [
       "Approved followers",
     ],
   },
+  {
+    section: "Audience",
+    expected: [
+      "Audience lists",
+      "Close friends",
+      "Small direct audience for sensitive updates.",
+      "Edit list",
+      "Allowed sensitive categories",
+      "Members",
+    ],
+  },
 ]) {
   app.innerHTML = "";
   globalThis.window = {

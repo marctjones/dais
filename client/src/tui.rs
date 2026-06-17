@@ -1060,6 +1060,7 @@ impl App {
             protocol: owner_protocol(self.compose.protocol),
             encrypt: self.compose.encrypt,
             in_reply_to: reply_to,
+            audience_list_id: None,
             recipients: to,
             attachments: Vec::new(),
         };

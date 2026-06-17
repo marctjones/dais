@@ -1,6 +1,6 @@
 use dais_client_core::{
-    ComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient, OwnerCreatedPost,
-    OwnerDelivery, OwnerDiscoveredActor, OwnerFollowResult, OwnerInteraction,
+    ComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient, OwnerAudienceList,
+    OwnerAudienceListUpsert, OwnerCreatedPost, OwnerDelivery, OwnerDiscoveredActor, OwnerFollowResult, OwnerInteraction,
     OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification, OwnerPost,
     OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSection,
     OwnerSettings, OwnerSnapshot, OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult,
@@ -51,6 +51,7 @@ async fn create_owner_post(
     protocol: ProtocolRoute,
     encrypt: bool,
     in_reply_to: Option<String>,
+    audience_list_id: Option<String>,
     recipients: Vec<String>,
     attachments: Vec<String>,
 ) -> Result<OwnerCreatedPost, String> {
@@ -68,6 +69,7 @@ async fn create_owner_post(
             protocol,
             encrypt,
             in_reply_to: optional_trimmed(in_reply_to.unwrap_or_default()),
+            audience_list_id: optional_trimmed(audience_list_id.unwrap_or_default()),
             recipients,
             attachments,
         })
@@ -491,6 +493,7 @@ fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> Own
         followers: Vec::new(),
         friends: Vec::new(),
         following: Vec::new(),
+        audience_lists: Vec::new(),
         sources: vec![SourceItem {
             id: "sources-ready".to_string(),
             title: "Public source reader".to_string(),
@@ -625,6 +628,65 @@ async fn set_follower_status(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn owner_audience_lists(app: tauri::AppHandle) -> Result<Vec<OwnerAudienceList>, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .audience_lists()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn upsert_owner_audience_list(
+    app: tauri::AppHandle,
+    id: Option<String>,
+    name: String,
+    description: Option<String>,
+    allowed_categories: Vec<String>,
+    member_actor_ids: Vec<String>,
+) -> Result<OwnerAudienceList, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .upsert_audience_list(&OwnerAudienceListUpsert {
+            id: id.and_then(optional_trimmed),
+            name,
+            description: description.and_then(optional_trimmed),
+            allowed_categories,
+            member_actor_ids,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn delete_owner_audience_list(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .delete_audience_list(&id)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 fn optional_trimmed(value: String) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -667,6 +729,9 @@ fn main() {
             owner_search,
             owner_stats,
             owner_diagnostics,
+            owner_audience_lists,
+            upsert_owner_audience_list,
+            delete_owner_audience_list,
             owner_sources,
             add_owner_source,
             remove_owner_source,

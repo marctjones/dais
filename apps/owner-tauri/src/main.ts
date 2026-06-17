@@ -3,6 +3,18 @@ import "./styles.css";
 
 type Visibility = "Public" | "Unlisted" | "Followers" | "Direct";
 type ProtocolRoute = "ActivityPub" | "AtProto" | "Both";
+type SensitiveCategory = "medical" | "adult" | "political" | "family-only" | "work-sensitive";
+
+type OwnerAudienceList = {
+  id: string;
+  name: string;
+  description?: string | null;
+  allowed_categories: SensitiveCategory[];
+  member_actor_ids: string[];
+  member_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
 
 type OwnerSnapshot = {
   settings: {
@@ -82,6 +94,7 @@ type OwnerSnapshot = {
     created_at?: string | null;
     accepted_at?: string | null;
   }>;
+  audience_lists: OwnerAudienceList[];
   sources: Array<{
     id: string;
     title: string;
@@ -131,6 +144,7 @@ type ComposeDraftState = {
   visibility: Visibility;
   protocol: ProtocolRoute;
   encrypt: boolean;
+  audienceListId: string;
   recipients: string;
   selectedRecipients: string[];
 };
@@ -340,6 +354,7 @@ const sections = [
   "Home",
   "Following",
   "Friends",
+  "Audience",
   "Discovery",
   "Compose",
   "Posts",
@@ -378,6 +393,13 @@ let ownerStats: OwnerStats | null = null;
 let showTimelineReplies = false;
 let showSourceItems = true;
 let composeState: ComposeDraftState | null = null;
+const supportedSensitiveCategories: SensitiveCategory[] = [
+  "medical",
+  "adult",
+  "political",
+  "family-only",
+  "work-sensitive"
+];
 
 async function ownerInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!smokeMode) {
@@ -390,6 +412,22 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
   const data = smokeSnapshot();
   if (command === "owner_snapshot") return data as T;
   if (command === "owner_post_detail") return smokePostDetail(String(args?.objectId || smokePostId)) as T;
+  if (command === "owner_audience_lists") return smokeSnapshot().audience_lists as T;
+  if (command === "upsert_owner_audience_list") {
+    const id = String(args?.id || "audience-smoke");
+    const name = String(args?.name || "Close friends");
+    return {
+      id,
+      name,
+      description: String(args?.description || "Owner-only direct audience list"),
+      allowed_categories: (Array.isArray(args?.allowedCategories) ? args?.allowedCategories : args?.allowed_categories || []) as SensitiveCategory[],
+      member_actor_ids: (Array.isArray(args?.memberActorIds) ? args?.memberActorIds : args?.member_actor_ids || ["https://mastodon.example/users/alice"]) as string[],
+      member_count: Array.isArray(args?.memberActorIds) ? args.memberActorIds.length : 1,
+      created_at: "2026-06-16T14:00:00Z",
+      updated_at: "2026-06-16T14:00:00Z"
+    } as T;
+  }
+  if (command === "delete_owner_audience_list") return undefined as T;
   if (command === "owner_sources") {
     return {
       subscriptions: [smokeSourceSubscription()],
@@ -550,6 +588,18 @@ function smokeSnapshot(): OwnerSnapshot {
         accepted_at: "2026-06-16T14:00:00Z"
       }
     ],
+    audience_lists: [
+      {
+        id: "audience-smoke",
+        name: "Close friends",
+        description: "Small direct audience for sensitive updates.",
+        allowed_categories: ["medical", "political"],
+        member_actor_ids: ["https://mastodon.example/users/alice"],
+        member_count: 1,
+        created_at: "2026-06-16T14:00:00Z",
+        updated_at: "2026-06-16T14:00:00Z"
+      }
+    ],
     sources: [
       {
         id: "source-item-smoke",
@@ -701,6 +751,7 @@ function render() {
   app.querySelector<HTMLFormElement>("#block-actor-form")?.addEventListener("submit", blockActor);
   app.querySelector<HTMLFormElement>("#block-domain-form")?.addEventListener("submit", blockDomain);
   app.querySelector<HTMLFormElement>("#allow-host-form")?.addEventListener("submit", allowHost);
+  app.querySelector<HTMLFormElement>("#audience-list-form")?.addEventListener("submit", saveAudienceList);
   app.querySelector<HTMLButtonElement>("[data-refresh-sources]")?.addEventListener("click", () => {
     void refreshSource(null);
   });
@@ -773,6 +824,32 @@ function render() {
       void disallowHost(button.dataset.disallowHost || "");
     });
   });
+  app.querySelectorAll<HTMLButtonElement>("[data-audience-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.dataset.audienceEdit || "";
+      active = "Audience";
+      notice = `Editing audience list ${id}.`;
+      render();
+      const form = document.querySelector<HTMLFormElement>("#audience-list-form");
+      const list = snapshot?.audience_lists.find((row) => row.id === id);
+      if (!form || !list) return;
+      form.elements.namedItem("id") && ((form.elements.namedItem("id") as HTMLInputElement).value = list.id);
+      form.elements.namedItem("name") && ((form.elements.namedItem("name") as HTMLInputElement).value = list.name);
+      form.elements.namedItem("description") &&
+        ((form.elements.namedItem("description") as HTMLTextAreaElement).value = list.description || "");
+      form.querySelectorAll<HTMLInputElement>('input[name="allowed_categories"]').forEach((input) => {
+        input.checked = list.allowed_categories.includes(input.value as SensitiveCategory);
+      });
+      form.querySelectorAll<HTMLInputElement>('input[name="member_actor_ids"]').forEach((input) => {
+        input.checked = list.member_actor_ids.includes(input.value);
+      });
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-audience-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void deleteAudienceList(button.dataset.audienceDelete || "");
+    });
+  });
   app.querySelectorAll<HTMLInputElement>("[data-feed-toggle]").forEach((input) => {
     input.addEventListener("change", () => {
       if (input.dataset.feedToggle === "replies") showTimelineReplies = input.checked;
@@ -796,6 +873,8 @@ function view(section: string, data: OwnerSnapshot): string {
       return followingView(data);
     case "Friends":
       return friendsView(data);
+    case "Audience":
+      return audienceListsView(data);
     case "Discovery":
       return discoveryView();
     case "Compose":
@@ -993,6 +1072,43 @@ function friendsView(data: OwnerSnapshot) {
   </section>`;
 }
 
+function audienceListsView(data: OwnerSnapshot) {
+  const approvedFollowers = data.followers.filter((row) => row.status === "approved");
+  return `<section class="split">
+    <article class="panel">
+      <div class="section-heading">
+        <h2>Audience lists</h2>
+        <span class="pill ${data.audience_lists.length ? "ok" : "warn"}">${data.audience_lists.length} list${data.audience_lists.length === 1 ? "" : "s"}</span>
+      </div>
+      <p class="privacy-note">Audience lists are owner-only direct-routing shortcuts. They should be used for small, intentional sharing sets rather than broad follower distribution.</p>
+      ${list(data.audience_lists.map(audienceListCard), "No audience lists yet. Create one for direct sharing with a stable group of approved followers.")}
+    </article>
+    <article class="panel">
+      <h2>Edit list</h2>
+      <form id="audience-list-form" class="compact-form">
+        <input type="hidden" name="id" value="" />
+        <input name="name" placeholder="Close friends" />
+        <textarea name="description" placeholder="When this list should be used"></textarea>
+        <fieldset class="recipient-picker">
+          <legend>Allowed sensitive categories</legend>
+          ${supportedSensitiveCategories.map((category) => `<label class="check"><input type="checkbox" name="allowed_categories" value="${escapeAttr(category)}" /> ${escapeHtml(category)}</label>`).join("")}
+        </fieldset>
+        <fieldset class="recipient-picker">
+          <legend>Members</legend>
+          ${
+            approvedFollowers.length
+              ? approvedFollowers.map((row) => `<label class="check"><input type="checkbox" name="member_actor_ids" value="${escapeAttr(row.follower_actor_id)}" /> ${escapeHtml(row.follower_actor_id)}</label>`).join("")
+              : `<p>No approved followers are available yet.</p>`
+          }
+        </fieldset>
+        <div class="compose-actions">
+          <button type="submit">Save list</button>
+        </div>
+      </form>
+    </article>
+  </section>`;
+}
+
 function feedTimeline(data: OwnerSnapshot) {
   return showTimelineReplies ? data.home_timeline : data.home_timeline.filter((post) => !post.in_reply_to);
 }
@@ -1030,6 +1146,7 @@ function discoveryView() {
 function composeView(data: OwnerSnapshot) {
   const state = ensureComposeState(data);
   const approvedFollowers = data.followers.filter((row) => row.status === "approved");
+  const availableAudienceLists = data.audience_lists;
   return `<form id="compose-form" class="panel compose">
     <div class="compose-head">
       <h2>New post</h2>
@@ -1058,6 +1175,12 @@ function composeView(data: OwnerSnapshot) {
           ${option("ActivityPub", state.protocol === "ActivityPub")}
           ${option("Both", state.protocol === "Both")}
           ${option("AtProto", state.protocol === "AtProto")}
+        </select>
+      </label>
+      <label>Audience list
+        <select name="audience_list_id">
+          <option value="">None</option>
+          ${availableAudienceLists.map((list) => `<option value="${escapeAttr(list.id)}"${state.audienceListId === list.id ? " selected" : ""}>${escapeHtml(list.name)} (${list.member_count})</option>`).join("")}
         </select>
       </label>
     </div>
@@ -1104,6 +1227,7 @@ function defaultComposeState(data: OwnerSnapshot): ComposeDraftState {
     visibility: data.settings.default_visibility,
     protocol: data.settings.default_protocol,
     encrypt: false,
+    audienceListId: "",
     recipients: "",
     selectedRecipients: [],
   };
@@ -1122,6 +1246,7 @@ function readComposeState(form: HTMLFormElement, data: OwnerSnapshot): ComposeDr
     visibility: normalizeVisibility(String(form.get("visibility") || data.settings.default_visibility)),
     protocol: normalizeProtocol(String(form.get("protocol") || data.settings.default_protocol)),
     encrypt: form.get("encrypt") === "on",
+    audienceListId: String(form.get("audience_list_id") || ""),
     recipients: String(form.get("recipients") || ""),
     selectedRecipients: form
       .getAll("follower_recipient")
@@ -1146,10 +1271,16 @@ function updateComposeStateFromForm(event: Event) {
 }
 
 function composePreviewHtml(data: OwnerSnapshot, state: ComposeDraftState) {
-  const recipients = draftRecipients(state);
-  const audience = audienceForCompose(state.visibility, data.followers.filter((row) => row.status === "approved").length, recipients.length);
+  const audienceList = selectedAudienceList(data, state);
+  const recipients = resolvedDraftRecipients(data, state);
+  const audience = audienceForCompose(
+    state.visibility,
+    data.followers.filter((row) => row.status === "approved").length,
+    recipients.length,
+    audienceList
+  );
   const sensitiveCategories = sensitiveCategoriesForText(state.text);
-  const warnings = composeWarnings(state, sensitiveCategories);
+  const warnings = composeWarnings(state, sensitiveCategories, audienceList, recipients.length);
   return `<article class="preview-card">
     <div class="section-heading">
       <h3>Audience preview</h3>
@@ -1158,6 +1289,7 @@ function composePreviewHtml(data: OwnerSnapshot, state: ComposeDraftState) {
     <p>${escapeHtml(audience)}</p>
     <dl class="preview-meta">
       <dt>Protocol</dt><dd>${escapeHtml(state.protocol)}</dd>
+      <dt>Audience list</dt><dd>${audienceList ? escapeHtml(`${audienceList.name} (${audienceList.member_count})`) : "none"}</dd>
       <dt>Recipients</dt><dd>${escapeHtml(recipientSummary(recipients))}</dd>
       <dt>Reply target</dt><dd>${draftReplyTo ? escapeHtml(shortUrl(draftReplyTo)) : "none"}</dd>
       <dt>Attachments</dt><dd>${draftAttachments.length ? escapeHtml(String(draftAttachments.length)) : "none"}</dd>
@@ -1181,16 +1313,24 @@ function composePreviewHtml(data: OwnerSnapshot, state: ComposeDraftState) {
   </article>`;
 }
 
-function audienceForCompose(visibility: Visibility, approvedCount: number, recipientCount: number) {
+function audienceForCompose(
+  visibility: Visibility,
+  approvedCount: number,
+  recipientCount: number,
+  audienceList: OwnerAudienceList | null
+) {
   if (visibility === "Public") return "Public posts are visible on the open web and public feeds.";
   if (visibility === "Unlisted") return "Unlisted posts are link-visible but stay out of most public listings.";
   if (visibility === "Followers") return `Followers-only posts reach ${approvedCount} approved follower${approvedCount === 1 ? "" : "s"}.`;
+  if (audienceList) {
+    return `Direct posts reach ${recipientCount} recipient${recipientCount === 1 ? "" : "s"} through ${audienceList.name}.`;
+  }
   return recipientCount
     ? `Direct posts reach ${recipientCount} named recipient${recipientCount === 1 ? "" : "s"}.`
     : "Direct posts need at least one named recipient before publish.";
 }
 
-function sensitiveCategoriesForText(text: string) {
+function sensitiveCategoriesForText(text: string): SensitiveCategory[] {
   const lower = text.toLowerCase();
   const rules = [
     { label: "medical", keywords: ["medical", "doctor", "clinic", "hospital", "therapy", "medication", "prescription", "surgery", "diagnosis", "health"] },
@@ -1199,7 +1339,9 @@ function sensitiveCategoriesForText(text: string) {
     { label: "family-only", keywords: ["family", "kids", "child", "children", "baby", "spouse", "partner", "wedding"] },
     { label: "work-sensitive", keywords: ["work", "company", "employer", "client", "salary", "interview", "manager", "confidential", "internal", "project"] },
   ];
-  return rules.filter((rule) => rule.keywords.some((keyword) => lower.includes(keyword))).map((rule) => rule.label);
+  return rules
+    .filter((rule) => rule.keywords.some((keyword) => lower.includes(keyword)))
+    .map((rule) => rule.label as SensitiveCategory);
 }
 
 function sensitivityBadgesHtml(text: string) {
@@ -1209,7 +1351,12 @@ function sensitivityBadgesHtml(text: string) {
     : "";
 }
 
-function composeWarnings(state: ComposeDraftState, sensitiveCategories: string[]) {
+function composeWarnings(
+  state: ComposeDraftState,
+  sensitiveCategories: SensitiveCategory[],
+  audienceList: OwnerAudienceList | null,
+  recipientCount: number
+) {
   const warnings: string[] = [];
   if (state.protocol !== "ActivityPub") {
     if (state.visibility === "Public") {
@@ -1220,11 +1367,16 @@ function composeWarnings(state: ComposeDraftState, sensitiveCategories: string[]
       warnings.push("Private ActivityPub visibility is not representable on Bluesky.");
     }
   }
-  if (state.visibility === "Direct" && draftRecipients(state).length === 0) {
+  if (state.visibility === "Direct" && recipientCount === 0) {
     warnings.push("Direct posts need at least one named recipient.");
+  }
+  if (audienceList && state.visibility !== "Direct") {
+    warnings.push("Audience lists currently apply only to direct posts.");
   }
   if (sensitiveCategories.length) {
     const categoryList = sensitiveCategories.join(", ");
+    const disallowed =
+      audienceList ? sensitiveCategories.filter((label) => !audienceList.allowed_categories.includes(label)) : [];
     if (state.visibility === "Public") {
       warnings.push(`Sensitive content detected (${categoryList}). Public posts are hard to retract.`);
     } else if (state.visibility === "Unlisted") {
@@ -1233,6 +1385,9 @@ function composeWarnings(state: ComposeDraftState, sensitiveCategories: string[]
       warnings.push(`Sensitive content detected (${categoryList}). Approved followers can still include people you do not expect.`);
     } else {
       warnings.push(`Sensitive content detected (${categoryList}). Only the named recipients will see this post.`);
+    }
+    if (disallowed.length) {
+      warnings.push(`Selected audience list does not permit ${disallowed.join(", ")} content.`);
     }
   }
   if (draftAttachments.length > 0 && state.protocol !== "ActivityPub") {
@@ -1250,6 +1405,16 @@ function draftRecipients(state: ComposeDraftState) {
     .map((value) => value.trim())
     .filter(Boolean);
   return Array.from(new Set([...state.selectedRecipients, ...explicitRecipients]));
+}
+
+function selectedAudienceList(data: OwnerSnapshot, state: ComposeDraftState) {
+  return data.audience_lists.find((list) => list.id === state.audienceListId) || null;
+}
+
+function resolvedDraftRecipients(data: OwnerSnapshot, state: ComposeDraftState) {
+  const explicit = draftRecipients(state);
+  const fromList = selectedAudienceList(data, state)?.member_actor_ids || [];
+  return Array.from(new Set([...fromList, ...explicit]));
 }
 
 function recipientSummary(recipients: string[]) {
@@ -1614,6 +1779,28 @@ function metric(label: string, value: string | number, detail: string) {
   </article>`;
 }
 
+function audienceListCard(row: OwnerAudienceList) {
+  return `<article class="panel item follower">
+    <div>
+      <h2>${escapeHtml(row.name)}</h2>
+      ${row.description ? `<p>${escapeHtml(row.description)}</p>` : ""}
+      <p>${escapeHtml(`${row.member_count} member${row.member_count === 1 ? "" : "s"}`)}</p>
+      <div class="sensitivity-tags">
+        ${
+          row.allowed_categories.length
+            ? row.allowed_categories.map((label) => `<span class="sensitive-chip">${escapeHtml(label)}</span>`).join("")
+            : `<span class="sensitive-chip neutral">No sensitive categories allowed</span>`
+        }
+      </div>
+    </div>
+    <footer>
+      <span>${escapeHtml(row.id)}</span>
+      <button type="button" data-audience-edit="${escapeAttr(row.id)}">Edit</button>
+      <button type="button" data-audience-delete="${escapeAttr(row.id)}">Delete</button>
+    </footer>
+  </article>`;
+}
+
 function followerCard(row: OwnerSnapshot["followers"][number]) {
   return `<article class="panel item follower">
     <div>
@@ -1791,6 +1978,12 @@ async function publishPost(event: SubmitEvent) {
   }
   const visibility = String(form.get("visibility") || "Followers");
   const protocol = String(form.get("protocol") || "ActivityPub");
+  const audienceListId = String(form.get("audience_list_id") || "").trim();
+  const audienceList = snapshot && composeState ? selectedAudienceList(snapshot, composeState) : null;
+  const disallowedCategories =
+    audienceList && composeState
+      ? sensitiveCategoriesForText(composeState.text).filter((label) => !audienceList.allowed_categories.includes(label))
+      : [];
   if (draftAttachments.length > 0 && protocol !== "ActivityPub") {
     notice = "Media attachments currently require ActivityPub routing.";
     render();
@@ -1810,12 +2003,23 @@ async function publishPost(event: SubmitEvent) {
     render();
     return;
   }
+  if (audienceListId && visibility !== "Direct") {
+    notice = "Audience lists currently require direct visibility.";
+    render();
+    return;
+  }
+  if (disallowedCategories.length) {
+    notice = `Selected audience list does not permit ${disallowedCategories.join(", ")} content.`;
+    render();
+    return;
+  }
   const created = await ownerInvoke<CreatedPost>("create_owner_post", {
     text,
     visibility,
     protocol,
     encrypt: form.get("encrypt") === "on",
     inReplyTo: draftReplyTo || null,
+    audienceListId: audienceListId || null,
     recipients: [
       ...form.getAll("follower_recipient").map((value) => String(value)),
       ...String(form.get("recipients") || "")
@@ -2016,6 +2220,39 @@ async function allowHost(event: SubmitEvent) {
   await loadLiveSection("Moderation");
 }
 
+async function saveAudienceList(event: SubmitEvent) {
+  event.preventDefault();
+  const form = event.currentTarget as HTMLFormElement;
+  const fields = new FormData(form);
+  const name = String(fields.get("name") || "").trim();
+  if (!name) {
+    notice = "Audience list name is required.";
+    render();
+    return;
+  }
+  const saved = await ownerInvoke<OwnerAudienceList>("upsert_owner_audience_list", {
+    id: String(fields.get("id") || "").trim() || null,
+    name,
+    description: String(fields.get("description") || "").trim() || null,
+    allowedCategories: fields.getAll("allowed_categories").map((value) => String(value)),
+    memberActorIds: fields.getAll("member_actor_ids").map((value) => String(value)),
+  });
+  form.reset();
+  notice = `Saved audience list ${saved.name}.`;
+  await load();
+  active = "Audience";
+  await loadLiveSection("Audience");
+}
+
+async function deleteAudienceList(id: string) {
+  if (!id) return;
+  await ownerInvoke("delete_owner_audience_list", { id });
+  notice = `Deleted audience list ${id}.`;
+  await load();
+  active = "Audience";
+  await loadLiveSection("Audience");
+}
+
 async function disallowHost(host: string) {
   if (!host) return;
   await ownerInvoke("disallow_owner_host", { host });
@@ -2083,6 +2320,10 @@ async function loadLiveSection(section: string) {
   } else if (section === "Moderation") {
     moderationState = await ownerInvoke<ModerationState>("owner_moderation");
     render();
+  } else if (section === "Audience") {
+    const audienceLists = await ownerInvoke<OwnerAudienceList[]>("owner_audience_lists");
+    snapshot = snapshot ? { ...snapshot, audience_lists: audienceLists } : snapshot;
+    render();
   }
 }
 
@@ -2136,6 +2377,7 @@ function normalizeProtocol(value: string): ProtocolRoute {
 
 function sectionSubtitle(section: string) {
   if (section === "Compose") return "Private-by-default publishing with explicit public and E2EE modes";
+  if (section === "Audience") return "Direct-audience lists with explicit sensitive-category boundaries";
   if (section === "Friends") return "Owner-only mutual relationships and friend feed";
   if (section === "Sources") return "Private reader items from public standards-based sources";
   if (section === "Diagnostics") return "Instance, federation, delivery, and client health";

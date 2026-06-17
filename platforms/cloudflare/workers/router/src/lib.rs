@@ -1865,6 +1865,7 @@ async fn mastodon_create_status(env: &Env, body: &Value) -> Result<Response> {
         attachments,
         false,
         in_reply_to.clone(),
+        None,
         object_type,
         summary.clone(),
         poll.clone(),
@@ -3335,6 +3336,27 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Get, "/audience-lists") => api_json(
+            &OwnerItems {
+                items: owner_audience_lists(&env).await?,
+            },
+            200,
+        ),
+        (worker::Method::Post, "/audience-lists") => {
+            let body = read_json(&mut req).await;
+            match owner_upsert_audience_list(&env, &body).await {
+                Ok(list) => api_json(&list, 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Delete, _) if owner_path.starts_with("/audience-lists/") => {
+            let id = decode_component(owner_path.trim_start_matches("/audience-lists/"));
+            if id.trim().is_empty() {
+                return api_json(&serde_json::json!({ "error": "id is required" }), 400);
+            }
+            owner_delete_audience_list(&env, &id).await?;
+            api_json(&serde_json::json!({ "ok": true }), 200)
+        }
         (worker::Method::Post, "/discovery/actor") => {
             let body = read_json(&mut req).await;
             let target = string_like_any(&body, &["target"]).unwrap_or_default();
@@ -3411,7 +3433,12 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             let encrypt = body.get("encrypt").map(js_truthy).unwrap_or(false);
             let in_reply_to =
                 body_string_any(&body, &["in_reply_to", "inReplyTo", "in_reply_to_id"]);
-            if visibility == "direct" && recipients.is_empty() {
+            let audience_list_id =
+                body_string_any(&body, &["audience_list_id", "audienceListId"]);
+            if visibility == "direct"
+                && recipients.is_empty()
+                && audience_list_id.as_deref().unwrap_or_default().trim().is_empty()
+            {
                 return api_json(
                     &serde_json::json!({ "error": "direct posts require at least one recipient" }),
                     400,
@@ -3426,6 +3453,7 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 attachments,
                 encrypt,
                 in_reply_to,
+                audience_list_id,
                 "Note",
                 None,
                 None,
@@ -4053,6 +4081,7 @@ async fn owner_snapshot(env: &Env) -> Result<Map<String, Value>> {
     let followers = owner_followers(env, 100).await?;
     let friends = owner_friends(env, 100).await?;
     let following = owner_following(env, 100).await?;
+    let audience_lists = owner_audience_lists(env).await?;
     let sources = owner_source_items(env, 20).await?;
     let moderation = owner_moderation(env).await?;
     let diagnostics = owner_diagnostics(env).await?;
@@ -4113,6 +4142,10 @@ async fn owner_snapshot(env: &Env) -> Result<Map<String, Value>> {
     snapshot.insert(
         "following".to_string(),
         Value::Array(following.into_iter().map(Value::Object).collect()),
+    );
+    snapshot.insert(
+        "audience_lists".to_string(),
+        Value::Array(audience_lists.into_iter().map(Value::Object).collect()),
     );
     snapshot.insert(
         "sources".to_string(),
@@ -4582,6 +4615,7 @@ async fn owner_create_post(
     attachments: Vec<Value>,
     encrypt: bool,
     in_reply_to: Option<String>,
+    audience_list_id: Option<String>,
     object_type: &str,
     summary: Option<String>,
     poll_options: Option<Value>,
@@ -4594,8 +4628,28 @@ async fn owner_create_post(
         .map_err(|error| error.to_string())?;
     let actor_id = string_field(actor.as_ref(), "id")
         .unwrap_or_else(|| "https://social.dais.social/users/social".to_string());
+    let audience_list_id = audience_list_id.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+    if audience_list_id.is_some() && visibility != "direct" {
+        return Err("audience lists currently require direct visibility".to_string());
+    }
+    let list_recipients = if let Some(list_id) = audience_list_id.as_deref() {
+        owner_audience_list_recipient_actors(env, list_id).await?
+    } else {
+        Vec::new()
+    };
+    let mut resolved_recipients = recipients;
+    resolved_recipients.extend(list_recipients);
+    resolved_recipients.sort();
+    resolved_recipients.dedup();
     let direct_targets = if visibility == "direct" {
-        owner_direct_delivery_targets(env, &recipients).await?
+        owner_direct_delivery_targets(env, &resolved_recipients).await?
     } else {
         Vec::new()
     };
@@ -4731,12 +4785,16 @@ async fn owner_create_post(
         in_reply_to.map(Value::String).unwrap_or(Value::Null),
     );
     response.insert(
+        "audience_list_id".to_string(),
+        audience_list_id.map(Value::String).unwrap_or(Value::Null),
+    );
+    response.insert(
         "poll_options".to_string(),
         poll_options_json.map(Value::String).unwrap_or(Value::Null),
     );
     response.insert(
         "recipients".to_string(),
-        Value::Array(recipients.into_iter().map(Value::String).collect()),
+        Value::Array(resolved_recipients.into_iter().map(Value::String).collect()),
     );
     response.insert("attachments".to_string(), Value::Array(media_attachments));
     response.insert(
@@ -4808,6 +4866,198 @@ async fn owner_direct_delivery_targets(
         ));
     }
     Ok(inboxes)
+}
+
+async fn owner_audience_lists(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let lists = db
+        .prepare(
+            r#"
+            SELECT id, name, description, allowed_categories, created_at, updated_at
+            FROM audience_lists
+            ORDER BY name COLLATE NOCASE ASC, created_at DESC
+            "#,
+        )
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    let mut shaped = Vec::new();
+    for row in lists {
+        let id = string_field(Some(&row), "id").unwrap_or_default();
+        let member_actor_ids = owner_audience_list_member_actor_ids(env, &id).await?;
+        let allowed_categories = string_vec_json_field(Some(&row), "allowed_categories");
+        let mut item = Map::new();
+        item.insert("id".to_string(), Value::String(id));
+        item.insert("name".to_string(), string_value_or_default(&row, "name"));
+        item.insert(
+            "description".to_string(),
+            row_value_or_null(&row, "description"),
+        );
+        item.insert(
+            "allowed_categories".to_string(),
+            Value::Array(allowed_categories.into_iter().map(Value::String).collect()),
+        );
+        item.insert(
+            "member_actor_ids".to_string(),
+            Value::Array(
+                member_actor_ids
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+        item.insert(
+            "member_count".to_string(),
+            Value::from(member_actor_ids.len() as i64),
+        );
+        item.insert("created_at".to_string(), row_value_or_null(&row, "created_at"));
+        item.insert("updated_at".to_string(), row_value_or_null(&row, "updated_at"));
+        shaped.push(item);
+    }
+    Ok(shaped)
+}
+
+async fn owner_audience_list(env: &Env, list_id: &str) -> Result<Option<Map<String, Value>>> {
+    let lists = owner_audience_lists(env).await?;
+    Ok(lists.into_iter().find(|row| {
+        row.get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == list_id)
+    }))
+}
+
+async fn owner_upsert_audience_list(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let name = body_string_any(body, &["name"]).ok_or_else(|| "name is required".to_string())?;
+    let description = body.get("description").and_then(optional_body_string);
+    let allowed_categories = normalize_sensitive_categories(body_string_array_any(
+        body,
+        &["allowed_categories", "allowedCategories"],
+    ));
+    let member_actor_ids = {
+        let mut unique = Vec::new();
+        for value in body_string_array_any(body, &["member_actor_ids", "memberActorIds"]) {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() || unique.contains(&trimmed) {
+                continue;
+            }
+            unique.push(trimmed);
+        }
+        unique
+    };
+    let id = body_string_any(body, &["id"])
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            let created = js_sys::Date::new_0()
+                .to_iso_string()
+                .as_string()
+                .unwrap_or_default();
+            format!("audience-{}-{}", stable_id(&name), stable_id(&created))
+        });
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(id.as_str());
+    let name_arg = D1Type::Text(name.as_str());
+    let description_arg = description.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let allowed_categories_json = serde_json::to_string(&allowed_categories)
+        .map_err(|error| error.to_string())?;
+    let categories_arg = D1Type::Text(allowed_categories_json.as_str());
+
+    db.prepare(
+        r#"
+        INSERT INTO audience_lists (id, name, description, allowed_categories, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          description = excluded.description,
+          allowed_categories = excluded.allowed_categories,
+          updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind_refs([&id_arg, &name_arg, &description_arg, &categories_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    db.prepare("DELETE FROM audience_list_members WHERE list_id = ?1")
+        .bind_refs(&id_arg)
+        .map_err(|error| error.to_string())?
+        .run()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    for actor_id in &member_actor_ids {
+        let actor_arg = D1Type::Text(actor_id.as_str());
+        db.prepare(
+            r#"
+            INSERT INTO audience_list_members (list_id, actor_id, created_at)
+            VALUES (?1, ?2, CURRENT_TIMESTAMP)
+            "#,
+        )
+        .bind_refs([&id_arg, &actor_arg])
+        .map_err(|error| error.to_string())?
+        .run()
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+
+    owner_audience_list(env, &id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "failed to load saved audience list".to_string())
+}
+
+async fn owner_delete_audience_list(env: &Env, id: &str) -> Result<()> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare("DELETE FROM audience_list_members WHERE list_id = ?1")
+        .bind_refs(&id_arg)?
+        .run()
+        .await?;
+    db.prepare("DELETE FROM audience_lists WHERE id = ?1")
+        .bind_refs(&id_arg)?
+        .run()
+        .await?;
+    Ok(())
+}
+
+async fn owner_audience_list_member_actor_ids(env: &Env, list_id: &str) -> Result<Vec<String>> {
+    let db = env.d1("DB")?;
+    let list_arg = D1Type::Text(list_id);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT actor_id
+            FROM audience_list_members
+            WHERE list_id = ?1
+            ORDER BY actor_id ASC
+            "#,
+        )
+        .bind_refs(&list_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| string_field(Some(&row), "actor_id"))
+        .collect())
+}
+
+async fn owner_audience_list_recipient_actors(
+    env: &Env,
+    list_id: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let members = owner_audience_list_member_actor_ids(env, list_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    if members.is_empty() {
+        return Err("selected audience list has no members".to_string());
+    }
+    Ok(members)
 }
 
 async fn owner_post_replies(env: &Env, id: &str) -> Result<Vec<Map<String, Value>>> {
@@ -7634,6 +7884,12 @@ fn body_string_any(body: &Value, keys: &[&str]) -> Option<String> {
         .find_map(|key| required_body_string(body.get(*key)))
 }
 
+fn body_string_array_any(body: &Value, keys: &[&str]) -> Vec<String> {
+    keys.iter()
+        .find_map(|key| body.get(*key).map(array_from_body_value))
+        .unwrap_or_default()
+}
+
 fn normalize_host(value: &str) -> Result<String> {
     normalize_host_value(value).map_err(|message| worker::Error::RustError(message.to_string()))
 }
@@ -7758,6 +8014,16 @@ fn integer_field(row: Option<&Map<String, Value>>, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
+fn string_vec_json_field(row: Option<&Map<String, Value>>, key: &str) -> Vec<String> {
+    let Some(raw) = string_field(row, key) else {
+        return Vec::new();
+    };
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&raw) else {
+        return Vec::new();
+    };
+    items.iter().filter_map(optional_body_string).collect()
+}
+
 fn bool_field(row: Option<&Map<String, Value>>, key: &str) -> bool {
     row.and_then(|fields| fields.get(key))
         .and_then(|value| {
@@ -7782,6 +8048,23 @@ fn string_value_or_default(row: &Map<String, Value>, key: &str) -> Value {
     string_field(Some(row), key)
         .map(Value::String)
         .unwrap_or_else(|| Value::String(String::new()))
+}
+
+fn normalize_sensitive_categories(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let category = value.trim().to_ascii_lowercase();
+        if !matches!(
+            category.as_str(),
+            "medical" | "adult" | "political" | "family-only" | "work-sensitive"
+        ) {
+            continue;
+        }
+        if !normalized.contains(&category) {
+            normalized.push(category);
+        }
+    }
+    normalized
 }
 
 fn row_value_or_fallback_null(row: &Map<String, Value>, key: &str, fallback: &str) -> Value {

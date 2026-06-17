@@ -118,6 +118,24 @@ impl OwnerApiClient {
         Ok(response.items)
     }
 
+    pub async fn audience_lists(&self) -> ClientResult<Vec<OwnerAudienceList>> {
+        let response: OwnerItems<OwnerAudienceList> =
+            self.get("/api/dais/owner/audience-lists").await?;
+        Ok(response.items)
+    }
+
+    pub async fn upsert_audience_list(
+        &self,
+        list: &OwnerAudienceListUpsert,
+    ) -> ClientResult<OwnerAudienceList> {
+        self.post("/api/dais/owner/audience-lists", list).await
+    }
+
+    pub async fn delete_audience_list(&self, id: &str) -> ClientResult<OwnerActionResult> {
+        self.delete(&format!("/api/dais/owner/audience-lists/{}", url_encode(id)))
+            .await
+    }
+
     pub async fn mark_notification_read(&self, id: &str) -> ClientResult<OwnerActionResult> {
         self.post(
             "/api/dais/owner/notifications/read",
@@ -347,6 +365,7 @@ pub struct ComposeDraft {
     pub protocol: ProtocolRoute,
     pub encrypt: bool,
     pub in_reply_to: Option<String>,
+    pub audience_list_id: Option<String>,
     pub recipients: Vec<String>,
     pub attachments: Vec<String>,
 }
@@ -524,6 +543,32 @@ pub struct OwnerFollowing {
     pub status: String,
     pub created_at: Option<String>,
     pub accepted_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerAudienceList {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub allowed_categories: Vec<String>,
+    #[serde(default)]
+    pub member_actor_ids: Vec<String>,
+    #[serde(default)]
+    pub member_count: u64,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerAudienceListUpsert {
+    pub id: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub allowed_categories: Vec<String>,
+    #[serde(default)]
+    pub member_actor_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -851,6 +896,7 @@ pub struct OwnerSnapshot {
     pub followers: Vec<OwnerFollower>,
     pub friends: Vec<OwnerFriend>,
     pub following: Vec<OwnerFollowing>,
+    pub audience_lists: Vec<OwnerAudienceList>,
     pub sources: Vec<SourceItem>,
     pub moderation: ModerationState,
     pub diagnostics: Vec<DiagnosticStatus>,
@@ -916,6 +962,7 @@ mod tests {
             protocol: ProtocolRoute::ActivityPub,
             encrypt: false,
             in_reply_to: None,
+            audience_list_id: None,
             recipients: Vec::new(),
             attachments: Vec::new(),
         };
@@ -931,6 +978,7 @@ mod tests {
             protocol: ProtocolRoute::Both,
             encrypt: true,
             in_reply_to: None,
+            audience_list_id: None,
             recipients: vec!["https://example.com/users/alice".to_string()],
             attachments: Vec::new(),
         };
@@ -969,6 +1017,7 @@ mod tests {
             followers: Vec::new(),
             friends: Vec::new(),
             following: Vec::new(),
+            audience_lists: Vec::new(),
             sources: Vec::new(),
             moderation: ModerationState {
                 closed_network: false,
