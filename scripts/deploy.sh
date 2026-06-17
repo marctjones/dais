@@ -142,8 +142,8 @@ do_list() {
     dir="$WORKERS_DIR/$w"
     cfg="missing"; [ -f "$dir/wrangler.toml" ] && cfg="ok"
     entry="?"
-    [ -f "$dir/src/index.js" ] && entry="js"
     [ -f "$dir/Cargo.toml" ] && entry="rust"
+    [ "$entry" = "?" ] && [ -f "$dir/src/index.js" ] && entry="js"
     printf "  %-16s wrangler:%-8s entry:%s\n" "$w" "$cfg" "$entry"
   done
 }

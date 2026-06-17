@@ -55,7 +55,8 @@ must not publish followers-only, direct, or E2EE content as public data.
 Run before closing v0.27 slices:
 
 ```bash
-node --check platforms/cloudflare/workers/router/src/index.js
+cd platforms/cloudflare/workers/router
+cargo check --target wasm32-unknown-unknown
 npm run test:mastodon-api-conformance
 ```
 

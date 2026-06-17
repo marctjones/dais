@@ -17,7 +17,7 @@ database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
 # NOTE: auth had no wrangler.toml in the v1.0 tree and is not yet routed by the
 # router worker (the router 404s unknown paths). This config lets auth deploy
-# standalone; wire `/auth/*` routing in router/src/index.js when auth goes live.
+# standalone; wire `/auth/*` routing in router/src/lib.rs when auth goes live.
 
 [env.production]
 name = "auth-production"
