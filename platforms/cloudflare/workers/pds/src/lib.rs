@@ -913,7 +913,55 @@ async fn handle_websocket(ws: WebSocket, _env: Env) -> Result<()> {
     let info_msg = r##"{"t":"#info","info":{"name":"dais-pds","version":"1.1.0"}}"##;
     ws.send_with_str(info_msg)?;
 
-    // The compatibility floor announces availability; commit streaming is tracked in GitHub issues.
+    let identity = identity(&_env);
+    let stats = repo_stats(&_env, &identity).await?;
+    let posts = public_posts(
+        &_env,
+        Page {
+            limit: 100,
+            offset: 0,
+        },
+    )
+    .await?;
+    let mut ops = vec![serde_json::json!({
+        "action": "update",
+        "path": "app.bsky.actor.profile/self",
+        "cid": { "$link": stable_cid(&format!("profile:{}", stats.rev)) }
+    })];
+    for row in posts.into_iter().take(99) {
+        let uri = at_uri(&identity, &row);
+        let rkey = uri.rsplit('/').next().unwrap_or("");
+        if rkey.is_empty() {
+            continue;
+        }
+        let cid = row
+            .get("atproto_cid")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| stable_cid(&uri));
+        ops.push(serde_json::json!({
+            "action": "update",
+            "path": format!("app.bsky.feed.post/{rkey}"),
+            "cid": { "$link": cid }
+        }));
+    }
+    let commit_msg = serde_json::json!({
+        "t": "#commit",
+        "commit": {
+            "seq": repo_seq(&stats.rev),
+            "rebase": false,
+            "tooBig": false,
+            "repo": identity.did,
+            "commit": { "$link": stats.head },
+            "rev": stats.rev,
+            "since": null,
+            "blocks": "",
+            "ops": ops,
+            "blobs": [],
+            "time": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
+        }
+    });
+    ws.send_with_str(&commit_msg.to_string())?;
 
     Ok(())
 }
@@ -1874,6 +1922,14 @@ fn stable_cid(value: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
     format!("bafy{:016x}", hasher.finish())
+}
+
+fn repo_seq(value: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish().max(1)
 }
 
 fn html_escape(value: &str) -> String {

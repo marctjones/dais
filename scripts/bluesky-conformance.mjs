@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import WebSocket from "ws";
+
 const config = {
   pdsBaseUrl: process.env.DAIS_PDS_BASE_URL || "https://pds.dais.social",
   socialBaseUrl: process.env.DAIS_SOCIAL_BASE_URL || "https://social.dais.social",
@@ -98,6 +100,48 @@ function assertPublicPostShape(post) {
   if (String(post.record?.text || "").includes("End-to-end encrypted message")) {
     throw new Error(`encrypted fallback text leaked through Bluesky feed: ${post.uri}`);
   }
+}
+
+function websocketUrl(path) {
+  const base = new URL(config.pdsBaseUrl);
+  base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+  base.pathname = path;
+  base.search = "";
+  return base.toString();
+}
+
+function subscribeReposMessages(timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const messages = [];
+    const ws = new WebSocket(websocketUrl("/xrpc/com.atproto.sync.subscribeRepos"));
+    const timeout = setTimeout(() => {
+      ws.close();
+      reject(new Error(`subscribeRepos WebSocket timed out after ${timeoutMs}ms with ${messages.length} message(s)`));
+    }, timeoutMs);
+    ws.on("message", (data) => {
+      const text = data.toString();
+      try {
+        messages.push(JSON.parse(text));
+      } catch {
+        messages.push({ parseError: true, text });
+      }
+      if (messages.some((message) => message.t === "#info") && messages.some((message) => message.t === "#commit")) {
+        clearTimeout(timeout);
+        ws.close();
+        resolve(messages);
+      }
+    });
+    ws.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    ws.on("close", () => {
+      if (messages.some((message) => message.t === "#info") && messages.some((message) => message.t === "#commit")) {
+        clearTimeout(timeout);
+        resolve(messages);
+      }
+    });
+  });
 }
 
 const tests = [
@@ -846,6 +890,20 @@ const tests = [
     if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
     if (res.json?.transport !== "websocket" || res.json?.status !== "available") {
       throw new Error("subscribeRepos guidance shape mismatch");
+    }
+  }),
+
+  requirement("BLUESKY-SYNC-02", "subscribeRepos WebSocket emits repo commit snapshot", async () => {
+    const messages = await subscribeReposMessages();
+    const info = messages.find((message) => message.t === "#info");
+    const commit = messages.find((message) => message.t === "#commit")?.commit;
+    if (info?.info?.name !== "dais-pds") throw new Error("subscribeRepos info frame shape mismatch");
+    if (commit?.repo !== did()) throw new Error(`subscribeRepos commit repo mismatch: ${commit?.repo}`);
+    if (!Number.isInteger(commit?.seq) || commit.seq < 1) throw new Error("subscribeRepos commit missing integer seq");
+    if (!commit?.commit?.$link || !commit?.rev) throw new Error("subscribeRepos commit missing commit/rev");
+    expectArray(commit?.ops, "subscribeRepos commit ops");
+    if (!commit.ops.some((op) => op.path === "app.bsky.actor.profile/self")) {
+      throw new Error("subscribeRepos commit missing profile op");
     }
   }),
 
