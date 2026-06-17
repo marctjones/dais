@@ -403,6 +403,47 @@ const tests = [
     expectArray(likes.json?.likes, "likes");
   }),
 
+  requirement("BLUESKY-MODERATION-01", "Moderation and preference probes return private-safe shapes", async () => {
+    const unauthPreferences = await request("/xrpc/app.bsky.actor.getPreferences");
+    const unauthBlocks = await request("/xrpc/app.bsky.graph.getBlocks");
+    const unauthMutes = await request("/xrpc/app.bsky.graph.getMutes");
+    if ([unauthPreferences, unauthBlocks, unauthMutes].some((res) => res.status !== 401)) {
+      throw new Error(
+        `auth-protected moderation endpoints expected 401s, got ${[
+          unauthPreferences.status,
+          unauthBlocks.status,
+          unauthMutes.status,
+        ].join("/")}`,
+      );
+    }
+
+    const labelers = await request(`/xrpc/app.bsky.labeler.getServices?dids=${encodeURIComponent(did())}`);
+    if (labelers.status !== 200) throw new Error(`labeler getServices expected 200, got ${labelers.status}: ${labelers.text}`);
+    expectArray(labelers.json?.views, "labeler views");
+
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for authenticated moderation probes" };
+    }
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const auth = { Authorization: `Bearer ${session.json.accessJwt}` };
+    const preferences = await request("/xrpc/app.bsky.actor.getPreferences", { headers: auth });
+    const blocks = await request("/xrpc/app.bsky.graph.getBlocks?limit=5", { headers: auth });
+    const mutes = await request("/xrpc/app.bsky.graph.getMutes?limit=5", { headers: auth });
+    const statuses = [preferences, blocks, mutes].map((res) => res.status);
+    if (statuses.some((status) => status !== 200)) throw new Error(`authenticated moderation endpoints expected 200s, got ${statuses.join("/")}`);
+    expectArray(preferences.json?.preferences, "preferences");
+    expectArray(blocks.json?.blocks, "blocks");
+    expectArray(mutes.json?.mutes, "mutes");
+    if (!preferences.json.preferences.some((pref) => pref.$type === "app.bsky.actor.defs#adultContentPref")) {
+      throw new Error("preferences missing adultContentPref default");
+    }
+  }),
+
   requirement("BLUESKY-SEARCH-01", "AppView search endpoints return public post and actor result arrays", async () => {
     const posts = await request("/xrpc/app.bsky.feed.searchPosts?q=dais&limit=5");
     const actors = await request(`/xrpc/app.bsky.actor.searchActors?q=${encodeURIComponent(config.acctDomain)}&limit=5`);

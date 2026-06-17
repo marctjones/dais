@@ -27,10 +27,14 @@ use serde_json::Value;
 /// - GET /xrpc/app.bsky.feed.searchPosts
 /// - GET /xrpc/app.bsky.actor.searchActors
 /// - GET /xrpc/app.bsky.actor.searchActorsTypeahead
+/// - GET /xrpc/app.bsky.actor.getPreferences
 /// - GET /xrpc/app.bsky.notification.listNotifications
 /// - GET /xrpc/app.bsky.feed.getLikes
 /// - GET /xrpc/app.bsky.graph.getFollowers
 /// - GET /xrpc/app.bsky.graph.getFollows
+/// - GET /xrpc/app.bsky.graph.getBlocks
+/// - GET /xrpc/app.bsky.graph.getMutes
+/// - GET /xrpc/app.bsky.labeler.getServices
 /// - WebSocket /xrpc/com.atproto.sync.subscribeRepos
 use worker::*;
 
@@ -135,12 +139,22 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             handle_search_actors,
         )
         .get_async(
+            "/xrpc/app.bsky.actor.getPreferences",
+            handle_get_preferences,
+        )
+        .get_async(
             "/xrpc/app.bsky.notification.listNotifications",
             handle_list_notifications,
         )
         .get_async("/xrpc/app.bsky.feed.getLikes", handle_get_likes)
         .get_async("/xrpc/app.bsky.graph.getFollowers", handle_get_followers)
         .get_async("/xrpc/app.bsky.graph.getFollows", handle_get_follows)
+        .get_async("/xrpc/app.bsky.graph.getBlocks", handle_get_blocks)
+        .get_async("/xrpc/app.bsky.graph.getMutes", handle_get_mutes)
+        .get_async(
+            "/xrpc/app.bsky.labeler.getServices",
+            handle_get_labeler_services,
+        )
         .get("/health", |_req, _ctx| Response::ok("PDS OK"))
         .run(req, env)
         .await
@@ -701,6 +715,42 @@ async fn handle_search_actors(req: Request, ctx: RouteContext<()>) -> Result<Res
     json_response(serde_json::json!({ "actors": actors }))
 }
 
+async fn handle_get_preferences(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    if !owner_bearer_matches(&req, &ctx.env)? {
+        return Response::error("Unauthorized", 401);
+    }
+    json_response(serde_json::json!({
+        "preferences": [
+            {
+                "$type": "app.bsky.actor.defs#adultContentPref",
+                "enabled": false
+            },
+            {
+                "$type": "app.bsky.actor.defs#savedFeedsPref",
+                "pinned": [],
+                "saved": []
+            },
+            {
+                "$type": "app.bsky.actor.defs#threadViewPref",
+                "sort": "oldest",
+                "prioritizeFollowedUsers": false
+            },
+            {
+                "$type": "app.bsky.actor.defs#mutedWordsPref",
+                "items": []
+            },
+            {
+                "$type": "app.bsky.actor.defs#hiddenPostsPref",
+                "items": []
+            },
+            {
+                "$type": "app.bsky.actor.defs#labelersPref",
+                "labelers": []
+            }
+        ]
+    }))
+}
+
 async fn handle_list_notifications(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let url = req.url()?;
     let identity = identity(&ctx.env);
@@ -814,6 +864,24 @@ async fn handle_get_follows(req: Request, ctx: RouteContext<()>) -> Result<Respo
         })
         .collect();
     paged_array_response("follows", follows, page)
+}
+
+async fn handle_get_blocks(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    if !owner_bearer_matches(&req, &ctx.env)? {
+        return Response::error("Unauthorized", 401);
+    }
+    json_response(serde_json::json!({ "blocks": [] }))
+}
+
+async fn handle_get_mutes(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    if !owner_bearer_matches(&req, &ctx.env)? {
+        return Response::error("Unauthorized", 401);
+    }
+    json_response(serde_json::json!({ "mutes": [] }))
+}
+
+async fn handle_get_labeler_services(_req: Request, _ctx: RouteContext<()>) -> Result<Response> {
+    json_response(serde_json::json!({ "views": [] }))
 }
 
 async fn handle_subscribe_repos(_req: Request, env: Env) -> Result<Response> {
