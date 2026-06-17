@@ -519,16 +519,17 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
         .transpose()
         .map_err(|error| worker::Error::RustError(error.to_string()))?
         .unwrap_or_default();
+    let summary = atproto_self_label_summary(&body.record);
 
     ctx.env
         .d1("DB")?
         .prepare(
             r#"
             INSERT INTO posts (
-              id, actor_id, content, content_html, object_type, visibility, protocol,
+              id, actor_id, content, content_html, summary, object_type, visibility, protocol,
               published_at, in_reply_to, atproto_uri, atproto_cid, media_attachments,
               atproto_reply_json, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, 'Note', 'public', 'atproto', ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'Note', 'public', 'atproto', ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             "#,
         )
         .bind(&[
@@ -536,6 +537,7 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
             actor_id.into(),
             text.into(),
             content_html.into(),
+            summary.into(),
             created_at.into(),
             in_reply_to.into(),
             atproto_uri.clone().into(),
@@ -1202,7 +1204,7 @@ async fn public_posts(env: &Env, page: Page) -> Result<Vec<serde_json::Map<Strin
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               atproto_uri, atproto_cid, media_attachments, atproto_reply_json
+               summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -1226,7 +1228,7 @@ async fn search_public_posts(
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               atproto_uri, atproto_cid, media_attachments, atproto_reply_json
+               summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -1326,7 +1328,7 @@ async fn find_public_post(env: &Env, rkey: &str) -> Result<Option<serde_json::Ma
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
-               atproto_uri, atproto_cid, media_attachments, atproto_reply_json
+               summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json
         FROM posts
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
@@ -1789,11 +1791,41 @@ fn actor_handle(actor_id: &str) -> String {
 }
 
 fn record_value(row: serde_json::Map<String, Value>) -> Value {
+    let text = row.get("content").and_then(Value::as_str).unwrap_or("");
+    let (facets, tags) = feed_post_facets(text);
     let mut record = serde_json::json!({
         "$type": "app.bsky.feed.post",
-        "text": row.get("content").and_then(Value::as_str).unwrap_or(""),
+        "text": text,
         "createdAt": row.get("published_at").and_then(Value::as_str).unwrap_or("")
     });
+    if let Some(object) = record.as_object_mut() {
+        if !text.trim().is_empty() {
+            object.insert("langs".to_string(), serde_json::json!(["en"]));
+        }
+        if !facets.is_empty() {
+            object.insert("facets".to_string(), Value::Array(facets));
+        }
+        if !tags.is_empty() {
+            object.insert(
+                "tags".to_string(),
+                Value::Array(tags.into_iter().map(Value::String).collect()),
+            );
+        }
+        if row
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            object.insert(
+                "labels".to_string(),
+                serde_json::json!({
+                    "$type": "com.atproto.label.defs#selfLabels",
+                    "values": [{ "val": "!warn" }]
+                }),
+            );
+        }
+    }
     if let Some(reply) = row
         .get("atproto_reply_json")
         .and_then(Value::as_str)
@@ -1881,6 +1913,137 @@ fn record_created_at(record: &Value) -> String {
                 .as_string()
                 .unwrap_or_default()
         })
+}
+
+fn atproto_self_label_summary(record: &Value) -> String {
+    let has_self_label = record
+        .get("labels")
+        .and_then(|labels| labels.get("values"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.get("val").and_then(Value::as_str))
+                .any(|value| !value.trim().is_empty())
+        })
+        .unwrap_or(false);
+    if has_self_label {
+        "ATProto self-label".to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn feed_post_facets(text: &str) -> (Vec<Value>, Vec<String>) {
+    let mut facets = Vec::new();
+    let mut tags = Vec::new();
+    let mut link_ranges = Vec::new();
+
+    for (start, _) in text
+        .match_indices("http://")
+        .chain(text.match_indices("https://"))
+    {
+        let end = start + trimmed_url_len(&text[start..]);
+        if end <= start {
+            continue;
+        }
+        let uri = &text[start..end];
+        link_ranges.push((start, end));
+        facets.push(facet(
+            start,
+            end,
+            "app.bsky.richtext.facet#link",
+            "uri",
+            uri,
+        ));
+    }
+
+    for (start, _) in text.match_indices('#') {
+        if link_ranges
+            .iter()
+            .any(|(link_start, link_end)| start >= *link_start && start < *link_end)
+        {
+            continue;
+        }
+        let end = scan_tag_end(text, start + 1);
+        if end <= start + 1 {
+            continue;
+        }
+        let tag = &text[start + 1..end];
+        if tag.len() > 640 {
+            continue;
+        }
+        facets.push(facet(start, end, "app.bsky.richtext.facet#tag", "tag", tag));
+        push_unique_tag(&mut tags, tag);
+    }
+
+    facets.sort_by_key(|value| {
+        value
+            .get("index")
+            .and_then(|index| index.get("byteStart"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    });
+    (facets, tags)
+}
+
+fn facet(start: usize, end: usize, feature_type: &str, field: &str, value: &str) -> Value {
+    serde_json::json!({
+        "index": {
+            "byteStart": start,
+            "byteEnd": end
+        },
+        "features": [{
+            "$type": feature_type,
+            field: value
+        }]
+    })
+}
+
+fn trimmed_url_len(value: &str) -> usize {
+    let mut end = value.len();
+    for (index, ch) in value.char_indices() {
+        if ch.is_whitespace() || matches!(ch, '<' | '>' | '"' | '\'') {
+            end = index;
+            break;
+        }
+    }
+    while end > 0 {
+        let Some((index, ch)) = value[..end].char_indices().next_back() else {
+            break;
+        };
+        if matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']') {
+            end = index;
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+fn scan_tag_end(text: &str, start: usize) -> usize {
+    let mut end = start;
+    for (offset, ch) in text[start..].char_indices() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            end = start + offset + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+fn push_unique_tag(tags: &mut Vec<String>, tag: &str) {
+    if tags.len() >= 8 {
+        return;
+    }
+    if tags
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(tag))
+    {
+        return;
+    }
+    tags.push(tag.to_string());
 }
 
 fn generated_rkey(created_at: &str, seed: &str) -> String {

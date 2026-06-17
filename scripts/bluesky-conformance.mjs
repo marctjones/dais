@@ -629,6 +629,86 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-RECORD-SHAPE-01", "feed.post records expose facets, tags, language, and self-label metadata", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for feed.post shape fixture" };
+    }
+
+    let createdRkey = "";
+    const stamp = new Date().toISOString();
+    const tag = `DaisFacet${Date.now()}`;
+    const url = "https://example.com/dais-facet";
+    const text = `dais Bluesky record shape ${stamp} ${url} #${tag}`;
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const authHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.json.accessJwt}`,
+    };
+
+    try {
+      const create = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.feed.post",
+          record: {
+            $type: "app.bsky.feed.post",
+            text,
+            createdAt: stamp,
+            labels: {
+              $type: "com.atproto.label.defs#selfLabels",
+              values: [{ val: "!warn" }],
+            },
+          },
+        }),
+      });
+      if (create.status !== 200) throw new Error(`createRecord expected 200, got ${create.status}: ${create.text}`);
+      createdRkey = rkeyFromAtUri(create.json?.uri);
+
+      const record = await request(
+        `/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did())}&collection=app.bsky.feed.post&rkey=${encodeURIComponent(createdRkey)}`,
+      );
+      if (record.status !== 200) throw new Error(`getRecord expected 200, got ${record.status}: ${record.text}`);
+      const value = record.json?.value || {};
+      if (value.text !== text) throw new Error("feed.post text did not round-trip");
+      if (!value.langs?.includes("en")) throw new Error("feed.post missing default language metadata");
+      if (!value.tags?.includes(tag)) throw new Error("feed.post missing tag metadata");
+      if (value.labels?.$type !== "com.atproto.label.defs#selfLabels") throw new Error("feed.post labels type mismatch");
+      if (!value.labels?.values?.some((label) => label.val === "!warn")) throw new Error("feed.post missing !warn self-label");
+
+      const facets = value.facets || [];
+      const linkFacet = facets.find((facet) => facet.features?.some((feature) => feature.$type === "app.bsky.richtext.facet#link" && feature.uri === url));
+      const tagFacet = facets.find((facet) => facet.features?.some((feature) => feature.$type === "app.bsky.richtext.facet#tag" && feature.tag === tag));
+      if (!linkFacet) throw new Error("feed.post missing URL richtext facet");
+      if (!tagFacet) throw new Error("feed.post missing hashtag richtext facet");
+      if (text.slice(linkFacet.index.byteStart, linkFacet.index.byteEnd) !== url) throw new Error("URL facet byte range mismatch");
+      if (text.slice(tagFacet.index.byteStart, tagFacet.index.byteEnd) !== `#${tag}`) throw new Error("hashtag facet byte range mismatch");
+
+      const search = await request(`/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(tag)}&limit=5`);
+      if (search.status !== 200) throw new Error(`search expected 200, got ${search.status}: ${search.text}`);
+      const post = search.json?.posts?.find((item) => item.uri === create.json?.uri);
+      if (!post?.record?.facets?.length) throw new Error("AppView search result did not expose record facets");
+    } finally {
+      if (createdRkey) {
+        await request("/xrpc/com.atproto.repo.deleteRecord", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            repo: did(),
+            collection: "app.bsky.feed.post",
+            rkey: createdRkey,
+          }),
+        });
+      }
+    }
+  }),
+
   requirement("BLUESKY-REPLY-01", "Owner-token ATProto feed replies preserve root and parent refs", async () => {
     if (!config.mastodonToken) {
       return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for reply fixture" };
