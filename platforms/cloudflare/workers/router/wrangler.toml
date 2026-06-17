@@ -15,6 +15,9 @@ binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
+[ai]
+binding = "AI"
+
 [triggers]
 crons = ["*/30 * * * *"]
 
@@ -32,6 +35,9 @@ bucket_name = "dais-media"
 binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
+
+[env.production.ai]
+binding = "AI"
 
 [env.production.triggers]
 crons = ["*/30 * * * *"]

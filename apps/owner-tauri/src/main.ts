@@ -155,6 +155,12 @@ type ModerationReply = {
   moderation_score?: number | null;
   moderation_flags?: string[];
   moderation_checked_at?: string | null;
+  ai_moderation?: {
+    model?: string | null;
+    unsafe_detected?: boolean;
+    categories?: string[];
+    summary?: string | null;
+  } | null;
   hidden: boolean | number | string | null;
 };
 
@@ -504,7 +510,13 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
         published_at: "2026-06-16T14:06:00Z",
         moderation_status: "pending",
         moderation_score: 0.72,
-        moderation_flags: ["medical"],
+        moderation_flags: ["medical", "ai:medical"],
+        ai_moderation: {
+          model: "@cf/meta/llama-guard-3-8b",
+          unsafe_detected: true,
+          categories: ["medical"],
+          summary: "Likely private medical content."
+        },
         moderation_checked_at: "2026-06-16T14:06:01Z",
         hidden: true
       }
@@ -520,7 +532,13 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
       published_at: "2026-06-16T14:06:00Z",
       moderation_status: String(args?.status || "approved"),
       moderation_score: 0.72,
-      moderation_flags: ["medical"],
+      moderation_flags: ["medical", "ai:medical"],
+      ai_moderation: {
+        model: "@cf/meta/llama-guard-3-8b",
+        unsafe_detected: true,
+        categories: ["medical"],
+        summary: "Likely private medical content."
+      },
       moderation_checked_at: "2026-06-16T14:06:01Z",
       hidden: String(args?.status || "approved") !== "approved"
     } as T;
@@ -1566,7 +1584,7 @@ function moderationView(data: OwnerSnapshot) {
             ${["off", "warn", "review", "hide", "reject"].map((value) => option(value, (moderation.reply_policy || "warn") === value)).join("")}
           </select>
         </label>
-        <label class="check"><input type="checkbox" name="ai_enabled"${moderation.ai_enabled ? " checked" : ""} /> Workers AI advisory mode</label>
+        <label class="check"><input type="checkbox" name="ai_enabled"${moderation.ai_enabled ? " checked" : ""} /> Workers AI live advisory mode</label>
         <label>AI model
           <input name="ai_model" value="${escapeAttr(moderation.ai_model || "@cf/meta/llama-guard-3-8b")}" />
         </label>
@@ -1575,7 +1593,7 @@ function moderationView(data: OwnerSnapshot) {
         </label>
         <button type="submit">Save policy</button>
       </form>
-      <p>Deterministic rules remain authoritative. Workers AI is advisory configuration for future classifier calls.</p>
+      <p>Deterministic rules remain authoritative. Workers AI adds advisory flags and summaries when enabled.</p>
       <p>Private posts stay off public outboxes and Bluesky routes.</p>
       <p>Public routing is explicit from compose.</p>
     </article>
@@ -2043,11 +2061,13 @@ function allowlistCard(row: ModerationAllowlistHost) {
 }
 
 function moderationReplyCard(row: ModerationReply) {
+  const ai = row.ai_moderation;
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</h2>
       <p>${escapeHtml(row.content)}</p>
       ${row.moderation_flags?.length ? `<div class="sensitivity-tags">${row.moderation_flags.map((label) => `<span class="sensitive-chip">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
+      ${ai?.summary ? `<p class="privacy-note">AI advisory${ai.model ? ` (${escapeHtml(shortModel(ai.model))})` : ""}: ${escapeHtml(ai.summary)}</p>` : ""}
     </div>
     <footer>
       <span>${escapeHtml(row.moderation_status || "approved")}</span>
@@ -2059,6 +2079,10 @@ function moderationReplyCard(row: ModerationReply) {
       <button type="button" data-reply-id="${escapeAttr(row.id)}" data-reply-status="rejected">Reject</button>
     </footer>
   </article>`;
+}
+
+function shortModel(value: string) {
+  return value.split("/").at(-1) || value;
 }
 
 function list(items: string[], emptyText: string) {

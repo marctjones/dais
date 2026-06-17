@@ -3433,11 +3433,14 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             let encrypt = body.get("encrypt").map(js_truthy).unwrap_or(false);
             let in_reply_to =
                 body_string_any(&body, &["in_reply_to", "inReplyTo", "in_reply_to_id"]);
-            let audience_list_id =
-                body_string_any(&body, &["audience_list_id", "audienceListId"]);
+            let audience_list_id = body_string_any(&body, &["audience_list_id", "audienceListId"]);
             if visibility == "direct"
                 && recipients.is_empty()
-                && audience_list_id.as_deref().unwrap_or_default().trim().is_empty()
+                && audience_list_id
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
             {
                 return api_json(
                     &serde_json::json!({ "error": "direct posts require at least one recipient" }),
@@ -4370,7 +4373,7 @@ async fn owner_moderation_replies(env: &Env, limit: i32) -> Result<Vec<Map<Strin
             r#"
             SELECT id, post_id, actor_id, actor_username, actor_display_name, actor_avatar_url,
                    content, published_at, created_at, moderation_status, moderation_score,
-                   moderation_flags, moderation_checked_at, hidden
+                   moderation_flags, moderation_checked_at, ai_moderation_result, hidden
             FROM replies
             WHERE moderation_status != 'approved'
                OR (hidden IS NOT NULL AND hidden != 0)
@@ -4383,10 +4386,7 @@ async fn owner_moderation_replies(env: &Env, limit: i32) -> Result<Vec<Map<Strin
         .all()
         .await?
         .results::<Map<String, Value>>()?;
-    Ok(rows
-        .into_iter()
-        .map(shape_owner_moderation_reply)
-        .collect())
+    Ok(rows.into_iter().map(shape_owner_moderation_reply).collect())
 }
 
 async fn owner_set_reply_moderation_status(
@@ -4432,7 +4432,11 @@ async fn owner_update_moderation_settings(
     let ai_enabled = body
         .get("ai_enabled")
         .or_else(|| body.get("aiEnabled"))
-        .and_then(|value| value.as_bool().or_else(|| optional_body_string(value).map(|v| v == "true" || v == "1")))
+        .and_then(|value| {
+            value
+                .as_bool()
+                .or_else(|| optional_body_string(value).map(|v| v == "true" || v == "1"))
+        })
         .unwrap_or(false);
     let ai_model = body
         .get("ai_model")
@@ -4451,7 +4455,10 @@ async fn owner_update_moderation_settings(
     let db = env.d1("DB").map_err(|error| error.to_string())?;
     let policy_arg = D1Type::Text(&reply_policy);
     let ai_enabled_arg = D1Type::Integer(if ai_enabled { 1 } else { 0 });
-    let ai_model_arg = ai_model.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let ai_model_arg = ai_model
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
     let ai_daily_budget_i32 = i32::try_from(ai_daily_budget).unwrap_or(i32::MAX);
     let ai_budget_arg = D1Type::Integer(ai_daily_budget_i32);
     db.prepare(
@@ -4475,7 +4482,9 @@ async fn owner_update_moderation_settings(
     owner_reclassify_recent_replies(env, 120)
         .await
         .map_err(|error| error.to_string())?;
-    owner_moderation(env).await.map_err(|error| error.to_string())
+    owner_moderation(env)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn owner_reclassify_recent_replies(env: &Env, limit: i32) -> std::result::Result<(), String> {
@@ -4549,7 +4558,19 @@ async fn classify_reply_in_db(
         .as_ref()
         .and_then(|row| string_field(Some(row), "reply_policy"))
         .unwrap_or_else(|| "warn".to_string());
-    let result = classify_reply_content(content, &policy)?;
+    let mut result = classify_reply_content(content, &policy)?;
+    let ai_advisory = classify_reply_with_ai(env, settings.as_ref(), content).await?;
+    if let Some(advisory) = ai_advisory.as_ref().filter(|value| value.unsafe_detected) {
+        for category in &advisory.categories {
+            let ai_flag = format!("ai:{category}");
+            if !result.flags.contains(&ai_flag) {
+                result.flags.push(ai_flag);
+            }
+        }
+        if result.score < 0.7 {
+            result.score = 0.7;
+        }
+    }
     let db = env.d1("DB").map_err(|error| error.to_string())?;
     let reply_arg = D1Type::Text(reply_id);
     let status_arg = D1Type::Text(&result.status);
@@ -4557,6 +4578,24 @@ async fn classify_reply_in_db(
     let flags_json = serde_json::to_string(&result.flags).map_err(|error| error.to_string())?;
     let flags_arg = D1Type::Text(&flags_json);
     let hidden_arg = D1Type::Integer(if result.hidden { 1 } else { 0 });
+    let ai_result_json = ai_advisory
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let ai_result_arg = ai_result_json
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let ai_checked_at = if ai_advisory.is_some() {
+        js_sys::Date::new_0().to_iso_string().as_string()
+    } else {
+        None
+    };
+    let ai_checked_arg = ai_checked_at
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
     db.prepare(
         r#"
         UPDATE replies
@@ -4564,16 +4603,89 @@ async fn classify_reply_in_db(
             moderation_score = ?3,
             moderation_flags = ?4,
             moderation_checked_at = CURRENT_TIMESTAMP,
-            hidden = ?5
+            hidden = ?5,
+            ai_moderation_result = ?6,
+            ai_moderation_checked_at = ?7
         WHERE id = ?1
         "#,
     )
-    .bind_refs([&reply_arg, &status_arg, &score_arg, &flags_arg, &hidden_arg])
+    .bind_refs([
+        &reply_arg,
+        &status_arg,
+        &score_arg,
+        &flags_arg,
+        &hidden_arg,
+        &ai_result_arg,
+        &ai_checked_arg,
+    ])
     .map_err(|error| error.to_string())?
     .run()
     .await
     .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+async fn classify_reply_with_ai(
+    env: &Env,
+    settings: Option<&Map<String, Value>>,
+    content: &str,
+) -> std::result::Result<Option<WorkersAiModerationAdvisory>, String> {
+    if !bool_field(settings, "ai_enabled") {
+        return Ok(None);
+    }
+    let daily_budget = integer_field(settings, "ai_daily_budget");
+    if daily_budget <= 0 || !ai_reply_budget_available(env, daily_budget).await? {
+        return Ok(None);
+    }
+    let model = string_field(settings, "ai_model")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "@cf/meta/llama-guard-3-8b".to_string());
+    let instruction = "Classify this social reply for advisory moderation. Return JSON only with keys unsafe (boolean), categories (array of strings), and summary (string). Categories must only use: spam, harassment, medical, adult, political, family-only, work-sensitive. Mark unsafe true only when one or more categories apply.";
+    let ai = env.ai("AI").map_err(|error| error.to_string())?;
+    let response: Value = ai
+        .run(
+            model.as_str(),
+            serde_json::json!({
+                "messages": [
+                    { "role": "system", "content": instruction },
+                    { "role": "user", "content": content }
+                ],
+                "max_tokens": 256,
+                "temperature": 0
+            }),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let text = workers_ai_text(&response);
+    let mut advisory = parse_workers_ai_moderation(&text).unwrap_or_else(|| {
+        let mut categories = Vec::new();
+        let lower = text.to_ascii_lowercase();
+        for category in [
+            "spam",
+            "harassment",
+            "medical",
+            "adult",
+            "political",
+            "family-only",
+            "work-sensitive",
+        ] {
+            if lower.contains(category) {
+                categories.push(category.to_string());
+            }
+        }
+        WorkersAiModerationAdvisory {
+            model: None,
+            unsafe_detected: lower.contains("unsafe") || !categories.is_empty(),
+            categories,
+            summary: (!text.trim().is_empty()).then(|| truncate_text(text.trim(), 240)),
+        }
+    });
+    advisory.model = Some(model);
+    advisory.categories = normalize_ai_categories(advisory.categories);
+    if advisory.summary.is_none() && !text.trim().is_empty() {
+        advisory.summary = Some(truncate_text(text.trim(), 240));
+    }
+    Ok(Some(advisory))
 }
 
 fn classify_reply_content(
@@ -4651,7 +4763,9 @@ fn detect_sensitive_categories(content: &str) -> Vec<String> {
         ),
         (
             "adult",
-            &["adult", "nsfw", "sexual", "sex", "porn", "erotic", "explicit"][..],
+            &[
+                "adult", "nsfw", "sexual", "sex", "porn", "erotic", "explicit",
+            ][..],
         ),
         (
             "political",
@@ -4669,7 +4783,9 @@ fn detect_sensitive_categories(content: &str) -> Vec<String> {
         ),
         (
             "family-only",
-            &["family", "kids", "child", "children", "baby", "spouse", "partner", "wedding"][..],
+            &[
+                "family", "kids", "child", "children", "baby", "spouse", "partner", "wedding",
+            ][..],
         ),
         (
             "work-sensitive",
@@ -4692,6 +4808,124 @@ fn detect_sensitive_categories(content: &str) -> Vec<String> {
         }
     }
     categories
+}
+
+async fn ai_reply_budget_available(
+    env: &Env,
+    daily_budget: i64,
+) -> std::result::Result<bool, String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let row = db
+        .prepare(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM replies
+            WHERE ai_moderation_checked_at IS NOT NULL
+              AND DATE(ai_moderation_checked_at) = DATE('now')
+            "#,
+        )
+        .first::<Map<String, Value>>(None)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(integer_field(row.as_ref(), "count") < daily_budget)
+}
+
+fn workers_ai_text(value: &Value) -> String {
+    value
+        .get("response")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("result").and_then(Value::as_str))
+        .or_else(|| {
+            value
+                .get("result")
+                .and_then(Value::as_object)
+                .and_then(|object| object.get("response"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn parse_workers_ai_moderation(text: &str) -> Option<WorkersAiModerationAdvisory> {
+    let candidate = strip_json_fence(text.trim());
+    let json: Value = serde_json::from_str(candidate).ok()?;
+    let unsafe_detected = json
+        .get("unsafe")
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            json.get("verdict")
+                .and_then(Value::as_str)
+                .map(|value| value.eq_ignore_ascii_case("unsafe"))
+        })
+        .or_else(|| {
+            json.get("safe")
+                .and_then(Value::as_bool)
+                .map(|value| !value)
+        })
+        .unwrap_or(false);
+    let categories = json
+        .get("categories")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let summary = json
+        .get("summary")
+        .or_else(|| json.get("reason"))
+        .and_then(Value::as_str)
+        .map(|value| truncate_text(value.trim(), 240));
+    Some(WorkersAiModerationAdvisory {
+        model: None,
+        unsafe_detected,
+        categories,
+        summary,
+    })
+}
+
+fn strip_json_fence(text: &str) -> &str {
+    let stripped = text
+        .strip_prefix("```json")
+        .or_else(|| text.strip_prefix("```"))
+        .unwrap_or(text)
+        .trim();
+    stripped.strip_suffix("```").unwrap_or(stripped).trim()
+}
+
+fn normalize_ai_categories(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let trimmed = value.trim().to_ascii_lowercase();
+        let canonical = match trimmed.as_str() {
+            "spam" | "harassment" | "medical" | "adult" | "political" | "family-only"
+            | "work-sensitive" => Some(trimmed),
+            "sexual" | "nsfw" | "explicit" => Some("adult".to_string()),
+            "health" => Some("medical".to_string()),
+            "work" => Some("work-sensitive".to_string()),
+            "family" => Some("family-only".to_string()),
+            _ => None,
+        };
+        if let Some(category) = canonical {
+            if !normalized.contains(&category) {
+                normalized.push(category);
+            }
+        }
+    }
+    normalized
+}
+
+fn truncate_text(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    let shortened: String = trimmed.chars().take(max_chars).collect();
+    if trimmed.chars().count() > max_chars {
+        format!("{shortened}...")
+    } else {
+        shortened
+    }
 }
 
 fn normalize_reply_policy(value: &str) -> std::result::Result<&'static str, String> {
@@ -4723,7 +4957,7 @@ async fn owner_moderation_reply(env: &Env, reply_id: &str) -> Result<Option<Map<
             r#"
             SELECT id, post_id, actor_id, actor_username, actor_display_name, actor_avatar_url,
                    content, published_at, created_at, moderation_status, moderation_score,
-                   moderation_flags, moderation_checked_at, hidden
+                   moderation_flags, moderation_checked_at, ai_moderation_result, hidden
             FROM replies
             WHERE id = ?1
             LIMIT 1
@@ -4742,6 +4976,11 @@ fn shape_owner_moderation_reply(row: Map<String, Value>) -> Map<String, Value> {
         "moderation_flags".to_string(),
         Value::Array(flags.into_iter().map(Value::String).collect()),
     );
+    if let Some(raw) = string_field(Some(&row), "ai_moderation_result") {
+        if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+            item.insert("ai_moderation".to_string(), value);
+        }
+    }
     item
 }
 
@@ -5368,8 +5607,14 @@ async fn owner_audience_lists(env: &Env) -> Result<Vec<Map<String, Value>>> {
             "member_count".to_string(),
             Value::from(member_actor_ids.len() as i64),
         );
-        item.insert("created_at".to_string(), row_value_or_null(&row, "created_at"));
-        item.insert("updated_at".to_string(), row_value_or_null(&row, "updated_at"));
+        item.insert(
+            "created_at".to_string(),
+            row_value_or_null(&row, "created_at"),
+        );
+        item.insert(
+            "updated_at".to_string(),
+            row_value_or_null(&row, "updated_at"),
+        );
         shaped.push(item);
     }
     Ok(shaped)
@@ -5418,9 +5663,12 @@ async fn owner_upsert_audience_list(
     let db = env.d1("DB").map_err(|error| error.to_string())?;
     let id_arg = D1Type::Text(id.as_str());
     let name_arg = D1Type::Text(name.as_str());
-    let description_arg = description.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
-    let allowed_categories_json = serde_json::to_string(&allowed_categories)
-        .map_err(|error| error.to_string())?;
+    let description_arg = description
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let allowed_categories_json =
+        serde_json::to_string(&allowed_categories).map_err(|error| error.to_string())?;
     let categories_arg = D1Type::Text(allowed_categories_json.as_str());
 
     db.prepare(
@@ -9069,6 +9317,14 @@ struct ReplyModerationDecision {
     hidden: bool,
 }
 
+#[derive(Serialize, Deserialize)]
+struct WorkersAiModerationAdvisory {
+    model: Option<String>,
+    unsafe_detected: bool,
+    categories: Vec<String>,
+    summary: Option<String>,
+}
+
 #[derive(Serialize)]
 struct OwnerDiagnostic {
     key: &'static str,
@@ -9102,4 +9358,38 @@ struct RemoteActor {
 struct OwnerToken {
     token: String,
     scopes: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_ai_categories, parse_workers_ai_moderation, strip_json_fence};
+
+    #[test]
+    fn parses_workers_ai_json_reply() {
+        let parsed = parse_workers_ai_moderation(
+            r#"{"unsafe":true,"categories":["Medical","sexual","work"],"summary":"contains private medical and work details"}"#,
+        )
+        .expect("expected JSON advisory");
+        assert!(parsed.unsafe_detected);
+        assert_eq!(
+            normalize_ai_categories(parsed.categories),
+            vec![
+                "medical".to_string(),
+                "adult".to_string(),
+                "work-sensitive".to_string()
+            ]
+        );
+        assert_eq!(
+            parsed.summary.as_deref(),
+            Some("contains private medical and work details")
+        );
+    }
+
+    #[test]
+    fn strips_markdown_json_fence() {
+        assert_eq!(
+            strip_json_fence("```json\n{\"unsafe\":false}\n```"),
+            "{\"unsafe\":false}"
+        );
+    }
 }
