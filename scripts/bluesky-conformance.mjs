@@ -1081,6 +1081,100 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-THREAD-01", "AppView getPostThread returns public post replies", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for thread fixture" };
+    }
+
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const authHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.json.accessJwt}`,
+    };
+    const token = `dais Bluesky thread conformance ${new Date().toISOString()}`;
+    const created = [];
+    try {
+      const parent = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.feed.post",
+          record: {
+            $type: "app.bsky.feed.post",
+            text: token,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+      });
+      if (parent.status !== 200) throw new Error(`parent createRecord expected 200, got ${parent.status}: ${parent.text}`);
+      const parentRef = { uri: parent.json?.uri, cid: parent.json?.cid };
+      if (!parentRef.uri || !parentRef.cid) throw new Error("parent createRecord missing uri/cid");
+      created.push({ collection: "app.bsky.feed.post", rkey: rkeyFromAtUri(parentRef.uri) });
+
+      const reply = await request("/xrpc/com.atproto.repo.createRecord", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          repo: did(),
+          collection: "app.bsky.feed.post",
+          record: {
+            $type: "app.bsky.feed.post",
+            text: `${token} reply`,
+            createdAt: new Date().toISOString(),
+            reply: {
+              root: parentRef,
+              parent: parentRef,
+            },
+          },
+        }),
+      });
+      if (reply.status !== 200) throw new Error(`reply createRecord expected 200, got ${reply.status}: ${reply.text}`);
+      const replyRef = { uri: reply.json?.uri, cid: reply.json?.cid };
+      if (!replyRef.uri || !replyRef.cid) throw new Error("reply createRecord missing uri/cid");
+      created.push({ collection: "app.bsky.feed.post", rkey: rkeyFromAtUri(replyRef.uri) });
+
+      let thread;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const res = await request(`/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(parentRef.uri)}&depth=2`);
+        if (res.status !== 200) throw new Error(`getPostThread expected 200, got ${res.status}: ${res.text}`);
+        thread = res.json?.thread;
+        if (thread?.replies?.some((item) => item.post?.uri === replyRef.uri)) break;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (thread?.post?.uri !== parentRef.uri) throw new Error("thread parent post URI mismatch");
+      if (!Array.isArray(thread?.replies)) throw new Error("thread replies was not an array");
+      if (!thread.replies.some((item) => item.post?.uri === replyRef.uri)) {
+        throw new Error("thread replies did not include fixture reply");
+      }
+      if (thread.post.replyCount < 1) throw new Error(`thread parent replyCount did not include fixture reply: ${thread.post.replyCount}`);
+
+      const missing = await request(
+        `/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(`at://${did()}/app.bsky.feed.post/missing-thread-fixture`)}`,
+      );
+      if (missing.status !== 200) throw new Error(`missing getPostThread expected 200, got ${missing.status}: ${missing.text}`);
+      if (missing.json?.thread?.notFound !== true) throw new Error("missing getPostThread did not return notFound");
+    } finally {
+      for (const item of created.reverse()) {
+        if (!item.rkey) continue;
+        await request("/xrpc/com.atproto.repo.deleteRecord", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            repo: did(),
+            collection: item.collection,
+            rkey: item.rkey,
+          }),
+        });
+      }
+    }
+  }),
+
   requirement("BLUESKY-PRIVACY-01", "PDS public feeds exclude private/E2EE fallback content", async () => {
     const feed = await request("/xrpc/app.bsky.feed.getTimeline?limit=20");
     if (feed.status !== 200) throw new Error(`timeline expected 200, got ${feed.status}`);

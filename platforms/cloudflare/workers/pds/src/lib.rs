@@ -26,6 +26,7 @@ use serde_json::Value;
 /// - GET /xrpc/app.bsky.actor.getProfiles
 /// - GET /xrpc/app.bsky.feed.getAuthorFeed
 /// - GET /xrpc/app.bsky.feed.getTimeline
+/// - GET /xrpc/app.bsky.feed.getPostThread
 /// - GET /xrpc/app.bsky.feed.searchPosts
 /// - GET /xrpc/app.bsky.actor.searchActors
 /// - GET /xrpc/app.bsky.actor.searchActorsTypeahead
@@ -139,6 +140,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/xrpc/app.bsky.actor.getProfiles", handle_get_profiles)
         .get_async("/xrpc/app.bsky.feed.getAuthorFeed", handle_get_author_feed)
         .get_async("/xrpc/app.bsky.feed.getTimeline", handle_get_timeline)
+        .get_async("/xrpc/app.bsky.feed.getPostThread", handle_get_post_thread)
         .get_async("/xrpc/app.bsky.feed.searchPosts", handle_search_posts)
         .get_async("/xrpc/app.bsky.actor.searchActors", handle_search_actors)
         .get_async(
@@ -741,6 +743,29 @@ async fn handle_get_timeline(req: Request, ctx: RouteContext<()>) -> Result<Resp
     paged_array_response("feed", feed, page)
 }
 
+async fn handle_get_post_thread(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let url = req.url()?;
+    let uri = required_query(&url, "uri")?;
+    let identity = identity(&ctx.env);
+    let Some(row) = find_public_post(&ctx.env, &uri).await? else {
+        return json_response(serde_json::json!({
+            "thread": {
+                "uri": uri,
+                "notFound": true
+            }
+        }));
+    };
+    let depth = query_u32(&url, "depth", 6).clamp(0, 1000);
+    let replies = if depth == 0 {
+        Vec::new()
+    } else {
+        direct_public_replies(&ctx.env, &identity, &row, depth).await?
+    };
+    json_response(serde_json::json!({
+        "thread": thread_view_post(&identity, row, replies)
+    }))
+}
+
 async fn handle_search_posts(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let url = req.url()?;
     let query = required_query(&url, "q")?;
@@ -1145,6 +1170,13 @@ fn query_limit(url: &Url) -> u32 {
         .clamp(1, 100)
 }
 
+fn query_u32(url: &Url, key: &str, default: u32) -> u32 {
+    url.query_pairs()
+        .find(|(name, _)| name == key)
+        .and_then(|(_, value)| value.parse::<u32>().ok())
+        .unwrap_or(default)
+}
+
 fn query_page(url: &Url) -> Page {
     Page {
         limit: query_limit(url),
@@ -1451,7 +1483,9 @@ async fn follows_rows(env: &Env, page: Page) -> Result<Vec<serde_json::Map<Strin
 
 async fn find_public_post(env: &Env, rkey: &str) -> Result<Option<serde_json::Map<String, Value>>> {
     let db = env.d1("DB")?;
-    let uri_suffix = format!("/{rkey}");
+    let lookup = rkey.trim();
+    let lookup_rkey = lookup.rsplit('/').next().unwrap_or(lookup);
+    let uri_suffix = format!("/{lookup_rkey}");
     db.prepare(
         r#"
         SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
@@ -1506,9 +1540,79 @@ async fn find_public_post(env: &Env, rkey: &str) -> Result<Option<serde_json::Ma
         LIMIT 1
         "#,
     )
-    .bind(&[rkey.into(), format!("%{uri_suffix}").into()])?
+    .bind(&[lookup.into(), format!("%{uri_suffix}").into()])?
     .first::<serde_json::Map<String, Value>>(None)
     .await
+}
+
+async fn direct_public_replies(
+    env: &Env,
+    identity: &Identity,
+    parent: &serde_json::Map<String, Value>,
+    _depth: u32,
+) -> Result<Vec<Value>> {
+    let parent_id = string_field(parent, "id");
+    let parent_uri = at_uri(identity, parent);
+    let rows = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, content, published_at, COALESCE(updated_at, published_at) AS updated_at,
+                   summary, atproto_uri, atproto_cid, media_attachments, atproto_reply_json,
+                   (
+                     SELECT COUNT(*)
+                     FROM replies r
+                     WHERE r.post_id = posts.id
+                       AND (r.hidden IS NULL OR r.hidden = 0)
+                   ) + (
+                     SELECT COUNT(*)
+                     FROM posts child
+                     WHERE child.visibility = 'public'
+                       AND child.encrypted_message IS NULL
+                       AND child.content NOT LIKE '%End-to-end encrypted message%'
+                       AND (
+                         child.in_reply_to = posts.id
+                         OR (posts.atproto_uri IS NOT NULL AND child.in_reply_to = posts.atproto_uri)
+                       )
+                   ) AS reply_count,
+                   (
+                     SELECT COUNT(*)
+                     FROM interactions i
+                     WHERE i.type = 'like'
+                       AND (
+                         i.post_id = posts.id
+                         OR i.object_url = posts.id
+                         OR (posts.atproto_uri IS NOT NULL AND i.object_url = posts.atproto_uri)
+                       )
+                   ) AS like_count,
+                   (
+                     SELECT COUNT(*)
+                     FROM interactions i
+                     WHERE i.type = 'boost'
+                       AND (
+                         i.post_id = posts.id
+                         OR i.object_url = posts.id
+                         OR (posts.atproto_uri IS NOT NULL AND i.object_url = posts.atproto_uri)
+                       )
+                   ) AS repost_count
+            FROM posts
+            WHERE visibility = 'public'
+              AND encrypted_message IS NULL
+              AND content NOT LIKE '%End-to-end encrypted message%'
+              AND (in_reply_to = ?1 OR in_reply_to = ?2)
+            ORDER BY published_at ASC
+            LIMIT 100
+            "#,
+        )
+        .bind(&[parent_id.into(), parent_uri.into()])?
+        .all()
+        .await?
+        .results::<serde_json::Map<String, Value>>()?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| thread_view_post(identity, row, Vec::new()))
+        .collect())
 }
 
 async fn public_media_by_cid(env: &Env, cid: &str) -> Result<Option<PublicMediaBlob>> {
@@ -1948,6 +2052,18 @@ fn post_view(identity: &Identity, row: serde_json::Map<String, Value>) -> Value 
         "repostCount": u64_field(&row, "repost_count"),
         "likeCount": u64_field(&row, "like_count"),
         "indexedAt": row.get("published_at").and_then(Value::as_str).unwrap_or("")
+    })
+}
+
+fn thread_view_post(
+    identity: &Identity,
+    row: serde_json::Map<String, Value>,
+    replies: Vec<Value>,
+) -> Value {
+    serde_json::json!({
+        "$type": "app.bsky.feed.defs#threadViewPost",
+        "post": post_view(identity, row),
+        "replies": replies
     })
 }
 
