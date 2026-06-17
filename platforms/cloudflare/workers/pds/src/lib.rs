@@ -2470,11 +2470,9 @@ fn record_uri_from_row(
 }
 
 fn stable_cid(value: &str) -> String {
-    use std::hash::{Hash, Hasher};
+    use multihash_codetable::{Code, MultihashDigest};
 
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    value.hash(&mut hasher);
-    format!("bafy{:016x}", hasher.finish())
+    cid::Cid::new_v1(0x55, Code::Sha2_256.digest(value.as_bytes())).to_string()
 }
 
 fn repo_seq(value: &str) -> u64 {
@@ -2483,6 +2481,24 @@ fn repo_seq(value: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish().max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stable_cid;
+
+    #[test]
+    fn stable_cid_is_real_cidv1() {
+        let cid = stable_cid("dais");
+        let parsed = cid.parse::<cid::Cid>().expect("valid cid");
+        assert_eq!(parsed.version(), cid::Version::V1);
+        assert_eq!(parsed.codec(), 0x55);
+    }
+
+    #[test]
+    fn stable_cid_changes_with_input() {
+        assert_ne!(stable_cid("dais-a"), stable_cid("dais-b"));
+    }
 }
 
 fn html_escape(value: &str) -> String {
