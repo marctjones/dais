@@ -413,7 +413,29 @@ async fn handle_get_record(req: Request, ctx: RouteContext<()>) -> Result<Respon
         return json_response(profile_record_response(&ctx.env, &identity).await?);
     }
     if collection != "app.bsky.feed.post" {
-        return Response::error("Collection not found", 404);
+        if !matches!(
+            collection.as_str(),
+            "app.bsky.feed.like" | "app.bsky.feed.repost" | "app.bsky.graph.follow"
+        ) {
+            return Response::error("Collection not found", 404);
+        }
+        if !owner_bearer_matches(&req, &ctx.env)? {
+            return Response::error("Unauthorized", 401);
+        }
+        let value = match collection.as_str() {
+            "app.bsky.feed.like" => {
+                find_subject_record(&ctx.env, &identity, &collection, "like", &rkey).await?
+            }
+            "app.bsky.feed.repost" => {
+                find_subject_record(&ctx.env, &identity, &collection, "boost", &rkey).await?
+            }
+            "app.bsky.graph.follow" => find_follow_record(&ctx.env, &identity, &rkey).await?,
+            _ => unreachable!("unsupported collections returned before auth"),
+        };
+        return match value {
+            Some(value) => json_response(value),
+            None => Response::error("Record not found", 404),
+        };
     }
 
     let Some(row) = find_public_post(&ctx.env, &rkey).await? else {
@@ -1629,23 +1651,62 @@ async fn subject_records(
         .results::<serde_json::Map<String, Value>>()?;
     Ok(rows
         .into_iter()
-        .map(|row| {
-            let subject_uri = string_field(&row, "object_url");
-            let uri = record_uri_from_row(identity, collection, &row);
-            serde_json::json!({
-                "uri": uri,
-                "cid": stable_cid(&format!("{}:{}", collection, subject_uri)),
-                "value": {
-                    "$type": collection,
-                    "subject": {
-                        "uri": subject_uri,
-                        "cid": stable_cid(&subject_uri)
-                    },
-                    "createdAt": string_field(&row, "created_at")
-                }
-            })
-        })
+        .map(|row| subject_record_value(identity, collection, &row))
         .collect())
+}
+
+async fn find_subject_record(
+    env: &Env,
+    identity: &Identity,
+    collection: &str,
+    interaction_type: &str,
+    rkey: &str,
+) -> Result<Option<Value>> {
+    let uri = record_uri(identity, collection, rkey);
+    let id_suffix = format!("/{rkey}");
+    let row = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, object_url, created_at
+            FROM interactions
+            WHERE actor_id = ?1
+              AND type = ?2
+              AND (id = ?3 OR id LIKE ?4)
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(&[
+            local_actor_id(identity).into(),
+            interaction_type.into(),
+            uri.into(),
+            format!("%{id_suffix}").into(),
+        ])?
+        .first::<serde_json::Map<String, Value>>(None)
+        .await?;
+    Ok(row.map(|row| subject_record_value(identity, collection, &row)))
+}
+
+fn subject_record_value(
+    identity: &Identity,
+    collection: &str,
+    row: &serde_json::Map<String, Value>,
+) -> Value {
+    let subject_uri = string_field(row, "object_url");
+    let uri = record_uri_from_row(identity, collection, row);
+    serde_json::json!({
+        "uri": uri,
+        "cid": stable_cid(&format!("{}:{}", collection, subject_uri)),
+        "value": {
+            "$type": collection,
+            "subject": {
+                "uri": subject_uri,
+                "cid": stable_cid(&subject_uri)
+            },
+            "createdAt": string_field(row, "created_at")
+        }
+    })
 }
 
 async fn follow_records(env: &Env, identity: &Identity, page: Page) -> Result<Vec<Value>> {
@@ -1671,20 +1732,48 @@ async fn follow_records(env: &Env, identity: &Identity, page: Page) -> Result<Ve
         .results::<serde_json::Map<String, Value>>()?;
     Ok(rows
         .into_iter()
-        .map(|row| {
-            let subject = string_field(&row, "target_actor_id");
-            let uri = record_uri_from_row(identity, "app.bsky.graph.follow", &row);
-            serde_json::json!({
-                "uri": uri,
-                "cid": stable_cid(&format!("app.bsky.graph.follow:{subject}")),
-                "value": {
-                    "$type": "app.bsky.graph.follow",
-                    "subject": subject,
-                    "createdAt": string_field(&row, "created_at")
-                }
-            })
-        })
+        .map(|row| follow_record_value(identity, &row))
         .collect())
+}
+
+async fn find_follow_record(env: &Env, identity: &Identity, rkey: &str) -> Result<Option<Value>> {
+    let uri = record_uri(identity, "app.bsky.graph.follow", rkey);
+    let id_suffix = format!("/{rkey}");
+    let row = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, target_actor_id, created_at
+            FROM following
+            WHERE actor_id = ?1
+              AND status IN ('accepted', 'pending')
+              AND (id = ?2 OR id LIKE ?3)
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(&[
+            local_actor_id(identity).into(),
+            uri.into(),
+            format!("%{id_suffix}").into(),
+        ])?
+        .first::<serde_json::Map<String, Value>>(None)
+        .await?;
+    Ok(row.map(|row| follow_record_value(identity, &row)))
+}
+
+fn follow_record_value(identity: &Identity, row: &serde_json::Map<String, Value>) -> Value {
+    let subject = string_field(row, "target_actor_id");
+    let uri = record_uri_from_row(identity, "app.bsky.graph.follow", row);
+    serde_json::json!({
+        "uri": uri,
+        "cid": stable_cid(&format!("app.bsky.graph.follow:{subject}")),
+        "value": {
+            "$type": "app.bsky.graph.follow",
+            "subject": subject,
+            "createdAt": string_field(row, "created_at")
+        }
+    })
 }
 
 async fn profile_record_response(env: &Env, identity: &Identity) -> Result<Value> {

@@ -940,6 +940,18 @@ const tests = [
       created.push({ collection: "app.bsky.graph.follow", rkey: rkeyFromAtUri(follow.json.uri), subject: followDid });
 
       for (const item of created) {
+        const record = await request(
+          `/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did())}&collection=${encodeURIComponent(item.collection)}&rkey=${encodeURIComponent(item.rkey)}`,
+          { headers: { Authorization: `Bearer ${session.json.accessJwt}` } },
+        );
+        if (record.status !== 200) throw new Error(`${item.collection} getRecord expected 200, got ${record.status}: ${record.text}`);
+        if (record.json?.value?.$type !== item.collection) throw new Error(`${item.collection} getRecord type mismatch`);
+        if (item.collection === "app.bsky.graph.follow") {
+          if (record.json?.value?.subject !== item.subject) throw new Error("follow getRecord subject mismatch");
+        } else if (record.json?.value?.subject?.uri !== item.subject) {
+          throw new Error(`${item.collection} getRecord subject mismatch`);
+        }
+
         const listed = await request(
           `/xrpc/com.atproto.repo.listRecords?repo=${encodeURIComponent(did())}&collection=${encodeURIComponent(item.collection)}&limit=20`,
           { headers: { Authorization: `Bearer ${session.json.accessJwt}` } },
@@ -1000,7 +1012,7 @@ const tests = [
 
   requirement("BLUESKY-ERROR-01", "Unsupported repo collections fail explicitly", async () => {
     const res = await request(
-      `/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did())}&collection=app.bsky.feed.like&rkey=missing`,
+      `/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did())}&collection=app.bsky.feed.threadgate&rkey=missing`,
     );
     if (res.status !== 404) throw new Error(`expected 404 for unsupported collection, got ${res.status}`);
   }),
