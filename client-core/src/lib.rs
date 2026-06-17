@@ -132,8 +132,11 @@ impl OwnerApiClient {
     }
 
     pub async fn delete_audience_list(&self, id: &str) -> ClientResult<OwnerActionResult> {
-        self.delete(&format!("/api/dais/owner/audience-lists/{}", url_encode(id)))
-            .await
+        self.delete(&format!(
+            "/api/dais/owner/audience-lists/{}",
+            url_encode(id)
+        ))
+        .await
     }
 
     pub async fn mark_notification_read(&self, id: &str) -> ClientResult<OwnerActionResult> {
@@ -156,8 +159,20 @@ impl OwnerApiClient {
     }
 
     pub async fn search(&self, query: &str) -> ClientResult<OwnerSearchResult> {
-        self.get(&format!("/api/dais/owner/search?q={}", url_encode(query)))
-            .await
+        self.search_with_scope(query, "local").await
+    }
+
+    pub async fn search_with_scope(
+        &self,
+        query: &str,
+        scope: &str,
+    ) -> ClientResult<OwnerSearchResult> {
+        self.get(&format!(
+            "/api/dais/owner/search?q={}&scope={}",
+            url_encode(query),
+            url_encode(scope)
+        ))
+        .await
     }
 
     pub async fn stats(&self) -> ClientResult<OwnerStats> {
@@ -687,6 +702,12 @@ pub struct OwnerSearchResult {
     pub sources: Vec<SourceSubscription>,
     #[serde(default)]
     pub source_items: Vec<OwnerSearchSourceItem>,
+    #[serde(default)]
+    pub public_posts: Vec<OwnerPublicSearchPost>,
+    #[serde(default)]
+    pub public_actors: Vec<OwnerPublicSearchActor>,
+    #[serde(default)]
+    pub provider_errors: Vec<OwnerSearchProviderError>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -731,6 +752,45 @@ pub struct OwnerSearchSourceItem {
     pub read: serde_json::Value,
     pub rights_policy_json: String,
     pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerPublicSearchPost {
+    pub provider: String,
+    pub network: String,
+    pub id: String,
+    pub url: String,
+    pub content: String,
+    pub actor_id: Option<String>,
+    pub actor_handle: Option<String>,
+    pub actor_display_name: Option<String>,
+    pub content_html: Option<String>,
+    pub summary: Option<String>,
+    pub object_type: Option<String>,
+    pub published_at: Option<String>,
+    pub cid: Option<String>,
+    pub reply_count: Option<u64>,
+    pub repost_count: Option<u64>,
+    pub like_count: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerPublicSearchActor {
+    pub provider: String,
+    pub network: String,
+    pub id: String,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub summary: Option<String>,
+    pub url: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSearchProviderError {
+    pub provider: String,
+    pub network: String,
+    pub error: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

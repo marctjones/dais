@@ -38,6 +38,7 @@ Implemented endpoints:
 | `GET` | `/notifications` | Local notifications. |
 | `POST` | `/notifications/read` | Mark a notification as read. |
 | `GET` | `/deliveries` | ActivityPub delivery jobs. |
+| `GET` | `/search?q=<term>&scope=local\|public\|all` | Operator search. `local` searches Dais posts, follows, sources, and reader items. `public` queries explicit public Bluesky and Mastodon-compatible providers. `all` returns both. |
 | `GET` | `/sources` | Public source subscriptions and private reader items. |
 | `GET` | `/moderation` | Closed-network, block, allowlist, and follower policy state. |
 | `GET` | `/diagnostics` | Owner API, private default, ActivityPub, and delivery health. |
@@ -52,7 +53,8 @@ Known gaps:
   Mastodon API or local CLI surfaces.
 - The Rust CLI can exercise live owner API compose with
   `dais owner post-create`, media uploads with `dais owner media-upload`, and
-  media revocation with `dais owner media-revoke`.
+  media revocation with `dais owner media-revoke`. It can opt into public search
+  with `dais owner search --scope public <term>`.
 - Private media capability URLs can expire automatically, but recipient-bound
   authorized-fetch media access remains future hardening.
 - Profile updates currently cover the fields reflected in ActivityPub actor

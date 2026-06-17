@@ -1081,7 +1081,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
         }
         OwnerCommand::Search(args) => {
             let results = owner_api(&args.api)
-                .search(&args.query)
+                .search_with_scope(&args.query, &args.scope)
                 .await
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_search(&results);
@@ -1715,6 +1715,44 @@ fn print_owner_search(results: &OwnerSearchResult) {
             println!("{excerpt}");
         }
         println!();
+    }
+    println!("public_posts={}", results.public_posts.len());
+    for post in &results.public_posts {
+        println!(
+            "{} [{}] {} {}",
+            post.id,
+            post.network,
+            post.provider,
+            post.published_at.as_deref().unwrap_or("")
+        );
+        if let Some(handle) = post.actor_handle.as_deref() {
+            println!("author={handle}");
+        }
+        println!("url={}", post.url);
+        println!("{}", post.content);
+        println!();
+    }
+    println!("public_actors={}", results.public_actors.len());
+    for actor in &results.public_actors {
+        println!(
+            "{} [{}] {} {}",
+            actor.id,
+            actor.network,
+            actor.provider,
+            actor.handle.as_deref().unwrap_or("")
+        );
+        if let Some(display_name) = actor.display_name.as_deref() {
+            println!("name={display_name}");
+        }
+        if let Some(url) = actor.url.as_deref() {
+            println!("url={url}");
+        }
+    }
+    if !results.provider_errors.is_empty() {
+        println!("provider_errors={}", results.provider_errors.len());
+        for error in &results.provider_errors {
+            println!("{} [{}] {}", error.provider, error.network, error.error);
+        }
     }
 }
 

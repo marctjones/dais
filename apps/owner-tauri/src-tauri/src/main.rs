@@ -1,11 +1,10 @@
 use dais_client_core::{
-    ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate,
-    ModerationState, OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert,
-    OwnerCreatedPost, OwnerDelivery, OwnerDiscoveredActor, OwnerFollowResult,
-    OwnerInteraction, OwnerInteractionResult, OwnerMedia, OwnerMediaUpload,
-    OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate,
-    OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSnapshot, OwnerSourceAdd,
-    OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources, OwnerStats,
+    ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate, ModerationState,
+    OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost, OwnerDelivery,
+    OwnerDiscoveredActor, OwnerFollowResult, OwnerInteraction, OwnerInteractionResult, OwnerMedia,
+    OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
+    OwnerProfileUpdate, OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSnapshot,
+    OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources, OwnerStats,
     ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
@@ -180,7 +179,11 @@ async fn owner_direct_messages(
 }
 
 #[tauri::command]
-async fn owner_search(app: tauri::AppHandle, query: String) -> Result<OwnerSearchResult, String> {
+async fn owner_search(
+    app: tauri::AppHandle,
+    query: String,
+    scope: Option<String>,
+) -> Result<OwnerSearchResult, String> {
     let stored = load_settings(&app)?;
     let token = stored
         .owner_token
@@ -189,7 +192,7 @@ async fn owner_search(app: tauri::AppHandle, query: String) -> Result<OwnerSearc
         .ok_or_else(|| "owner token is required".to_string())?;
     let client = OwnerApiClient::new(&stored.instance_url, token);
     client
-        .search(&query)
+        .search_with_scope(&query, scope.as_deref().unwrap_or("local"))
         .await
         .map_err(|error| error.to_string())
 }
@@ -313,7 +316,9 @@ async fn owner_moderation(app: tauri::AppHandle) -> Result<ModerationState, Stri
 }
 
 #[tauri::command]
-async fn owner_moderation_replies(app: tauri::AppHandle) -> Result<Vec<ModerationReplyRow>, String> {
+async fn owner_moderation_replies(
+    app: tauri::AppHandle,
+) -> Result<Vec<ModerationReplyRow>, String> {
     let stored = load_settings(&app)?;
     let token = stored
         .owner_token

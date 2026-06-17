@@ -1289,6 +1289,30 @@ const tests = [
     t.pass("owner discovery resolved pasted public post URL to preview and author actor");
   }),
 
+  requirement("OWNER-SEARCH-01", "DAIS-OWNER", "Owner search exposes explicit public provider result buckets", async (t) => {
+    if (!config.ownerToken) {
+      return t.info("set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner public search fixture");
+    }
+    const search = await ownerApi("/search?q=dais&scope=all&limit=5");
+    const body = search.json || {};
+    for (const key of ["posts", "users", "sources", "source_items", "public_posts", "public_actors", "provider_errors"]) {
+      if (!Array.isArray(body[key])) {
+        return t.fail(`owner search missing ${key} array: ${summarizeJson(body)}`);
+      }
+    }
+    for (const post of body.public_posts) {
+      if (!post.provider || !post.network || !post.id || !post.url) {
+        return t.fail(`public post result shape incomplete: ${summarizeJson(post)}`);
+      }
+    }
+    for (const actor of body.public_actors) {
+      if (!actor.provider || !actor.network || !actor.id) {
+        return t.fail(`public actor result shape incomplete: ${summarizeJson(actor)}`);
+      }
+    }
+    t.pass("owner search returned explicit local and public provider buckets");
+  }),
+
   requirement("OWNER-SECURITY-01", "DAIS-OWNER", "Owner API rejects anonymous and invalid bearer requests", async (t) => {
     const anonymous = await request("/api/dais/owner/snapshot", { noCache: true });
     const invalid = await ownerApiWithToken("/snapshot", "dais-invalid-owner-token");

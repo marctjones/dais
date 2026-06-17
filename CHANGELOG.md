@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.90] - 2026-06-17
+
+### Added
+- Added explicit owner public-search scopes. `GET /api/dais/owner/search` remains
+  local-only by default, while `scope=public` and `scope=all` return normalized
+  Bluesky public AppView and Mastodon-compatible ActivityPub search result
+  buckets for operator-driven discovery.
+
 ## [1.28.73] - 2026-06-16
 
 ### Added

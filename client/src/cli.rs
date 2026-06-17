@@ -881,6 +881,9 @@ pub struct OwnerApiArgs {
 pub struct OwnerSearchArgs {
     #[command(flatten)]
     pub api: OwnerApiArgs,
+    /// Search scope: local, public, or all.
+    #[arg(long, default_value = "local")]
+    pub scope: String,
     pub query: String,
 }
 

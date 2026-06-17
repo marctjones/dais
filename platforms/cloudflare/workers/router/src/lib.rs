@@ -3597,7 +3597,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             200,
         ),
         (worker::Method::Get, "/search") => api_json(
-            &owner_search(&env, query_param(url, "q").unwrap_or_default(), limit).await?,
+            &owner_search(
+                &env,
+                query_param(url, "q").unwrap_or_default(),
+                limit,
+                owner_search_flags(url),
+            )
+            .await?,
             200,
         ),
         (worker::Method::Get, "/sources") => api_json(
@@ -6091,7 +6097,38 @@ async fn owner_direct_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, 
     .results::<Map<String, Value>>()
 }
 
-async fn owner_search(env: &Env, query: String, limit: i32) -> Result<OwnerSearch> {
+#[derive(Clone, Copy)]
+struct OwnerSearchFlags {
+    include_local: bool,
+    include_public: bool,
+}
+
+fn owner_search_flags(url: &worker::Url) -> OwnerSearchFlags {
+    let scope = query_param(url, "scope")
+        .unwrap_or_else(|| "local".to_string())
+        .to_ascii_lowercase();
+    let mut include_local = matches!(scope.as_str(), "" | "local" | "all");
+    let mut include_public = matches!(scope.as_str(), "public" | "remote" | "all");
+
+    if query_param(url, "include_public").as_deref() == Some("true") {
+        include_public = true;
+    }
+    if query_param(url, "include_local").as_deref() == Some("false") {
+        include_local = false;
+    }
+
+    OwnerSearchFlags {
+        include_local,
+        include_public,
+    }
+}
+
+async fn owner_search(
+    env: &Env,
+    query: String,
+    limit: i32,
+    flags: OwnerSearchFlags,
+) -> Result<OwnerSearch> {
     let term = query.trim().to_string();
     if term.is_empty() {
         return Ok(OwnerSearch {
@@ -6099,9 +6136,42 @@ async fn owner_search(env: &Env, query: String, limit: i32) -> Result<OwnerSearc
             users: Vec::new(),
             sources: Vec::new(),
             source_items: Vec::new(),
+            public_posts: Vec::new(),
+            public_actors: Vec::new(),
+            provider_errors: Vec::new(),
         });
     }
 
+    let (posts, users, sources, source_items) = if flags.include_local {
+        owner_local_search(env, &term, limit).await?
+    } else {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    };
+    let public = if flags.include_public {
+        owner_public_search(&term, limit).await
+    } else {
+        OwnerPublicSearch::default()
+    };
+
+    Ok(OwnerSearch {
+        posts,
+        users,
+        sources,
+        source_items,
+        public_posts: public.posts,
+        public_actors: public.actors,
+        provider_errors: public.provider_errors,
+    })
+}
+
+type OwnerLocalSearchRows = (
+    Vec<Map<String, Value>>,
+    Vec<Map<String, Value>>,
+    Vec<Map<String, Value>>,
+    Vec<Map<String, Value>>,
+);
+
+async fn owner_local_search(env: &Env, term: &str, limit: i32) -> Result<OwnerLocalSearchRows> {
     let db = env.d1("DB")?;
     let like = format!("%{term}%");
     let like_arg = D1Type::Text(&like);
@@ -6173,12 +6243,348 @@ async fn owner_search(env: &Env, query: String, limit: i32) -> Result<OwnerSearc
         .await?
         .results::<Map<String, Value>>()?;
 
-    Ok(OwnerSearch {
-        posts,
-        users,
-        sources,
-        source_items,
-    })
+    Ok((posts, users, sources, source_items))
+}
+
+#[derive(Default)]
+struct OwnerPublicSearch {
+    posts: Vec<Map<String, Value>>,
+    actors: Vec<Map<String, Value>>,
+    provider_errors: Vec<Map<String, Value>>,
+}
+
+async fn owner_public_search(term: &str, limit: i32) -> OwnerPublicSearch {
+    let limit = limit.clamp(1, 25);
+    let mut results = OwnerPublicSearch::default();
+
+    match owner_public_search_bluesky_posts(term, limit).await {
+        Ok(posts) => results.posts.extend(posts),
+        Err(error) => results
+            .provider_errors
+            .push(owner_search_provider_error("bluesky", "atproto", &error)),
+    }
+    match owner_public_search_bluesky_actors(term, limit).await {
+        Ok(actors) => results.actors.extend(actors),
+        Err(error) => results
+            .provider_errors
+            .push(owner_search_provider_error("bluesky", "atproto", &error)),
+    }
+    match owner_public_search_mastodon(term, limit).await {
+        Ok((posts, actors)) => {
+            results.posts.extend(posts);
+            results.actors.extend(actors);
+        }
+        Err(error) => results.provider_errors.push(owner_search_provider_error(
+            "mastodon.social",
+            "activitypub",
+            &error,
+        )),
+    }
+
+    results
+}
+
+async fn owner_public_search_bluesky_posts(
+    term: &str,
+    limit: i32,
+) -> std::result::Result<Vec<Map<String, Value>>, String> {
+    let url = format!(
+        "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q={}&limit={}",
+        urlencoding::encode(term),
+        limit
+    );
+    let body = fetch_json_with_accept(&url, "application/json", "bluesky post search").await?;
+    Ok(body
+        .get("posts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(owner_normalize_bluesky_post)
+        .collect())
+}
+
+async fn owner_public_search_bluesky_actors(
+    term: &str,
+    limit: i32,
+) -> std::result::Result<Vec<Map<String, Value>>, String> {
+    let url = format!(
+        "https://public.api.bsky.app/xrpc/app.bsky.actor.searchActors?q={}&limit={}",
+        urlencoding::encode(term),
+        limit
+    );
+    let body = fetch_json_with_accept(&url, "application/json", "bluesky actor search").await?;
+    Ok(body
+        .get("actors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(owner_normalize_bluesky_actor)
+        .collect())
+}
+
+async fn owner_public_search_mastodon(
+    term: &str,
+    limit: i32,
+) -> std::result::Result<(Vec<Map<String, Value>>, Vec<Map<String, Value>>), String> {
+    let url = format!(
+        "https://mastodon.social/api/v2/search?q={}&limit={}",
+        urlencoding::encode(term),
+        limit
+    );
+    let body =
+        fetch_json_with_accept(&url, "application/json", "mastodon-compatible search").await?;
+    let posts = body
+        .get("statuses")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(owner_normalize_mastodon_status)
+        .collect();
+    let actors = body
+        .get("accounts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(owner_normalize_mastodon_account)
+        .collect();
+    Ok((posts, actors))
+}
+
+fn owner_normalize_bluesky_post(value: &Value) -> Option<Map<String, Value>> {
+    let object = value.as_object()?;
+    let uri = object.get("uri").and_then(optional_body_string)?;
+    let author = object.get("author").and_then(Value::as_object);
+    let handle = author
+        .and_then(|row| row.get("handle"))
+        .and_then(optional_body_string);
+    let actor_id = author
+        .and_then(|row| row.get("did"))
+        .and_then(optional_body_string);
+    let display_name = author
+        .and_then(|row| row.get("displayName"))
+        .and_then(optional_body_string);
+    let record = object.get("record").and_then(Value::as_object);
+    let text = record
+        .and_then(|row| row.get("text"))
+        .and_then(optional_body_string)
+        .unwrap_or_default();
+    let published_at = record
+        .and_then(|row| row.get("createdAt"))
+        .and_then(optional_body_string)
+        .or_else(|| object.get("indexedAt").and_then(optional_body_string));
+    let url = bluesky_post_url(&uri, handle.as_deref()).unwrap_or_else(|| uri.clone());
+    let mut row = owner_public_post_row(OwnerPublicPostFields {
+        provider: "bluesky",
+        network: "atproto",
+        id: uri.clone(),
+        url: url.clone(),
+        actor_id,
+        actor_handle: handle,
+        actor_display_name: display_name,
+        content: text,
+        content_html: None,
+        summary: None,
+        object_type: Some("app.bsky.feed.post".to_string()),
+        published_at,
+    });
+    insert_optional_string(
+        &mut row,
+        "cid",
+        object.get("cid").and_then(optional_body_string),
+    );
+    insert_optional_number(&mut row, "reply_count", object.get("replyCount"));
+    insert_optional_number(&mut row, "repost_count", object.get("repostCount"));
+    insert_optional_number(&mut row, "like_count", object.get("likeCount"));
+    Some(row)
+}
+
+fn owner_normalize_bluesky_actor(value: &Value) -> Option<Map<String, Value>> {
+    let object = value.as_object()?;
+    let did = object.get("did").and_then(optional_body_string)?;
+    let handle = object.get("handle").and_then(optional_body_string);
+    let url = handle
+        .as_ref()
+        .map(|handle| format!("https://bsky.app/profile/{handle}"))
+        .unwrap_or_else(|| did.clone());
+    Some(owner_public_actor_row(
+        "bluesky",
+        "atproto",
+        &did,
+        handle,
+        object.get("displayName").and_then(optional_body_string),
+        object.get("description").and_then(optional_body_string),
+        Some(url),
+        object.get("avatar").and_then(optional_body_string),
+    ))
+}
+
+fn owner_normalize_mastodon_status(value: &Value) -> Option<Map<String, Value>> {
+    let object = value.as_object()?;
+    let id = object
+        .get("uri")
+        .or_else(|| object.get("url"))
+        .or_else(|| object.get("id"))
+        .and_then(optional_body_string)?;
+    let url = object
+        .get("url")
+        .and_then(optional_body_string)
+        .unwrap_or_else(|| id.clone());
+    let content_html = object
+        .get("content")
+        .and_then(optional_body_string)
+        .unwrap_or_default();
+    let summary = object.get("spoiler_text").and_then(optional_body_string);
+    let mut content = strip_html(&content_html);
+    if content.is_empty() {
+        content = summary.clone().unwrap_or_default();
+    }
+    let account = object.get("account").and_then(Value::as_object);
+    Some(owner_public_post_row(OwnerPublicPostFields {
+        provider: "mastodon.social",
+        network: "activitypub",
+        id: id.clone(),
+        url: url.clone(),
+        actor_id: account
+            .and_then(|row| row.get("url"))
+            .and_then(optional_body_string),
+        actor_handle: account
+            .and_then(|row| row.get("acct"))
+            .and_then(optional_body_string)
+            .or_else(|| {
+                account
+                    .and_then(|row| row.get("username"))
+                    .and_then(optional_body_string)
+            }),
+        actor_display_name: account
+            .and_then(|row| row.get("display_name"))
+            .and_then(optional_body_string),
+        content,
+        content_html: (!content_html.is_empty()).then_some(content_html),
+        summary,
+        object_type: Some("Note".to_string()),
+        published_at: object.get("created_at").and_then(optional_body_string),
+    }))
+}
+
+fn owner_normalize_mastodon_account(value: &Value) -> Option<Map<String, Value>> {
+    let object = value.as_object()?;
+    let id = object
+        .get("url")
+        .or_else(|| object.get("uri"))
+        .or_else(|| object.get("id"))
+        .and_then(optional_body_string)?;
+    Some(owner_public_actor_row(
+        "mastodon.social",
+        "activitypub",
+        &id,
+        object
+            .get("acct")
+            .and_then(optional_body_string)
+            .or_else(|| object.get("username").and_then(optional_body_string)),
+        object.get("display_name").and_then(optional_body_string),
+        object
+            .get("note")
+            .and_then(optional_body_string)
+            .map(|html| strip_html(&html)),
+        object.get("url").and_then(optional_body_string),
+        object.get("avatar").and_then(optional_body_string),
+    ))
+}
+
+struct OwnerPublicPostFields {
+    provider: &'static str,
+    network: &'static str,
+    id: String,
+    url: String,
+    actor_id: Option<String>,
+    actor_handle: Option<String>,
+    actor_display_name: Option<String>,
+    content: String,
+    content_html: Option<String>,
+    summary: Option<String>,
+    object_type: Option<String>,
+    published_at: Option<String>,
+}
+
+fn owner_public_post_row(fields: OwnerPublicPostFields) -> Map<String, Value> {
+    let mut row = Map::new();
+    row.insert(
+        "provider".to_string(),
+        Value::String(fields.provider.to_string()),
+    );
+    row.insert(
+        "network".to_string(),
+        Value::String(fields.network.to_string()),
+    );
+    row.insert("id".to_string(), Value::String(fields.id));
+    row.insert("url".to_string(), Value::String(fields.url));
+    row.insert("content".to_string(), Value::String(fields.content));
+    insert_optional_string(&mut row, "actor_id", fields.actor_id);
+    insert_optional_string(&mut row, "actor_handle", fields.actor_handle);
+    insert_optional_string(&mut row, "actor_display_name", fields.actor_display_name);
+    insert_optional_string(&mut row, "content_html", fields.content_html);
+    insert_optional_string(&mut row, "summary", fields.summary);
+    insert_optional_string(&mut row, "object_type", fields.object_type);
+    insert_optional_string(&mut row, "published_at", fields.published_at);
+    row
+}
+
+fn owner_public_actor_row(
+    provider: &str,
+    network: &str,
+    id: &str,
+    handle: Option<String>,
+    display_name: Option<String>,
+    summary: Option<String>,
+    url: Option<String>,
+    avatar_url: Option<String>,
+) -> Map<String, Value> {
+    let mut row = Map::new();
+    row.insert("provider".to_string(), Value::String(provider.to_string()));
+    row.insert("network".to_string(), Value::String(network.to_string()));
+    row.insert("id".to_string(), Value::String(id.to_string()));
+    insert_optional_string(&mut row, "handle", handle);
+    insert_optional_string(&mut row, "display_name", display_name);
+    insert_optional_string(&mut row, "summary", summary);
+    insert_optional_string(&mut row, "url", url);
+    insert_optional_string(&mut row, "avatar_url", avatar_url);
+    row
+}
+
+fn owner_search_provider_error(provider: &str, network: &str, error: &str) -> Map<String, Value> {
+    let mut row = Map::new();
+    row.insert("provider".to_string(), Value::String(provider.to_string()));
+    row.insert("network".to_string(), Value::String(network.to_string()));
+    row.insert("error".to_string(), Value::String(error.to_string()));
+    row
+}
+
+fn bluesky_post_url(uri: &str, handle: Option<&str>) -> Option<String> {
+    let handle = handle?.trim();
+    let rkey = uri.rsplit('/').next()?.trim();
+    if handle.is_empty() || rkey.is_empty() {
+        return None;
+    }
+    Some(format!("https://bsky.app/profile/{handle}/post/{rkey}"))
+}
+
+fn insert_optional_string(row: &mut Map<String, Value>, key: &str, value: Option<String>) {
+    if let Some(value) = value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        row.insert(key.to_string(), Value::String(value));
+    }
+}
+
+fn insert_optional_number(row: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
+    if let Some(Value::Number(number)) = value {
+        row.insert(key.to_string(), Value::Number(number.clone()));
+    }
 }
 
 async fn owner_source_subscriptions(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
@@ -9403,6 +9809,9 @@ struct OwnerSearch {
     users: Vec<Map<String, Value>>,
     sources: Vec<Map<String, Value>>,
     source_items: Vec<Map<String, Value>>,
+    public_posts: Vec<Map<String, Value>>,
+    public_actors: Vec<Map<String, Value>>,
+    provider_errors: Vec<Map<String, Value>>,
 }
 
 #[derive(Serialize)]

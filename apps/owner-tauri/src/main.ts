@@ -356,6 +356,39 @@ type OwnerSearchResult = {
     rights_policy_json: string;
     created_at?: string | null;
   }>;
+  public_posts: Array<{
+    provider: string;
+    network: string;
+    id: string;
+    url: string;
+    content: string;
+    actor_id?: string | null;
+    actor_handle?: string | null;
+    actor_display_name?: string | null;
+    content_html?: string | null;
+    summary?: string | null;
+    object_type?: string | null;
+    published_at?: string | null;
+    cid?: string | null;
+    reply_count?: number | null;
+    repost_count?: number | null;
+    like_count?: number | null;
+  }>;
+  public_actors: Array<{
+    provider: string;
+    network: string;
+    id: string;
+    handle?: string | null;
+    display_name?: string | null;
+    summary?: string | null;
+    url?: string | null;
+    avatar_url?: string | null;
+  }>;
+  provider_errors: Array<{
+    provider: string;
+    network: string;
+    error: string;
+  }>;
 };
 
 type OwnerStats = {
@@ -422,7 +455,8 @@ let moderationState: ModerationState | null = null;
 let moderationReplies: ModerationReply[] = [];
 let directMessages: OwnerDirectMessage[] = [];
 let searchQuery = "";
-let searchResults: OwnerSearchResult = { posts: [], users: [], sources: [], source_items: [] };
+let searchScope = "local";
+let searchResults: OwnerSearchResult = emptySearchResults();
 let ownerStats: OwnerStats | null = null;
 let showTimelineReplies = false;
 let showSourceItems = true;
@@ -434,6 +468,18 @@ const supportedSensitiveCategories: SensitiveCategory[] = [
   "family-only",
   "work-sensitive"
 ];
+
+function emptySearchResults(): OwnerSearchResult {
+  return {
+    posts: [],
+    users: [],
+    sources: [],
+    source_items: [],
+    public_posts: [],
+    public_actors: [],
+    provider_errors: []
+  };
+}
 
 async function ownerInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!smokeMode) {
@@ -579,7 +625,28 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
         read: item.read,
         rights_policy_json: "{}",
         created_at: null
-      }))
+      })),
+      public_posts: [
+        {
+          provider: "bluesky",
+          network: "atproto",
+          id: "at://did:plc:smoke/app.bsky.feed.post/3smoke",
+          url: "https://bsky.app/profile/smoke.example/post/3smoke",
+          content: "Public smoke result",
+          actor_handle: "smoke.example",
+          published_at: "2026-06-17T12:00:00Z"
+        }
+      ],
+      public_actors: [
+        {
+          provider: "mastodon.social",
+          network: "activitypub",
+          id: "https://mastodon.social/@smoke",
+          handle: "smoke@mastodon.social",
+          display_name: "Smoke"
+        }
+      ],
+      provider_errors: []
     } as T;
   }
   if (command === "owner_interaction") {
@@ -1045,20 +1112,31 @@ function searchView() {
       <h2>Search</h2>
       <form id="search-form" class="inline-form">
         <input name="query" value="${escapeAttr(searchQuery)}" placeholder="Search posts, actors, follows, and sources" />
+        <select name="scope">
+          <option value="local"${searchScope === "local" ? " selected" : ""}>Local</option>
+          <option value="public"${searchScope === "public" ? " selected" : ""}>Public</option>
+          <option value="all"${searchScope === "all" ? " selected" : ""}>All</option>
+        </select>
         <button type="submit">Search</button>
       </form>
       <h2 class="section-label">Posts</h2>
       ${list(searchResults.posts.map(searchPostCard), "No matching posts.")}
+      <h2 class="section-label">Public posts</h2>
+      ${list((searchResults.public_posts || []).map(searchPublicPostCard), "No public post results.")}
     </article>
     <article class="panel">
       <h2>Actors</h2>
       ${list(searchResults.users.map(searchUserCard), "No matching actors.")}
+      <h2 class="section-label">Public actors</h2>
+      ${list((searchResults.public_actors || []).map(searchPublicActorCard), "No public actor results.")}
     </article>
     <article class="panel">
       <h2>Sources</h2>
       ${list((searchResults.sources || []).map(sourceSubscriptionCard), "No matching source subscriptions.")}
       <h2 class="section-label">Source items</h2>
       ${list((searchResults.source_items || []).map(searchSourceItemCard), "No matching source items.")}
+      <h2 class="section-label">Providers</h2>
+      ${list((searchResults.provider_errors || []).map(searchProviderErrorCard), "Providers returned normally.")}
     </article>
   </section>`;
 }
@@ -1881,6 +1959,48 @@ function searchUserCard(row: OwnerSearchResult["users"][number]) {
   </article>`;
 }
 
+function searchPublicPostCard(row: OwnerSearchResult["public_posts"][number]) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.actor_display_name || row.actor_handle || shortUrl(row.url))}</h2>
+      <p>${escapeHtml(row.content || row.summary || "")}</p>
+      ${sensitivityBadgesHtml([row.actor_display_name || "", row.actor_handle || "", row.content || "", row.summary || ""].join(" "))}
+    </div>
+    <footer>
+      <span>${escapeHtml(row.network)}</span>
+      <span>${escapeHtml(row.provider)}</span>
+      ${row.published_at ? `<time>${escapeHtml(formatTime(row.published_at))}</time>` : ""}
+      <a href="${escapeAttr(row.url)}">${escapeHtml(shortHost(row.url))}</a>
+    </footer>
+  </article>`;
+}
+
+function searchPublicActorCard(row: OwnerSearchResult["public_actors"][number]) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.display_name || row.handle || actorLabel(row.id))}</h2>
+      <p>${escapeHtml(row.handle || row.id)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(row.network)}</span>
+      <span>${escapeHtml(row.provider)}</span>
+      ${row.url ? `<a href="${escapeAttr(row.url)}">${escapeHtml(shortHost(row.url))}</a>` : ""}
+    </footer>
+  </article>`;
+}
+
+function searchProviderErrorCard(row: OwnerSearchResult["provider_errors"][number]) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(row.provider)}</h2>
+      <p>${escapeHtml(row.error)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(row.network)}</span>
+    </footer>
+  </article>`;
+}
+
 function searchSourceItemCard(row: OwnerSearchResult["source_items"][number]) {
   return `<article class="panel item">
     <div>
@@ -2506,14 +2626,30 @@ async function runSearch(event: Event) {
   event.preventDefault();
   const form = event.currentTarget as HTMLFormElement;
   const query = String(new FormData(form).get("query") || "").trim();
+  const scope = String(new FormData(form).get("scope") || "local").trim() || "local";
   searchQuery = query;
+  searchScope = scope;
   searchResults = query
-    ? await ownerInvoke<OwnerSearchResult>("owner_search", { query })
-    : { posts: [], users: [], sources: [], source_items: [] };
+    ? normalizeSearchResults(await ownerInvoke<OwnerSearchResult>("owner_search", { query, scope }))
+    : emptySearchResults();
   notice = query
-    ? `Search returned ${searchResults.posts.length} posts, ${searchResults.users.length} actors, ${(searchResults.sources || []).length} sources, and ${(searchResults.source_items || []).length} source items.`
+    ? `Search returned ${searchResults.posts.length} posts, ${searchResults.users.length} actors, ${(searchResults.sources || []).length} sources, ${(searchResults.source_items || []).length} source items, ${(searchResults.public_posts || []).length} public posts, and ${(searchResults.public_actors || []).length} public actors.`
     : "";
   render();
+}
+
+function normalizeSearchResults(results: OwnerSearchResult): OwnerSearchResult {
+  return {
+    ...emptySearchResults(),
+    ...results,
+    posts: results.posts || [],
+    users: results.users || [],
+    sources: results.sources || [],
+    source_items: results.source_items || [],
+    public_posts: results.public_posts || [],
+    public_actors: results.public_actors || [],
+    provider_errors: results.provider_errors || []
+  };
 }
 
 async function markNotificationRead(id: string) {
