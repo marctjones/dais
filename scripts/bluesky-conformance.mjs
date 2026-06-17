@@ -238,6 +238,64 @@ const tests = [
     }
   }),
 
+  requirement("BLUESKY-CURSOR-01", "Public feed endpoints support cursor pagination", async () => {
+    const firstTimeline = await request("/xrpc/app.bsky.feed.getTimeline?limit=1");
+    if (firstTimeline.status !== 200) throw new Error(`timeline page 1 expected 200, got ${firstTimeline.status}`);
+    expectArray(firstTimeline.json?.feed, "timeline page 1");
+    if (firstTimeline.json.feed.length !== 1) throw new Error("timeline page 1 did not honor limit=1");
+    if (!firstTimeline.json?.cursor) throw new Error("timeline page 1 did not return a next cursor");
+
+    const secondTimeline = await request(
+      `/xrpc/app.bsky.feed.getTimeline?limit=1&cursor=${encodeURIComponent(firstTimeline.json.cursor)}`,
+    );
+    if (secondTimeline.status !== 200) throw new Error(`timeline page 2 expected 200, got ${secondTimeline.status}`);
+    expectArray(secondTimeline.json?.feed, "timeline page 2");
+    if (secondTimeline.json.feed.length !== 1) throw new Error("timeline page 2 did not honor limit=1");
+    if (secondTimeline.json.feed[0]?.post?.uri === firstTimeline.json.feed[0]?.post?.uri) {
+      throw new Error("timeline cursor returned a duplicate first-page post");
+    }
+
+    const author = await request(`/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(did())}&limit=1`);
+    if (author.status !== 200) throw new Error(`author feed page 1 expected 200, got ${author.status}`);
+    if (!author.json?.cursor) throw new Error("author feed did not return a next cursor");
+    const authorNext = await request(
+      `/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(did())}&limit=1&cursor=${encodeURIComponent(author.json.cursor)}`,
+    );
+    if (authorNext.status !== 200) throw new Error(`author feed page 2 expected 200, got ${authorNext.status}`);
+    if (authorNext.json?.feed?.[0]?.post?.uri === author.json?.feed?.[0]?.post?.uri) {
+      throw new Error("author feed cursor returned a duplicate first-page post");
+    }
+  }),
+
+  requirement("BLUESKY-REPO-CURSOR-01", "Repo listRecords supports cursor pagination", async () => {
+    if (!config.mastodonToken) {
+      return { status: "SKIP", detail: "set DAIS_MASTODON_BEARER_TOKEN for repo listRecords cursor check" };
+    }
+    const session = await request("/xrpc/com.atproto.server.createSession", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: did(), password: config.mastodonToken }),
+    });
+    if (session.status !== 200) throw new Error(`createSession expected 200, got ${session.status}: ${session.text}`);
+    const records = await request(
+      `/xrpc/com.atproto.repo.listRecords?repo=${encodeURIComponent(did())}&collection=app.bsky.feed.post&limit=1`,
+      { headers: { Authorization: `Bearer ${session.json.accessJwt}` } },
+    );
+    if (records.status !== 200) throw new Error(`listRecords page 1 expected 200, got ${records.status}: ${records.text}`);
+    expectArray(records.json?.records, "listRecords page 1");
+    if (!records.json?.cursor) throw new Error("listRecords page 1 did not return a next cursor");
+    const nextRecords = await request(
+      `/xrpc/com.atproto.repo.listRecords?repo=${encodeURIComponent(did())}&collection=app.bsky.feed.post&limit=1&cursor=${encodeURIComponent(records.json.cursor)}`,
+      { headers: { Authorization: `Bearer ${session.json.accessJwt}` } },
+    );
+    if (nextRecords.status !== 200) {
+      throw new Error(`listRecords page 2 expected 200, got ${nextRecords.status}: ${nextRecords.text}`);
+    }
+    if (nextRecords.json?.records?.[0]?.uri === records.json?.records?.[0]?.uri) {
+      throw new Error("listRecords cursor returned a duplicate first-page record");
+    }
+  }),
+
   requirement("BLUESKY-PROFILE-01", "Profile endpoints expose local account shape and counts", async () => {
     const profile = await request(`/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(did())}`);
     const profiles = await request(

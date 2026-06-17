@@ -386,26 +386,26 @@ async fn handle_list_records(req: Request, ctx: RouteContext<()>) -> Result<Resp
     if repo != identity.did && repo != identity.handle {
         return Response::error("Repo not found", 404);
     }
-    let limit = query_limit(&url);
+    let page = query_page(&url);
     let records = match collection.as_str() {
-        "app.bsky.feed.post" => public_posts(&ctx.env, limit)
+        "app.bsky.feed.post" => public_posts(&ctx.env, page)
             .await?
             .into_iter()
             .map(|row| record_response(&identity, row))
             .collect(),
         "app.bsky.feed.like" => {
-            subject_records(&ctx.env, &identity, &collection, "like", limit).await?
+            subject_records(&ctx.env, &identity, &collection, "like", page).await?
         }
         "app.bsky.feed.repost" => {
-            subject_records(&ctx.env, &identity, &collection, "boost", limit).await?
+            subject_records(&ctx.env, &identity, &collection, "boost", page).await?
         }
-        "app.bsky.graph.follow" => follow_records(&ctx.env, &identity, limit).await?,
+        "app.bsky.graph.follow" => follow_records(&ctx.env, &identity, page).await?,
         "app.bsky.actor.profile" => {
             vec![profile_record_response(&ctx.env, &identity).await?]
         }
         _ => return Response::error("Collection not found", 404),
     };
-    json_response(serde_json::json!({ "records": records }))
+    paged_array_response("records", records, page)
 }
 
 async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -649,23 +649,25 @@ async fn handle_get_author_feed(req: Request, ctx: RouteContext<()>) -> Result<R
     if actor != identity.did && actor != identity.handle {
         return json_response(serde_json::json!({ "feed": [] }));
     }
-    let rows = public_posts(&ctx.env, query_limit(&url)).await?;
+    let page = query_page(&url);
+    let rows = public_posts(&ctx.env, page).await?;
     let feed: Vec<Value> = rows
         .into_iter()
         .map(|row| serde_json::json!({ "post": post_view(&identity, row) }))
         .collect();
-    json_response(serde_json::json!({ "feed": feed }))
+    paged_array_response("feed", feed, page)
 }
 
 async fn handle_get_timeline(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let url = req.url()?;
     let identity = identity(&ctx.env);
-    let rows = public_posts(&ctx.env, query_limit(&url)).await?;
+    let page = query_page(&url);
+    let rows = public_posts(&ctx.env, page).await?;
     let feed: Vec<Value> = rows
         .into_iter()
         .map(|row| serde_json::json!({ "post": post_view(&identity, row) }))
         .collect();
-    json_response(serde_json::json!({ "feed": feed }))
+    paged_array_response("feed", feed, page)
 }
 
 async fn handle_search_posts(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -675,12 +677,13 @@ async fn handle_search_posts(req: Request, ctx: RouteContext<()>) -> Result<Resp
     if query.trim().is_empty() {
         return json_response(serde_json::json!({ "posts": [] }));
     }
-    let posts: Vec<Value> = search_public_posts(&ctx.env, &query, query_limit(&url))
+    let page = query_page(&url);
+    let posts: Vec<Value> = search_public_posts(&ctx.env, &query, page)
         .await?
         .into_iter()
         .map(|row| post_view(&identity, row))
         .collect();
-    json_response(serde_json::json!({ "posts": posts }))
+    paged_array_response("posts", posts, page)
 }
 
 async fn handle_search_actors(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -701,7 +704,8 @@ async fn handle_search_actors(req: Request, ctx: RouteContext<()>) -> Result<Res
 async fn handle_list_notifications(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let url = req.url()?;
     let identity = identity(&ctx.env);
-    let rows = notification_rows(&ctx.env, query_limit(&url)).await?;
+    let page = query_page(&url);
+    let rows = notification_rows(&ctx.env, page).await?;
     let notifications: Vec<Value> = rows
         .into_iter()
         .map(|row| {
@@ -734,14 +738,15 @@ async fn handle_list_notifications(req: Request, ctx: RouteContext<()>) -> Resul
             })
         })
         .collect();
-    json_response(serde_json::json!({ "notifications": notifications }))
+    paged_array_response("notifications", notifications, page)
 }
 
 async fn handle_get_likes(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let url = req.url()?;
     let uri = required_query(&url, "uri")?;
     let identity = identity(&ctx.env);
-    let rows = like_rows(&ctx.env, &uri, query_limit(&url)).await?;
+    let page = query_page(&url);
+    let rows = like_rows(&ctx.env, &uri, page).await?;
     let likes: Vec<Value> = rows
         .into_iter()
         .map(|row| {
@@ -759,11 +764,18 @@ async fn handle_get_likes(req: Request, ctx: RouteContext<()>) -> Result<Respons
             })
         })
         .collect();
-    json_response(serde_json::json!({
+    let cursor = next_cursor(page, likes.len());
+    let mut likes = likes;
+    likes.truncate(page.limit as usize);
+    let mut body = serde_json::json!({
         "uri": uri,
         "cid": stable_cid(&uri),
         "likes": likes
-    }))
+    });
+    if let (Some(object), Some(cursor)) = (body.as_object_mut(), cursor) {
+        object.insert("cursor".to_string(), Value::String(cursor));
+    }
+    json_response(body)
 }
 
 async fn handle_get_followers(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -773,7 +785,8 @@ async fn handle_get_followers(req: Request, ctx: RouteContext<()>) -> Result<Res
     if actor != identity.did && actor != identity.handle {
         return json_response(serde_json::json!({ "followers": [] }));
     }
-    let followers: Vec<Value> = follower_rows(&ctx.env, query_limit(&url))
+    let page = query_page(&url);
+    let followers: Vec<Value> = follower_rows(&ctx.env, page)
         .await?
         .into_iter()
         .map(|row| {
@@ -781,7 +794,7 @@ async fn handle_get_followers(req: Request, ctx: RouteContext<()>) -> Result<Res
             profile_view(&identity, &actor_id, "", "")
         })
         .collect();
-    json_response(serde_json::json!({ "followers": followers }))
+    paged_array_response("followers", followers, page)
 }
 
 async fn handle_get_follows(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -791,7 +804,8 @@ async fn handle_get_follows(req: Request, ctx: RouteContext<()>) -> Result<Respo
     if actor != identity.did && actor != identity.handle {
         return json_response(serde_json::json!({ "follows": [] }));
     }
-    let follows: Vec<Value> = follows_rows(&ctx.env, query_limit(&url))
+    let page = query_page(&url);
+    let follows: Vec<Value> = follows_rows(&ctx.env, page)
         .await?
         .into_iter()
         .map(|row| {
@@ -799,7 +813,7 @@ async fn handle_get_follows(req: Request, ctx: RouteContext<()>) -> Result<Respo
             profile_view(&identity, &actor_id, "", "")
         })
         .collect();
-    json_response(serde_json::json!({ "follows": follows }))
+    paged_array_response("follows", follows, page)
 }
 
 async fn handle_subscribe_repos(_req: Request, env: Env) -> Result<Response> {
@@ -858,6 +872,12 @@ struct ProfileCounts {
 struct ActorProfile {
     display_name: String,
     description: String,
+}
+
+#[derive(Clone, Copy)]
+struct Page {
+    limit: u32,
+    offset: u32,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -952,6 +972,44 @@ fn query_limit(url: &Url) -> u32 {
         .clamp(1, 100)
 }
 
+fn query_page(url: &Url) -> Page {
+    Page {
+        limit: query_limit(url),
+        offset: url
+            .query_pairs()
+            .find(|(name, _)| name == "cursor")
+            .and_then(|(_, value)| parse_cursor_offset(&value))
+            .unwrap_or(0),
+    }
+}
+
+fn parse_cursor_offset(value: &str) -> Option<u32> {
+    value
+        .strip_prefix("offset:")
+        .unwrap_or(value)
+        .parse::<u32>()
+        .ok()
+}
+
+fn next_cursor(page: Page, row_count: usize) -> Option<String> {
+    (row_count > page.limit as usize).then(|| (page.offset + page.limit).to_string())
+}
+
+fn page_size(page: Page) -> u32 {
+    page.limit + 1
+}
+
+fn paged_array_response(key: &str, mut values: Vec<Value>, page: Page) -> Result<Response> {
+    let cursor = next_cursor(page, values.len());
+    values.truncate(page.limit as usize);
+    let mut object = serde_json::Map::new();
+    object.insert(key.to_string(), Value::Array(values));
+    if let Some(cursor) = cursor {
+        object.insert("cursor".to_string(), Value::String(cursor));
+    }
+    json_response(Value::Object(object))
+}
+
 async fn repo_stats(env: &Env, identity: &Identity) -> Result<RepoStats> {
     let db = env.d1("DB")?;
     let actor_id = local_actor_id(identity);
@@ -1023,7 +1081,7 @@ async fn profile_counts(env: &Env) -> Result<ProfileCounts> {
     })
 }
 
-async fn public_posts(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<String, Value>>> {
+async fn public_posts(env: &Env, page: Page) -> Result<Vec<serde_json::Map<String, Value>>> {
     let db = env.d1("DB")?;
     db.prepare(
         r#"
@@ -1034,10 +1092,10 @@ async fn public_posts(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<Strin
           AND encrypted_message IS NULL
           AND content NOT LIKE '%End-to-end encrypted message%'
         ORDER BY published_at DESC
-        LIMIT ?1
+        LIMIT ?1 OFFSET ?2
         "#,
     )
-    .bind(&[limit.into()])?
+    .bind(&[page_size(page).into(), page.offset.into()])?
     .all()
     .await?
     .results::<serde_json::Map<String, Value>>()
@@ -1046,7 +1104,7 @@ async fn public_posts(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<Strin
 async fn search_public_posts(
     env: &Env,
     query: &str,
-    limit: u32,
+    page: Page,
 ) -> Result<Vec<serde_json::Map<String, Value>>> {
     let db = env.d1("DB")?;
     db.prepare(
@@ -1059,16 +1117,20 @@ async fn search_public_posts(
           AND content NOT LIKE '%End-to-end encrypted message%'
           AND instr(LOWER(content), LOWER(?1)) > 0
         ORDER BY published_at DESC
-        LIMIT ?2
+        LIMIT ?2 OFFSET ?3
         "#,
     )
-    .bind(&[query.trim().into(), limit.into()])?
+    .bind(&[
+        query.trim().into(),
+        page_size(page).into(),
+        page.offset.into(),
+    ])?
     .all()
     .await?
     .results::<serde_json::Map<String, Value>>()
 }
 
-async fn notification_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<String, Value>>> {
+async fn notification_rows(env: &Env, page: Page) -> Result<Vec<serde_json::Map<String, Value>>> {
     let db = env.d1("DB")?;
     db.prepare(
         r#"
@@ -1076,10 +1138,10 @@ async fn notification_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<
                actor_avatar_url, post_id, activity_id, content, read, created_at
         FROM notifications
         ORDER BY created_at DESC
-        LIMIT ?1
+        LIMIT ?1 OFFSET ?2
         "#,
     )
-    .bind(&[limit.into()])?
+    .bind(&[page_size(page).into(), page.offset.into()])?
     .all()
     .await?
     .results::<serde_json::Map<String, Value>>()
@@ -1088,7 +1150,7 @@ async fn notification_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<
 async fn like_rows(
     env: &Env,
     uri: &str,
-    limit: u32,
+    page: Page,
 ) -> Result<Vec<serde_json::Map<String, Value>>> {
     let db = env.d1("DB")?;
     db.prepare(
@@ -1099,16 +1161,16 @@ async fn like_rows(
         WHERE type = 'like'
           AND object_url = ?1
         ORDER BY created_at DESC
-        LIMIT ?2
+        LIMIT ?2 OFFSET ?3
         "#,
     )
-    .bind(&[uri.into(), limit.into()])?
+    .bind(&[uri.into(), page_size(page).into(), page.offset.into()])?
     .all()
     .await?
     .results::<serde_json::Map<String, Value>>()
 }
 
-async fn follower_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<String, Value>>> {
+async fn follower_rows(env: &Env, page: Page) -> Result<Vec<serde_json::Map<String, Value>>> {
     let db = env.d1("DB")?;
     db.prepare(
         r#"
@@ -1116,16 +1178,16 @@ async fn follower_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<Stri
         FROM followers
         WHERE status = 'approved'
         ORDER BY created_at DESC
-        LIMIT ?1
+        LIMIT ?1 OFFSET ?2
         "#,
     )
-    .bind(&[limit.into()])?
+    .bind(&[page_size(page).into(), page.offset.into()])?
     .all()
     .await?
     .results::<serde_json::Map<String, Value>>()
 }
 
-async fn follows_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<String, Value>>> {
+async fn follows_rows(env: &Env, page: Page) -> Result<Vec<serde_json::Map<String, Value>>> {
     let db = env.d1("DB")?;
     db.prepare(
         r#"
@@ -1133,10 +1195,10 @@ async fn follows_rows(env: &Env, limit: u32) -> Result<Vec<serde_json::Map<Strin
         FROM following
         WHERE status = 'accepted'
         ORDER BY created_at DESC
-        LIMIT ?1
+        LIMIT ?1 OFFSET ?2
         "#,
     )
-    .bind(&[limit.into()])?
+    .bind(&[page_size(page).into(), page.offset.into()])?
     .all()
     .await?
     .results::<serde_json::Map<String, Value>>()
@@ -1347,7 +1409,7 @@ async fn subject_records(
     identity: &Identity,
     collection: &str,
     interaction_type: &str,
-    limit: u32,
+    page: Page,
 ) -> Result<Vec<Value>> {
     let rows = env
         .d1("DB")?
@@ -1358,13 +1420,14 @@ async fn subject_records(
             WHERE actor_id = ?1
               AND type = ?2
             ORDER BY created_at DESC
-            LIMIT ?3
+            LIMIT ?3 OFFSET ?4
             "#,
         )
         .bind(&[
             local_actor_id(identity).into(),
             interaction_type.into(),
-            limit.into(),
+            page_size(page).into(),
+            page.offset.into(),
         ])?
         .all()
         .await?
@@ -1390,7 +1453,7 @@ async fn subject_records(
         .collect())
 }
 
-async fn follow_records(env: &Env, identity: &Identity, limit: u32) -> Result<Vec<Value>> {
+async fn follow_records(env: &Env, identity: &Identity, page: Page) -> Result<Vec<Value>> {
     let rows = env
         .d1("DB")?
         .prepare(
@@ -1400,10 +1463,14 @@ async fn follow_records(env: &Env, identity: &Identity, limit: u32) -> Result<Ve
             WHERE actor_id = ?1
               AND status IN ('accepted', 'pending')
             ORDER BY created_at DESC
-            LIMIT ?2
+            LIMIT ?2 OFFSET ?3
             "#,
         )
-        .bind(&[local_actor_id(identity).into(), limit.into()])?
+        .bind(&[
+            local_actor_id(identity).into(),
+            page_size(page).into(),
+            page.offset.into(),
+        ])?
         .all()
         .await?
         .results::<serde_json::Map<String, Value>>()?;
