@@ -76,6 +76,16 @@ Complete feature list for dais single-user ActivityPub & AT Protocol server.
 - **Follower Count** - Public follower statistics
 - **Mutual Follows** - Identify mutual connections
 
+### Watch Reader ✅
+- **Private Watch Targets** - Monitor public posts without creating a remote
+  follow, graph record, approval request, or subscription notice
+- **Multi-Protocol Watching** - RSS, Atom, ActivityPub actors, ActivityPub
+  objects, Bluesky actors, and Bluesky posts
+- **Public-Only Harvesting** - Uses ordinary public GET/AppView/feed requests
+  and stores results as private local reader items
+- **Owner Controls** - Add, list, refresh, and remove Watch targets from the
+  owner API, CLI, and desktop owner app
+
 ### Notifications ✅
 - **Follow Notifications** - New follower alerts
 - **Mention Notifications** - @-mentions

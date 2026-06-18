@@ -221,6 +221,29 @@ impl OwnerApiClient {
         .await
     }
 
+    pub async fn watches(&self) -> ClientResult<OwnerSources> {
+        self.get("/api/dais/owner/watches").await
+    }
+
+    pub async fn add_watch(&self, watch: &OwnerWatchAdd) -> ClientResult<OwnerSourceAddResult> {
+        self.post("/api/dais/owner/watches", watch).await
+    }
+
+    pub async fn remove_watch(&self, id: &str) -> ClientResult<OwnerActionResult> {
+        self.delete(&format!("/api/dais/owner/watches/{id}")).await
+    }
+
+    pub async fn refresh_watches(
+        &self,
+        id: Option<&str>,
+    ) -> ClientResult<OwnerSourceRefreshResult> {
+        self.post(
+            "/api/dais/owner/watches/refresh",
+            &OwnerSourceRefresh { id },
+        )
+        .await
+    }
+
     pub async fn moderation(&self) -> ClientResult<ModerationState> {
         self.get("/api/dais/owner/moderation").await
     }
@@ -922,6 +945,20 @@ pub struct OwnerSourceAdd {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerWatchAdd {
+    pub watch_type: String,
+    pub target: String,
+    pub title: Option<String>,
+    pub cadence_minutes: Option<u16>,
+    pub private_reader_only: bool,
+    pub excerpt_only: bool,
+    pub link_required: bool,
+    pub attribution_required: bool,
+    pub image_allowed: bool,
+    pub full_text_allowed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerSourceAddResult {
     pub ok: bool,
     pub source: SourceSubscription,
@@ -1190,6 +1227,16 @@ mod tests {
                 closed_network: false,
                 block_count: 0,
                 allowlist_count: 0,
+                require_authorized_fetch: false,
+                manually_approves_followers: false,
+                reply_policy: "review".to_string(),
+                ai_enabled: false,
+                ai_model: None,
+                ai_daily_budget: 0,
+                reply_queue_count: 0,
+                flagged_reply_count: 0,
+                hidden_reply_count: 0,
+                rejected_reply_count: 0,
                 blocks: Vec::new(),
                 allowlist: Vec::new(),
             },

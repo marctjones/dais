@@ -819,6 +819,8 @@ pub enum OwnerCommand {
     PostDelete(OwnerObjectArgs),
     /// List live owner API source subscriptions and reader items.
     Sources(OwnerApiArgs),
+    /// List live owner API private watches and harvested public posts.
+    Watches(OwnerApiArgs),
     /// Upload media through the live owner API and print attachment JSON.
     MediaUpload(OwnerMediaUploadArgs),
     /// Revoke/delete media uploaded through the live owner API.
@@ -829,6 +831,12 @@ pub enum OwnerCommand {
     SourceRemove(OwnerSourceIdArgs),
     /// Refresh one live owner API source, or all active sources when no id is supplied.
     SourceRefresh(OwnerSourceRefreshArgs),
+    /// Add a private Watch target through the live owner API.
+    WatchAdd(OwnerWatchAddArgs),
+    /// Remove a private Watch target.
+    WatchRemove(OwnerSourceIdArgs),
+    /// Refresh one private Watch, or all active watches when no id is supplied.
+    WatchRefresh(OwnerSourceRefreshArgs),
     /// Show live owner API moderation blocks and federation allowlist.
     Moderation(OwnerApiArgs),
     /// Block an ActivityPub actor through the live owner API.
@@ -1001,6 +1009,32 @@ pub struct OwnerSourceAddArgs {
     pub cadence_minutes: Option<u16>,
     #[arg(long)]
     pub api_secret_name: Option<String>,
+    #[arg(long, default_value_t = true)]
+    pub private_reader_only: bool,
+    #[arg(long, default_value_t = true)]
+    pub excerpt_only: bool,
+    #[arg(long, default_value_t = true)]
+    pub link_required: bool,
+    #[arg(long, default_value_t = true)]
+    pub attribution_required: bool,
+    #[arg(long)]
+    pub image_allowed: bool,
+    #[arg(long)]
+    pub full_text_allowed: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerWatchAddArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Watch kind: rss, atom, activitypub_actor, activitypub_object, bluesky_actor, or bluesky_post.
+    pub watch_type: String,
+    /// Public target to monitor without following: feed URL, AP actor/object URL or handle, Bluesky handle/DID/profile/post.
+    pub target: String,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub cadence_minutes: Option<u16>,
     #[arg(long, default_value_t = true)]
     pub private_reader_only: bool,
     #[arg(long, default_value_t = true)]

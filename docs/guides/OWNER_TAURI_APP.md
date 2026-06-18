@@ -7,7 +7,8 @@ shell intended to share Rust owner-client models with the CLI/TUI through
 Current status:
 
 - Adaptive desktop/narrow layout for Home, Posts, Sources, Notifications,
-  Followers, Profile, Moderation, Deliveries, Settings, and Diagnostics.
+  Followers, Watches, Profile, Moderation, Deliveries, Settings, and
+  Diagnostics.
 - Local settings storage for instance URL and owner token.
 - Shared Rust `dais-client-core` models and `OwnerApiClient` HTTP calls for
   snapshots, compose, profile updates, and follower status updates.
@@ -17,6 +18,8 @@ Current status:
 - Live public account/profile configuration for the ActivityPub actor, HTML
   profile, and Mastodon account API output.
 - Approved-follower selection in compose for direct ActivityPub posts.
+- Live Watch management for private monitoring of public RSS, Atom,
+  ActivityPub, and Bluesky posts without remote follow or subscription records.
 - Local preview data when no token is configured or the owner API is
   unreachable.
 

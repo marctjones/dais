@@ -5,7 +5,7 @@ use dais_client_core::{
     OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
     OwnerProfileUpdate, OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSnapshot,
     OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources, OwnerStats,
-    ProtocolRoute, SourceItem, Visibility,
+    OwnerWatchAdd, ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -242,6 +242,18 @@ async fn owner_sources(app: tauri::AppHandle) -> Result<OwnerSources, String> {
 }
 
 #[tauri::command]
+async fn owner_watches(app: tauri::AppHandle) -> Result<OwnerSources, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client.watches().await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn add_owner_source(
     app: tauri::AppHandle,
     source_type: String,
@@ -275,6 +287,38 @@ async fn add_owner_source(
 }
 
 #[tauri::command]
+async fn add_owner_watch(
+    app: tauri::AppHandle,
+    watch_type: String,
+    target: String,
+    title: Option<String>,
+    cadence_minutes: Option<u16>,
+) -> Result<OwnerSourceAddResult, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .add_watch(&OwnerWatchAdd {
+            watch_type,
+            target,
+            title,
+            cadence_minutes,
+            private_reader_only: true,
+            excerpt_only: true,
+            link_required: true,
+            attribution_required: true,
+            image_allowed: false,
+            full_text_allowed: false,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn remove_owner_source(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let stored = load_settings(&app)?;
     let token = stored
@@ -285,6 +329,22 @@ async fn remove_owner_source(app: tauri::AppHandle, id: String) -> Result<(), St
     let client = OwnerApiClient::new(&stored.instance_url, token);
     client
         .remove_source(&id)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn remove_owner_watch(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .remove_watch(&id)
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -304,6 +364,24 @@ async fn refresh_owner_source(
     let client = OwnerApiClient::new(&stored.instance_url, token);
     client
         .refresh_sources(id.as_deref())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn refresh_owner_watch(
+    app: tauri::AppHandle,
+    id: Option<String>,
+) -> Result<OwnerSourceRefreshResult, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .refresh_watches(id.as_deref())
         .await
         .map_err(|error| error.to_string())
 }
@@ -815,9 +893,13 @@ fn main() {
             upsert_owner_audience_list,
             delete_owner_audience_list,
             owner_sources,
+            owner_watches,
             add_owner_source,
+            add_owner_watch,
             remove_owner_source,
+            remove_owner_watch,
             refresh_owner_source,
+            refresh_owner_watch,
             owner_moderation,
             owner_moderation_replies,
             set_owner_reply_moderation_status,

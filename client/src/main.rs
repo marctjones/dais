@@ -29,7 +29,8 @@ use dais_client_core::{
     OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing,
     OwnerFriend, OwnerInteraction, OwnerMediaUpload, OwnerNotification, OwnerPostDetail,
     OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd,
-    OwnerSources, OwnerStats, ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
+    OwnerSources, OwnerStats, OwnerWatchAdd, ProtocolRoute as OwnerProtocolRoute,
+    Visibility as OwnerVisibility,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
@@ -1155,6 +1156,13 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_sources(&sources);
         }
+        OwnerCommand::Watches(args) => {
+            let watches = owner_api(&args)
+                .watches()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_sources(&watches);
+        }
         OwnerCommand::MediaUpload(args) => {
             let data = fs::read(&args.path)?;
             let filename = args
@@ -1239,6 +1247,51 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
         OwnerCommand::SourceRefresh(args) => {
             let result = owner_api(&args.api)
                 .refresh_sources(args.id.as_deref())
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            for item in result.items {
+                if item.ok {
+                    println!(
+                        "{} ok status={}",
+                        item.id,
+                        item.status.unwrap_or_else(|| "active".to_string())
+                    );
+                } else {
+                    println!("{} error={}", item.id, item.error.unwrap_or_default());
+                }
+            }
+        }
+        OwnerCommand::WatchAdd(args) => {
+            let result = owner_api(&args.api)
+                .add_watch(&OwnerWatchAdd {
+                    watch_type: args.watch_type,
+                    target: args.target,
+                    title: args.title,
+                    cadence_minutes: args.cadence_minutes,
+                    private_reader_only: args.private_reader_only,
+                    excerpt_only: args.excerpt_only,
+                    link_required: args.link_required,
+                    attribution_required: args.attribution_required,
+                    image_allowed: args.image_allowed,
+                    full_text_allowed: args.full_text_allowed,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!(
+                "Added watch {} {} {}",
+                result.source.id, result.source.source_type, result.source.url
+            );
+        }
+        OwnerCommand::WatchRemove(args) => {
+            owner_api(&args.api)
+                .remove_watch(&args.id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Removed watch {}", args.id);
+        }
+        OwnerCommand::WatchRefresh(args) => {
+            let result = owner_api(&args.api)
+                .refresh_watches(args.id.as_deref())
                 .await
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             for item in result.items {

@@ -1,7 +1,7 @@
 # Dais User Guide
 
 **Version:** 1.0
-**Last Updated:** March 14, 2026
+**Last Updated:** June 18, 2026
 
 ## Table of Contents
 
@@ -9,12 +9,13 @@
 2. [Getting Started](#getting-started)
 3. [Creating Posts](#creating-posts)
 4. [Managing Followers](#managing-followers)
-5. [Bluesky Chat](#bluesky-chat)
-6. [Direct Messages (ActivityPub)](#direct-messages-activitypub)
-7. [Moderation](#moderation)
-8. [TUI Reference](#tui-reference)
-9. [Privacy & Security](#privacy--security)
-10. [Troubleshooting](#troubleshooting)
+5. [Watching Public Posts](#watching-public-posts)
+6. [Bluesky Chat](#bluesky-chat)
+7. [Direct Messages (ActivityPub)](#direct-messages-activitypub)
+8. [Moderation](#moderation)
+9. [TUI Reference](#tui-reference)
+10. [Privacy & Security](#privacy--security)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -28,6 +29,8 @@
 - ✅ **Privacy Protection** - Automatic privacy checks prevent leaking private posts
 - ✅ **Unified Threads** - See replies from both protocols in one view
 - ✅ **Bluesky Chats** - Separate messaging system from ActivityPub DMs
+- ✅ **Private Watch Reader** - Monitor public RSS, ActivityPub, and Bluesky
+  posts without following or asking for approval
 - ✅ **Comprehensive Moderation** - Review and filter replies
 - ✅ **Self-Hosted** - Full control over your data
 
@@ -156,6 +159,46 @@ dais followers reject @user@mastodon.social
 ```
 
 **Note:** Manual approval is enabled by default (`manuallyApprovesFollowers: true`)
+
+---
+
+## Watching Public Posts
+
+Watch is private public-post monitoring. It is separate from following or
+friendship: Dais fetches public posts for your private reader without sending an
+ActivityPub `Follow`, creating a Bluesky graph follow, requesting approval, or
+creating a remote feed subscription.
+
+```bash
+# List watches and harvested reader items
+dais owner watches
+
+# Watch an ActivityPub actor's public outbox
+dais owner watch-add activitypub_actor @nasa@social.nasa.gov
+
+# Watch a Bluesky account's public posts
+dais owner watch-add bluesky_actor nasa.gov
+
+# Watch RSS or Atom
+dais owner watch-add rss https://example.com/feed.xml
+dais owner watch-add atom https://example.com/atom.xml
+
+# Watch a single public post/thread
+dais owner watch-add bluesky_post https://bsky.app/profile/nasa.gov/post/...
+dais owner watch-add activitypub_object https://example.social/users/alice/statuses/...
+
+# Refresh or remove
+dais owner watch-refresh
+dais owner watch-remove <watch-id>
+```
+
+The owner desktop app has a Watches section with the same target types. The
+TUI source-add overlay can also add `watch_rss`,
+`watch_activitypub_actor`, and `watch_bluesky_actor` source types.
+
+Watch only grants access to content that is already public. Remote servers may
+still log ordinary RSS, ActivityPub, or Bluesky public API fetches, but they do
+not receive a protocol-level relationship request or notice from Dais.
 
 ---
 

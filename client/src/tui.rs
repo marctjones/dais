@@ -1710,7 +1710,7 @@ impl App {
             Mode::Normal => "q quit · tab switch · r refresh · h replies · g discover · f follow · w unfollow · enter detail · y/l/o actions · i link · n open",
             Mode::Compose => "ctrl+s send · tab field · v visibility · p protocol · e e2ee · esc cancel",
             Mode::Search => "enter search · esc cancel · backspace edit",
-            Mode::SourceAdd => "enter add source · esc cancel · format: rss|atom|jsonfeed|api url [title]",
+            Mode::SourceAdd => "enter add source/watch · esc cancel · format: rss|atom|api|watch_rss|watch_activitypub_actor|watch_bluesky_actor target [title]",
             Mode::Discovery => "enter lookup actor · esc cancel · backspace edit",
             Mode::ProfileEdit => "ctrl+s save profile · tab field · enter newline in summary · esc cancel",
         };
@@ -2803,7 +2803,7 @@ fn parse_source_add_input(input: &str) -> Result<OwnerSourceAdd> {
     let mut parts = input.split_whitespace();
     let source_type = parts
         .next()
-        .ok_or_else(|| anyhow!("Use: rss|atom|jsonfeed|api url [title]"))?;
+        .ok_or_else(|| anyhow!("Use: rss|atom|api|watch_rss|watch_activitypub_actor|watch_bluesky_actor target [title]"))?;
     let url = parts
         .next()
         .ok_or_else(|| anyhow!("Source URL is required"))?;

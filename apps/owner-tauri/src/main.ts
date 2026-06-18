@@ -433,6 +433,7 @@ const sections = [
   "Posts",
   "Search",
   "Sources",
+  "Watches",
   "DMs",
   "Notifications",
   "Followers",
@@ -458,6 +459,8 @@ let notifications: OwnerNotification[] = [];
 let deliveries: OwnerDelivery[] = [];
 let sourceSubscriptions: SourceSubscription[] = [];
 let sourceItems: OwnerSnapshot["sources"] = [];
+let watchSubscriptions: SourceSubscription[] = [];
+let watchItems: OwnerSnapshot["sources"] = [];
 let moderationState: ModerationState | null = null;
 let moderationReplies: ModerationReply[] = [];
 let directMessages: OwnerDirectMessage[] = [];
@@ -528,6 +531,26 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
       items: data.sources
     } as T;
   }
+  if (command === "owner_watches") {
+    return {
+      subscriptions: [smokeWatchSubscription()],
+      items: [smokeWatchItem()]
+    } as T;
+  }
+  if (command === "add_owner_watch") {
+    return {
+      ok: true,
+      source: {
+        ...smokeWatchSubscription(),
+        source_type: `watch_${String(args?.watchType || "rss")}`.replace("watch_activitypub_actor", "watch_activitypub_actor"),
+        url: String(args?.target || "news.example")
+      }
+    } as T;
+  }
+  if (command === "refresh_owner_watch") {
+    return { ok: true, items: [{ id: String(args?.id || "watch-smoke"), ok: true, status: "active" }] } as T;
+  }
+  if (command === "remove_owner_watch") return undefined as T;
   if (command === "owner_stats") {
     return {
       followers_total: data.followers.length,
@@ -861,6 +884,30 @@ function smokeSourceSubscription(): SourceSubscription {
   };
 }
 
+function smokeWatchSubscription(): SourceSubscription {
+  return {
+    id: "watch-smoke",
+    source_type: "watch_bluesky_actor",
+    url: "nasa.gov",
+    title: "NASA on Bluesky",
+    status: "active",
+    refresh_cadence_minutes: 60,
+    error_count: 0,
+    policy_json: "{\"watch\":true,\"public_only\":true,\"no_remote_relationship\":true}"
+  };
+}
+
+function smokeWatchItem(): OwnerSnapshot["sources"][number] {
+  return {
+    id: "watch-item-smoke",
+    title: "Public launch update",
+    source_type: "watch_bluesky_actor",
+    canonical_url: "https://bsky.app/profile/nasa.gov/post/3smoke",
+    excerpt: "A public post harvested into the private watch reader.",
+    read: false
+  };
+}
+
 async function load() {
   render();
   snapshot = await ownerInvoke<OwnerSnapshot>("owner_snapshot");
@@ -941,6 +988,7 @@ function render() {
   app.querySelector<HTMLFormElement>("#follow-form")?.addEventListener("submit", followActor);
   app.querySelector<HTMLFormElement>("#discover-form")?.addEventListener("submit", discoverActor);
   app.querySelector<HTMLFormElement>("#source-form")?.addEventListener("submit", addSource);
+  app.querySelector<HTMLFormElement>("#watch-form")?.addEventListener("submit", addWatch);
   app.querySelector<HTMLFormElement>("#search-form")?.addEventListener("submit", runSearch);
   app.querySelector<HTMLButtonElement>("[data-confirm-public-search]")?.addEventListener("click", () => {
     void executeSearch(searchQuery, searchScope, true);
@@ -952,6 +1000,9 @@ function render() {
   app.querySelector<HTMLFormElement>("#moderation-settings-form")?.addEventListener("submit", saveModerationSettings);
   app.querySelector<HTMLButtonElement>("[data-refresh-sources]")?.addEventListener("click", () => {
     void refreshSource(null);
+  });
+  app.querySelector<HTMLButtonElement>("[data-refresh-watches]")?.addEventListener("click", () => {
+    void refreshWatch(null);
   });
   app.querySelector<HTMLButtonElement>("[data-follow-discovered]")?.addEventListener("click", () => {
     void followTarget(discoveredActor?.id || "");
@@ -1010,6 +1061,16 @@ function render() {
   app.querySelectorAll<HTMLButtonElement>("[data-source-remove]").forEach((button) => {
     button.addEventListener("click", () => {
       void removeSource(button.dataset.sourceRemove || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-watch-refresh]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void refreshWatch(button.dataset.watchRefresh || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-watch-remove]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void removeWatch(button.dataset.watchRemove || "");
     });
   });
   app.querySelectorAll<HTMLButtonElement>("[data-unblock-value]").forEach((button) => {
@@ -1088,6 +1149,8 @@ function view(section: string, data: OwnerSnapshot): string {
       return searchView();
     case "Sources":
       return sourcesView(data);
+    case "Watches":
+      return watchesView(data);
     case "DMs":
       return directMessagesView();
     case "Moderation":
@@ -1235,6 +1298,37 @@ function sourcesView(data: OwnerSnapshot) {
       <h2 class="section-label">Reader items</h2>
       ${sourceControls()}
       ${list(items.map(sourceCard), "No source items are available yet.")}
+    </article>
+  </section>`;
+}
+
+function watchesView(data: OwnerSnapshot) {
+  const items = watchItems.length ? watchItems : data.sources.filter((item) => item.source_type.startsWith("watch_"));
+  return `<section class="split">
+    <article>
+      <div class="section-heading">
+        <h2 class="section-label">Watches</h2>
+        <button type="button" data-refresh-watches>Refresh all</button>
+      </div>
+      <form id="watch-form" class="compact-form">
+        <select name="watch_type">
+          <option value="rss">RSS feed</option>
+          <option value="atom">Atom feed</option>
+          <option value="activitypub_actor">ActivityPub actor</option>
+          <option value="activitypub_object">ActivityPub post</option>
+          <option value="bluesky_actor">Bluesky actor</option>
+          <option value="bluesky_post">Bluesky post</option>
+        </select>
+        <input name="target" placeholder="@user@server, bsky handle, or public URL" />
+        <input name="title" placeholder="Label" />
+        <input name="cadence_minutes" type="number" min="5" max="1440" value="60" />
+        <button type="submit">Watch</button>
+      </form>
+      ${list(watchSubscriptions.map(watchSubscriptionCard), "No watch targets returned by the owner API.")}
+    </article>
+    <article>
+      <h2 class="section-label">Harvested public posts</h2>
+      ${list(items.map(sourceCard), "No watched public posts are available yet.")}
     </article>
   </section>`;
 }
@@ -1930,6 +2024,36 @@ function sourceSubscriptionCard(source: SourceSubscription) {
   </article>`;
 }
 
+function watchSubscriptionCard(source: SourceSubscription) {
+  return `<article class="panel item">
+    <div>
+      <h2>${escapeHtml(source.title || source.url)}</h2>
+      <p>${escapeHtml(source.url)}</p>
+    </div>
+    <footer>
+      <span>${escapeHtml(watchLabel(source.source_type))}</span>
+      <span>${escapeHtml(source.status)}</span>
+      <span>${source.refresh_cadence_minutes} min</span>
+      ${source.last_fetched_at ? `<time>${escapeHtml(formatTime(source.last_fetched_at))}</time>` : ""}
+      ${source.last_error ? `<span>${escapeHtml(source.last_error)}</span>` : ""}
+    </footer>
+    <div class="row-actions">
+      <button type="button" data-watch-refresh="${escapeAttr(source.id)}">Refresh</button>
+      <button type="button" data-watch-remove="${escapeAttr(source.id)}">Remove</button>
+    </div>
+  </article>`;
+}
+
+function watchLabel(sourceType: string) {
+  if (sourceType === "watch_activitypub_actor") return "ActivityPub actor";
+  if (sourceType === "watch_activitypub_object") return "ActivityPub post";
+  if (sourceType === "watch_bluesky_actor") return "Bluesky actor";
+  if (sourceType === "watch_bluesky_post") return "Bluesky post";
+  if (sourceType === "watch_rss") return "RSS feed";
+  if (sourceType === "watch_atom") return "Atom feed";
+  return sourceType;
+}
+
 function notificationCard(row: OwnerNotification) {
   const actor = row.actor_display_name || row.actor_username || actorLabel(row.actor_id);
   return `<article class="panel item">
@@ -2488,6 +2612,46 @@ async function removeSource(id: string) {
   await loadLiveSection("Sources");
 }
 
+async function addWatch(event: SubmitEvent) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  const target = String(form.get("target") || "").trim();
+  if (!target) {
+    notice = "Enter a watch target.";
+    render();
+    return;
+  }
+  const title = String(form.get("title") || "").trim();
+  const cadence = Number(form.get("cadence_minutes") || 60);
+  const result = await ownerInvoke<{ source: SourceSubscription }>("add_owner_watch", {
+    watchType: String(form.get("watch_type") || "rss"),
+    target,
+    title: title || null,
+    cadenceMinutes: Number.isFinite(cadence) ? cadence : 60
+  });
+  notice = `Watching ${result.source.title || result.source.url}.`;
+  await loadLiveSection("Watches");
+}
+
+async function refreshWatch(id: string | null) {
+  const result = await ownerInvoke<{ ok: boolean; items: Array<{ id: string; ok: boolean; error?: string | null }> }>(
+    "refresh_owner_watch",
+    { id }
+  );
+  const failures = result.items.filter((item) => !item.ok);
+  notice = failures.length
+    ? `Watch refresh completed with ${failures.length} error${failures.length === 1 ? "" : "s"}.`
+    : `Refreshed ${result.items.length} watch${result.items.length === 1 ? "" : "es"}.`;
+  await loadLiveSection("Watches");
+}
+
+async function removeWatch(id: string) {
+  if (!id) return;
+  await ownerInvoke("remove_owner_watch", { id });
+  notice = `Removed watch ${id}.`;
+  await loadLiveSection("Watches");
+}
+
 async function blockActor(event: SubmitEvent) {
   event.preventDefault();
   const form = new FormData(event.currentTarget as HTMLFormElement);
@@ -2658,6 +2822,11 @@ async function loadLiveSection(section: string) {
     sourceSubscriptions = sources.subscriptions;
     sourceItems = sources.items;
     render();
+  } else if (section === "Watches") {
+    const watches = await ownerInvoke<OwnerSources>("owner_watches");
+    watchSubscriptions = watches.subscriptions;
+    watchItems = watches.items;
+    render();
   } else if (section === "Moderation") {
     moderationState = await ownerInvoke<ModerationState>("owner_moderation");
     moderationReplies = await ownerInvoke<ModerationReply[]>("owner_moderation_replies");
@@ -2761,6 +2930,7 @@ function sectionSubtitle(section: string) {
   if (section === "Audience") return "Direct-audience lists with explicit sensitive-category boundaries";
   if (section === "Friends") return "Owner-only mutual relationships and friend feed";
   if (section === "Sources") return "Private reader items from public standards-based sources";
+  if (section === "Watches") return "Private public-post monitoring without follows, approvals, or remote subscription records";
   if (section === "Diagnostics") return "Instance, federation, delivery, and client health";
   return "Owner workspace for the live dais instance";
 }

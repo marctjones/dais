@@ -12,6 +12,10 @@ Dais bridges two social media protocols with different privacy models:
 
 This guide explains how Dais protects your privacy when posting across both networks.
 
+Watch is a separate reader feature: it monitors public posts without announcing
+a follow relationship. It does not make private posts visible and it does not
+grant access to non-public content.
+
 ---
 
 ## Privacy Levels Comparison
@@ -225,6 +229,18 @@ dais block user @spammer@evil.com
 # Block entire domain
 dais block domain evil.com
 ```
+
+### 6. Use Watch When You Do Not Want a Public Follow Signal
+
+Use Watch for public RSS, Atom, ActivityPub, or Bluesky posts when you want a
+private reading list rather than a public or semi-public relationship. Watch
+does not send ActivityPub `Follow`, Bluesky graph follow records, approval
+requests, WebSub subscription requests, or remote notifications.
+
+Watch still uses normal public network fetches. A remote server can observe
+HTTP requests to public feeds, actors, outboxes, objects, or public API
+endpoints, but Dais does not coordinate with the watched account and does not
+ask for extra access.
 
 ---
 

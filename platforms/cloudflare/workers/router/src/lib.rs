@@ -11,6 +11,37 @@ use worker::{
 };
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
+const SOURCE_TYPES: &[&str] = &[
+    "rss",
+    "atom",
+    "activitypub",
+    "api",
+    "watch_rss",
+    "watch_atom",
+    "watch_activitypub_actor",
+    "watch_activitypub_object",
+    "watch_bluesky_actor",
+    "watch_bluesky_post",
+];
+const REFRESHABLE_SOURCE_TYPES: &[&str] = &[
+    "rss",
+    "atom",
+    "api",
+    "watch_rss",
+    "watch_atom",
+    "watch_activitypub_actor",
+    "watch_activitypub_object",
+    "watch_bluesky_actor",
+    "watch_bluesky_post",
+];
+const WATCH_SOURCE_TYPES: &[&str] = &[
+    "watch_rss",
+    "watch_atom",
+    "watch_activitypub_actor",
+    "watch_activitypub_object",
+    "watch_bluesky_actor",
+    "watch_bluesky_post",
+];
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -3633,6 +3664,42 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
             }
         }
+        (worker::Method::Get, "/watches") => api_json(
+            &OwnerSources {
+                subscriptions: owner_watch_subscriptions(&env, limit).await?,
+                items: owner_watch_items(
+                    &env,
+                    clamp_limit(query_param(url, "items_limit").or_else(|| Some("40".to_string()))),
+                )
+                .await?,
+            },
+            200,
+        ),
+        (worker::Method::Post, "/watches") => {
+            let body = read_json(&mut req).await;
+            match owner_add_watch(&env, &body).await {
+                Ok(source) => api_json(&serde_json::json!({ "ok": true, "source": source }), 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Post, "/watches/refresh") => {
+            let body = read_json(&mut req).await;
+            let id = body.get("id").and_then(optional_body_string);
+            match owner_refresh_watches(&env, id.as_deref()).await {
+                Ok(result) => api_json(&result, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Delete, _) if owner_path.starts_with("/watches/") => {
+            let id = decode_component(owner_path.trim_start_matches("/watches/"));
+            if id.trim().is_empty() {
+                return api_json(&serde_json::json!({ "error": "id is required" }), 400);
+            }
+            match owner_delete_watch(&env, &id).await {
+                Ok(()) => api_json(&serde_json::json!({ "ok": true }), 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Delete, _) if owner_path.starts_with("/sources/") => {
             let id = decode_component(owner_path.trim_start_matches("/sources/"));
             if id.trim().is_empty() {
@@ -6634,6 +6701,32 @@ async fn owner_source_subscriptions(env: &Env, limit: i32) -> Result<Vec<Map<Str
         SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
                last_fetched_at, next_fetch_at, last_error, error_count, policy_json, created_at, updated_at
         FROM source_subscriptions
+        WHERE source_type NOT IN (
+          'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+          'watch_bluesky_actor', 'watch_bluesky_post'
+        )
+        ORDER BY updated_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_watch_subscriptions(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               last_fetched_at, next_fetch_at, last_error, error_count, policy_json, created_at, updated_at
+        FROM source_subscriptions
+        WHERE source_type IN (
+          'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+          'watch_bluesky_actor', 'watch_bluesky_post'
+        )
         ORDER BY updated_at DESC
         LIMIT ?1
         "#,
@@ -6654,6 +6747,35 @@ async fn owner_source_items(env: &Env, limit: i32) -> Result<Vec<Map<String, Val
                    published_at, fetched_at, excerpt, content_type, thumbnail_url,
                    rights_policy_json, read, summary, created_at, updated_at
             FROM source_items
+            WHERE source_type NOT IN (
+              'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+              'watch_bluesky_actor', 'watch_bluesky_post'
+            )
+            ORDER BY COALESCE(published_at, fetched_at) DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(rows.into_iter().map(normalize_source_item).collect())
+}
+
+async fn owner_watch_items(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, source_id, source_type, title, canonical_url, external_id, author,
+                   published_at, fetched_at, excerpt, content_type, thumbnail_url,
+                   rights_policy_json, read, summary, created_at, updated_at
+            FROM source_items
+            WHERE source_type IN (
+              'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+              'watch_bluesky_actor', 'watch_bluesky_post'
+            )
             ORDER BY COALESCE(published_at, fetched_at) DESC
             LIMIT ?1
             "#,
@@ -6669,38 +6791,107 @@ async fn owner_add_source(
     env: &Env,
     body: &Value,
 ) -> std::result::Result<Map<String, Value>, String> {
-    let source_type = string_like_any(body, &["source_type", "sourceType"])
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if !matches!(source_type.as_str(), "rss" | "atom" | "api") {
-        return Err("source_type must be rss, atom, or api".to_string());
+    let source_type = normalize_source_type(
+        &string_like_any(body, &["source_type", "sourceType"]).unwrap_or_default(),
+    );
+    if !is_addable_source_type(&source_type) {
+        return Err(format!(
+            "source_type must be one of: {}",
+            addable_source_types().join(", ")
+        ));
     }
-    let source_url = public_https_url(
-        &string_like_field(body, "url").unwrap_or_default(),
-        "source url",
-    )?;
-    let id = source_id(&source_type, &source_url);
+    let source_url = normalized_source_target(&source_type, body)?;
     let title = body.get("title").and_then(optional_body_string);
     let cadence_minutes = clamp_cadence_minutes(string_like_any(
         body,
         &["cadence_minutes", "cadenceMinutes"],
     ));
-    let api_secret_name = string_like_any(body, &["api_secret_name", "apiSecretName"])
-        .and_then(|value| optional_body_string(&Value::String(value)));
-    let policy_json = source_policy_json(body);
+    let api_secret_name = if is_watch_source_type(&source_type) {
+        None
+    } else {
+        string_like_any(body, &["api_secret_name", "apiSecretName"])
+            .and_then(|value| optional_body_string(&Value::String(value)))
+    };
+    let policy_json = source_policy_json_for_type(body, &source_type);
 
+    owner_upsert_source(
+        env,
+        &source_type,
+        &source_url,
+        title.as_deref(),
+        cadence_minutes,
+        api_secret_name.as_deref(),
+        &policy_json,
+    )
+    .await
+}
+
+async fn owner_add_watch(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let watch_kind = string_like_any(
+        body,
+        &[
+            "watch_type",
+            "watchType",
+            "source_type",
+            "sourceType",
+            "protocol",
+            "kind",
+        ],
+    )
+    .unwrap_or_else(|| "rss".to_string());
+    let source_type = source_type_for_watch_kind(&watch_kind)
+        .ok_or_else(|| "watch_type must be rss, atom, activitypub_actor, activitypub_object, bluesky_actor, or bluesky_post".to_string())?;
+    let source_url = normalized_source_target(source_type, body)?;
+    let id = source_id(source_type, &source_url);
+    let title = body.get("title").and_then(optional_body_string);
+    let cadence_minutes = clamp_cadence_minutes(string_like_any(
+        body,
+        &["cadence_minutes", "cadenceMinutes"],
+    ));
+    let policy_json = source_policy_json_for_type(body, source_type);
+
+    owner_upsert_source(
+        env,
+        source_type,
+        &source_url,
+        title.as_deref(),
+        cadence_minutes,
+        None,
+        &policy_json,
+    )
+    .await
+    .map(|mut row| {
+        row.insert("watch".to_string(), Value::Bool(true));
+        row.insert(
+            "watch_type".to_string(),
+            Value::String(source_type.to_string()),
+        );
+        row.insert("id".to_string(), Value::String(id));
+        row
+    })
+}
+
+async fn owner_upsert_source(
+    env: &Env,
+    source_type: &str,
+    source_url: &str,
+    title: Option<&str>,
+    cadence_minutes: i32,
+    api_secret_name: Option<&str>,
+    policy_json: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    let id = source_id(source_type, source_url);
     let db = env.d1("DB").map_err(|error| error.to_string())?;
     let id_arg = D1Type::Text(&id);
-    let type_arg = D1Type::Text(&source_type);
-    let url_arg = D1Type::Text(&source_url);
-    let title_arg = title.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let type_arg = D1Type::Text(source_type);
+    let url_arg = D1Type::Text(source_url);
+    let title_arg = title.map(D1Type::Text).unwrap_or(D1Type::Null);
     let cadence_arg = D1Type::Integer(cadence_minutes);
-    let policy_arg = D1Type::Text(&policy_json);
-    let secret_arg = api_secret_name
-        .as_deref()
-        .map(D1Type::Text)
-        .unwrap_or(D1Type::Null);
+    let policy_arg = D1Type::Text(policy_json);
+    let secret_arg = api_secret_name.map(D1Type::Text).unwrap_or(D1Type::Null);
     db.prepare(
         r#"
         INSERT INTO source_subscriptions (
@@ -6770,7 +6961,37 @@ async fn owner_refresh_sources(env: &Env, id: Option<&str>) -> std::result::Resu
             .await
             .map_err(|error| error.to_string())?
     };
+    refresh_source_rows(env, rows).await
+}
 
+async fn owner_refresh_watches(env: &Env, id: Option<&str>) -> std::result::Result<Value, String> {
+    let rows = if let Some(id) = id.filter(|value| !value.trim().is_empty()) {
+        match owner_source_by_id(env, id)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            Some(source)
+                if string_field(Some(&source), "source_type")
+                    .map(|source_type| is_watch_source_type(&source_type))
+                    .unwrap_or(false) =>
+            {
+                vec![source]
+            }
+            Some(_) => return Err(format!("source is not a watch: {id}")),
+            None => return Err(format!("watch not found: {id}")),
+        }
+    } else {
+        owner_active_watches(env)
+            .await
+            .map_err(|error| error.to_string())?
+    };
+    refresh_source_rows(env, rows).await
+}
+
+async fn refresh_source_rows(
+    env: &Env,
+    rows: Vec<Map<String, Value>>,
+) -> std::result::Result<Value, String> {
     let mut items = Vec::new();
     for source in rows {
         let source_id = string_field(Some(&source), "id").unwrap_or_default();
@@ -6821,7 +7042,33 @@ async fn owner_active_sources(env: &Env) -> Result<Vec<Map<String, Value>>> {
                policy_json, api_secret_name, created_at, updated_at
         FROM source_subscriptions
         WHERE status = 'active'
-          AND source_type IN ('rss', 'atom', 'api')
+          AND source_type IN (
+            'rss', 'atom', 'api', 'watch_rss', 'watch_atom',
+            'watch_activitypub_actor', 'watch_activitypub_object',
+            'watch_bluesky_actor', 'watch_bluesky_post'
+          )
+        ORDER BY COALESCE(next_fetch_at, created_at) ASC
+        LIMIT 20
+        "#,
+    )
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_active_watches(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+               policy_json, api_secret_name, created_at, updated_at
+        FROM source_subscriptions
+        WHERE status = 'active'
+          AND source_type IN (
+            'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+            'watch_bluesky_actor', 'watch_bluesky_post'
+          )
         ORDER BY COALESCE(next_fetch_at, created_at) ASC
         LIMIT 20
         "#,
@@ -6845,7 +7092,11 @@ async fn due_active_sources(env: &Env) -> Result<Vec<Map<String, Value>>> {
                policy_json, api_secret_name, created_at, updated_at
         FROM source_subscriptions
         WHERE status = 'active'
-          AND source_type IN ('rss', 'atom', 'api')
+          AND source_type IN (
+            'rss', 'atom', 'api', 'watch_rss', 'watch_atom',
+            'watch_activitypub_actor', 'watch_activitypub_object',
+            'watch_bluesky_actor', 'watch_bluesky_post'
+          )
           AND (next_fetch_at IS NULL OR next_fetch_at <= ?1)
         ORDER BY COALESCE(next_fetch_at, created_at) ASC
         LIMIT 20
@@ -6865,6 +7116,9 @@ async fn refresh_feed_source(
         string_field(Some(source), "id").ok_or_else(|| "source id is missing".to_string())?;
     let source_type =
         string_field(Some(source), "source_type").unwrap_or_else(|| "rss".to_string());
+    if !is_refreshable_source_type(&source_type) {
+        return Err(format!("unsupported source type {source_type}"));
+    }
     let url =
         string_field(Some(source), "url").ok_or_else(|| "source url is missing".to_string())?;
     let cadence = row_int(source, "refresh_cadence_minutes")
@@ -6876,6 +7130,32 @@ async fn refresh_feed_source(
     .to_iso_string()
     .as_string()
     .unwrap_or_default();
+    let policy = source_policy_from_row(source);
+
+    if source_type == "watch_activitypub_actor" {
+        let items = watch_activitypub_actor_items(source, &policy).await?;
+        store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
+        mark_source_refreshed(env, &source_id, &next_fetch_at, None, None).await?;
+        return Ok(());
+    }
+    if source_type == "watch_activitypub_object" {
+        let items = watch_activitypub_object_items(source, &policy).await?;
+        store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
+        mark_source_refreshed(env, &source_id, &next_fetch_at, None, None).await?;
+        return Ok(());
+    }
+    if source_type == "watch_bluesky_actor" {
+        let items = watch_bluesky_actor_items(source, &policy).await?;
+        store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
+        mark_source_refreshed(env, &source_id, &next_fetch_at, None, None).await?;
+        return Ok(());
+    }
+    if source_type == "watch_bluesky_post" {
+        let items = watch_bluesky_post_items(source, &policy).await?;
+        store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
+        mark_source_refreshed(env, &source_id, &next_fetch_at, None, None).await?;
+        return Ok(());
+    }
 
     let mut response = fetch_source(env, source, &url).await?;
     let status = response.status_code();
@@ -6905,16 +7185,13 @@ async fn refresh_feed_source(
         .map_err(|error| error.to_string())?
         .or_else(|| string_field(Some(source), "last_modified"));
     let body = response.text().await.map_err(|error| error.to_string())?;
-    let policy = source_policy_from_row(source);
     let mut items = if source_type == "api" {
         parse_api_items(&body, source, &policy)?
     } else {
         parse_feed_items(&body, source, &policy)
     };
     items.truncate(50);
-    for item in items {
-        insert_source_item(env, &source_id, &source_type, &policy, &item).await?;
-    }
+    store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
     mark_source_refreshed(
         env,
         &source_id,
@@ -6923,6 +7200,20 @@ async fn refresh_feed_source(
         last_modified.as_deref(),
     )
     .await?;
+    Ok(())
+}
+
+async fn store_source_refresh_items(
+    env: &Env,
+    source_id: &str,
+    source_type: &str,
+    policy: &SourcePolicy,
+    mut items: Vec<SourceRefreshItem>,
+) -> std::result::Result<(), String> {
+    items.truncate(50);
+    for item in items {
+        insert_source_item(env, source_id, source_type, policy, &item).await?;
+    }
     Ok(())
 }
 
@@ -6945,11 +7236,14 @@ async fn fetch_source(
             .set("If-Modified-Since", &last_modified)
             .map_err(|error| error.to_string())?;
     }
-    if let Some(secret_name) = string_field(Some(env_source), "api_secret_name") {
-        if let Ok(secret) = env.var(&secret_name) {
-            headers
-                .set("Authorization", &format!("Bearer {}", secret.to_string()))
-                .map_err(|error| error.to_string())?;
+    let source_type = string_field(Some(env_source), "source_type").unwrap_or_default();
+    if !is_watch_source_type(&source_type) {
+        if let Some(secret_name) = string_field(Some(env_source), "api_secret_name") {
+            if let Ok(secret) = env.var(&secret_name) {
+                headers
+                    .set("Authorization", &format!("Bearer {}", secret.to_string()))
+                    .map_err(|error| error.to_string())?;
+            }
         }
     }
     let mut init = RequestInit::new();
@@ -7111,6 +7405,22 @@ async fn owner_delete_source(env: &Env, id: &str) -> Result<()> {
         .run()
         .await?;
     Ok(())
+}
+
+async fn owner_delete_watch(env: &Env, id: &str) -> std::result::Result<(), String> {
+    let Some(source) = owner_source_by_id(env, id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Err(format!("watch not found: {id}"));
+    };
+    let source_type = string_field(Some(&source), "source_type").unwrap_or_default();
+    if !is_watch_source_type(&source_type) {
+        return Err(format!("source is not a watch: {id}"));
+    }
+    owner_delete_source(env, id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn owner_unblock(env: &Env, value: &str) -> Result<()> {
@@ -8690,6 +9000,209 @@ fn parse_api_items(
         .collect())
 }
 
+async fn watch_activitypub_actor_items(
+    source: &Map<String, Value>,
+    policy: &SourcePolicy,
+) -> std::result::Result<Vec<SourceRefreshItem>, String> {
+    let target =
+        string_field(Some(source), "url").ok_or_else(|| "watch target is missing".to_string())?;
+    let remote = resolve_activitypub_actor(&target).await?;
+    let posts = fetch_actor_recent_public_posts(&remote).await;
+    Ok(posts
+        .iter()
+        .filter_map(|post| activitypub_watch_item(source, post, policy))
+        .collect())
+}
+
+async fn watch_activitypub_object_items(
+    source: &Map<String, Value>,
+    policy: &SourcePolicy,
+) -> std::result::Result<Vec<SourceRefreshItem>, String> {
+    let target =
+        string_field(Some(source), "url").ok_or_else(|| "watch target is missing".to_string())?;
+    let object_url = public_https_url(&target, "watch target")?;
+    let object = fetch_activitypub_json(&object_url, "watch object").await?;
+    let Some(post) = normalize_discovered_public_post(&object) else {
+        return Ok(Vec::new());
+    };
+    Ok(activitypub_watch_item(source, &post, policy)
+        .into_iter()
+        .collect())
+}
+
+async fn watch_bluesky_actor_items(
+    source: &Map<String, Value>,
+    policy: &SourcePolicy,
+) -> std::result::Result<Vec<SourceRefreshItem>, String> {
+    let target =
+        string_field(Some(source), "url").ok_or_else(|| "watch target is missing".to_string())?;
+    let actor = bluesky_actor_target(&target)?;
+    let url = format!(
+        "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor={}&limit=50&filter=posts_no_replies",
+        urlencoding::encode(&actor)
+    );
+    let body = fetch_json_with_accept(&url, "application/json", "bluesky author feed").await?;
+    let feed = body
+        .get("feed")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(feed
+        .iter()
+        .filter_map(|row| row.get("post").or(Some(row)))
+        .filter_map(|post| bluesky_watch_item(source, post, policy))
+        .collect())
+}
+
+async fn watch_bluesky_post_items(
+    source: &Map<String, Value>,
+    policy: &SourcePolicy,
+) -> std::result::Result<Vec<SourceRefreshItem>, String> {
+    let target =
+        string_field(Some(source), "url").ok_or_else(|| "watch target is missing".to_string())?;
+    let uri = bluesky_post_uri(&target)?;
+    let url = format!(
+        "https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri={}&depth=1&parentHeight=0",
+        urlencoding::encode(&uri)
+    );
+    let body = fetch_json_with_accept(&url, "application/json", "bluesky post thread").await?;
+    let mut posts = Vec::new();
+    collect_bluesky_thread_posts(body.get("thread"), &mut posts);
+    Ok(posts
+        .iter()
+        .filter_map(|post| bluesky_watch_item(source, post, policy))
+        .collect())
+}
+
+fn activitypub_watch_item(
+    source: &Map<String, Value>,
+    post: &Map<String, Value>,
+    policy: &SourcePolicy,
+) -> Option<SourceRefreshItem> {
+    let id = string_field(Some(post), "id")?;
+    let canonical_url = string_field(Some(post), "url").or_else(|| Some(id.clone()));
+    let title = string_field(Some(post), "name")
+        .or_else(|| string_field(Some(post), "summary"))
+        .or_else(|| string_field(Some(post), "content"))
+        .map(|value| source_title(&strip_html(&value), "ActivityPub public post"))
+        .unwrap_or_else(|| "ActivityPub public post".to_string());
+    let excerpt = string_field(Some(post), "content")
+        .or_else(|| string_field(Some(post), "summary"))
+        .and_then(|value| source_excerpt(&value, excerpt_limit(policy)));
+    let published_at = normalize_source_date(string_field(Some(post), "published"));
+    Some(source_refresh_item(
+        source,
+        title,
+        canonical_url,
+        Some(id),
+        string_field(Some(post), "actor_id"),
+        published_at,
+        excerpt,
+        None,
+    ))
+}
+
+fn bluesky_watch_item(
+    source: &Map<String, Value>,
+    post: &Value,
+    policy: &SourcePolicy,
+) -> Option<SourceRefreshItem> {
+    let object = post.as_object()?;
+    let uri = object.get("uri").and_then(optional_body_string)?;
+    let author = object.get("author").and_then(Value::as_object);
+    let handle = author
+        .and_then(|row| row.get("handle"))
+        .and_then(optional_body_string);
+    let display_name = author
+        .and_then(|row| row.get("displayName"))
+        .and_then(optional_body_string);
+    let author_label = display_name.or_else(|| handle.clone()).or_else(|| {
+        author
+            .and_then(|row| row.get("did"))
+            .and_then(optional_body_string)
+    });
+    let record = object.get("record").and_then(Value::as_object);
+    let text = record
+        .and_then(|row| row.get("text"))
+        .and_then(optional_body_string)
+        .unwrap_or_default();
+    let title = if text.trim().is_empty() {
+        author_label
+            .as_ref()
+            .map(|author| format!("Bluesky public post by {author}"))
+            .unwrap_or_else(|| "Bluesky public post".to_string())
+    } else {
+        source_title(&text, "Bluesky public post")
+    };
+    let canonical_url = bluesky_post_url(&uri, handle.as_deref()).or_else(|| Some(uri.clone()));
+    let published_at = normalize_source_date(
+        record
+            .and_then(|row| row.get("createdAt"))
+            .and_then(optional_body_string)
+            .or_else(|| object.get("indexedAt").and_then(optional_body_string)),
+    );
+    let excerpt = source_excerpt(&text, excerpt_limit(policy));
+    let thumbnail_url = if policy.no_image {
+        None
+    } else {
+        bluesky_post_thumbnail(post)
+    };
+    Some(source_refresh_item(
+        source,
+        title,
+        canonical_url,
+        Some(uri),
+        author_label,
+        published_at,
+        excerpt,
+        thumbnail_url,
+    ))
+}
+
+fn collect_bluesky_thread_posts(value: Option<&Value>, posts: &mut Vec<Value>) {
+    let Some(Value::Object(object)) = value else {
+        return;
+    };
+    if let Some(post) = object.get("post") {
+        posts.push(post.clone());
+    }
+    if let Some(replies) = object.get("replies").and_then(Value::as_array) {
+        for reply in replies {
+            collect_bluesky_thread_posts(Some(reply), posts);
+        }
+    }
+}
+
+fn bluesky_post_thumbnail(post: &Value) -> Option<String> {
+    let embed = post.get("embed").and_then(Value::as_object)?;
+    embed
+        .get("images")
+        .and_then(Value::as_array)
+        .and_then(|images| images.first())
+        .and_then(|image| {
+            image
+                .get("thumb")
+                .or_else(|| image.get("fullsize"))
+                .and_then(optional_body_string)
+        })
+        .or_else(|| {
+            embed
+                .get("external")
+                .and_then(Value::as_object)
+                .and_then(|external| external.get("thumb"))
+                .and_then(optional_body_string)
+        })
+}
+
+fn source_title(value: &str, fallback: &str) -> String {
+    let text = collapse_whitespace(value);
+    if text.is_empty() {
+        fallback.to_string()
+    } else {
+        text.chars().take(120).collect()
+    }
+}
+
 fn normalize_api_item(
     row: &Value,
     source: &Map<String, Value>,
@@ -8920,12 +9433,19 @@ fn excerpt_limit(policy: &SourcePolicy) -> usize {
 
 fn normalize_source_date(value: Option<String>) -> Option<String> {
     let value = value?;
-    let date = js_sys::Date::new(&JsValue::from_str(&value));
-    let millis = date.get_time();
-    if millis.is_nan() {
-        None
-    } else {
-        date.to_iso_string().as_string()
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        return Some(value);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let date = js_sys::Date::new(&JsValue::from_str(&value));
+        let millis = date.get_time();
+        if millis.is_nan() {
+            None
+        } else {
+            date.to_iso_string().as_string()
+        }
     }
 }
 
@@ -9257,15 +9777,19 @@ fn clamp_cadence_minutes(value: Option<String>) -> i32 {
     minutes.max(5.0).min(1440.0) as i32
 }
 
-fn source_policy_json(body: &Value) -> String {
+fn source_policy_json_for_type(body: &Value, source_type: &str) -> String {
+    let is_watch = is_watch_source_type(source_type);
     format!(
-        "{{\"private_reader_only\":{},\"excerpt_only\":{},\"link_required\":{},\"attribution_required\":{},\"image_allowed\":{},\"full_text_allowed\":{}}}",
-        source_policy_default_true(body, "private_reader_only", "privateReaderOnly"),
+        "{{\"private_reader_only\":{},\"excerpt_only\":{},\"link_required\":{},\"attribution_required\":{},\"image_allowed\":{},\"full_text_allowed\":{},\"watch\":{},\"public_only\":{},\"no_remote_relationship\":{}}}",
+        source_policy_default_true(body, "private_reader_only", "privateReaderOnly") || is_watch,
         source_policy_default_true(body, "excerpt_only", "excerptOnly"),
         source_policy_default_true(body, "link_required", "linkRequired"),
         source_policy_default_true(body, "attribution_required", "attributionRequired"),
         source_policy_bool(body, "image_allowed", "imageAllowed"),
         source_policy_bool(body, "full_text_allowed", "fullTextAllowed"),
+        is_watch,
+        is_watch,
+        is_watch,
     )
 }
 
@@ -9280,6 +9804,148 @@ fn source_policy_bool(body: &Value, snake: &str, camel: &str) -> bool {
     matches!(
         body.get(snake).or_else(|| body.get(camel)),
         Some(Value::Bool(true))
+    )
+}
+
+fn normalize_source_type(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_")
+        .replace(':', "_")
+}
+
+fn addable_source_types() -> Vec<&'static str> {
+    SOURCE_TYPES
+        .iter()
+        .copied()
+        .filter(|value| *value != "activitypub")
+        .collect()
+}
+
+fn is_addable_source_type(value: &str) -> bool {
+    addable_source_types().iter().any(|item| *item == value)
+}
+
+fn is_watch_source_type(value: &str) -> bool {
+    WATCH_SOURCE_TYPES.iter().any(|item| *item == value)
+}
+
+fn is_refreshable_source_type(value: &str) -> bool {
+    REFRESHABLE_SOURCE_TYPES.iter().any(|item| *item == value)
+}
+
+fn source_type_for_watch_kind(value: &str) -> Option<&'static str> {
+    match normalize_source_type(value).as_str() {
+        "rss" | "feed" | "watch_rss" => Some("watch_rss"),
+        "atom" | "watch_atom" => Some("watch_atom"),
+        "activitypub" | "activitypub_actor" | "ap" | "actor" | "watch_activitypub_actor" => {
+            Some("watch_activitypub_actor")
+        }
+        "activitypub_object"
+        | "activitypub_post"
+        | "ap_object"
+        | "ap_post"
+        | "watch_activitypub_object" => Some("watch_activitypub_object"),
+        "bluesky"
+        | "bsky"
+        | "atproto"
+        | "bluesky_actor"
+        | "atproto_actor"
+        | "watch_bluesky_actor" => Some("watch_bluesky_actor"),
+        "bluesky_post" | "bsky_post" | "atproto_post" | "watch_bluesky_post" => {
+            Some("watch_bluesky_post")
+        }
+        _ => None,
+    }
+}
+
+fn normalized_source_target(
+    source_type: &str,
+    body: &Value,
+) -> std::result::Result<String, String> {
+    let raw = string_like_any(
+        body,
+        &["url", "target", "uri", "actor", "feed_url", "feedUrl"],
+    )
+    .unwrap_or_default();
+    match source_type {
+        "watch_activitypub_actor" => normalized_activitypub_actor_target(&raw),
+        "watch_bluesky_actor" => bluesky_actor_target(&raw),
+        "watch_bluesky_post" => bluesky_post_uri(&raw),
+        "watch_rss" | "watch_atom" | "watch_activitypub_object" => {
+            public_https_url(&raw, "watch target")
+        }
+        _ => public_https_url(&raw, "source url"),
+    }
+}
+
+fn normalized_activitypub_actor_target(value: &str) -> std::result::Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.starts_with('@') && trimmed.trim_start_matches('@').contains('@') {
+        return Ok(trimmed.to_string());
+    }
+    public_https_url(trimmed, "watch target")
+}
+
+fn bluesky_actor_target(value: &str) -> std::result::Result<String, String> {
+    let trimmed = value.trim().trim_start_matches('@');
+    if trimmed.is_empty() {
+        return Err("watch target is required".to_string());
+    }
+    if trimmed.starts_with("did:") {
+        return Ok(trimmed.to_string());
+    }
+    if trimmed.starts_with("at://") {
+        return trimmed
+            .trim_start_matches("at://")
+            .split('/')
+            .next()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| "Bluesky actor target is invalid".to_string());
+    }
+    if let Ok(url) = worker::Url::parse(trimmed) {
+        if url.host_str() != Some("bsky.app") {
+            return Err("Bluesky actor URL must be on bsky.app".to_string());
+        }
+        let mut parts = url.path().split('/').filter(|part| !part.is_empty());
+        if parts.next() == Some("profile") {
+            if let Some(actor) = parts.next().filter(|value| !value.trim().is_empty()) {
+                return Ok(actor.to_string());
+            }
+        }
+        return Err(
+            "Bluesky actor URL must look like https://bsky.app/profile/<handle-or-did>".to_string(),
+        );
+    }
+    if trimmed.contains('.') || trimmed.starts_with("did:") {
+        return Ok(trimmed.to_string());
+    }
+    Err("Bluesky actor target must be a handle, DID, or bsky.app profile URL".to_string())
+}
+
+fn bluesky_post_uri(value: &str) -> std::result::Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.starts_with("at://") && trimmed.contains("/app.bsky.feed.post/") {
+        return Ok(trimmed.to_string());
+    }
+    let url = worker::Url::parse(trimmed)
+        .map_err(|_| "Bluesky post target must be an at:// URI or bsky.app post URL".to_string())?;
+    if url.host_str() != Some("bsky.app") {
+        return Err("Bluesky post URL must be on bsky.app".to_string());
+    }
+    let parts: Vec<&str> = url
+        .path()
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() >= 4 && parts[0] == "profile" && parts[2] == "post" {
+        return Ok(format!("at://{}/app.bsky.feed.post/{}", parts[1], parts[3]));
+    }
+    Err(
+        "Bluesky post URL must look like https://bsky.app/profile/<handle-or-did>/post/<rkey>"
+            .to_string(),
     )
 }
 
@@ -10089,7 +10755,12 @@ struct OwnerToken {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_ai_categories, parse_workers_ai_moderation, strip_json_fence};
+    use super::{
+        activitypub_watch_item, bluesky_actor_target, bluesky_post_uri, bluesky_watch_item,
+        normalize_ai_categories, normalize_discovered_public_post, parse_workers_ai_moderation,
+        source_type_for_watch_kind, strip_json_fence, SourcePolicy, PUBLIC_COLLECTION,
+    };
+    use serde_json::{Map, Value};
 
     #[test]
     fn parses_workers_ai_json_reply() {
@@ -10118,5 +10789,92 @@ mod tests {
             strip_json_fence("```json\n{\"unsafe\":false}\n```"),
             "{\"unsafe\":false}"
         );
+    }
+
+    #[test]
+    fn maps_watch_kinds_to_explicit_source_types() {
+        assert_eq!(source_type_for_watch_kind("rss"), Some("watch_rss"));
+        assert_eq!(
+            source_type_for_watch_kind("activitypub_actor"),
+            Some("watch_activitypub_actor")
+        );
+        assert_eq!(
+            source_type_for_watch_kind("bluesky_actor"),
+            Some("watch_bluesky_actor")
+        );
+    }
+
+    #[test]
+    fn normalizes_bluesky_watch_targets() {
+        assert_eq!(
+            bluesky_actor_target("https://bsky.app/profile/nasa.gov").unwrap(),
+            "nasa.gov"
+        );
+        assert_eq!(bluesky_actor_target("@nasa.gov").unwrap(), "nasa.gov");
+        assert_eq!(
+            bluesky_post_uri("https://bsky.app/profile/nasa.gov/post/3abc").unwrap(),
+            "at://nasa.gov/app.bsky.feed.post/3abc"
+        );
+    }
+
+    #[test]
+    fn normalizes_activitypub_public_watch_item() {
+        let activity = serde_json::json!({
+            "type": "Create",
+            "id": "https://example.com/create/1",
+            "actor": "https://example.com/users/alice",
+            "to": [PUBLIC_COLLECTION],
+            "object": {
+                "type": "Note",
+                "id": "https://example.com/posts/1",
+                "attributedTo": "https://example.com/users/alice",
+                "to": [PUBLIC_COLLECTION],
+                "content": "<p>Hello public world</p>",
+                "published": "2026-06-18T12:00:00Z",
+                "url": "https://example.com/@alice/1"
+            }
+        });
+        let post = normalize_discovered_public_post(&activity).expect("public post");
+        let mut source = Map::new();
+        source.insert("id".to_string(), Value::String("source-test".to_string()));
+        let policy = SourcePolicy::default();
+        let item = activitypub_watch_item(&source, &post, &policy).expect("watch item");
+        assert_eq!(
+            item.external_id.as_deref(),
+            Some("https://example.com/posts/1")
+        );
+        assert_eq!(
+            item.author.as_deref(),
+            Some("https://example.com/users/alice")
+        );
+        assert_eq!(item.excerpt.as_deref(), Some("Hello public world"));
+    }
+
+    #[test]
+    fn normalizes_bluesky_public_watch_item() {
+        let post = serde_json::json!({
+            "uri": "at://did:plc:alice/app.bsky.feed.post/3abc",
+            "cid": "bafy",
+            "author": {
+                "did": "did:plc:alice",
+                "handle": "alice.example",
+                "displayName": "Alice"
+            },
+            "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "A public Bluesky update",
+                "createdAt": "2026-06-18T12:00:00Z"
+            }
+        });
+        let mut source = Map::new();
+        source.insert("id".to_string(), Value::String("source-bsky".to_string()));
+        let policy = SourcePolicy::default();
+        let item = bluesky_watch_item(&source, &post, &policy).expect("watch item");
+        assert_eq!(
+            item.canonical_url.as_deref(),
+            Some("https://bsky.app/profile/alice.example/post/3abc")
+        );
+        assert_eq!(item.author.as_deref(), Some("Alice"));
+        assert_eq!(item.excerpt.as_deref(), Some("A public Bluesky update"));
     }
 }

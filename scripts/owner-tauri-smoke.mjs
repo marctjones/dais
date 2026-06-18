@@ -112,6 +112,20 @@ for (const check of [
     ],
   },
   {
+    section: "Watches",
+    expected: [
+      "Watches",
+      "Private public-post monitoring without follows, approvals, or remote subscription records",
+      "ActivityPub actor",
+      "Bluesky actor",
+      "NASA on Bluesky",
+      "nasa.gov",
+      "Harvested public posts",
+      "Public launch update",
+      "A public post harvested into the private watch reader.",
+    ],
+  },
+  {
     section: "Moderation",
     expected: [
       "Federation safety",

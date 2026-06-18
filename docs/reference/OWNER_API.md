@@ -40,8 +40,38 @@ Implemented endpoints:
 | `GET` | `/deliveries` | ActivityPub delivery jobs. |
 | `GET` | `/search?q=<term>&scope=local\|public\|all` | Operator search. `local` searches Dais posts, follows, sources, and reader items. `public` queries explicit public Bluesky and Mastodon-compatible providers. `all` returns both. Sensitive-looking public queries return `public_search_guard.blocked=true` and skip provider calls unless `confirm_public_sensitive=true` is supplied. |
 | `GET` | `/sources` | Public source subscriptions and private reader items. |
+| `GET` | `/watches` | Private Watch subscriptions and harvested public posts. |
+| `POST` | `/watches` | Add an RSS, Atom, ActivityPub, or Bluesky public Watch target without creating a remote follow, approval request, graph record, or notification subscription. |
+| `POST` | `/watches/refresh` | Refresh one Watch by `id`, or all active Watch targets when no `id` is supplied. |
+| `DELETE` | `/watches/:id` | Remove a Watch subscription and its reader items. |
 | `GET` | `/moderation` | Closed-network, block, allowlist, and follower policy state. |
 | `GET` | `/diagnostics` | Owner API, private default, ActivityPub, and delivery health. |
+
+Watch add body:
+
+```json
+{
+  "watch_type": "activitypub_actor",
+  "target": "@nasa@social.nasa.gov",
+  "title": "NASA ActivityPub",
+  "cadence_minutes": 60,
+  "private_reader_only": true,
+  "excerpt_only": true,
+  "link_required": true,
+  "attribution_required": true,
+  "image_allowed": false,
+  "full_text_allowed": false
+}
+```
+
+Supported `watch_type` values are `rss`, `atom`, `activitypub_actor`,
+`activitypub_object`, `bluesky_actor`, and `bluesky_post`. Watch targets are
+private local reader state. Dais fetches only public posts using normal public
+protocol endpoints: unsigned ActivityPub public GETs, Bluesky public AppView
+reads, and RSS/Atom feed GETs. It does not send ActivityPub `Follow`, Bluesky
+graph follow records, approval requests, WebSub subscription requests, or remote
+notifications. Remote servers may still observe ordinary HTTP fetches in access
+logs.
 
 Known gaps:
 
@@ -57,7 +87,9 @@ Known gaps:
   public-provider query was paused for operator confirmation.
 - The Rust CLI can exercise live owner API compose with
   `dais owner post-create`, media uploads with `dais owner media-upload`, and
-  media revocation with `dais owner media-revoke`. It can opt into public search
+  media revocation with `dais owner media-revoke`. It can manage private Watch
+  targets with `dais owner watches`, `dais owner watch-add`, `dais owner
+  watch-refresh`, and `dais owner watch-remove`. It can opt into public search
   with `dais owner search --scope public <term>` and can confirm a sensitive
   public search with `--confirm-public-sensitive`.
 - Private media capability URLs can expire automatically, but recipient-bound
