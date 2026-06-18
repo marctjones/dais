@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.92] - 2026-06-18
+
+### Fixed
+- Added signed ActivityPub actor discovery retries for owner follow/discover
+  flows against authorized-fetch servers that reject unsigned actor document
+  requests.
+- Aligned production ActivityPub signing material so the published actor public
+  key matches the private key used by router, inbox, and delivery workers.
+
 ## [1.28.91] - 2026-06-17
 
 ### Added

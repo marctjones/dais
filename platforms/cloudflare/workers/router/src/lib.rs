@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use dais_core::activitypub::sign_request;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -1089,7 +1090,7 @@ async fn activitypub_store_follow(env: &Env, body: &Value) -> std::result::Resul
     let local_actor = owner_local_actor(env)
         .await
         .map_err(|error| error.to_string())?;
-    let remote = resolve_activitypub_actor(&actor).await?;
+    let remote = resolve_activitypub_actor_for_local(&actor, &local_actor).await?;
     let inbox = if remote.inbox.is_empty() {
         format!("{actor}/inbox")
     } else {
@@ -7440,7 +7441,7 @@ async fn owner_follow_actor(
     let local_actor = owner_local_actor(env)
         .await
         .map_err(|error| error.to_string())?;
-    let remote = resolve_activitypub_actor(target).await?;
+    let remote = resolve_activitypub_actor_for_local(target, &local_actor).await?;
     if remote.id.is_empty() || remote.inbox.is_empty() {
         return Err("target actor must expose id and inbox".to_string());
     }
@@ -7531,7 +7532,7 @@ async fn owner_discover_actor(
         .as_ref()
         .and_then(|post| string_field(Some(post), "actor_id"))
         .unwrap_or_else(|| target.to_string());
-    let remote = resolve_activitypub_actor(&actor_target).await?;
+    let remote = resolve_activitypub_actor_for_local(&actor_target, &local_actor).await?;
     if remote.inbox.is_empty() {
         return Err("target actor must expose inbox".to_string());
     }
@@ -7616,7 +7617,7 @@ async fn owner_unfollow_actor(
     let local_actor = owner_local_actor(env)
         .await
         .map_err(|error| error.to_string())?;
-    let remote = resolve_activitypub_actor(target).await?;
+    let remote = resolve_activitypub_actor_for_local(target, &local_actor).await?;
     let existing = owner_following_row(env, &local_actor.id, &remote.id)
         .await
         .map_err(|error| error.to_string())?
@@ -7738,12 +7739,49 @@ async fn resolve_activitypub_object_inbox(object_id: &str) -> std::result::Resul
 }
 
 async fn resolve_activitypub_actor(target: &str) -> std::result::Result<RemoteActor, String> {
-    let actor_url = if target.starts_with("http://") || target.starts_with("https://") {
-        public_https_url(target, "target")?
-    } else {
-        resolve_webfinger_actor(target).await?
-    };
+    let actor_url = activitypub_actor_url_for_target(target).await?;
     let actor = fetch_activitypub_json(&actor_url, "actor").await?;
+    remote_actor_from_json(actor_url, actor)
+}
+
+async fn resolve_activitypub_actor_for_local(
+    target: &str,
+    local_actor: &LocalActor,
+) -> std::result::Result<RemoteActor, String> {
+    let actor_url = activitypub_actor_url_for_target(target).await?;
+    let actor = match fetch_activitypub_json(&actor_url, "actor").await {
+        Ok(actor) => actor,
+        Err(unsigned_error)
+            if should_retry_signed_fetch(&unsigned_error) && local_actor.can_sign() =>
+        {
+            fetch_activitypub_json_signed(&actor_url, "actor", local_actor)
+                .await
+                .map_err(|signed_error| {
+                    format!("{unsigned_error}; signed retry failed: {signed_error}")
+                })?
+        }
+        Err(unsigned_error) if should_retry_signed_fetch(&unsigned_error) => {
+            return Err(format!(
+                "{unsigned_error}; signed retry skipped: local actor signing key is not configured"
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    remote_actor_from_json(actor_url, actor)
+}
+
+async fn activitypub_actor_url_for_target(target: &str) -> std::result::Result<String, String> {
+    if target.starts_with("http://") || target.starts_with("https://") {
+        public_https_url(target, "target")
+    } else {
+        resolve_webfinger_actor(target).await
+    }
+}
+
+fn remote_actor_from_json(
+    actor_url: String,
+    actor: Value,
+) -> std::result::Result<RemoteActor, String> {
     let endpoints = actor.get("endpoints").and_then(Value::as_object);
     Ok(RemoteActor {
         id: actor
@@ -7781,6 +7819,10 @@ async fn resolve_activitypub_actor(target: &str) -> std::result::Result<RemoteAc
             .or(Some(actor_url)),
         outbox: actor.get("outbox").and_then(optional_body_string),
     })
+}
+
+fn should_retry_signed_fetch(error: &str) -> bool {
+    error.contains("HTTP 401") || error.contains("HTTP 403")
 }
 
 async fn resolve_webfinger_actor(target: &str) -> std::result::Result<String, String> {
@@ -7878,10 +7920,29 @@ async fn fetch_activitypub_json(url: &str, label: &str) -> std::result::Result<V
     if let Some(value) = local_activitypub_fixture_value(url) {
         return Ok(value);
     }
-    fetch_json_with_accept(
+    fetch_json_with_accept_and_headers(
         url,
         "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
         label,
+        &[],
+    )
+    .await
+}
+
+async fn fetch_activitypub_json_signed(
+    url: &str,
+    label: &str,
+    local_actor: &LocalActor,
+) -> std::result::Result<Value, String> {
+    if let Some(value) = local_activitypub_fixture_value(url) {
+        return Ok(value);
+    }
+    let signed_headers = signed_activitypub_get_headers(url, local_actor)?;
+    fetch_json_with_accept_and_headers(
+        url,
+        "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
+        label,
+        &signed_headers,
     )
     .await
 }
@@ -8010,6 +8071,15 @@ async fn fetch_json_with_accept(
     accept: &str,
     label: &str,
 ) -> std::result::Result<Value, String> {
+    fetch_json_with_accept_and_headers(url, accept, label, &[]).await
+}
+
+async fn fetch_json_with_accept_and_headers(
+    url: &str,
+    accept: &str,
+    label: &str,
+    extra_headers: &[(String, String)],
+) -> std::result::Result<Value, String> {
     let headers = Headers::new();
     headers
         .set("Accept", accept)
@@ -8017,6 +8087,11 @@ async fn fetch_json_with_accept(
     headers
         .set("User-Agent", "dais-owner-api/1.0")
         .map_err(|error| error.to_string())?;
+    for (name, value) in extra_headers {
+        headers
+            .set(name, value)
+            .map_err(|error| error.to_string())?;
+    }
     let mut init = RequestInit::new();
     init.with_method(worker::Method::Get).with_headers(headers);
     let request = Request::new_with_init(url, &init).map_err(|error| error.to_string())?;
@@ -8032,6 +8107,64 @@ async fn fetch_json_with_accept(
         .json::<Value>()
         .await
         .map_err(|error| error.to_string())
+}
+
+fn signed_activitypub_get_headers(
+    url: &str,
+    local_actor: &LocalActor,
+) -> std::result::Result<Vec<(String, String)>, String> {
+    let parsed = worker::Url::parse(url).map_err(|error| error.to_string())?;
+    let host = activitypub_request_host(&parsed)?;
+    let request_target = activitypub_request_target(&parsed, &host);
+    let date = js_sys::Date::new_0()
+        .to_utc_string()
+        .as_string()
+        .unwrap_or_default();
+    if date.is_empty() {
+        return Err("could not generate Date header".to_string());
+    }
+
+    let mut sign_headers = HashMap::new();
+    sign_headers.insert("host".to_string(), host.clone());
+    sign_headers.insert("date".to_string(), date.clone());
+    let headers_to_sign = vec![
+        "(request-target)".to_string(),
+        "host".to_string(),
+        "date".to_string(),
+    ];
+    let key_id = format!("{}#main-key", local_actor.id);
+    let signature = sign_request(
+        &local_actor.private_key,
+        &key_id,
+        "GET",
+        &request_target,
+        &sign_headers,
+        &headers_to_sign,
+    )?;
+    Ok(vec![
+        ("Host".to_string(), host),
+        ("Date".to_string(), date),
+        ("Signature".to_string(), signature.to_header()),
+    ])
+}
+
+fn activitypub_request_host(url: &worker::Url) -> std::result::Result<String, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "target URL is missing a host".to_string())?;
+    match url.port() {
+        Some(port) => Ok(format!("{host}:{port}")),
+        None => Ok(host.to_string()),
+    }
+}
+
+fn activitypub_request_target(url: &worker::Url, host: &str) -> String {
+    let origin = format!("{}://{}", url.scheme(), host);
+    url.to_string()
+        .strip_prefix(&origin)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| url.path().to_string())
 }
 
 fn local_object_inbox(object_id: &str) -> Option<String> {
@@ -8281,12 +8414,20 @@ fn normalize_source_item(row: Map<String, Value>) -> Map<String, Value> {
 async fn owner_local_actor(env: &Env) -> Result<LocalActor> {
     let db = env.d1("DB")?;
     let row = db
-        .prepare("SELECT id, username FROM actors WHERE username = 'social' LIMIT 1")
+        .prepare("SELECT id, username, private_key FROM actors WHERE username = 'social' LIMIT 1")
         .first::<Map<String, Value>>(None)
         .await?;
+    let private_key = env
+        .secret("PRIVATE_KEY")
+        .ok()
+        .map(|secret| secret.to_string())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| string_field(row.as_ref(), "private_key"))
+        .unwrap_or_default();
     Ok(LocalActor {
         id: string_field(row.as_ref(), "id")
             .unwrap_or_else(|| "https://social.dais.social/users/social".to_string()),
+        private_key,
     })
 }
 
@@ -9919,6 +10060,13 @@ struct DeliveryCount {
 
 struct LocalActor {
     id: String,
+    private_key: String,
+}
+
+impl LocalActor {
+    fn can_sign(&self) -> bool {
+        !self.private_key.trim().is_empty()
+    }
 }
 
 struct RemoteActor {
