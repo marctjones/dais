@@ -30,6 +30,7 @@ export struct AccountRow {
     subtitle: string,
     active: bool,
     token: bool,
+    can_delete: bool,
 }
 
 component Chip inherits Rectangle {
@@ -285,6 +286,54 @@ export component MainWindow inherits Window {
     in-out property <string> account-label;
     in-out property <string> account-url;
     in-out property <string> account-token;
+    in-out property <string> search-scope;
+    in-out property <string> search-provider;
+    in-out property <string> search-type;
+    in-out property <string> search-servers;
+    in-out property <string> search-sort;
+    in-out property <string> search-since;
+    in-out property <string> search-until;
+    in-out property <string> search-author;
+    in-out property <string> search-mentions;
+    in-out property <string> search-lang;
+    in-out property <string> search-domain;
+    in-out property <string> search-url;
+    in-out property <string> search-tags;
+    in-out property <bool> search-confirm-public-sensitive;
+    in-out property <string> source-type;
+    in-out property <string> source-url;
+    in-out property <string> source-title;
+    in-out property <string> source-cadence;
+    in-out property <string> watch-type;
+    in-out property <string> watch-target;
+    in-out property <string> watch-title;
+    in-out property <string> watch-cadence;
+    in-out property <string> profile-actor-type;
+    in-out property <string> profile-display-name;
+    in-out property <string> profile-summary;
+    in-out property <string> profile-icon;
+    in-out property <string> profile-image;
+    in-out property <string> audience-id;
+    in-out property <string> audience-name;
+    in-out property <string> audience-description;
+    in-out property <string> audience-categories;
+    in-out property <string> audience-members;
+    in-out property <string> moderation-reply-policy;
+    in-out property <bool> moderation-ai-enabled;
+    in-out property <string> moderation-ai-model;
+    in-out property <string> moderation-ai-budget;
+    in-out property <string> moderation-block-actor;
+    in-out property <string> moderation-block-domain;
+    in-out property <string> moderation-block-reason;
+    in-out property <string> moderation-allow-host;
+    in-out property <string> moderation-allow-note;
+    in-out property <string> media-file-path;
+    in-out property <string> media-type;
+    in-out property <string> media-description;
+    in-out property <string> media-access;
+    in-out property <string> media-expires-seconds;
+    in-out property <bool> media-authorized-fetch;
+    in-out property <string> media-revoke-url;
 
     callback select-mode(string);
     callback select-screen(string);
@@ -292,6 +341,19 @@ export component MainWindow inherits Window {
     callback row-action(string, string);
     callback refresh();
     callback run-command(string);
+    callback run-filtered-search(string, string, string, string, string, string, string, string, string, string, string, string, string, string, bool);
+    callback add-source(string, string, string, string);
+    callback add-watch(string, string, string, string);
+    callback save-profile(string, string, string, string, string);
+    callback save-audience(string, string, string, string, string);
+    callback delete-audience(string);
+    callback save-moderation(string, bool, string, string);
+    callback block-actor(string, string);
+    callback block-domain(string, string);
+    callback allow-host(string, string);
+    callback disallow-host(string);
+    callback upload-media(string, string, string, string, string, bool);
+    callback revoke-media(string);
     callback save-account(string, string, string);
     callback switch-account(string);
     callback delete-account(string);
@@ -453,7 +515,7 @@ export component MainWindow inherits Window {
                         }
 
                         if root.active-screen == "compose" : Rectangle {
-                            height: 292px;
+                            height: 336px;
                             border-radius: 8px;
                             border-width: 1px;
                             border-color: #ccd6e3;
@@ -592,6 +654,250 @@ export component MainWindow inherits Window {
                             wrap: word-wrap;
                         }
 
+                        if root.active-screen == "find" : Rectangle {
+                            min-height: 354px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            border-color: #d9dee6;
+                            background: #ffffff;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 7px;
+                                Text { text: "Search controls"; font-weight: 800; font-size: 13px; color: #172033; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.search-scope; placeholder-text: "scope"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-provider; placeholder-text: "provider"; horizontal-stretch: 1; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.search-type; placeholder-text: "type"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-sort; placeholder-text: "sort"; horizontal-stretch: 1; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.search-lang; placeholder-text: "lang"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-domain; placeholder-text: "domain"; horizontal-stretch: 1; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.search-since; placeholder-text: "since"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-until; placeholder-text: "until"; horizontal-stretch: 1; }
+                                }
+                                LineEdit { text <=> root.search-author; placeholder-text: "author handle or actor"; }
+                                LineEdit { text <=> root.search-mentions; placeholder-text: "mentions"; }
+                                LineEdit { text <=> root.search-url; placeholder-text: "URL filter"; }
+                                LineEdit { text <=> root.search-servers; placeholder-text: "servers, comma separated"; }
+                                LineEdit { text <=> root.search-tags; placeholder-text: "tags, comma separated"; }
+                                CheckBox {
+                                    text: "Confirm sensitive public search";
+                                    checked <=> root.search-confirm-public-sensitive;
+                                }
+                                Button {
+                                    text: "Search";
+                                    clicked => {
+                                        root.run-filtered-search(root.command-text, root.search-scope, root.search-provider, root.search-type, root.search-servers, root.search-sort, root.search-since, root.search-until, root.search-author, root.search-mentions, root.search-lang, root.search-domain, root.search-url, root.search-tags, root.search-confirm-public-sensitive);
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.active-screen == "compose" : Rectangle {
+                            min-height: 244px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            border-color: #d9dee6;
+                            background: #ffffff;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 7px;
+                                Text { text: "Media"; font-weight: 800; font-size: 13px; color: #172033; }
+                                LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.media-type; placeholder-text: "media type"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.media-access; placeholder-text: "access"; horizontal-stretch: 1; }
+                                }
+                                LineEdit { text <=> root.media-description; placeholder-text: "alt text / description"; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.media-expires-seconds; placeholder-text: "expires seconds"; horizontal-stretch: 1; }
+                                    CheckBox { text: "Auth fetch"; checked <=> root.media-authorized-fetch; }
+                                }
+                                Button {
+                                    text: "Upload and attach";
+                                    clicked => {
+                                        root.upload-media(root.media-file-path, root.media-type, root.media-description, root.media-access, root.media-expires-seconds, root.media-authorized-fetch);
+                                    }
+                                }
+                                LineEdit { text <=> root.media-revoke-url; placeholder-text: "Uploaded media URL to revoke"; }
+                                Button {
+                                    text: "Revoke media";
+                                    clicked => {
+                                        root.revoke-media(root.media-revoke-url);
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.active-screen == "watches" : Rectangle {
+                            min-height: 252px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            border-color: #d9dee6;
+                            background: #ffffff;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 7px;
+                                Text { text: "Add source or Watch"; font-weight: 800; font-size: 13px; color: #172033; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.source-type; placeholder-text: "rss | atom | api"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.source-cadence; placeholder-text: "minutes"; width: 70px; }
+                                }
+                                LineEdit { text <=> root.source-url; placeholder-text: "Source URL"; }
+                                LineEdit { text <=> root.source-title; placeholder-text: "Source title"; }
+                                Button {
+                                    text: "Add source";
+                                    clicked => {
+                                        root.add-source(root.source-type, root.source-url, root.source-title, root.source-cadence);
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.watch-type; placeholder-text: "activitypub_actor"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.watch-cadence; placeholder-text: "minutes"; width: 70px; }
+                                }
+                                LineEdit { text <=> root.watch-target; placeholder-text: "Watch target"; }
+                                LineEdit { text <=> root.watch-title; placeholder-text: "Watch title"; }
+                                Button {
+                                    text: "Add Watch";
+                                    clicked => {
+                                        root.add-watch(root.watch-type, root.watch-target, root.watch-title, root.watch-cadence);
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.active-screen == "audience" : Rectangle {
+                            min-height: 250px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            border-color: #d9dee6;
+                            background: #ffffff;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 7px;
+                                Text { text: "Audience group"; font-weight: 800; font-size: 13px; color: #172033; }
+                                LineEdit { text <=> root.audience-id; placeholder-text: "id, blank for new"; }
+                                LineEdit { text <=> root.audience-name; placeholder-text: "name"; }
+                                LineEdit { text <=> root.audience-description; placeholder-text: "description"; }
+                                LineEdit { text <=> root.audience-categories; placeholder-text: "sensitive categories"; }
+                                TextEdit { text <=> root.audience-members; height: 58px; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Button {
+                                        text: "Save group";
+                                        clicked => {
+                                            root.save-audience(root.audience-id, root.audience-name, root.audience-description, root.audience-categories, root.audience-members);
+                                        }
+                                    }
+                                    Button {
+                                        text: "Delete group";
+                                        enabled: root.audience-id != "";
+                                        clicked => {
+                                            root.delete-audience(root.audience-id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.active-screen == "identity" : Rectangle {
+                            min-height: 260px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            border-color: #d9dee6;
+                            background: #ffffff;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 7px;
+                                Text { text: "Public identity"; font-weight: 800; font-size: 13px; color: #172033; }
+                                LineEdit { text <=> root.profile-actor-type; placeholder-text: "actor type"; }
+                                LineEdit { text <=> root.profile-display-name; placeholder-text: "display name"; }
+                                TextEdit { text <=> root.profile-summary; height: 66px; }
+                                LineEdit { text <=> root.profile-icon; placeholder-text: "icon URL"; }
+                                LineEdit { text <=> root.profile-image; placeholder-text: "header image URL"; }
+                                Button {
+                                    text: "Save profile";
+                                    clicked => {
+                                        root.save-profile(root.profile-actor-type, root.profile-display-name, root.profile-summary, root.profile-icon, root.profile-image);
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.active-screen == "moderation" : Rectangle {
+                            min-height: 250px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            border-color: #d9dee6;
+                            background: #ffffff;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 7px;
+                                Text { text: "Moderation policy"; font-weight: 800; font-size: 13px; color: #172033; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.moderation-reply-policy; placeholder-text: "reply policy"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.moderation-ai-budget; placeholder-text: "AI budget"; width: 82px; }
+                                }
+                                LineEdit { text <=> root.moderation-ai-model; placeholder-text: "AI model"; }
+                                CheckBox { text: "AI advisory"; checked <=> root.moderation-ai-enabled; }
+                                Button {
+                                    text: "Save policy";
+                                    clicked => {
+                                        root.save-moderation(root.moderation-reply-policy, root.moderation-ai-enabled, root.moderation-ai-model, root.moderation-ai-budget);
+                                    }
+                                }
+                                LineEdit { text <=> root.moderation-block-actor; placeholder-text: "Actor to block"; }
+                                LineEdit { text <=> root.moderation-block-domain; placeholder-text: "Domain to block"; }
+                                LineEdit { text <=> root.moderation-block-reason; placeholder-text: "Reason"; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Button { text: "Block actor"; clicked => { root.block-actor(root.moderation-block-actor, root.moderation-block-reason); } }
+                                    Button { text: "Block domain"; clicked => { root.block-domain(root.moderation-block-domain, root.moderation-block-reason); } }
+                                }
+                            }
+                        }
+
+                        if root.active-screen == "blocks" : Rectangle {
+                            min-height: 174px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            border-color: #d9dee6;
+                            background: #ffffff;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 7px;
+                                Text { text: "Allowlist host"; font-weight: 800; font-size: 13px; color: #172033; }
+                                LineEdit { text <=> root.moderation-allow-host; placeholder-text: "host"; }
+                                LineEdit { text <=> root.moderation-allow-note; placeholder-text: "note"; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Button { text: "Allow host"; clicked => { root.allow-host(root.moderation-allow-host, root.moderation-allow-note); } }
+                                    Button { text: "Remove host"; clicked => { root.disallow-host(root.moderation-allow-host); } }
+                                }
+                            }
+                        }
+
                         if root.active-screen == "accounts" : Rectangle {
                             min-height: 188px;
                             border-radius: 7px;
@@ -634,7 +940,7 @@ export component MainWindow inherits Window {
                                         HorizontalLayout {
                                             spacing: 8px;
                                             Button { text: "Switch"; enabled: !account.active; clicked => { root.switch-account(account.id); } }
-                                            Button { text: "Delete"; clicked => { root.delete-account(account.id); } }
+                                            Button { text: "Delete"; enabled: account.can_delete; clicked => { root.delete-account(account.id); } }
                                         }
                                     }
                                 }

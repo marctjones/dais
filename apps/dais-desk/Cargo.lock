@@ -1004,6 +1004,7 @@ dependencies = [
 name = "dais-desk"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "dais-client-core",
  "i-slint-backend-testing",
  "image",

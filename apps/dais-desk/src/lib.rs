@@ -1,18 +1,21 @@
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use dais_client_core::{
-    ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationState, OwnerApiClient,
-    OwnerAudienceList, OwnerCreatedPost, OwnerDeletedPost, OwnerDelivery, OwnerDirectMessage,
-    OwnerDiscoveredActor, OwnerFollowResult, OwnerFollower, OwnerFollowing, OwnerFriend,
-    OwnerInteraction, OwnerInteractionResult, OwnerNotification, OwnerPost, OwnerProfile,
-    OwnerPublicSearchActor, OwnerPublicSearchPost, OwnerSearchQuery, OwnerSearchResult,
-    OwnerSection, OwnerSettings, OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources,
-    OwnerStats, OwnerTimelinePost, OwnerWatchAdd, ProtocolRoute, SourceItem, SourceSubscription,
-    Visibility,
+    ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate, ModerationState,
+    OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost, OwnerDeletedPost,
+    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerFollowResult, OwnerFollower,
+    OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerInteractionResult, OwnerMedia,
+    OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
+    OwnerProfileUpdate, OwnerPublicSearchActor, OwnerPublicSearchPost, OwnerSearchQuery,
+    OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSourceAdd, OwnerSourceAddResult,
+    OwnerSourceRefreshResult, OwnerSources, OwnerStats, OwnerTimelinePost, OwnerWatchAdd,
+    ProtocolRoute, SourceItem, SourceSubscription, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 
@@ -69,6 +72,7 @@ pub struct OwnerAccountSummary {
 #[derive(Clone, Debug)]
 pub struct DeskData {
     pub snapshot: OwnerSnapshotBundle,
+    pub post_detail: Option<OwnerPostDetail>,
     pub notifications: Vec<OwnerNotification>,
     pub deliveries: Vec<OwnerDelivery>,
     pub direct_messages: Vec<OwnerDirectMessage>,
@@ -146,6 +150,173 @@ impl Default for ComposeState {
 }
 
 #[derive(Clone, Debug)]
+pub struct SearchFormState {
+    pub scope: String,
+    pub provider: String,
+    pub result_type: String,
+    pub servers: String,
+    pub sort: String,
+    pub since: String,
+    pub until: String,
+    pub author: String,
+    pub mentions: String,
+    pub lang: String,
+    pub domain: String,
+    pub url: String,
+    pub tags: String,
+    pub confirm_public_sensitive: bool,
+}
+
+impl Default for SearchFormState {
+    fn default() -> Self {
+        Self {
+            scope: "public".into(),
+            provider: "all".into(),
+            result_type: "all".into(),
+            servers: String::new(),
+            sort: "recent".into(),
+            since: String::new(),
+            until: String::new(),
+            author: String::new(),
+            mentions: String::new(),
+            lang: String::new(),
+            domain: String::new(),
+            url: String::new(),
+            tags: String::new(),
+            confirm_public_sensitive: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SourceFormState {
+    pub source_type: String,
+    pub url: String,
+    pub title: String,
+    pub cadence_minutes: String,
+}
+
+impl Default for SourceFormState {
+    fn default() -> Self {
+        Self {
+            source_type: "rss".into(),
+            url: String::new(),
+            title: String::new(),
+            cadence_minutes: "60".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct WatchFormState {
+    pub watch_type: String,
+    pub target: String,
+    pub title: String,
+    pub cadence_minutes: String,
+}
+
+impl Default for WatchFormState {
+    fn default() -> Self {
+        Self {
+            watch_type: "activitypub_actor".into(),
+            target: String::new(),
+            title: String::new(),
+            cadence_minutes: "60".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ProfileFormState {
+    pub actor_type: String,
+    pub display_name: String,
+    pub summary: String,
+    pub icon: String,
+    pub image: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AudienceFormState {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub categories: String,
+    pub members: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ModerationFormState {
+    pub reply_policy: String,
+    pub ai_enabled: bool,
+    pub ai_model: String,
+    pub ai_daily_budget: String,
+    pub block_actor: String,
+    pub block_domain: String,
+    pub block_reason: String,
+    pub allow_host: String,
+    pub allow_note: String,
+}
+
+impl Default for ModerationFormState {
+    fn default() -> Self {
+        Self {
+            reply_policy: "warn".into(),
+            ai_enabled: false,
+            ai_model: String::new(),
+            ai_daily_budget: "0".into(),
+            block_actor: String::new(),
+            block_domain: String::new(),
+            block_reason: String::new(),
+            allow_host: String::new(),
+            allow_note: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MediaFormState {
+    pub file_path: String,
+    pub media_type: String,
+    pub description: String,
+    pub access: String,
+    pub expires_seconds: String,
+    pub require_authorized_fetch: bool,
+    pub revoke_url: String,
+}
+
+impl Default for MediaFormState {
+    fn default() -> Self {
+        Self {
+            file_path: String::new(),
+            media_type: String::new(),
+            description: String::new(),
+            access: "followers".into(),
+            expires_seconds: String::new(),
+            require_authorized_fetch: true,
+            revoke_url: String::new(),
+        }
+    }
+}
+
+pub struct SearchFormInput<'a> {
+    pub query: &'a str,
+    pub scope: &'a str,
+    pub provider: &'a str,
+    pub result_type: &'a str,
+    pub servers: &'a str,
+    pub sort: &'a str,
+    pub since: &'a str,
+    pub until: &'a str,
+    pub author: &'a str,
+    pub mentions: &'a str,
+    pub lang: &'a str,
+    pub domain: &'a str,
+    pub url: &'a str,
+    pub tags: &'a str,
+    pub confirm_public_sensitive: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct UiProjection {
     pub mode_nav: Vec<NavItem>,
     pub screen_nav: Vec<NavItem>,
@@ -172,6 +343,54 @@ pub struct UiProjection {
     pub account_label: String,
     pub account_url: String,
     pub account_token: String,
+    pub search_scope: String,
+    pub search_provider: String,
+    pub search_type: String,
+    pub search_servers: String,
+    pub search_sort: String,
+    pub search_since: String,
+    pub search_until: String,
+    pub search_author: String,
+    pub search_mentions: String,
+    pub search_lang: String,
+    pub search_domain: String,
+    pub search_url: String,
+    pub search_tags: String,
+    pub search_confirm_public_sensitive: bool,
+    pub source_type: String,
+    pub source_url: String,
+    pub source_title: String,
+    pub source_cadence: String,
+    pub watch_type: String,
+    pub watch_target: String,
+    pub watch_title: String,
+    pub watch_cadence: String,
+    pub profile_actor_type: String,
+    pub profile_display_name: String,
+    pub profile_summary: String,
+    pub profile_icon: String,
+    pub profile_image: String,
+    pub audience_id: String,
+    pub audience_name: String,
+    pub audience_description: String,
+    pub audience_categories: String,
+    pub audience_members: String,
+    pub moderation_reply_policy: String,
+    pub moderation_ai_enabled: bool,
+    pub moderation_ai_model: String,
+    pub moderation_ai_budget: String,
+    pub moderation_block_actor: String,
+    pub moderation_block_domain: String,
+    pub moderation_block_reason: String,
+    pub moderation_allow_host: String,
+    pub moderation_allow_note: String,
+    pub media_file_path: String,
+    pub media_type: String,
+    pub media_description: String,
+    pub media_access: String,
+    pub media_expires_seconds: String,
+    pub media_authorized_fetch: bool,
+    pub media_revoke_url: String,
 }
 
 pub struct DeskController {
@@ -184,6 +403,13 @@ pub struct DeskController {
     selected_row: String,
     command_text: String,
     compose: ComposeState,
+    search_form: SearchFormState,
+    source_form: SourceFormState,
+    watch_form: WatchFormState,
+    profile_form: ProfileFormState,
+    audience_form: AudienceFormState,
+    moderation_form: ModerationFormState,
+    media_form: MediaFormState,
     status_message: String,
     account_form_label: String,
     account_form_url: String,
@@ -221,12 +447,20 @@ impl DeskController {
             selected_row: String::new(),
             command_text: String::new(),
             compose: ComposeState::default(),
+            search_form: SearchFormState::default(),
+            source_form: SourceFormState::default(),
+            watch_form: WatchFormState::default(),
+            profile_form: ProfileFormState::default(),
+            audience_form: AudienceFormState::default(),
+            moderation_form: ModerationFormState::default(),
+            media_form: MediaFormState::default(),
             status_message: "Ready.".to_string(),
             account_form_label,
             account_form_url,
             account_form_token,
         };
         controller.refresh();
+        controller.sync_forms_from_data();
         Ok(controller)
     }
 
@@ -236,7 +470,7 @@ impl DeskController {
             .build()
             .expect("test runtime");
         let settings = StoredOwnerSettings::default();
-        Self {
+        let mut controller = Self {
             settings_path: PathBuf::from("fixture-owner-settings.json"),
             settings,
             runtime,
@@ -246,11 +480,20 @@ impl DeskController {
             selected_row: "post:fixture-private-post".to_string(),
             command_text: String::new(),
             compose: ComposeState::default(),
+            search_form: SearchFormState::default(),
+            source_form: SourceFormState::default(),
+            watch_form: WatchFormState::default(),
+            profile_form: ProfileFormState::default(),
+            audience_form: AudienceFormState::default(),
+            moderation_form: ModerationFormState::default(),
+            media_form: MediaFormState::default(),
             status_message: "Fixture mode.".to_string(),
             account_form_label: "Dais Social".to_string(),
             account_form_url: DEFAULT_INSTANCE_URL.to_string(),
             account_form_token: String::new(),
-        }
+        };
+        controller.sync_forms_from_data();
+        controller
     }
 
     pub fn refresh(&mut self) {
@@ -268,6 +511,38 @@ impl DeskController {
         };
         if self.selected_row.is_empty() {
             self.selected_row = self.first_row_id();
+        }
+        self.sync_forms_from_data();
+    }
+
+    fn sync_forms_from_data(&mut self) {
+        let profile = &self.data.snapshot.profile;
+        self.profile_form = ProfileFormState {
+            actor_type: profile.actor_type.clone(),
+            display_name: profile.display_name.clone().unwrap_or_default(),
+            summary: profile.summary.clone().unwrap_or_default(),
+            icon: profile
+                .icon
+                .clone()
+                .or_else(|| profile.avatar_url.clone())
+                .unwrap_or_default(),
+            image: profile
+                .image
+                .clone()
+                .or_else(|| profile.header_url.clone())
+                .unwrap_or_default(),
+        };
+
+        let moderation = &self.data.snapshot.moderation;
+        self.moderation_form.reply_policy = moderation.reply_policy.clone();
+        self.moderation_form.ai_enabled = moderation.ai_enabled;
+        self.moderation_form.ai_model = moderation.ai_model.clone().unwrap_or_default();
+        self.moderation_form.ai_daily_budget = moderation.ai_daily_budget.to_string();
+
+        if self.audience_form.id.is_empty() {
+            if let Some(list) = self.data.snapshot.audience_lists.first() {
+                self.audience_form = audience_form_from_list(list);
+            }
         }
     }
 
@@ -292,17 +567,60 @@ impl DeskController {
             }
         }
         self.selected_row = self.first_row_id();
+        self.populate_form_from_selected_row();
     }
 
     pub fn select_row(&mut self, row_id: &str) {
         self.selected_row = row_id.to_string();
         if let Some(object_id) = row_id.strip_prefix("post:") {
             self.compose.in_reply_to = None;
-            self.status_message = format!("Selected post context {object_id}.");
+            self.status_message = match self.load_post_detail(object_id) {
+                Ok(message) => message,
+                Err(error) => {
+                    format!("Selected post context {object_id}; detail unavailable: {error}")
+                }
+            };
         } else if let Some(object_id) = row_id.strip_prefix("timeline:") {
-            self.status_message = format!("Selected timeline item {object_id}.");
+            self.status_message = match self.load_post_detail(object_id) {
+                Ok(message) => message,
+                Err(error) => {
+                    format!("Selected timeline item {object_id}; detail unavailable: {error}")
+                }
+            };
         } else if let Some(actor) = row_id.strip_prefix("actor:") {
             self.status_message = format!("Selected relationship context for {actor}.");
+            self.watch_form.target = actor.to_string();
+        } else if let Some(id) = row_id.strip_prefix("audience:") {
+            if let Some(list) = self
+                .data
+                .snapshot
+                .audience_lists
+                .iter()
+                .find(|list| list.id == id)
+            {
+                self.audience_form = audience_form_from_list(list);
+                self.status_message = format!("Editing audience group {}.", list.name);
+            }
+        } else if let Some(url) = row_id.strip_prefix("url:") {
+            self.watch_form.target = url.to_string();
+        }
+    }
+
+    fn populate_form_from_selected_row(&mut self) {
+        if let Some(id) = self.selected_row.strip_prefix("audience:") {
+            if let Some(list) = self
+                .data
+                .snapshot
+                .audience_lists
+                .iter()
+                .find(|list| list.id == id)
+            {
+                self.audience_form = audience_form_from_list(list);
+            }
+        } else if let Some(target) = self.selected_row.strip_prefix("actor:") {
+            self.watch_form.target = target.to_string();
+        } else if let Some(target) = self.selected_row.strip_prefix("url:") {
+            self.watch_form.target = target.to_string();
         }
     }
 
@@ -327,40 +645,61 @@ impl DeskController {
         if action.trim().is_empty() {
             return;
         }
-        let result = match action {
-            "Reply" => self.prepare_reply(row_id),
-            "Favorite" => self.interact(row_id, "favorite"),
-            "Boost" | "Repost" => self.interact(row_id, "boost"),
-            "Delete" => self.delete_post(row_id),
-            "Mark read" => self.mark_notification_read(row_id),
-            "Approve" => self.set_follower_status(row_id, "approved"),
-            "Reject" => self.set_follower_status(row_id, "rejected"),
-            "Remove" => self.set_follower_status(row_id, "removed"),
-            "Follow" => self.follow(row_id),
-            "Unfollow" | "Cancel" => self.unfollow(row_id),
-            "Watch" => self.watch(row_id),
-            "Stop watching" => self.remove_source_or_watch(row_id),
-            "Refresh" => self.refresh_source_or_watch(row_id),
-            "Approve reply" => self.set_reply_status(row_id, "approved"),
-            "Hide reply" => self.set_reply_status(row_id, "hidden"),
-            "Reject reply" => self.set_reply_status(row_id, "rejected"),
-            "Block" => self.block(row_id),
-            "Unblock" => self.unblock(row_id),
-            "Open original" | "Open link" => self.open_external(row_id),
-            "Open context" => {
-                self.selected_row = related_context(row_id).unwrap_or(row_id).to_string();
-                Ok("Opened related context.".to_string())
+        let result = if action == "Switch" && row_id.starts_with("account:") {
+            self.switch_account_result(row_id.trim_start_matches("account:"))
+        } else if action == "Delete" && row_id.starts_with("account:") {
+            self.delete_account_result(row_id.trim_start_matches("account:"))
+        } else if action == "Delete" && row_id.starts_with("audience:") {
+            self.delete_audience(row_id.trim_start_matches("audience:"))
+        } else if action == "Remove" && row_id.starts_with("audience:") {
+            self.delete_audience(row_id.trim_start_matches("audience:"))
+        } else if action == "Remove" && row_id.starts_with("allow:") {
+            self.disallow_host(row_id.trim_start_matches("allow:"))
+        } else if action == "Revoke media" {
+            self.revoke_media_from_row(row_id)
+        } else {
+            match action {
+                "Reply" => self.prepare_reply(row_id),
+                "Favorite" => self.interact(row_id, "favorite"),
+                "Boost" | "Repost" => self.interact(row_id, "boost"),
+                "Delete" => self.delete_post(row_id),
+                "Mark read" => self.mark_notification_read(row_id),
+                "Approve" => self.set_follower_status(row_id, "approved"),
+                "Reject" => self.set_follower_status(row_id, "rejected"),
+                "Remove" => self.set_follower_status(row_id, "removed"),
+                "Follow" => self.follow(row_id),
+                "Unfollow" | "Cancel" => self.unfollow(row_id),
+                "Watch" => self.watch(row_id),
+                "Stop watching" => self.remove_source_or_watch(row_id),
+                "Refresh" => self.refresh_source_or_watch(row_id),
+                "Approve reply" => self.set_reply_status(row_id, "approved"),
+                "Hide reply" => self.set_reply_status(row_id, "hidden"),
+                "Reject reply" => self.set_reply_status(row_id, "rejected"),
+                "Block" => self.block(row_id),
+                "Unblock" => self.unblock(row_id),
+                "Open original" | "Open link" => self.open_external(row_id),
+                "Open context" => {
+                    if let Some(context_row) = self.context_row_for(row_id) {
+                        self.selected_row = context_row.clone();
+                        if let Some(object_id) = object_id_from_row(&context_row) {
+                            let _ = self.load_post_detail(object_id);
+                        }
+                        Ok("Opened related context.".to_string())
+                    } else {
+                        Ok("No related post context is available for this item.".to_string())
+                    }
+                }
+                "Inspect delivery" => {
+                    self.active_mode = "server".to_string();
+                    self.active_screen = "deliveries".to_string();
+                    self.selected_row = row_id.to_string();
+                    Ok("Opened delivery inspector.".to_string())
+                }
+                "Copy evidence" => Ok("Evidence is available in Diagnostics details.".to_string()),
+                _ => Ok(format!(
+                    "{action} is visible but not destructive in preview mode."
+                )),
             }
-            "Inspect delivery" => {
-                self.active_mode = "server".to_string();
-                self.active_screen = "deliveries".to_string();
-                self.selected_row = row_id.to_string();
-                Ok("Opened delivery inspector.".to_string())
-            }
-            "Copy evidence" => Ok("Evidence is available in Diagnostics details.".to_string()),
-            _ => Ok(format!(
-                "{action} is visible but not destructive in preview mode."
-            )),
         };
         match result {
             Ok(message) => self.status_message = message,
@@ -386,6 +725,7 @@ impl DeskController {
                 | "Reject reply"
                 | "Block"
                 | "Unblock"
+                | "Revoke media"
         ) {
             self.refresh();
         }
@@ -406,25 +746,9 @@ impl DeskController {
     }
 
     pub fn switch_account(&mut self, account_id: &str) {
-        if !self
-            .settings
-            .accounts
-            .iter()
-            .any(|account| account.id == account_id)
-        {
-            self.status_message = "Account not found.".into();
-            return;
-        }
-        self.settings.active_account_id = Some(account_id.to_string());
-        match persist_settings_to(
-            &self.settings_path,
-            normalize_settings(self.settings.clone()),
-        ) {
-            Ok(()) => {
-                self.settings = load_settings_from(&self.settings_path).unwrap_or_default();
-                self.status_message =
-                    "Switched account. Reads, posts, follows, watches, and server commands use it now."
-                        .into();
+        match self.switch_account_result(account_id) {
+            Ok(message) => {
+                self.status_message = message;
                 self.refresh();
             }
             Err(error) => self.status_message = format!("Switch failed: {error}"),
@@ -432,23 +756,9 @@ impl DeskController {
     }
 
     pub fn delete_account(&mut self, account_id: &str) {
-        if self.settings.accounts.len() <= 1 {
-            self.status_message = "At least one account profile is required.".into();
-            return;
-        }
-        self.settings
-            .accounts
-            .retain(|account| account.id != account_id);
-        if self.settings.active_account_id.as_deref() == Some(account_id) {
-            self.settings.active_account_id = self.settings.accounts.first().map(|a| a.id.clone());
-        }
-        match persist_settings_to(
-            &self.settings_path,
-            normalize_settings(self.settings.clone()),
-        ) {
-            Ok(()) => {
-                self.settings = load_settings_from(&self.settings_path).unwrap_or_default();
-                self.status_message = "Deleted account profile.".into();
+        match self.delete_account_result(account_id) {
+            Ok(message) => {
+                self.status_message = message;
                 self.refresh();
             }
             Err(error) => self.status_message = format!("Delete account failed: {error}"),
@@ -505,6 +815,231 @@ impl DeskController {
         }
     }
 
+    pub fn run_filtered_search(&mut self, input: SearchFormInput<'_>) {
+        self.search_form = SearchFormState {
+            scope: input.scope.trim().if_empty("public"),
+            provider: input.provider.trim().if_empty("all"),
+            result_type: input.result_type.trim().if_empty("all"),
+            servers: input.servers.trim().to_string(),
+            sort: input.sort.trim().if_empty("recent"),
+            since: input.since.trim().to_string(),
+            until: input.until.trim().to_string(),
+            author: input.author.trim().to_string(),
+            mentions: input.mentions.trim().to_string(),
+            lang: input.lang.trim().to_string(),
+            domain: input.domain.trim().to_string(),
+            url: input.url.trim().to_string(),
+            tags: input.tags.trim().to_string(),
+            confirm_public_sensitive: input.confirm_public_sensitive,
+        };
+        self.command_text = input.query.trim().to_string();
+        self.active_mode = "people".into();
+        self.active_screen = "find".into();
+        match self.filtered_search_inner() {
+            Ok(message) => self.status_message = message,
+            Err(error) => self.status_message = format!("Search failed: {error}"),
+        }
+        self.selected_row = self.first_row_id();
+    }
+
+    pub fn add_source_from_form(
+        &mut self,
+        source_type: &str,
+        url: &str,
+        title: &str,
+        cadence: &str,
+    ) {
+        self.source_form = SourceFormState {
+            source_type: source_type.trim().if_empty("rss"),
+            url: url.trim().to_string(),
+            title: title.trim().to_string(),
+            cadence_minutes: cadence.trim().if_empty("60"),
+        };
+        match self.add_source_inner() {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Add source failed: {error}"),
+        }
+    }
+
+    pub fn add_watch_from_form(
+        &mut self,
+        watch_type: &str,
+        target: &str,
+        title: &str,
+        cadence: &str,
+    ) {
+        self.watch_form = WatchFormState {
+            watch_type: watch_type.trim().if_empty("activitypub_actor"),
+            target: target.trim().to_string(),
+            title: title.trim().to_string(),
+            cadence_minutes: cadence.trim().if_empty("60"),
+        };
+        match self.add_watch_inner() {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Add watch failed: {error}"),
+        }
+    }
+
+    pub fn save_profile_from_form(
+        &mut self,
+        actor_type: &str,
+        display_name: &str,
+        summary: &str,
+        icon: &str,
+        image: &str,
+    ) {
+        self.profile_form = ProfileFormState {
+            actor_type: actor_type.trim().to_string(),
+            display_name: display_name.trim().to_string(),
+            summary: summary.trim().to_string(),
+            icon: icon.trim().to_string(),
+            image: image.trim().to_string(),
+        };
+        match self.save_profile_inner() {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Profile save failed: {error}"),
+        }
+    }
+
+    pub fn save_audience_from_form(
+        &mut self,
+        id: &str,
+        name: &str,
+        description: &str,
+        categories: &str,
+        members: &str,
+    ) {
+        self.audience_form = AudienceFormState {
+            id: id.trim().to_string(),
+            name: name.trim().to_string(),
+            description: description.trim().to_string(),
+            categories: categories.trim().to_string(),
+            members: members.trim().to_string(),
+        };
+        match self.save_audience_inner() {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Audience save failed: {error}"),
+        }
+    }
+
+    pub fn delete_audience_from_form(&mut self, id: &str) {
+        match self.delete_audience(id.trim()) {
+            Ok(message) => {
+                self.status_message = message;
+                self.audience_form = AudienceFormState::default();
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Audience delete failed: {error}"),
+        }
+    }
+
+    pub fn save_moderation_from_form(
+        &mut self,
+        reply_policy: &str,
+        ai_enabled: bool,
+        ai_model: &str,
+        ai_budget: &str,
+    ) {
+        self.moderation_form.reply_policy = reply_policy.trim().if_empty("warn");
+        self.moderation_form.ai_enabled = ai_enabled;
+        self.moderation_form.ai_model = ai_model.trim().to_string();
+        self.moderation_form.ai_daily_budget = ai_budget.trim().if_empty("0");
+        match self.save_moderation_inner() {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Moderation save failed: {error}"),
+        }
+    }
+
+    pub fn block_actor_from_form(&mut self, actor_id: &str, reason: &str) {
+        self.moderation_form.block_actor = actor_id.trim().to_string();
+        self.moderation_form.block_reason = reason.trim().to_string();
+        match self.block_actor_value(actor_id.trim(), reason.trim()) {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Block actor failed: {error}"),
+        }
+    }
+
+    pub fn block_domain_from_form(&mut self, domain: &str, reason: &str) {
+        self.moderation_form.block_domain = domain.trim().to_string();
+        self.moderation_form.block_reason = reason.trim().to_string();
+        match self.block_domain_value(domain.trim(), reason.trim()) {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Block domain failed: {error}"),
+        }
+    }
+
+    pub fn allow_host_from_form(&mut self, host: &str, note: &str) {
+        self.moderation_form.allow_host = host.trim().to_string();
+        self.moderation_form.allow_note = note.trim().to_string();
+        match self.allow_host(host.trim(), note.trim()) {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Allow host failed: {error}"),
+        }
+    }
+
+    pub fn disallow_host_from_form(&mut self, host: &str) {
+        match self.disallow_host(host.trim()) {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Remove host failed: {error}"),
+        }
+    }
+
+    pub fn upload_media_from_form(
+        &mut self,
+        file_path: &str,
+        media_type: &str,
+        description: &str,
+        access: &str,
+        expires_seconds: &str,
+        require_authorized_fetch: bool,
+    ) {
+        self.media_form.file_path = file_path.trim().to_string();
+        self.media_form.media_type = media_type.trim().to_string();
+        self.media_form.description = description.trim().to_string();
+        self.media_form.access = access.trim().if_empty("followers");
+        self.media_form.expires_seconds = expires_seconds.trim().to_string();
+        self.media_form.require_authorized_fetch = require_authorized_fetch;
+        match self.upload_media_inner() {
+            Ok(message) => self.status_message = message,
+            Err(error) => self.status_message = format!("Media upload failed: {error}"),
+        }
+    }
+
+    pub fn revoke_media_from_form(&mut self, url: &str) {
+        self.media_form.revoke_url = url.trim().to_string();
+        match self.revoke_media_url(url.trim()) {
+            Ok(message) => self.status_message = message,
+            Err(error) => self.status_message = format!("Media revoke failed: {error}"),
+        }
+    }
+
     pub fn projection(&self) -> UiProjection {
         let rows = self.rows_for_active_screen();
         let selected_row = if rows.iter().any(|row| row.id.as_str() == self.selected_row) {
@@ -548,7 +1083,7 @@ impl DeskController {
             inspector_rows,
             accounts: account_summaries(&self.settings)
                 .into_iter()
-                .map(account_row)
+                .map(|account| account_row(account, self.settings.accounts.len() > 1))
                 .collect(),
             active_mode: self.active_mode.clone(),
             active_screen: self.active_screen.clone(),
@@ -579,6 +1114,54 @@ impl DeskController {
                 .clone()
                 .if_empty_else(|| account.map(|a| a.instance_url.clone()).unwrap_or_default()),
             account_token: self.account_form_token.clone(),
+            search_scope: self.search_form.scope.clone(),
+            search_provider: self.search_form.provider.clone(),
+            search_type: self.search_form.result_type.clone(),
+            search_servers: self.search_form.servers.clone(),
+            search_sort: self.search_form.sort.clone(),
+            search_since: self.search_form.since.clone(),
+            search_until: self.search_form.until.clone(),
+            search_author: self.search_form.author.clone(),
+            search_mentions: self.search_form.mentions.clone(),
+            search_lang: self.search_form.lang.clone(),
+            search_domain: self.search_form.domain.clone(),
+            search_url: self.search_form.url.clone(),
+            search_tags: self.search_form.tags.clone(),
+            search_confirm_public_sensitive: self.search_form.confirm_public_sensitive,
+            source_type: self.source_form.source_type.clone(),
+            source_url: self.source_form.url.clone(),
+            source_title: self.source_form.title.clone(),
+            source_cadence: self.source_form.cadence_minutes.clone(),
+            watch_type: self.watch_form.watch_type.clone(),
+            watch_target: self.watch_form.target.clone(),
+            watch_title: self.watch_form.title.clone(),
+            watch_cadence: self.watch_form.cadence_minutes.clone(),
+            profile_actor_type: self.profile_form.actor_type.clone(),
+            profile_display_name: self.profile_form.display_name.clone(),
+            profile_summary: self.profile_form.summary.clone(),
+            profile_icon: self.profile_form.icon.clone(),
+            profile_image: self.profile_form.image.clone(),
+            audience_id: self.audience_form.id.clone(),
+            audience_name: self.audience_form.name.clone(),
+            audience_description: self.audience_form.description.clone(),
+            audience_categories: self.audience_form.categories.clone(),
+            audience_members: self.audience_form.members.clone(),
+            moderation_reply_policy: self.moderation_form.reply_policy.clone(),
+            moderation_ai_enabled: self.moderation_form.ai_enabled,
+            moderation_ai_model: self.moderation_form.ai_model.clone(),
+            moderation_ai_budget: self.moderation_form.ai_daily_budget.clone(),
+            moderation_block_actor: self.moderation_form.block_actor.clone(),
+            moderation_block_domain: self.moderation_form.block_domain.clone(),
+            moderation_block_reason: self.moderation_form.block_reason.clone(),
+            moderation_allow_host: self.moderation_form.allow_host.clone(),
+            moderation_allow_note: self.moderation_form.allow_note.clone(),
+            media_file_path: self.media_form.file_path.clone(),
+            media_type: self.media_form.media_type.clone(),
+            media_description: self.media_form.description.clone(),
+            media_access: self.media_form.access.clone(),
+            media_expires_seconds: self.media_form.expires_seconds.clone(),
+            media_authorized_fetch: self.media_form.require_authorized_fetch,
+            media_revoke_url: self.media_form.revoke_url.clone(),
         }
     }
 
@@ -606,6 +1189,7 @@ impl DeskController {
             let stats = client.stats().await.unwrap_or_default();
             Ok(DeskData {
                 snapshot: snapshot.into(),
+                post_detail: None,
                 notifications,
                 deliveries,
                 direct_messages,
@@ -628,6 +1212,506 @@ impl DeskController {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "owner token is required")?;
         Ok(OwnerApiClient::new(&self.settings.instance_url, token))
+    }
+
+    fn load_post_detail(&mut self, object_id: &str) -> Result<String, String> {
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            self.data.post_detail = fixture_post_detail(object_id, &self.data.snapshot);
+            return Ok("Preview post detail loaded in the inspector.".into());
+        }
+        let client = self.client()?;
+        let id = object_id.to_string();
+        let detail = self.runtime.block_on(async move {
+            client
+                .post_detail(&id)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        let reply_count = detail.replies.len();
+        let like_count = detail.likes.len();
+        let boost_count = detail.boosts.len();
+        self.data.post_detail = Some(detail);
+        Ok(format!(
+            "Loaded post detail: {reply_count} replies, {like_count} likes, {boost_count} boosts."
+        ))
+    }
+
+    fn filtered_search_inner(&mut self) -> Result<String, String> {
+        if self.command_text.trim().is_empty() {
+            return Err("search text is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            self.data.search = fixture_search(&self.command_text);
+            return Ok("Preview filtered search results are shown.".into());
+        }
+        let client = self.client()?;
+        let options = OwnerSearchQuery {
+            query: self.command_text.trim().to_string(),
+            scope: self.search_form.scope.trim().if_empty("public"),
+            confirm_public_sensitive: self.search_form.confirm_public_sensitive,
+            provider: optional_filter(&self.search_form.provider, "all"),
+            result_type: optional_filter(&self.search_form.result_type, "all"),
+            servers: split_list(&self.search_form.servers),
+            sort: optional_filter(&self.search_form.sort, ""),
+            since: optional_trimmed(&self.search_form.since),
+            until: optional_trimmed(&self.search_form.until),
+            author: optional_trimmed(&self.search_form.author),
+            mentions: optional_trimmed(&self.search_form.mentions),
+            lang: optional_trimmed(&self.search_form.lang),
+            domain: optional_trimmed(&self.search_form.domain),
+            url: optional_trimmed(&self.search_form.url),
+            tags: split_list(&self.search_form.tags),
+        };
+        let result = self.runtime.block_on(async move {
+            client
+                .search_with_options(&options)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        let guard = result.public_search_guard.clone();
+        let result_count = result.public_posts.len()
+            + result.public_actors.len()
+            + result.posts.len()
+            + result.users.len()
+            + result.sources.len()
+            + result.source_items.len();
+        self.data.search = result;
+        if guard.requires_confirmation && !guard.confirmed {
+            Ok(guard.message.unwrap_or_else(|| {
+                "Public search looks sensitive. Enable confirmation and search again.".into()
+            }))
+        } else {
+            Ok(format!("Loaded {result_count} search result(s)."))
+        }
+    }
+
+    fn add_source_inner(&self) -> Result<String, String> {
+        if self.source_form.url.trim().is_empty() {
+            return Err("source URL is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview source added. Add an owner token to save it.".into());
+        }
+        let client = self.client()?;
+        let source = OwnerSourceAdd {
+            source_type: self.source_form.source_type.trim().if_empty("rss"),
+            url: self.source_form.url.trim().to_string(),
+            title: optional_trimmed(&self.source_form.title),
+            cadence_minutes: parse_u16(&self.source_form.cadence_minutes, Some(60)),
+            api_secret_name: None,
+            private_reader_only: true,
+            excerpt_only: true,
+            link_required: true,
+            attribution_required: true,
+            image_allowed: false,
+            full_text_allowed: false,
+        };
+        let result: OwnerSourceAddResult = self.runtime.block_on(async move {
+            client
+                .add_source(&source)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!(
+            "Added {} source {}.",
+            result.source.source_type, result.source.url
+        ))
+    }
+
+    fn add_watch_inner(&self) -> Result<String, String> {
+        if self.watch_form.target.trim().is_empty() {
+            return Err("watch target is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview watch added. No remote follow request is sent.".into());
+        }
+        let client = self.client()?;
+        let watch = OwnerWatchAdd {
+            watch_type: self
+                .watch_form
+                .watch_type
+                .trim()
+                .if_empty("activitypub_actor"),
+            target: self.watch_form.target.trim().to_string(),
+            title: optional_trimmed(&self.watch_form.title),
+            cadence_minutes: parse_u16(&self.watch_form.cadence_minutes, Some(60)),
+            private_reader_only: true,
+            excerpt_only: true,
+            link_required: true,
+            attribution_required: true,
+            image_allowed: false,
+            full_text_allowed: false,
+        };
+        let result: OwnerSourceAddResult = self.runtime.block_on(async move {
+            client
+                .add_watch(&watch)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!(
+            "Added private {} watch for {}.",
+            result.source.source_type, result.source.url
+        ))
+    }
+
+    fn save_profile_inner(&self) -> Result<String, String> {
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview profile saved. Add an owner token to update the server.".into());
+        }
+        let client = self.client()?;
+        let profile = OwnerProfileUpdate {
+            actor_type: optional_trimmed(&self.profile_form.actor_type),
+            display_name: optional_trimmed(&self.profile_form.display_name),
+            summary: optional_trimmed(&self.profile_form.summary),
+            icon: optional_trimmed(&self.profile_form.icon),
+            image: optional_trimmed(&self.profile_form.image),
+        };
+        let result: OwnerProfile = self.runtime.block_on(async move {
+            client
+                .update_profile(&profile)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!("Updated public profile {}.", result.public_handle))
+    }
+
+    fn save_audience_inner(&self) -> Result<String, String> {
+        if self.audience_form.name.trim().is_empty() {
+            return Err("audience name is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview audience group saved.".into());
+        }
+        let client = self.client()?;
+        let list = OwnerAudienceListUpsert {
+            id: optional_trimmed(&self.audience_form.id),
+            name: self.audience_form.name.trim().to_string(),
+            description: optional_trimmed(&self.audience_form.description),
+            allowed_categories: split_list(&self.audience_form.categories),
+            member_actor_ids: split_list(&self.audience_form.members),
+        };
+        let result: OwnerAudienceList = self.runtime.block_on(async move {
+            client
+                .upsert_audience_list(&list)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!(
+            "Saved audience group {} with {} member(s).",
+            result.name, result.member_count
+        ))
+    }
+
+    fn delete_audience(&self, id: &str) -> Result<String, String> {
+        if id.trim().is_empty() {
+            return Err("audience id is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview audience group deleted.".into());
+        }
+        let client = self.client()?;
+        self.runtime.block_on(async move {
+            client
+                .delete_audience_list(id)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok("Audience group deleted.".into())
+    }
+
+    fn save_moderation_inner(&self) -> Result<String, String> {
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview moderation policy saved.".into());
+        }
+        let client = self.client()?;
+        let settings = ModerationSettingsUpdate {
+            reply_policy: self.moderation_form.reply_policy.trim().if_empty("warn"),
+            ai_enabled: self.moderation_form.ai_enabled,
+            ai_model: optional_trimmed(&self.moderation_form.ai_model),
+            ai_daily_budget: parse_u64(&self.moderation_form.ai_daily_budget, 0),
+        };
+        let result: ModerationState = self.runtime.block_on(async move {
+            client
+                .update_moderation_settings(&settings)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!(
+            "Updated moderation policy {}. AI advisory is {}.",
+            result.reply_policy,
+            if result.ai_enabled { "on" } else { "off" }
+        ))
+    }
+
+    fn block_actor_value(&self, actor_id: &str, reason: &str) -> Result<String, String> {
+        if actor_id.is_empty() {
+            return Err("actor id is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview actor block recorded.".into());
+        }
+        let client = self.client()?;
+        let reason = optional_trimmed(reason);
+        self.runtime.block_on(async move {
+            client
+                .block_actor(actor_id, reason.as_deref())
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok("Actor blocked.".into())
+    }
+
+    fn block_domain_value(&self, domain: &str, reason: &str) -> Result<String, String> {
+        if domain.is_empty() {
+            return Err("domain is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview domain block recorded.".into());
+        }
+        let client = self.client()?;
+        let reason = optional_trimmed(reason);
+        self.runtime.block_on(async move {
+            client
+                .block_domain(domain, reason.as_deref())
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok("Domain blocked.".into())
+    }
+
+    fn allow_host(&self, host: &str, note: &str) -> Result<String, String> {
+        if host.is_empty() {
+            return Err("host is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview allowlist host saved.".into());
+        }
+        let client = self.client()?;
+        let note = optional_trimmed(note);
+        self.runtime.block_on(async move {
+            client
+                .allow_host(host, note.as_deref())
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok("Allowlist host saved.".into())
+    }
+
+    fn disallow_host(&self, host: &str) -> Result<String, String> {
+        if host.is_empty() {
+            return Err("host is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview allowlist host removed.".into());
+        }
+        let client = self.client()?;
+        self.runtime.block_on(async move {
+            client
+                .disallow_host(host)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok("Allowlist host removed.".into())
+    }
+
+    fn upload_media_inner(&mut self) -> Result<String, String> {
+        if self.media_form.file_path.trim().is_empty() {
+            return Err("local media file path is required".into());
+        }
+        let path = PathBuf::from(self.media_form.file_path.trim());
+        let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "media filename is required".to_string())?
+            .to_string();
+        let media_type = optional_trimmed(&self.media_form.media_type)
+            .unwrap_or_else(|| media_type_for_path(&path));
+        let expires_in_seconds = optional_trimmed(&self.media_form.expires_seconds)
+            .map(|value| parse_u64(&value, 0))
+            .filter(|value| *value > 0);
+        let upload = OwnerMediaUpload {
+            filename,
+            media_type: Some(media_type),
+            description: optional_trimmed(&self.media_form.description),
+            access: optional_trimmed(&self.media_form.access),
+            expires_in_seconds,
+            require_authorized_fetch: Some(self.media_form.require_authorized_fetch),
+            data_base64: BASE64.encode(bytes),
+        };
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok(format!(
+                "Preview media upload prepared for {}.",
+                upload.filename
+            ));
+        }
+        let client = self.client()?;
+        let result: OwnerMedia = self.runtime.block_on(async move {
+            client
+                .upload_media(&upload)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        self.compose.attachments.push(result.url.clone());
+        self.media_form.revoke_url = result.url.clone();
+        Ok(format!(
+            "Uploaded media and attached it to the current draft: {}.",
+            compact_url(&result.url)
+        ))
+    }
+
+    fn revoke_media_from_row(&mut self, row_id: &str) -> Result<String, String> {
+        let url = row_id
+            .strip_prefix("media:")
+            .or_else(|| row_id.strip_prefix("url:"))
+            .ok_or_else(|| "no media URL".to_string())?;
+        self.revoke_media_url(url)
+    }
+
+    fn revoke_media_url(&mut self, url: &str) -> Result<String, String> {
+        if url.is_empty() {
+            return Err("media URL is required".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            self.compose.attachments.retain(|item| item != url);
+            return Ok("Preview media revoked.".into());
+        }
+        let client = self.client()?;
+        self.runtime.block_on(async move {
+            client
+                .revoke_media(url)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        self.compose.attachments.retain(|item| item != url);
+        Ok("Media revoked and removed from the current draft.".into())
+    }
+
+    fn switch_account_result(&mut self, account_id: &str) -> Result<String, String> {
+        if !self
+            .settings
+            .accounts
+            .iter()
+            .any(|account| account.id == account_id)
+        {
+            return Err("account not found".into());
+        }
+        self.settings.active_account_id = Some(account_id.to_string());
+        persist_settings_to(
+            &self.settings_path,
+            normalize_settings(self.settings.clone()),
+        )?;
+        self.settings = load_settings_from(&self.settings_path).unwrap_or_default();
+        Ok(
+            "Switched account. Reads, posts, follows, watches, and server commands use it now."
+                .into(),
+        )
+    }
+
+    fn delete_account_result(&mut self, account_id: &str) -> Result<String, String> {
+        if self.settings.accounts.len() <= 1 {
+            return Err("at least one account profile is required".into());
+        }
+        let before = self.settings.accounts.len();
+        self.settings
+            .accounts
+            .retain(|account| account.id != account_id);
+        if before == self.settings.accounts.len() {
+            return Err("account not found".into());
+        }
+        if self.settings.active_account_id.as_deref() == Some(account_id) {
+            self.settings.active_account_id = self.settings.accounts.first().map(|a| a.id.clone());
+        }
+        persist_settings_to(
+            &self.settings_path,
+            normalize_settings(self.settings.clone()),
+        )?;
+        self.settings = load_settings_from(&self.settings_path).unwrap_or_default();
+        Ok("Deleted account profile.".into())
     }
 
     fn search_or_discover(&mut self, query: &str) -> Result<String, String> {
@@ -681,6 +1765,47 @@ impl DeskController {
     }
 
     fn prepare_reply(&mut self, row_id: &str) -> Result<String, String> {
+        if let Some(id) = row_id.strip_prefix("dm:") {
+            let dm = self
+                .data
+                .direct_messages
+                .iter()
+                .find(|dm| dm.id == id)
+                .ok_or_else(|| "direct message not found".to_string())?;
+            self.compose.in_reply_to = None;
+            self.compose.visibility = Visibility::Direct;
+            self.compose.protocol = ProtocolRoute::ActivityPub;
+            self.compose.recipients = dm.sender_id.clone();
+            self.active_mode = "home".to_string();
+            self.active_screen = "compose".to_string();
+            return Ok("Direct reply prepared. Recipient and Direct visibility are visible before sending.".into());
+        }
+        if let Some(id) = row_id.strip_prefix("notification:") {
+            let notice = self
+                .data
+                .notifications
+                .iter()
+                .find(|notice| notice.id == id)
+                .ok_or_else(|| "notification not found".to_string())?;
+            let object_id = notice
+                .context_post_id
+                .as_deref()
+                .or(notice.post_id.as_deref())
+                .ok_or_else(|| "notification has no post context".to_string())?;
+            self.compose.in_reply_to = Some(object_id.to_string());
+            self.compose.visibility = match notice.context_post_visibility.as_deref() {
+                Some("public") => Visibility::Public,
+                Some("direct") => Visibility::Direct,
+                _ => Visibility::Followers,
+            };
+            self.compose.protocol = ProtocolRoute::ActivityPub;
+            self.active_mode = "home".to_string();
+            self.active_screen = "compose".to_string();
+            return Ok(
+                "Notification reply context attached. Audience is still visible before sending."
+                    .into(),
+            );
+        }
         let object_id = object_id_from_row(row_id).ok_or_else(|| "no post context".to_string())?;
         self.compose.in_reply_to = Some(object_id.to_string());
         self.compose.visibility = Visibility::Followers;
@@ -843,7 +1968,7 @@ impl DeskController {
     }
 
     fn watch(&self, row_id: &str) -> Result<String, String> {
-        let target = target_from_row(row_id).ok_or_else(|| "no watch target".to_string())?;
+        let (watch_type, target) = self.watch_request_from_row(row_id)?;
         if self
             .settings
             .owner_token
@@ -857,8 +1982,8 @@ impl DeskController {
         let result: OwnerSourceAddResult = self.runtime.block_on(async move {
             client
                 .add_watch(&OwnerWatchAdd {
-                    watch_type: "activitypub".to_string(),
-                    target: target.to_string(),
+                    watch_type,
+                    target,
                     title: None,
                     cadence_minutes: Some(60),
                     private_reader_only: true,
@@ -875,6 +2000,49 @@ impl DeskController {
             "Watching {} privately. Only public posts will be fetched.",
             result.source.url
         ))
+    }
+
+    fn watch_request_from_row(&self, row_id: &str) -> Result<(String, String), String> {
+        if let Some(post_url) = row_id.strip_prefix("url:") {
+            if let Some(post) = self
+                .data
+                .search
+                .public_posts
+                .iter()
+                .find(|post| post.url == post_url)
+            {
+                if let Some(target) = post.watch_target.as_deref() {
+                    return Ok((
+                        post.watch_type
+                            .as_deref()
+                            .unwrap_or_else(|| infer_watch_type(target))
+                            .to_string(),
+                        target.to_string(),
+                    ));
+                }
+            }
+            return Ok((infer_watch_type(post_url).to_string(), post_url.to_string()));
+        }
+        let target = target_from_row(row_id).ok_or_else(|| "no watch target".to_string())?;
+        if let Some(actor) = self
+            .data
+            .search
+            .public_actors
+            .iter()
+            .find(|actor| actor.follow_target.as_deref() == Some(target) || actor.id == target)
+        {
+            if let Some(watch_target) = actor.watch_target.as_deref() {
+                return Ok((
+                    actor
+                        .watch_type
+                        .as_deref()
+                        .unwrap_or_else(|| infer_watch_type(watch_target))
+                        .to_string(),
+                    watch_target.to_string(),
+                ));
+            }
+        }
+        Ok((infer_watch_type(target).to_string(), target.to_string()))
     }
 
     fn remove_source_or_watch(&self, row_id: &str) -> Result<String, String> {
@@ -954,23 +2122,7 @@ impl DeskController {
 
     fn block(&self, row_id: &str) -> Result<String, String> {
         let target = target_from_row(row_id).ok_or_else(|| "no block target".to_string())?;
-        if self
-            .settings
-            .owner_token
-            .as_deref()
-            .unwrap_or("")
-            .is_empty()
-        {
-            return Ok("Preview block recorded.".into());
-        }
-        let client = self.client()?;
-        self.runtime.block_on(async move {
-            client
-                .block_actor(target, Some("Blocked from Dais Desk"))
-                .await
-                .map_err(|error| error.to_string())
-        })?;
-        Ok("Actor blocked.".into())
+        self.block_actor_value(target, "Blocked from Dais Desk")
     }
 
     fn unblock(&self, row_id: &str) -> Result<String, String> {
@@ -1001,6 +2153,11 @@ impl DeskController {
             .find_row(row_id)
             .and_then(|row| extract_first_url(&row.detail))
             .or_else(|| row_id.strip_prefix("url:").map(ToOwned::to_owned))
+            .or_else(|| row_id.strip_prefix("media:").map(ToOwned::to_owned))
+            .or_else(|| {
+                matches!(row_id, "identity:profile" | "health:profile")
+                    .then(|| self.data.snapshot.profile.actor_url.clone())
+            })
             .ok_or_else(|| "no external URL on this item".to_string())?;
         open_url(&url)?;
         Ok(format!("Opened {url} in the default browser."))
@@ -1323,7 +2480,7 @@ impl DeskController {
                 "Saved items are local to the owner and are not advertised to followers.",
                 "Owner-only",
                 "ok",
-                "Open context",
+                "",
                 "",
             ),
             row(
@@ -1333,8 +2490,8 @@ impl DeskController {
                 "Drafts preserve the intended audience and route before reopening.",
                 "Draft",
                 "warn",
-                "Open context",
-                "Delete",
+                "",
+                "",
             ),
         ]
     }
@@ -1567,6 +2724,7 @@ impl DeskController {
     }
 
     fn account_rows_as_ui(&self) -> Vec<UiRow> {
+        let can_delete = self.settings.accounts.len() > 1;
         account_summaries(&self.settings)
             .into_iter()
             .map(|account| {
@@ -1586,7 +2744,7 @@ impl DeskController {
                         "warn"
                     },
                     if account.active { "" } else { "Switch" },
-                    "Delete",
+                    if can_delete { "Delete" } else { "" },
                 )
             })
             .collect()
@@ -1716,6 +2874,7 @@ impl DeskController {
                 &selected.secondary,
             ));
         }
+        rows.extend(self.post_detail_inspector_rows(selected_row));
         rows.push(row(
             "inspector:privacy",
             "Visibility consequences",
@@ -1736,6 +2895,59 @@ impl DeskController {
             "Copy evidence",
             "",
         ));
+        rows
+    }
+
+    fn post_detail_inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
+        let Some(detail) = &self.data.post_detail else {
+            return Vec::new();
+        };
+        let Some(selected_object_id) = object_id_from_row(selected_row) else {
+            return Vec::new();
+        };
+        if detail.post.id != selected_object_id {
+            return Vec::new();
+        }
+        let mut rows = vec![row(
+            &format!("post-detail:{}", detail.post.id),
+            "Thread detail",
+            detail
+                .post
+                .published_at
+                .as_deref()
+                .unwrap_or("Selected post"),
+            &format!(
+                "{} replies, {} likes, {} boosts. {}",
+                detail.replies.len(),
+                detail.likes.len(),
+                detail.boosts.len(),
+                detail
+                    .in_reply_to
+                    .as_deref()
+                    .map(|reply| format!("In reply to {reply}."))
+                    .unwrap_or_default()
+            ),
+            "Thread",
+            "info",
+            "Reply",
+            "Delete",
+        )];
+        for attachment in &detail.post.attachments {
+            if let Some(url) = attachment_url(attachment) {
+                rows.push(row(
+                    &format!("media:{url}"),
+                    "Media attachment",
+                    attachment_media_type(attachment)
+                        .as_deref()
+                        .unwrap_or("Attachment"),
+                    &url,
+                    "Media",
+                    "info",
+                    "Open link",
+                    "Revoke media",
+                ));
+            }
+        }
         rows
     }
 
@@ -1760,6 +2972,35 @@ impl DeskController {
             })
     }
 
+    fn context_row_for(&self, row_id: &str) -> Option<String> {
+        if row_id.starts_with("post:") || row_id.starts_with("timeline:") {
+            return Some(row_id.to_string());
+        }
+        if let Some(id) = row_id.strip_prefix("notification:") {
+            return self
+                .data
+                .notifications
+                .iter()
+                .find(|notice| notice.id == id)
+                .and_then(|notice| {
+                    notice
+                        .context_post_id
+                        .as_deref()
+                        .or(notice.post_id.as_deref())
+                })
+                .map(|post_id| format!("post:{post_id}"));
+        }
+        if let Some(id) = row_id.strip_prefix("delivery:") {
+            return self
+                .data
+                .deliveries
+                .iter()
+                .find(|delivery| delivery.id == id)
+                .map(|delivery| format!("post:{}", delivery.post_id));
+        }
+        None
+    }
+
     fn first_row_id(&self) -> String {
         self.rows_for_active_screen()
             .first()
@@ -1778,6 +3019,20 @@ impl IfEmpty for String {
             fallback()
         } else {
             self
+        }
+    }
+}
+
+trait IfEmptyStr {
+    fn if_empty(self, fallback: &str) -> String;
+}
+
+impl IfEmptyStr for &str {
+    fn if_empty(self, fallback: &str) -> String {
+        if self.is_empty() {
+            fallback.to_string()
+        } else {
+            self.to_string()
         }
     }
 }
@@ -1860,6 +3115,194 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
     window.on_run_command(move |command| {
         if let Some(window) = weak.upgrade() {
             ctrl.borrow_mut().run_command(command.as_str());
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_run_filtered_search(
+        move |query,
+              scope,
+              provider,
+              result_type,
+              servers,
+              sort,
+              since,
+              until,
+              author,
+              mentions,
+              lang,
+              domain,
+              url,
+              tags,
+              confirm| {
+            if let Some(window) = weak.upgrade() {
+                ctrl.borrow_mut().run_filtered_search(SearchFormInput {
+                    query: query.as_str(),
+                    scope: scope.as_str(),
+                    provider: provider.as_str(),
+                    result_type: result_type.as_str(),
+                    servers: servers.as_str(),
+                    sort: sort.as_str(),
+                    since: since.as_str(),
+                    until: until.as_str(),
+                    author: author.as_str(),
+                    mentions: mentions.as_str(),
+                    lang: lang.as_str(),
+                    domain: domain.as_str(),
+                    url: url.as_str(),
+                    tags: tags.as_str(),
+                    confirm_public_sensitive: confirm,
+                });
+                apply_controller_projection(&window, &ctrl);
+            }
+        },
+    );
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_add_source(move |source_type, url, title, cadence| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().add_source_from_form(
+                source_type.as_str(),
+                url.as_str(),
+                title.as_str(),
+                cadence.as_str(),
+            );
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_add_watch(move |watch_type, target, title, cadence| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().add_watch_from_form(
+                watch_type.as_str(),
+                target.as_str(),
+                title.as_str(),
+                cadence.as_str(),
+            );
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_save_profile(move |actor_type, display_name, summary, icon, image| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().save_profile_from_form(
+                actor_type.as_str(),
+                display_name.as_str(),
+                summary.as_str(),
+                icon.as_str(),
+                image.as_str(),
+            );
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_save_audience(move |id, name, description, categories, members| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().save_audience_from_form(
+                id.as_str(),
+                name.as_str(),
+                description.as_str(),
+                categories.as_str(),
+                members.as_str(),
+            );
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_delete_audience(move |id| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().delete_audience_from_form(id.as_str());
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_save_moderation(move |reply_policy, ai_enabled, ai_model, ai_budget| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().save_moderation_from_form(
+                reply_policy.as_str(),
+                ai_enabled,
+                ai_model.as_str(),
+                ai_budget.as_str(),
+            );
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_block_actor(move |actor_id, reason| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut()
+                .block_actor_from_form(actor_id.as_str(), reason.as_str());
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_block_domain(move |domain, reason| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut()
+                .block_domain_from_form(domain.as_str(), reason.as_str());
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_allow_host(move |host, note| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut()
+                .allow_host_from_form(host.as_str(), note.as_str());
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_disallow_host(move |host| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().disallow_host_from_form(host.as_str());
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_upload_media(
+        move |file_path, media_type, description, access, expires_seconds, authorized_fetch| {
+            if let Some(window) = weak.upgrade() {
+                ctrl.borrow_mut().upload_media_from_form(
+                    file_path.as_str(),
+                    media_type.as_str(),
+                    description.as_str(),
+                    access.as_str(),
+                    expires_seconds.as_str(),
+                    authorized_fetch,
+                );
+                apply_controller_projection(&window, &ctrl);
+            }
+        },
+    );
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_revoke_media(move |url| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().revoke_media_from_form(url.as_str());
             apply_controller_projection(&window, &ctrl);
         }
     });
@@ -1986,6 +3429,54 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_account_label(s(&projection.account_label));
     window.set_account_url(s(&projection.account_url));
     window.set_account_token(s(&projection.account_token));
+    window.set_search_scope(s(&projection.search_scope));
+    window.set_search_provider(s(&projection.search_provider));
+    window.set_search_type(s(&projection.search_type));
+    window.set_search_servers(s(&projection.search_servers));
+    window.set_search_sort(s(&projection.search_sort));
+    window.set_search_since(s(&projection.search_since));
+    window.set_search_until(s(&projection.search_until));
+    window.set_search_author(s(&projection.search_author));
+    window.set_search_mentions(s(&projection.search_mentions));
+    window.set_search_lang(s(&projection.search_lang));
+    window.set_search_domain(s(&projection.search_domain));
+    window.set_search_url(s(&projection.search_url));
+    window.set_search_tags(s(&projection.search_tags));
+    window.set_search_confirm_public_sensitive(projection.search_confirm_public_sensitive);
+    window.set_source_type(s(&projection.source_type));
+    window.set_source_url(s(&projection.source_url));
+    window.set_source_title(s(&projection.source_title));
+    window.set_source_cadence(s(&projection.source_cadence));
+    window.set_watch_type(s(&projection.watch_type));
+    window.set_watch_target(s(&projection.watch_target));
+    window.set_watch_title(s(&projection.watch_title));
+    window.set_watch_cadence(s(&projection.watch_cadence));
+    window.set_profile_actor_type(s(&projection.profile_actor_type));
+    window.set_profile_display_name(s(&projection.profile_display_name));
+    window.set_profile_summary(s(&projection.profile_summary));
+    window.set_profile_icon(s(&projection.profile_icon));
+    window.set_profile_image(s(&projection.profile_image));
+    window.set_audience_id(s(&projection.audience_id));
+    window.set_audience_name(s(&projection.audience_name));
+    window.set_audience_description(s(&projection.audience_description));
+    window.set_audience_categories(s(&projection.audience_categories));
+    window.set_audience_members(s(&projection.audience_members));
+    window.set_moderation_reply_policy(s(&projection.moderation_reply_policy));
+    window.set_moderation_ai_enabled(projection.moderation_ai_enabled);
+    window.set_moderation_ai_model(s(&projection.moderation_ai_model));
+    window.set_moderation_ai_budget(s(&projection.moderation_ai_budget));
+    window.set_moderation_block_actor(s(&projection.moderation_block_actor));
+    window.set_moderation_block_domain(s(&projection.moderation_block_domain));
+    window.set_moderation_block_reason(s(&projection.moderation_block_reason));
+    window.set_moderation_allow_host(s(&projection.moderation_allow_host));
+    window.set_moderation_allow_note(s(&projection.moderation_allow_note));
+    window.set_media_file_path(s(&projection.media_file_path));
+    window.set_media_type(s(&projection.media_type));
+    window.set_media_description(s(&projection.media_description));
+    window.set_media_access(s(&projection.media_access));
+    window.set_media_expires_seconds(s(&projection.media_expires_seconds));
+    window.set_media_authorized_fetch(projection.media_authorized_fetch);
+    window.set_media_revoke_url(s(&projection.media_revoke_url));
 }
 
 fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
@@ -2031,13 +3522,14 @@ fn row(
     }
 }
 
-fn account_row(account: OwnerAccountSummary) -> AccountRow {
+fn account_row(account: OwnerAccountSummary, can_delete: bool) -> AccountRow {
     AccountRow {
         id: s(&account.id),
         title: s(&account.label),
         subtitle: s(&account.instance_url),
         active: account.active,
         token: account.owner_token_present,
+        can_delete,
     }
 }
 
@@ -2168,7 +3660,7 @@ fn friend_row(friend: &OwnerFriend) -> UiRow {
         "Friend means both sides can participate in the private social graph. Manage group membership from Audience Groups.",
         "Friend",
         "ok",
-        "Open context",
+        "",
         "Block",
     )
 }
@@ -2295,8 +3787,13 @@ fn watch_subscription_row(source: &SourceSubscription) -> UiRow {
 }
 
 fn source_item_row(item: &SourceItem) -> UiRow {
+    let id = item
+        .canonical_url
+        .as_deref()
+        .map(|url| format!("url:{url}"))
+        .unwrap_or_else(|| format!("source-item:{}", item.id));
     row(
-        &format!("source-item:{}", item.id),
+        &id,
         &item.title,
         &item.source_type,
         item.excerpt
@@ -2311,8 +3808,13 @@ fn source_item_row(item: &SourceItem) -> UiRow {
 }
 
 fn search_source_item_row(item: &dais_client_core::OwnerSearchSourceItem) -> UiRow {
+    let id = item
+        .canonical_url
+        .as_deref()
+        .map(|url| format!("url:{url}"))
+        .unwrap_or_else(|| format!("source-item:{}", item.id));
     row(
-        &format!("source-item:{}", item.id),
+        &id,
         &item.title,
         &item.source_type,
         item.excerpt
@@ -2336,7 +3838,7 @@ fn audience_row(list: &OwnerAudienceList) -> UiRow {
             .unwrap_or("Audience groups are owner-controlled sharing sets."),
         "Audience",
         "ok",
-        "Open context",
+        "",
         "Remove",
     )
 }
@@ -2387,7 +3889,7 @@ fn delivery_row(delivery: &OwnerDelivery) -> UiRow {
         &delivery.status,
         tone,
         if delivery.status == "failed" {
-            "Retry"
+            "Inspect delivery"
         } else {
             ""
         },
@@ -2502,17 +4004,11 @@ fn open_url(url: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn related_context(row_id: &str) -> Option<&str> {
-    row_id
-        .strip_prefix("notification:")
-        .or_else(|| row_id.strip_prefix("delivery:"))
-        .or_else(|| row_id.strip_prefix("dm:"))
-}
-
 fn object_id_from_row(row_id: &str) -> Option<&str> {
     row_id
         .strip_prefix("post:")
         .or_else(|| row_id.strip_prefix("timeline:"))
+        .or_else(|| row_id.strip_prefix("post-detail:"))
         .or_else(|| row_id.strip_prefix("url:"))
 }
 
@@ -2643,11 +4139,147 @@ fn compact_url(url: &str) -> String {
     }
 }
 
+fn infer_watch_type(target: &str) -> &'static str {
+    let lower = target.to_ascii_lowercase();
+    if lower.starts_with("at://") || lower.contains("bsky.app/profile/") && lower.contains("/post/")
+    {
+        "bluesky_post"
+    } else if lower.contains("bsky.app/profile/")
+        || lower.ends_with(".bsky.social")
+        || (!target.starts_with("http") && target.contains('.') && !target.contains('@'))
+    {
+        "bluesky_actor"
+    } else if lower.ends_with(".atom") || lower.contains("atom.xml") {
+        "atom"
+    } else if lower.ends_with(".rss") || lower.ends_with(".xml") || lower.contains("/rss") {
+        "rss"
+    } else if lower.contains("/statuses/")
+        || lower.contains("/objects/")
+        || lower.contains("/notes/")
+        || lower.contains("/@")
+            && lower
+                .rsplit('/')
+                .next()
+                .is_some_and(|part| part.chars().any(|c| c.is_ascii_digit()))
+    {
+        "activitypub_object"
+    } else {
+        "activitypub_actor"
+    }
+}
+
+fn media_type_for_path(path: &Path) -> String {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
+fn attachment_url(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("url")
+        .or_else(|| value.get("href"))
+        .or_else(|| value.get("remote_url"))
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+}
+
+fn attachment_media_type(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("mediaType")
+        .or_else(|| value.get("media_type"))
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+}
+
+fn parse_u16(value: &str, default: Option<u16>) -> Option<u16> {
+    optional_trimmed(value)
+        .and_then(|value| value.parse::<u16>().ok())
+        .or(default)
+}
+
+fn parse_u64(value: &str, default: u64) -> u64 {
+    optional_trimmed(value)
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn optional_filter(value: &str, ignored: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case(ignored) {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn audience_form_from_list(list: &OwnerAudienceList) -> AudienceFormState {
+    AudienceFormState {
+        id: list.id.clone(),
+        name: list.name.clone(),
+        description: list.description.clone().unwrap_or_default(),
+        categories: list.allowed_categories.join(", "),
+        members: list.member_actor_ids.join(", "),
+    }
+}
+
+fn fixture_post_detail(object_id: &str, snapshot: &OwnerSnapshotBundle) -> Option<OwnerPostDetail> {
+    snapshot
+        .posts
+        .iter()
+        .find(|post| post.id == object_id)
+        .cloned()
+        .or_else(|| {
+            snapshot
+                .home_timeline
+                .iter()
+                .find(|post| post.object_id == object_id)
+                .map(|post| OwnerPost {
+                    id: post.object_id.clone(),
+                    title: post.actor_display_name.clone(),
+                    content: post.content.clone(),
+                    visibility: Visibility::Followers,
+                    protocol: ProtocolRoute::ActivityPub,
+                    encrypted: false,
+                    attachments: Vec::new(),
+                    reply_count: post.reply_count,
+                    like_count: post.like_count,
+                    boost_count: post.boost_count,
+                    published_at: post.published_at.clone(),
+                })
+        })
+        .map(|post| OwnerPostDetail {
+            post,
+            content_html: Some("<p>Preview thread detail.</p>".into()),
+            in_reply_to: None,
+            replies: vec![serde_json::json!({"id": "fixture-reply"})],
+            likes: vec![serde_json::json!({"id": "fixture-like"})],
+            boosts: Vec::new(),
+        })
+}
+
 fn fixture_data(api_error: Option<String>) -> DeskData {
     let settings = StoredOwnerSettings::default();
     let snapshot = local_snapshot(settings, api_error.clone()).into();
     DeskData {
         snapshot,
+        post_detail: None,
         notifications: vec![
             OwnerNotification {
                 id: "notice-like-context".into(),
@@ -3392,5 +5024,77 @@ mod tests {
         assert!(projection
             .privacy_status
             .contains("Graph and watches are owner-only"));
+    }
+
+    #[test]
+    fn account_rows_hide_delete_when_only_one_account_exists() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("accounts");
+        let rows = controller.rows_for_active_screen();
+        assert!(rows.iter().all(|row| row.secondary.as_str() != "Delete"));
+        let projection = controller.projection();
+        assert!(projection
+            .accounts
+            .iter()
+            .all(|account| !account.can_delete));
+    }
+
+    #[test]
+    fn selecting_audience_screen_prefills_editor() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("audience");
+        let projection = controller.projection();
+        assert_eq!(projection.audience_id, "close-friends");
+        assert_eq!(projection.audience_name, "Close Friends");
+        assert!(projection.audience_members.contains("friend.example"));
+    }
+
+    #[test]
+    fn selecting_post_loads_thread_detail_for_inspector() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_row("post:fixture-private-post");
+        let projection = controller.projection();
+        assert!(projection
+            .inspector_rows
+            .iter()
+            .any(|row| row.title.as_str() == "Thread detail"));
+    }
+
+    #[test]
+    fn replying_to_notification_preserves_post_context() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.row_action("notification:notice-reply", "Reply");
+        assert_eq!(controller.active_screen, "compose");
+        assert_eq!(
+            controller.compose.in_reply_to.as_deref(),
+            Some("fixture-private-post")
+        );
+        assert_eq!(controller.compose.visibility, Visibility::Followers);
+    }
+
+    #[test]
+    fn replying_to_dm_sets_direct_recipient() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.row_action("dm:dm-fixture", "Reply");
+        assert_eq!(controller.active_screen, "compose");
+        assert_eq!(controller.compose.visibility, Visibility::Direct);
+        assert_eq!(
+            controller.compose.recipients,
+            "https://friend.example/users/ada"
+        );
+    }
+
+    #[test]
+    fn infers_protocol_specific_watch_types() {
+        assert_eq!(
+            infer_watch_type("https://bsky.app/profile/nasa.gov/post/abc"),
+            "bluesky_post"
+        );
+        assert_eq!(infer_watch_type("nasa.gov"), "bluesky_actor");
+        assert_eq!(
+            infer_watch_type("https://example.social/users/alice/statuses/1"),
+            "activitypub_object"
+        );
+        assert_eq!(infer_watch_type("https://example.com/feed.xml"), "rss");
     }
 }

@@ -19,15 +19,25 @@ Current status:
 - Shared Rust `dais-client-core` models and `OwnerApiClient` HTTP calls.
 - Live owner snapshot loading with fixture preview mode when no token is
   configured or the owner API is unreachable.
-- Private-by-default compose, replies, likes, boosts, deletion, media metadata,
+- Private-by-default compose, notification replies, direct-message replies,
+  likes, boosts, deletion, local media upload/attach, media revocation,
   direct-recipient warnings, and ActivityPub/Bluesky protocol routing controls.
 - Timelines, notifications, DMs, saved/draft rows, public discovery, follows,
   followers, following, friends, watches, audience groups, blocks, moderation,
   deliveries, diagnostics, profile/settings, stats, and account management.
+- Post/thread detail loading in the inspector for selected posts, including
+  reply/like/boost counts and attachment actions.
+- Full public search controls for scope, provider, type, sort, server, author,
+  mention, language, domain, URL, tag, and sensitive-search confirmation.
+- Source and Watch creation from the native UI, including RSS, Atom, API,
+  ActivityPub actor/object, and Bluesky actor/post watch targets.
+- Server-backed profile, audience group, moderation policy, actor/domain block,
+  and allowlist host forms.
 - Accessibility metadata for source-list controls and row cards, with automated
   Slint interaction tests.
-- Native visual smoke screenshots for Home, People/Followers, and
-  Server/Accounts.
+- Native visual smoke screenshots for Home, Compose/Media, Find/Search,
+  Followers, Watches/Sources, Audience Groups, Identity, Moderation, and
+  Accounts.
 
 Run the app locally:
 

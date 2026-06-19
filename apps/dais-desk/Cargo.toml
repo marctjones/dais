@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
+base64 = "0.22"
 dais-client-core = { path = "../../client-core" }
 slint = { version = "1.16.1", default-features = true }
 serde = { version = "1", features = ["derive"] }
