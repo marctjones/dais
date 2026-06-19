@@ -2149,16 +2149,7 @@ impl DeskController {
     }
 
     fn open_external(&self, row_id: &str) -> Result<String, String> {
-        let url = self
-            .find_row(row_id)
-            .and_then(|row| extract_first_url(&row.detail))
-            .or_else(|| row_id.strip_prefix("url:").map(ToOwned::to_owned))
-            .or_else(|| row_id.strip_prefix("media:").map(ToOwned::to_owned))
-            .or_else(|| {
-                matches!(row_id, "identity:profile" | "health:profile")
-                    .then(|| self.data.snapshot.profile.actor_url.clone())
-            })
-            .ok_or_else(|| "no external URL on this item".to_string())?;
+        let url = resolve_external_url(self, row_id)?;
         open_url(&url)?;
         Ok(format!("Opened {url} in the default browser."))
     }
@@ -3822,6 +3813,11 @@ fn source_item_row(item: &SourceItem) -> UiRow {
         .as_deref()
         .map(|url| format!("url:{url}"))
         .unwrap_or_else(|| format!("source-item:{}", item.id));
+    let open_link = item.canonical_url.as_deref().is_some()
+        || item
+            .excerpt
+            .as_deref()
+            .is_some_and(|excerpt| extract_first_url(excerpt).is_some());
     row(
         &id,
         &item.title,
@@ -3832,7 +3828,7 @@ fn source_item_row(item: &SourceItem) -> UiRow {
             .unwrap_or("Source item"),
         "Source item",
         "info",
-        "Open link",
+        if open_link { "Open link" } else { "" },
         "",
     )
 }
@@ -3843,6 +3839,11 @@ fn search_source_item_row(item: &dais_client_core::OwnerSearchSourceItem) -> UiR
         .as_deref()
         .map(|url| format!("url:{url}"))
         .unwrap_or_else(|| format!("source-item:{}", item.id));
+    let open_link = item.canonical_url.as_deref().is_some()
+        || item
+            .excerpt
+            .as_deref()
+            .is_some_and(|excerpt| extract_first_url(excerpt).is_some());
     row(
         &id,
         &item.title,
@@ -3853,7 +3854,7 @@ fn search_source_item_row(item: &dais_client_core::OwnerSearchSourceItem) -> UiR
             .unwrap_or("Search source item"),
         "Source item",
         "info",
-        "Open link",
+        if open_link { "Open link" } else { "" },
         "",
     )
 }
@@ -4007,6 +4008,22 @@ fn decode_html_entities(value: &str) -> String {
         .replace("&#39;", "'")
         .replace("&apos;", "'")
         .replace("&nbsp;", " ")
+}
+
+fn resolve_external_url(controller: &DeskController, row_id: &str) -> Result<String, String> {
+    let source = controller
+        .find_row(row_id)
+        .and_then(|row| extract_first_url(&row.detail))
+        .or_else(|| row_id.strip_prefix("url:").map(ToOwned::to_owned))
+        .or_else(|| row_id.strip_prefix("media:").map(ToOwned::to_owned))
+        .or_else(|| {
+            matches!(row_id, "identity:profile" | "health:profile")
+                .then(|| controller.data.snapshot.profile.actor_url.clone())
+        });
+    let normalized = source
+        .filter(|candidate| candidate.starts_with("http://") || candidate.starts_with("https://"))
+        .ok_or_else(|| "no external URL on this item".to_string())?;
+    Ok(normalized)
 }
 
 fn extract_first_url(value: &str) -> Option<String> {
@@ -5015,6 +5032,68 @@ mod tests {
         });
         assert_eq!(row.primary.as_str(), "Unfriend");
         assert_eq!(row.secondary.as_str(), "Block");
+    }
+
+    #[test]
+    fn source_item_row_without_link_has_no_open_action() {
+        let row = source_item_row(&SourceItem {
+            id: "item-1".into(),
+            title: "No URL item".into(),
+            source_type: "rss".into(),
+            canonical_url: None,
+            excerpt: Some("No external link in this excerpt.".into()),
+            rights_policy_json: "{}".into(),
+            read: false,
+        });
+        assert_eq!(row.primary.as_str(), "");
+    }
+
+    #[test]
+    fn source_item_row_with_excerpt_link_keeps_open_action() {
+        let row = source_item_row(&SourceItem {
+            id: "item-2".into(),
+            title: "Excerpt link item".into(),
+            source_type: "rss".into(),
+            canonical_url: None,
+            excerpt: Some("See https://example.org/article for details.".into()),
+            rights_policy_json: "{}".into(),
+            read: false,
+        });
+        assert_eq!(row.primary.as_str(), "Open link");
+    }
+
+    #[test]
+    fn search_source_item_row_without_link_has_no_open_action() {
+        let row = search_source_item_row(&dais_client_core::OwnerSearchSourceItem {
+            id: "search-item-1".into(),
+            source_id: "source-id".into(),
+            source_type: "rss".into(),
+            title: "No URL search result".into(),
+            canonical_url: None,
+            excerpt: None,
+            published_at: None,
+            read: serde_json::json!(false),
+            rights_policy_json: "{}".into(),
+            created_at: None,
+        });
+        assert_eq!(row.primary.as_str(), "");
+    }
+
+    #[test]
+    fn search_source_item_row_with_url_keeps_open_action() {
+        let row = search_source_item_row(&dais_client_core::OwnerSearchSourceItem {
+            id: "search-item-2".into(),
+            source_id: "source-id".into(),
+            source_type: "rss".into(),
+            title: "Search item with url".into(),
+            canonical_url: Some("https://example.org/search".into()),
+            excerpt: None,
+            published_at: None,
+            read: serde_json::json!(false),
+            rights_policy_json: "{}".into(),
+            created_at: None,
+        });
+        assert_eq!(row.primary.as_str(), "Open link");
     }
 
     #[test]
