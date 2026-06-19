@@ -172,6 +172,13 @@ type CreatedPost = {
   published_at: string;
 };
 
+type DeletedPost = {
+  ok: boolean;
+  id: string;
+  deleted: boolean;
+  delivery_ids: string[];
+};
+
 type ComposeDraftState = {
   text: string;
   visibility: Visibility;
@@ -451,7 +458,9 @@ const smokePostId = "https://social.dais.social/users/social/posts/smoke-post";
 let snapshot: OwnerSnapshot | null = null;
 let active = smokeSection() || "Home";
 let notice = "";
-let draftAttachments: string[] = [];
+let draftAttachments: string[] = smokeMode
+  ? [JSON.stringify({ url: "https://social.dais.social/media/smoke-upload.png", mediaType: "image/png", name: "smoke-upload.png" })]
+  : [];
 let draftReplyTo = "";
 let discoveredActor: DiscoveredActor | null = null;
 let selectedPostDetail: OwnerPostDetail | null = null;
@@ -509,6 +518,14 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
   const data = smokeSnapshot();
   if (command === "owner_snapshot") return data as T;
   if (command === "owner_post_detail") return smokePostDetail(String(args?.objectId || smokePostId)) as T;
+  if (command === "delete_owner_post") {
+    return {
+      ok: true,
+      id: String(args?.objectId || smokePostId),
+      deleted: true,
+      delivery_ids: ["delivery-delete-smoke"]
+    } as T;
+  }
   if (command === "owner_audience_lists") return smokeSnapshot().audience_lists as T;
   if (command === "upsert_owner_audience_list") {
     const id = String(args?.id || "audience-smoke");
@@ -581,6 +598,7 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
   if (command === "owner_deliveries") return [] as T;
   if (command === "owner_direct_messages") return [] as T;
   if (command === "owner_diagnostics") return data.diagnostics as T;
+  if (command === "revoke_owner_media") return { ok: true } as T;
   if (command === "owner_moderation") return data.moderation as T;
   if (command === "owner_moderation_replies") {
     return [
@@ -985,6 +1003,16 @@ function render() {
       render();
     });
   });
+  app.querySelectorAll<HTMLButtonElement>("[data-revoke-attachment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void revokeDraftAttachment(button.dataset.revokeAttachment || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-revoke-media]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void revokeMediaUrl(button.dataset.revokeMedia || "");
+    });
+  });
   app.querySelector<HTMLFormElement>("#follow-form")?.addEventListener("submit", followActor);
   app.querySelector<HTMLFormElement>("#discover-form")?.addEventListener("submit", discoverActor);
   app.querySelector<HTMLFormElement>("#source-form")?.addEventListener("submit", addSource);
@@ -1036,6 +1064,11 @@ function render() {
   app.querySelectorAll<HTMLButtonElement>("[data-post-detail]").forEach((button) => {
     button.addEventListener("click", () => {
       void loadPostDetail(button.dataset.postDetail || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-delete-post]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void deletePost(button.dataset.deletePost || "");
     });
   });
   app.querySelectorAll<HTMLButtonElement>("[data-copy-link]").forEach((button) => {
@@ -1517,8 +1550,13 @@ function composeView(data: OwnerSnapshot) {
       </div>
       ${list(
         draftAttachments.map((url) => `<article class="attachment-chip">
-          <span>${escapeHtml(shortUrl(url))}</span>
+          <span>${escapeHtml(attachmentLabel(url))}</span>
           <button type="button" data-remove-attachment="${escapeAttr(url)}">Remove</button>
+          ${
+            attachmentUrlFromDraft(url)
+              ? `<button type="button" data-revoke-attachment="${escapeAttr(url)}">Revoke upload</button>`
+              : ""
+          }
         </article>`),
         "No media attached."
       )}
@@ -1881,6 +1919,7 @@ function postCard(post: OwnerSnapshot["posts"][number]) {
       ${interactionCounts(post)}
       ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
       <button type="button" data-post-detail="${escapeAttr(post.id)}">Detail</button>
+      <button type="button" data-delete-post="${escapeAttr(post.id)}">Delete post</button>
     </footer>
   </article>`;
 }
@@ -1894,6 +1933,7 @@ function postDetailView(post: OwnerPostDetail) {
       <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.id)}">Boost</button>
       <button type="button" data-copy-link="${escapeAttr(post.id)}">Copy link</button>
       <button type="button" data-open-link="${escapeAttr(post.id)}">Open original</button>
+      <button type="button" data-delete-post="${escapeAttr(post.id)}">Delete post</button>
     </div>
     <dl>
       <dt>ID</dt><dd>${escapeHtml(shortUrl(post.id))}</dd>
@@ -1906,10 +1946,29 @@ function postDetailView(post: OwnerPostDetail) {
       <dt>Likes</dt><dd>${post.like_count || post.likes?.length || 0}</dd>
       <dt>Boosts</dt><dd>${post.boost_count || post.boosts?.length || 0}</dd>
     </dl>
+    ${postAttachmentsView(post)}
     ${postDetailReplies(post.replies || [])}
     ${postDetailInteractions("Likes", post.likes || [])}
     ${postDetailInteractions("Boosts", post.boosts || [])}
   </div>`;
+}
+
+function postAttachmentsView(post: OwnerPostDetail) {
+  return `<section class="detail-list">
+    <h3>Media</h3>
+    ${
+      post.attachments?.length
+        ? post.attachments.map((attachment) => {
+            const url = attachment.url || "";
+            return `<article>
+              <strong>${escapeHtml(attachment.name || shortUrl(url) || "media")}</strong>
+              <span>${escapeHtml(attachment.mediaType || "")}</span>
+              ${url ? `<button type="button" data-revoke-media="${escapeAttr(url)}">Revoke media</button>` : ""}
+            </article>`;
+          }).join("")
+        : `<p>None</p>`
+    }
+  </section>`;
 }
 
 function postDetailReplies(rows: PostReply[]) {
@@ -2514,6 +2573,42 @@ async function uploadSelectedMedia() {
   render();
 }
 
+async function revokeDraftAttachment(value: string) {
+  if (!value) return;
+  const url = attachmentUrlFromDraft(value);
+  if (!url) {
+    draftAttachments = draftAttachments.filter((item) => item !== value);
+    notice = "Removed local draft attachment.";
+    render();
+    return;
+  }
+  await ownerInvoke<{ ok: boolean }>("revoke_owner_media", { url });
+  draftAttachments = draftAttachments.filter((item) => item !== value);
+  notice = `Revoked upload ${shortUrl(url)}.`;
+  render();
+}
+
+async function revokeMediaUrl(url: string) {
+  if (!url) return;
+  await ownerInvoke<{ ok: boolean }>("revoke_owner_media", { url });
+  notice = `Revoked media ${shortUrl(url)}.`;
+  await load();
+  if (selectedPostDetail) {
+    selectedPostDetail = await ownerInvoke<OwnerPostDetail>("owner_post_detail", { objectId: selectedPostDetail.id });
+    render();
+  }
+}
+
+async function deletePost(objectId: string) {
+  if (!objectId) return;
+  const deleted = await ownerInvoke<DeletedPost>("delete_owner_post", { objectId });
+  if (selectedPostDetail?.id === objectId) {
+    selectedPostDetail = null;
+  }
+  notice = deleted.deleted ? `Deleted ${shortUrl(deleted.id)}.` : `Delete requested for ${shortUrl(deleted.id)}.`;
+  await load();
+}
+
 async function setFollowerStatus(followerActorId: string, status: string) {
   if (!followerActorId || !status) return;
   await ownerInvoke("set_follower_status", {
@@ -2970,6 +3065,20 @@ function isPrivateAttachment(value: string) {
   } catch {
     return false;
   }
+}
+
+function attachmentUrlFromDraft(value: string) {
+  try {
+    const attachment = JSON.parse(value);
+    return typeof attachment.url === "string" ? attachment.url : "";
+  } catch {
+    return "";
+  }
+}
+
+function attachmentLabel(value: string) {
+  const url = attachmentUrlFromDraft(value);
+  return url ? shortUrl(url) : shortUrl(value);
 }
 
 function stripTags(value: string) {

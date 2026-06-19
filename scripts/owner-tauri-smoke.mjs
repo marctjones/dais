@@ -87,12 +87,16 @@ for (const check of [
       "Likes",
       "Boosts",
       "Open original",
+      "Delete post",
+      "Revoke media",
     ],
   },
   {
     section: "Compose",
     expected: [
       "New post",
+      "social.dais.social/media/smoke-upload.png",
+      "Revoke upload",
       "Audience preview",
       "Followers-only posts reach 1 approved follower.",
       "No obvious sensitive content",

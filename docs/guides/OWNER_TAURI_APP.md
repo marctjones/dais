@@ -18,6 +18,8 @@ Current status:
 - Live public account/profile configuration for the ActivityPub actor, HTML
   profile, and Mastodon account API output.
 - Approved-follower selection in compose for direct ActivityPub posts.
+- Post-detail operator actions for replies, likes, boosts, deletion, and media
+  revocation.
 - Live Watch management for private monitoring of public RSS, Atom,
   ActivityPub, and Bluesky posts without remote follow or subscription records.
 - Local preview data when no token is configured or the owner API is

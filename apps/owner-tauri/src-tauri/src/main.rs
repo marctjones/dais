@@ -1,11 +1,11 @@
 use dais_client_core::{
     ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate, ModerationState,
-    OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost, OwnerDelivery,
-    OwnerDiscoveredActor, OwnerFollowResult, OwnerInteraction, OwnerInteractionResult, OwnerMedia,
-    OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
-    OwnerProfileUpdate, OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSnapshot,
-    OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources, OwnerStats,
-    OwnerWatchAdd, ProtocolRoute, SourceItem, Visibility,
+    OwnerActionResult, OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert,
+    OwnerCreatedPost, OwnerDeletedPost, OwnerDelivery, OwnerDiscoveredActor, OwnerFollowResult,
+    OwnerInteraction, OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification,
+    OwnerPost, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSection,
+    OwnerSettings, OwnerSnapshot, OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult,
+    OwnerSources, OwnerStats, OwnerWatchAdd, ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -74,6 +74,24 @@ async fn create_owner_post(
             recipients,
             attachments,
         })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn delete_owner_post(
+    app: tauri::AppHandle,
+    object_id: String,
+) -> Result<OwnerDeletedPost, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .delete_post(&object_id)
         .await
         .map_err(|error| error.to_string())
 }
@@ -598,6 +616,24 @@ async fn upload_owner_media(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn revoke_owner_media(
+    app: tauri::AppHandle,
+    url: String,
+) -> Result<OwnerActionResult, String> {
+    let stored = load_settings(&app)?;
+    let token = stored
+        .owner_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "owner token is required".to_string())?;
+    let client = OwnerApiClient::new(&stored.instance_url, token);
+    client
+        .revoke_media(&url)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 fn local_snapshot(stored: StoredOwnerSettings, api_error: Option<String>) -> OwnerSnapshot {
     let instance_url = stored.instance_url;
     let owner_token_present = stored
@@ -879,7 +915,9 @@ fn main() {
             owner_snapshot,
             save_owner_settings,
             create_owner_post,
+            delete_owner_post,
             upload_owner_media,
+            revoke_owner_media,
             owner_interaction,
             owner_post_detail,
             owner_notifications,
