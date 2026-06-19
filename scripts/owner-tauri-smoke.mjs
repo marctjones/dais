@@ -312,6 +312,10 @@ const screenChecks = [
     mode: "Home",
     section: "Notifications",
     expected: [
+      "Notification triage",
+      "Unread first",
+      "Read archive",
+      "1 unread",
       "mention from",
       "Alice Example",
       "read",
@@ -325,9 +329,34 @@ const screenChecks = [
     ],
   },
   {
+    mode: "Home",
+    section: "DMs",
+    expected: [
+      "Direct messages",
+      "Private inbox",
+      "conversation",
+      "Private smoke DM that belongs in the daily queue.",
+      "direct",
+    ],
+  },
+  {
+    mode: "Server",
+    section: "Deliveries",
+    expected: [
+      "Delivery queue",
+      "Needs attention",
+      "failed ActivityPub",
+      "Smoke delivery failure for daily queue review.",
+      "Open target",
+    ],
+  },
+  {
     mode: "People",
     section: "Followers",
     expected: [
+      "Follower review",
+      "Graph",
+      "Owner-only",
       "Follower lists are owner-token views.",
       "Dais does not advertise them publicly by default.",
       "Pending",
@@ -348,6 +377,7 @@ const screenChecks = [
     mode: "Server",
     section: "Settings",
     expected: [
+      "local profiles",
       "Accounts",
       "Dais Social",
       "Skeptical Engineer",
@@ -366,8 +396,10 @@ const screenChecks = [
     mode: "Server",
     section: "Moderation",
     expected: [
+      "Network",
       "Federation safety",
-      "Reply policy: review",
+      "Reply policy",
+      "review",
       "Reply queue",
       "Workers AI live advisory mode",
       "This is a medical update reply that should stay in review.",
@@ -382,6 +414,9 @@ const screenChecks = [
     mode: "Server",
     section: "Diagnostics",
     expected: [
+      "Diagnostics",
+      "Healthy checks",
+      "No diagnostics need attention.",
       "owner-api",
       "Smoke fixture owner API",
     ],

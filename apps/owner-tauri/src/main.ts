@@ -449,6 +449,16 @@ type OwnerStats = {
   closed_network: boolean;
 };
 
+type SummaryTone = "ok" | "warn" | "bad" | "neutral";
+
+type ScreenSummaryItem = {
+  label: string;
+  value: string | number;
+  detail?: string;
+  tone?: SummaryTone;
+  section?: string;
+};
+
 const homeLaneOrder = ["Friends", "Following", "Mentions", "Watches", "Public", "Drafts/Saved"] as const;
 type HomeLane = (typeof homeLaneOrder)[number];
 
@@ -1599,7 +1609,7 @@ function view(section: string, data: OwnerSnapshot): string {
     case "Settings":
       return settingsView(data);
     case "Diagnostics":
-      return list(data.diagnostics.map(diagnosticCard), "No diagnostics returned.");
+      return diagnosticsView(data);
     case "Followers":
       return followersView(data);
     case "Profile":
@@ -1615,38 +1625,160 @@ function view(section: string, data: OwnerSnapshot): string {
   }
 }
 
+function screenHeader(title: string, subtitle: string, summary: ScreenSummaryItem[] = [], actions = "") {
+  return `<header class="screen-header">
+    <div class="screen-title">
+      <div class="screen-title-row">
+        <h2>${escapeHtml(title)}</h2>
+        ${actions ? `<div class="screen-actions">${actions}</div>` : ""}
+      </div>
+      <p>${escapeHtml(subtitle)}</p>
+    </div>
+    ${summary.length ? `<div class="screen-summary">${summary.map(summaryCard).join("")}</div>` : ""}
+  </header>`;
+}
+
+function summaryCard(item: ScreenSummaryItem) {
+  const tone = item.tone || "neutral";
+  const content = `
+    <span>${escapeHtml(item.label)}</span>
+    <strong>${escapeHtml(String(item.value))}</strong>
+    ${item.detail ? `<small>${escapeHtml(item.detail)}</small>` : ""}`;
+  return item.section
+    ? `<button type="button" class="summary-card ${tone}" data-section="${escapeAttr(item.section)}">${content}</button>`
+    : `<article class="summary-card ${tone}">${content}</article>`;
+}
+
+function secondaryPanel(title: string, body: string, meta = "", className = "") {
+  return `<article class="panel secondary-panel ${className}">
+    <div class="secondary-panel-heading">
+      <h2>${escapeHtml(title)}</h2>
+      ${meta ? `<div class="panel-meta">${meta}</div>` : ""}
+    </div>
+    ${body}
+  </article>`;
+}
+
+function countPill(count: number, noun: string, tone: SummaryTone = "neutral", plural?: string) {
+  return `<span class="pill ${tone}">${escapeHtml(pluralize(count, noun, plural))}</span>`;
+}
+
+function pluralize(count: number, noun: string, plural = `${noun}s`) {
+  return `${count} ${count === 1 ? noun : plural}`;
+}
+
+function notificationKind(value: string) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized.includes("reply")) return "reply";
+  if (normalized.includes("mention")) return "mention";
+  return normalized || "notification";
+}
+
+function deliveryStatusKind(value: string) {
+  const normalized = String(value || "").toLowerCase();
+  if (["failed", "failure", "error"].some((status) => normalized.includes(status))) return "failed";
+  if (["delivered", "sent", "succeeded", "success"].some((status) => normalized.includes(status))) return "delivered";
+  return "active";
+}
+
+function watchProtocolCount(rows: SourceSubscription[]) {
+  return new Set(rows.map((row) => watchLabel(row.source_type))).size;
+}
+
 function postsView(data: OwnerSnapshot) {
-  return `<section class="split">
-    <div>${list(data.posts.map(postCard), "No posts returned by the owner API yet.")}</div>
-    <article class="panel detail">
-      <h2>Post detail</h2>
-      ${selectedPostDetail ? postDetailView(selectedPostDetail) : `<p>Select a post to inspect replies, reactions, boosts, and attachments.</p>`}
-    </article>
+  const publicPosts = data.posts.filter((post) => String(post.visibility || "").toLowerCase() === "public").length;
+  const privatePosts = data.posts.length - publicPosts;
+  const mediaPosts = data.posts.filter((post) => post.attachments?.length).length;
+  return `<section class="secondary-screen">
+    ${screenHeader("Post library", sectionSubtitle("Posts"), [
+      { label: "Posts", value: data.posts.length, detail: "returned by owner API" },
+      { label: "Public", value: publicPosts, detail: "internet-visible", tone: publicPosts ? "warn" : "neutral" },
+      { label: "Private", value: privatePosts, detail: "followers or direct", tone: privatePosts ? "ok" : "neutral" },
+      { label: "Media", value: mediaPosts, detail: "with attachments" }
+    ])}
+    <section class="split">
+      <div>${list(data.posts.map(postCard), "No posts returned by the owner API yet.")}</div>
+      <article class="panel detail secondary-panel">
+        <div class="secondary-panel-heading">
+          <h2>Post detail</h2>
+          ${selectedPostDetail ? `<div class="panel-meta"><span class="pill">${escapeHtml(compactAudienceLabel(selectedPostDetail.visibility))}</span></div>` : ""}
+        </div>
+        ${selectedPostDetail ? postDetailView(selectedPostDetail) : `<p>Select a post to inspect replies, reactions, boosts, and attachments.</p>`}
+      </article>
+    </section>
   </section>`;
 }
 
 function notificationsView() {
-  return `<section>
-    ${list(notifications.map(notificationCard), "No notifications returned by the owner API.")}
+  const unread = notifications.filter((row) => !isRead(row.read));
+  const read = notifications.filter((row) => isRead(row.read));
+  const replies = notifications.filter((row) => notificationKind(row.type) === "reply");
+  const mentions = notifications.filter((row) => notificationKind(row.type) === "mention");
+  return `<section class="secondary-screen notifications-screen">
+    ${screenHeader("Notification triage", sectionSubtitle("Notifications"), [
+      { label: "Unread", value: ownerStats?.notifications_unread ?? unread.length, detail: "needs review", tone: unread.length ? "warn" : "ok" },
+      { label: "Replies", value: replies.length, detail: "conversation activity" },
+      { label: "Mentions", value: mentions.length, detail: "direct attention" },
+      { label: "Read", value: read.length, detail: "archive" }
+    ])}
+    <section class="secondary-grid">
+      ${secondaryPanel("Unread first", list(unread.map(notificationCard), "No unread notifications."), countPill(unread.length, "unread", unread.length ? "warn" : "ok"))}
+      ${secondaryPanel("Read archive", list(read.map(notificationCard), "No read notifications yet."), countPill(read.length, "read"))}
+    </section>
   </section>`;
 }
 
 function deliveriesView() {
-  return `<section>
-    ${list(deliveries.map(deliveryCard), "No deliveries returned by the owner API.")}
+  const failed = deliveries.filter((row) => deliveryStatusKind(row.status) === "failed");
+  const activeDeliveries = deliveries.filter((row) => deliveryStatusKind(row.status) === "active");
+  const delivered = deliveries.filter((row) => deliveryStatusKind(row.status) === "delivered");
+  return `<section class="secondary-screen">
+    ${screenHeader("Delivery queue", sectionSubtitle("Deliveries"), [
+      { label: "Failed", value: ownerStats?.deliveries_failed ?? failed.length, detail: "needs attention", tone: failed.length ? "bad" : "ok" },
+      { label: "Queued", value: ownerStats?.deliveries_queued ?? activeDeliveries.length, detail: "waiting or retrying", tone: activeDeliveries.length ? "warn" : "neutral" },
+      { label: "Delivered", value: ownerStats?.deliveries_delivered ?? delivered.length, detail: "confirmed sends", tone: "ok" },
+      { label: "Total", value: ownerStats?.deliveries_total ?? deliveries.length, detail: "recent rows" }
+    ])}
+    <section class="secondary-grid">
+      ${secondaryPanel("Needs attention", list(failed.map(deliveryCard), "No failed deliveries."), countPill(failed.length, "failed", failed.length ? "bad" : "ok", "failed"))}
+      ${secondaryPanel("Queued and retrying", list(activeDeliveries.map(deliveryCard), "No queued deliveries."), countPill(activeDeliveries.length, "active"))}
+      ${secondaryPanel("Delivered", list(delivered.map(deliveryCard), "No delivered rows returned."), countPill(delivered.length, "delivered", "ok", "delivered"))}
+    </section>
   </section>`;
 }
 
 function directMessagesView() {
-  return `<section>
-    ${list(directMessages.map(directMessageCard), "No direct messages returned by the owner API.")}
+  const conversations = new Set(directMessages.map((row) => row.conversation_id)).size;
+  return `<section class="secondary-screen">
+    ${screenHeader("Direct messages", sectionSubtitle("DMs"), [
+      { label: "Messages", value: directMessages.length, detail: "private inbox rows" },
+      { label: "Conversations", value: conversations, detail: "threads" },
+      { label: "Latest", value: directMessages[0]?.published_at ? formatTime(directMessages[0].published_at) : "none", detail: "most recent" }
+    ])}
+    ${secondaryPanel("Private inbox", list(directMessages.map(directMessageCard), "No direct messages returned by the owner API."), countPill(directMessages.length, "message"))}
   </section>`;
 }
 
 function searchView() {
-  return `<section class="split">
-    <article class="panel">
-      <h2>Search</h2>
+  const publicPostCount = searchResults.public_posts?.length || 0;
+  const publicActorCount = searchResults.public_actors?.length || 0;
+  const providerErrorCount = searchResults.provider_errors?.length || 0;
+  return `<section class="secondary-screen search-screen">
+    ${screenHeader("Search", sectionSubtitle("Search"), [
+      { label: "Local posts", value: searchResults.posts.length, detail: "matching records" },
+      { label: "Actors", value: searchResults.users.length + publicActorCount, detail: "local and public" },
+      { label: "Public posts", value: publicPostCount, detail: "index/provider results" },
+      { label: "Provider issues", value: providerErrorCount, detail: "returned errors", tone: providerErrorCount ? "warn" : "ok" }
+    ])}
+    <section class="split">
+    <article class="panel secondary-panel search-controls-panel">
+      <div class="secondary-panel-heading">
+        <h2>Search</h2>
+        <div class="panel-meta">
+          <span class="pill">${escapeHtml(searchScope)}</span>
+          <span class="pill">${escapeHtml(searchProvider)}</span>
+        </div>
+      </div>
       <form id="search-form" class="inline-form">
         <input name="query" value="${escapeAttr(searchQuery)}" placeholder="Search posts, actors, follows, and sources" />
         <select name="scope">
@@ -1682,20 +1814,27 @@ function searchView() {
       <h2 class="section-label">Public posts</h2>
       ${list((searchResults.public_posts || []).map(searchPublicPostCard), "No public post results.")}
     </article>
-    <article class="panel">
-      <h2>Actors</h2>
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Actors</h2>
+        <div class="panel-meta">${countPill(searchResults.users.length + publicActorCount, "actor")}</div>
+      </div>
       ${list(searchResults.users.map(searchUserCard), "No matching actors.")}
       <h2 class="section-label">Public actors</h2>
       ${list((searchResults.public_actors || []).map(searchPublicActorCard), "No public actor results.")}
     </article>
-    <article class="panel">
-      <h2>Sources</h2>
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Sources</h2>
+        <div class="panel-meta">${countPill((searchResults.sources || []).length + (searchResults.source_items || []).length, "source")}</div>
+      </div>
       ${list((searchResults.sources || []).map(sourceSubscriptionCard), "No matching source subscriptions.")}
       <h2 class="section-label">Source items</h2>
       ${list((searchResults.source_items || []).map(searchSourceItemCard), "No matching source items.")}
       <h2 class="section-label">Providers</h2>
       ${list((searchResults.provider_errors || []).map(searchProviderErrorCard), "Providers returned normally.")}
     </article>
+    </section>
   </section>`;
 }
 
@@ -1724,32 +1863,53 @@ function searchPublicGuardHtml(guard: OwnerSearchResult["public_search_guard"]) 
 function statsView(data: OwnerSnapshot) {
   const stats = ownerStats;
   if (!stats) {
-    return `<section class="metrics">
-      <article><span>Posts</span><strong>${data.posts.length}</strong></article>
-      <article><span>Followers</span><strong>${data.followers.length}</strong></article>
-      <article><span>Following</span><strong>${data.following.length}</strong></article>
-      <article><span>Sources</span><strong>${data.sources.length}</strong></article>
+    return `<section class="secondary-screen">
+      ${screenHeader("Operational stats", sectionSubtitle("Stats"), [
+        { label: "Posts", value: data.posts.length, section: "Posts" },
+        { label: "Followers", value: data.followers.length, section: "Followers" },
+        { label: "Following", value: data.following.length, section: "Following" },
+        { label: "Sources", value: data.sources.length, section: "Sources" }
+      ])}
+      <section class="metrics">
+        <article><span>Posts</span><strong>${data.posts.length}</strong></article>
+        <article><span>Followers</span><strong>${data.followers.length}</strong></article>
+        <article><span>Following</span><strong>${data.following.length}</strong></article>
+        <article><span>Sources</span><strong>${data.sources.length}</strong></article>
+      </section>
     </section>`;
   }
-  return `<section class="metrics stats-grid">
-    ${metric("Followers", stats.followers_total, `${stats.followers_approved} approved, ${stats.followers_pending} pending`)}
-    ${metric("Following", stats.following_total, "")}
-    ${metric("Posts", stats.posts_total, `${stats.public_posts} public, ${stats.private_posts} private, ${stats.direct_posts} direct`)}
-    ${metric("Media", stats.media_posts, `${stats.encrypted_posts} encrypted, ${stats.dual_protocol_posts} dual-protocol`)}
-    ${metric("Deliveries", stats.deliveries_total, `${stats.deliveries_queued} queued, ${stats.deliveries_failed} failed`)}
-    ${metric("Notifications", stats.notifications_unread, "unread")}
-    ${metric("Moderation", stats.blocks_total, `${stats.allowlist_hosts} allowlist hosts`)}
-    ${metric("Network", stats.closed_network ? "closed" : "open", "federation mode")}
+  return `<section class="secondary-screen">
+    ${screenHeader("Operational stats", sectionSubtitle("Stats"), [
+      { label: "Posts", value: stats.posts_total, detail: `${stats.public_posts} public`, section: "Posts" },
+      { label: "Relationships", value: stats.followers_total + stats.following_total, detail: "followers + following" },
+      { label: "Deliveries", value: stats.deliveries_failed, detail: "failed", tone: stats.deliveries_failed ? "bad" : "ok", section: "Deliveries" },
+      { label: "Moderation", value: stats.blocks_total, detail: "blocks", section: "Moderation" }
+    ])}
+    <section class="metrics stats-grid">
+      ${metric("Followers", stats.followers_total, `${stats.followers_approved} approved, ${stats.followers_pending} pending`, "Followers")}
+      ${metric("Following", stats.following_total, "", "Following")}
+      ${metric("Posts", stats.posts_total, `${stats.public_posts} public, ${stats.private_posts} private, ${stats.direct_posts} direct`, "Posts")}
+      ${metric("Media", stats.media_posts, `${stats.encrypted_posts} encrypted, ${stats.dual_protocol_posts} dual-protocol`)}
+      ${metric("Deliveries", stats.deliveries_total, `${stats.deliveries_queued} queued, ${stats.deliveries_failed} failed`, "Deliveries")}
+      ${metric("Notifications", stats.notifications_unread, "unread", "Notifications")}
+      ${metric("Moderation", stats.blocks_total, `${stats.allowlist_hosts} allowlist hosts`, "Moderation")}
+      ${metric("Network", stats.closed_network ? "closed" : "open", "federation mode")}
+    </section>
   </section>`;
 }
 
 function sourcesView(data: OwnerSnapshot) {
   const items = showSourceItems ? (sourceItems.length ? sourceItems : data.sources) : [];
-  return `<section class="split">
-    <article>
+  return `<section class="secondary-screen">
+    ${screenHeader("Sources", sectionSubtitle("Sources"), [
+      { label: "Subscriptions", value: sourceSubscriptions.length, detail: "reader inputs" },
+      { label: "Items", value: items.length || data.sources.length, detail: showSourceItems ? "visible" : "available" },
+      { label: "Unread", value: data.sources.filter((item) => !item.read).length, detail: "reader items", tone: data.sources.some((item) => !item.read) ? "warn" : "ok" }
+    ], `<button type="button" data-refresh-sources>Refresh all</button>`)}
+    <section class="split">
+    <article class="secondary-stack">
       <div class="section-heading">
         <h2 class="section-label">Subscriptions</h2>
-        <button type="button" data-refresh-sources>Refresh all</button>
       </div>
       <form id="source-form" class="compact-form">
         <select name="source_type">
@@ -1764,21 +1924,27 @@ function sourcesView(data: OwnerSnapshot) {
       </form>
       ${list(sourceSubscriptions.map(sourceSubscriptionCard), "No source subscriptions returned by the owner API.")}
     </article>
-    <article>
+    <article class="secondary-stack">
       <h2 class="section-label">Reader items</h2>
       ${sourceControls()}
       ${list(items.map(sourceCard), "No source items are available yet.")}
     </article>
+    </section>
   </section>`;
 }
 
 function watchesView(data: OwnerSnapshot) {
   const items = watchItems.length ? watchItems : data.sources.filter((item) => item.source_type.startsWith("watch_"));
-  return `<section class="split">
-    <article>
+  return `<section class="secondary-screen">
+    ${screenHeader("Watches", sectionSubtitle("Watches"), [
+      { label: "Watch targets", value: watchSubscriptions.length, detail: "private monitors" },
+      { label: "Harvested posts", value: items.length, detail: "public items" },
+      { label: "Protocols", value: watchProtocolCount(watchSubscriptions), detail: "source types" }
+    ], `<button type="button" data-refresh-watches>Refresh all</button>`)}
+    <section class="split">
+    <article class="secondary-stack">
       <div class="section-heading">
         <h2 class="section-label">Watches</h2>
-        <button type="button" data-refresh-watches>Refresh all</button>
       </div>
       <form id="watch-form" class="compact-form">
         <select name="watch_type">
@@ -1796,10 +1962,11 @@ function watchesView(data: OwnerSnapshot) {
       </form>
       ${list(watchSubscriptions.map(watchSubscriptionCard), "No watch targets returned by the owner API.")}
     </article>
-    <article>
+    <article class="secondary-stack">
       <h2 class="section-label">Harvested public posts</h2>
       ${list(items.map(sourceCard), "No watched public posts are available yet.")}
     </article>
+    </section>
   </section>`;
 }
 
@@ -2245,14 +2412,27 @@ function privacyStatusView(data: OwnerSnapshot) {
 
 function followingView(data: OwnerSnapshot) {
   const timeline = feedTimeline(data);
-  return `<section class="split">
-    <article class="panel">
-      <h2>Following feed</h2>
+  const activeFollows = data.following.filter((row) => followingStatusCanUnfollow(row.status));
+  return `<section class="secondary-screen">
+    ${screenHeader("Following", sectionSubtitle("Following"), [
+      { label: "Following", value: data.following.length, detail: "owner-only graph" },
+      { label: "Active", value: activeFollows.length, detail: "can unfollow" },
+      { label: "Feed rows", value: timeline.length, detail: showTimelineReplies ? "including replies" : "top-level only" }
+    ])}
+    <section class="split">
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Following feed</h2>
+        <div class="panel-meta">${countPill(timeline.length, "post")}</div>
+      </div>
       ${feedControls()}
       ${list(timeline.map(timelineCard), "No followed posts yet. Follow an ActivityPub actor to build this feed.")}
     </article>
-    <article class="panel">
-      <h2>Follow actor</h2>
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Follow actor</h2>
+        <div class="panel-meta">${countPill(data.following.length, "account")}</div>
+      </div>
       <p class="privacy-note">Following is operator-only by default. Treat this list as sensitive; it can reveal medical, adult, political, or private interests.</p>
       <form id="follow-form" class="inline-form">
         <input name="target" placeholder="@user@example.social or https://..." />
@@ -2261,38 +2441,62 @@ function followingView(data: OwnerSnapshot) {
       <h2 class="section-label">Following</h2>
       ${list(data.following.map(followingCard), "No followed actors yet.")}
     </article>
+    </section>
   </section>`;
 }
 
 function friendsView(data: OwnerSnapshot) {
   const timeline = feedTimeline(data);
-  return `<section class="split">
-    <article class="panel">
-      <h2>Mutual friends</h2>
+  return `<section class="secondary-screen">
+    ${screenHeader("Friends", sectionSubtitle("Friends"), [
+      { label: "Mutual", value: data.friends.length, detail: "approved both ways" },
+      { label: "Feed rows", value: timeline.length, detail: showTimelineReplies ? "including replies" : "top-level only" },
+      { label: "Visibility", value: "Owner-only", detail: "not advertised" }
+    ])}
+    <section class="split">
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Mutual friends</h2>
+        <div class="panel-meta">${countPill(data.friends.length, "friend")}</div>
+      </div>
       <p class="privacy-note">Friends are mutual approved relationships. This view is operator-only and should be treated as sensitive social graph data.</p>
       ${list(data.friends.map(friendCard), "No mutual friends yet. A friend appears after they are an approved follower and you follow them back.")}
     </article>
-    <article class="panel">
-      <h2>Friend feed</h2>
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Friend feed</h2>
+        <div class="panel-meta">${countPill(timeline.length, "post")}</div>
+      </div>
       ${feedControls()}
       ${list(timeline.map(timelineCard), "No friend posts yet. Follow mutual friends to build this feed.")}
     </article>
+    </section>
   </section>`;
 }
 
 function audienceListsView(data: OwnerSnapshot) {
   const approvedFollowers = data.followers.filter((row) => row.status === "approved");
-  return `<section class="split">
-    <article class="panel">
-      <div class="section-heading">
+  const allowedCategories = new Set(data.audience_lists.flatMap((row) => row.allowed_categories)).size;
+  return `<section class="secondary-screen">
+    ${screenHeader("Audience lists", sectionSubtitle("Audience"), [
+      { label: "Lists", value: data.audience_lists.length, detail: "direct groups" },
+      { label: "Approved followers", value: approvedFollowers.length, detail: "available members", section: "Followers" },
+      { label: "Sensitive rules", value: allowedCategories, detail: "category gates" }
+    ])}
+    <section class="split">
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
         <h2>Audience lists</h2>
-        <span class="pill ${data.audience_lists.length ? "ok" : "warn"}">${data.audience_lists.length} list${data.audience_lists.length === 1 ? "" : "s"}</span>
+        <div class="panel-meta"><span class="pill ${data.audience_lists.length ? "ok" : "warn"}">${data.audience_lists.length} list${data.audience_lists.length === 1 ? "" : "s"}</span></div>
       </div>
       <p class="privacy-note">Audience lists are owner-only direct-routing shortcuts. They should be used for small, intentional sharing sets rather than broad follower distribution.</p>
       ${list(data.audience_lists.map(audienceListCard), "No audience lists yet. Create one for direct sharing with a stable group of approved followers.")}
     </article>
-    <article class="panel">
-      <h2>Edit list</h2>
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Edit list</h2>
+        <div class="panel-meta">${countPill(approvedFollowers.length, "approved follower")}</div>
+      </div>
       <form id="audience-list-form" class="compact-form">
         <input type="hidden" name="id" value="" />
         <input name="name" placeholder="Close friends" />
@@ -2314,6 +2518,7 @@ function audienceListsView(data: OwnerSnapshot) {
         </div>
       </form>
     </article>
+    </section>
   </section>`;
 }
 
@@ -2351,18 +2556,31 @@ function sourceControls() {
 }
 
 function discoveryView() {
-  return `<section class="split">
-    <article class="panel">
-      <h2>Find actor</h2>
+  const recentPosts = discoveredActor?.recent_public_posts?.length || 0;
+  return `<section class="secondary-screen">
+    ${screenHeader("Discovery", sectionSubtitle("Discovery"), [
+      { label: "Actor", value: discoveredActor ? "resolved" : "none", detail: "current preview", tone: discoveredActor ? "ok" : "neutral" },
+      { label: "Recent posts", value: recentPosts, detail: "public rows" },
+      { label: "Follow state", value: discoveredActor?.following_status || "unknown", detail: "before action" }
+    ])}
+    <section class="split">
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Find actor</h2>
+      </div>
       <form id="discover-form" class="inline-form">
         <input name="target" placeholder="@user@example.social or https://..." />
         <button type="submit">Lookup</button>
       </form>
     </article>
-    <article class="panel">
-      <h2>Actor preview</h2>
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Actor preview</h2>
+        <div class="panel-meta">${discoveredActor ? `<span class="pill">${escapeHtml(discoveredActor.following_status || "not-following")}</span>` : ""}</div>
+      </div>
       ${discoveredActor ? discoveredActorCard(discoveredActor) : `<p>No actor selected.</p>`}
     </article>
+    </section>
   </section>`;
 }
 
@@ -2820,18 +3038,26 @@ function followersView(data: OwnerSnapshot) {
   const pending = data.followers.filter((row) => row.status === "pending");
   const approved = data.followers.filter((row) => row.status === "approved");
   const rejected = data.followers.filter((row) => row.status === "rejected");
-  return `<section class="split followers">
-    <div>
-      <p class="privacy-note">Follower lists are owner-token views. Dais does not advertise them publicly by default.</p>
+  return `<section class="secondary-screen followers">
+    ${screenHeader("Follower review", sectionSubtitle("Followers"), [
+      { label: "Pending", value: pending.length, detail: "needs decision", tone: pending.length ? "warn" : "ok" },
+      { label: "Approved", value: approved.length, detail: "can see followers posts", tone: "ok" },
+      { label: "Hidden", value: rejected.length, detail: "rejected or removed" },
+      { label: "Graph", value: "Owner-only", detail: "not public by default" }
+    ])}
+    <p class="privacy-note">Follower lists are owner-token views. Dais does not advertise them publicly by default.</p>
+    <section class="split">
+    <div class="secondary-stack">
       <h2 class="section-label">Pending</h2>
       ${list(pending.map(followerCard), "No pending follow requests.")}
     </div>
-    <div>
+    <div class="secondary-stack">
       <h2 class="section-label">Approved</h2>
       ${list(approved.map(followerCard), "No approved followers yet.")}
       <h2 class="section-label">Rejected</h2>
       ${list(rejected.map(followerCard), "No rejected followers.")}
     </div>
+    </section>
   </section>`;
 }
 
@@ -2839,13 +3065,24 @@ function moderationView(data: OwnerSnapshot) {
   const moderation = moderationState || data.moderation;
   const blocks = moderation.blocks || [];
   const allowlist = moderation.allowlist || [];
-  return `<section class="split">
-    <article class="panel"><h2>Federation safety</h2>
-      <p>Closed network: ${moderation.closed_network ? "enabled" : "disabled"}</p>
-      <p>Blocked actors/domains: ${moderation.block_count}</p>
-      <p>Allowed hosts: ${moderation.allowlist_count}</p>
-      <p>Reply policy: ${escapeHtml(moderation.reply_policy || "warn")}</p>
-      <p>Reply queue: ${moderation.reply_queue_count || 0} pending, ${moderation.flagged_reply_count || 0} flagged</p>
+  const pendingReplies = moderation.reply_queue_count || moderationReplies.length || 0;
+  const flaggedReplies = moderation.flagged_reply_count || moderationReplies.filter((row) => row.moderation_flags?.length).length;
+  return `<section class="secondary-screen">
+    ${screenHeader("Moderation", sectionSubtitle("Moderation"), [
+      { label: "Network", value: moderation.closed_network ? "Closed" : "Open", detail: "federation mode", tone: moderation.closed_network ? "ok" : "warn" },
+      { label: "Reply queue", value: pendingReplies, detail: `${flaggedReplies} flagged`, tone: pendingReplies ? "warn" : "ok" },
+      { label: "Blocks", value: moderation.block_count, detail: "actors/domains" },
+      { label: "Allowlist", value: moderation.allowlist_count, detail: "hosts" }
+    ])}
+    <section class="split moderation-layout">
+    <article class="panel secondary-panel"><div class="secondary-panel-heading"><h2>Federation safety</h2><div class="panel-meta"><span class="pill ${moderation.closed_network ? "ok" : "warn"}">${moderation.closed_network ? "Closed network" : "Open network"}</span></div></div>
+      <dl class="status-dl">
+        <dt>Closed network</dt><dd>${moderation.closed_network ? "enabled" : "disabled"}</dd>
+        <dt>Blocked actors/domains</dt><dd>${moderation.block_count}</dd>
+        <dt>Allowed hosts</dt><dd>${moderation.allowlist_count}</dd>
+        <dt>Reply policy</dt><dd>${escapeHtml(moderation.reply_policy || "warn")}</dd>
+        <dt>Reply queue</dt><dd>${moderation.reply_queue_count || 0} pending, ${moderation.flagged_reply_count || 0} flagged</dd>
+      </dl>
       <form id="block-actor-form" class="inline-form">
         <input name="actor_id" placeholder="https://example.social/users/name" />
         <button type="submit">Block actor</button>
@@ -2857,7 +3094,7 @@ function moderationView(data: OwnerSnapshot) {
       <h2 class="section-label">Blocks</h2>
       ${list(blocks.map(blockCard), "No actor or domain blocks.")}
     </article>
-    <article class="panel"><h2>Allowlist</h2>
+    <article class="panel secondary-panel"><div class="secondary-panel-heading"><h2>Allowlist</h2><div class="panel-meta">${countPill(allowlist.length, "host")}</div></div>
       <form id="allow-host-form" class="inline-form">
         <input name="host" placeholder="example.social" />
         <button type="submit">Allow host</button>
@@ -2883,10 +3120,14 @@ function moderationView(data: OwnerSnapshot) {
       <p>Private posts stay off public outboxes and Bluesky routes.</p>
       <p>Public routing is explicit from compose.</p>
     </article>
-    <article class="panel">
-      <h2>Reply queue</h2>
+    <article class="panel secondary-panel">
+      <div class="secondary-panel-heading">
+        <h2>Reply queue</h2>
+        <div class="panel-meta">${countPill(moderationReplies.length, "reply", moderationReplies.length ? "warn" : "ok", "replies")}</div>
+      </div>
       ${list(moderationReplies.map(moderationReplyCard), "No flagged or queued replies.")}
     </article>
+    </section>
   </section>`;
 }
 
@@ -2899,8 +3140,14 @@ function pendingLiveView(section: string) {
 
 function settingsView(data: OwnerSnapshot) {
   const activeAccount = activeAccountProfile();
-  return `<section class="split">
-    <article class="panel settings account-manager">
+  return `<section class="secondary-screen">
+    ${screenHeader("Settings", sectionSubtitle("Settings"), [
+      { label: "Accounts", value: accountProfiles.length, detail: "local profiles", tone: accountProfiles.length ? "ok" : "warn" },
+      { label: "Active", value: activeAccount?.label || "none", detail: activeAccount ? shortHost(activeAccount.instance_url) : "not connected" },
+      { label: "Token", value: activeAccount?.owner_token_present || data.settings.owner_token_present ? "Stored" : "Needed", detail: "owner API", tone: activeAccount?.owner_token_present || data.settings.owner_token_present ? "ok" : "warn" }
+    ])}
+    <section class="split">
+    <article class="panel settings account-manager secondary-panel">
       <div class="section-heading">
         <h2>Accounts</h2>
         <span class="pill ${accountProfiles.length > 1 ? "ok" : "warn"}">${accountProfiles.length} configured</span>
@@ -2908,7 +3155,7 @@ function settingsView(data: OwnerSnapshot) {
       <p class="privacy-note">Accounts are local client profiles. Switching changes which Dais instance receives reads, posts, replies, follows, watches, moderation, and operator commands.</p>
       ${list(accountProfiles.map(accountCard), "No local account profiles are configured.")}
     </article>
-    <form id="settings-form" class="panel settings">
+    <form id="settings-form" class="panel settings secondary-panel">
       <div>
         <h2>Add or update account</h2>
         <p>${activeAccount ? `Active: ${escapeHtml(activeAccount.label)} · ${escapeHtml(shortHost(activeAccount.instance_url))}` : "Connect a Dais owner API token."}</p>
@@ -2925,6 +3172,7 @@ function settingsView(data: OwnerSnapshot) {
       <p>Saving an existing instance updates its local label or token. Saving a new instance creates it and makes it active.</p>
       <button>Save account</button>
     </form>
+    </section>
   </section>`;
 }
 
@@ -2943,30 +3191,53 @@ function accountCard(account: OwnerAccountProfile) {
 
 function profileView(data: OwnerSnapshot) {
   const profile = data.profile;
-  return `<form id="profile-form" class="panel settings">
-    <div>
-      <h2>Public account</h2>
-      <p>${escapeHtml(profile.public_handle)} · ${escapeHtml(profile.actor_url)}</p>
-    </div>
-    <label>Display name
-      <input name="display_name" value="${escapeAttr(profile.display_name || "")}" />
-    </label>
-    <label>Actor type
-      <select name="actor_type">
-        ${["Person", "Group", "Organization"].map((value) => option(value, profile.actor_type === value)).join("")}
-      </select>
-    </label>
-    <label>Summary
-      <textarea name="summary" rows="5">${escapeHtml(profile.summary || "")}</textarea>
-    </label>
-    <label>Avatar/icon URL
-      <input name="icon" value="${escapeAttr(profile.icon || profile.avatar_url || "")}" placeholder="https://..." />
-    </label>
-    <label>Header image URL
-      <input name="image" value="${escapeAttr(profile.image || profile.header_url || "")}" placeholder="https://..." />
-    </label>
-    <button>Save profile</button>
-  </form>`;
+  return `<section class="secondary-screen">
+    ${screenHeader("Profile", sectionSubtitle("Profile"), [
+      { label: "Public handle", value: profile.public_handle, detail: "ActivityPub identity" },
+      { label: "Actor type", value: profile.actor_type || "Person", detail: "federation object" },
+      { label: "Media", value: profile.icon || profile.avatar_url || profile.image || profile.header_url ? "Configured" : "Missing", detail: "avatar or header", tone: profile.icon || profile.avatar_url || profile.image || profile.header_url ? "ok" : "neutral" }
+    ])}
+    <form id="profile-form" class="panel settings secondary-panel">
+      <div>
+        <h2>Public account</h2>
+        <p>${escapeHtml(profile.public_handle)} · ${escapeHtml(profile.actor_url)}</p>
+      </div>
+      <label>Display name
+        <input name="display_name" value="${escapeAttr(profile.display_name || "")}" />
+      </label>
+      <label>Actor type
+        <select name="actor_type">
+          ${["Person", "Group", "Organization"].map((value) => option(value, profile.actor_type === value)).join("")}
+        </select>
+      </label>
+      <label>Summary
+        <textarea name="summary" rows="5">${escapeHtml(profile.summary || "")}</textarea>
+      </label>
+      <label>Avatar/icon URL
+        <input name="icon" value="${escapeAttr(profile.icon || profile.avatar_url || "")}" placeholder="https://..." />
+      </label>
+      <label>Header image URL
+        <input name="image" value="${escapeAttr(profile.image || profile.header_url || "")}" placeholder="https://..." />
+      </label>
+      <button>Save profile</button>
+    </form>
+  </section>`;
+}
+
+function diagnosticsView(data: OwnerSnapshot) {
+  const passing = data.diagnostics.filter((row) => row.ok);
+  const attention = data.diagnostics.filter((row) => !row.ok);
+  return `<section class="secondary-screen">
+    ${screenHeader("Diagnostics", sectionSubtitle("Diagnostics"), [
+      { label: "Checks", value: data.diagnostics.length, detail: "reported" },
+      { label: "Passing", value: passing.length, detail: "ok", tone: "ok" },
+      { label: "Needs attention", value: attention.length, detail: "warnings/errors", tone: attention.length ? "bad" : "ok" }
+    ])}
+    <section class="secondary-grid">
+      ${secondaryPanel("Needs attention", list(attention.map(diagnosticCard), "No diagnostics need attention."), countPill(attention.length, "issue", attention.length ? "bad" : "ok"))}
+      ${secondaryPanel("Healthy checks", list(passing.map(diagnosticCard), "No passing diagnostics returned."), countPill(passing.length, "check", "ok"))}
+    </section>
+  </section>`;
 }
 
 function postCard(post: OwnerSnapshot["posts"][number]) {
@@ -3188,43 +3459,56 @@ function watchLabel(sourceType: string) {
 function notificationCard(row: OwnerNotification) {
   const actor = row.actor_display_name || row.actor_username || actorLabel(row.actor_id);
   const read = isRead(row.read);
-  return `<article class="panel item">
+  const kind = notificationKind(row.type);
+  return `<article class="panel item notification-item ${read ? "read" : "unread"}">
     <div>
-      <h2>${escapeHtml(row.type)} from ${actorLink(row.actor_id, actor)}</h2>
+      <div class="item-title-row">
+        <h2>${escapeHtml(kind)} from ${actorLink(row.actor_id, actor)}</h2>
+        <span class="pill ${read ? "ok" : "warn"}">${read ? "read" : "unread"}</span>
+      </div>
       ${postBodyHtml(row.content || row.activity_id || "")}
     </div>
     <footer>
-      <span>${read ? "read" : "unread"}</span>
+      <span>${escapeHtml(row.type)}</span>
       ${row.post_id ? `<span>${escapeHtml(shortUrl(row.post_id))}</span>` : ""}
       ${row.created_at ? `<time>${escapeHtml(formatTime(row.created_at))}</time>` : ""}
+      ${row.post_id ? `<button type="button" data-post-detail="${escapeAttr(row.post_id)}">Post detail</button>` : ""}
       ${read ? "" : `<button type="button" data-notification-read="${escapeAttr(row.id)}">Mark read</button>`}
     </footer>
   </article>`;
 }
 
 function deliveryCard(row: OwnerDelivery) {
-  return `<article class="panel item">
+  const kind = deliveryStatusKind(row.status);
+  return `<article class="panel item delivery-item ${kind}">
     <div>
-      <h2>${escapeHtml(row.status)} ${escapeHtml(row.protocol)}</h2>
-      <p>${escapeHtml(shortUrl(row.target_url))}</p>
+      <div class="item-title-row">
+        <h2>${escapeHtml(row.status)} ${escapeHtml(row.protocol)}</h2>
+        <span class="pill ${kind === "failed" ? "bad" : kind === "delivered" ? "ok" : "warn"}">${escapeHtml(kind)}</span>
+      </div>
+      <p>${externalLink(row.target_url, shortUrl(row.target_url))}</p>
     </div>
     <footer>
       ${row.activity_type ? `<span>${escapeHtml(row.activity_type)}</span>` : ""}
       <span>retries ${row.retry_count || 0}</span>
       ${row.last_attempt_at ? `<time>${escapeHtml(formatTime(row.last_attempt_at))}</time>` : ""}
       ${row.error_message ? `<span>${escapeHtml(row.error_message)}</span>` : ""}
+      <button type="button" data-open-link="${escapeAttr(row.target_url)}">Open target</button>
     </footer>
   </article>`;
 }
 
 function directMessageCard(row: OwnerDirectMessage) {
-  return `<article class="panel item">
+  return `<article class="panel item direct-message-item">
     <div>
-      <h2>${actorLink(row.sender_id)}</h2>
+      <div class="item-title-row">
+        <h2>${actorLink(row.sender_id)}</h2>
+        <span class="pill ok">direct</span>
+      </div>
       ${postBodyHtml(row.content)}
     </div>
     <footer>
-      <span>${escapeHtml(row.conversation_id)}</span>
+      <span>${escapeHtml(shortUrl(row.conversation_id))}</span>
       <time>${escapeHtml(formatTime(row.published_at))}</time>
     </footer>
   </article>`;
@@ -3512,9 +3796,12 @@ function recipientOption(row: OwnerSnapshot["followers"][number], checked: boole
 }
 
 function diagnosticCard(row: OwnerSnapshot["diagnostics"][number]) {
-  return `<article class="panel item">
+  return `<article class="panel item diagnostic-item ${row.ok ? "ok" : "bad"}">
     <div>
-      <h2>${escapeHtml(row.key)}</h2>
+      <div class="item-title-row">
+        <h2>${escapeHtml(row.key)}</h2>
+        <span class="pill ${row.ok ? "ok" : "bad"}">${row.ok ? "ok" : "needs attention"}</span>
+      </div>
       <p>${escapeHtml(row.detail)}</p>
     </div>
     <footer><span class="${row.ok ? "good" : "bad"}">${row.ok ? "ok" : "needs attention"}</span></footer>
@@ -4127,6 +4414,7 @@ async function ownerInteraction(objectId: string, interaction: string) {
 async function loadPostDetail(objectId: string) {
   if (!objectId) return;
   selectedPostDetail = await ownerInvoke<OwnerPostDetail>("owner_post_detail", { objectId });
+  active = "Posts";
   notice = `Loaded ${shortUrl(objectId)}.`;
   render();
 }
@@ -4343,6 +4631,8 @@ function sectionSubtitle(section: string) {
   if (section === "Compose") return "Private-by-default publishing with explicit public and E2EE modes";
   if (section === "Search") return "Find public posts and accounts without exposing local searches";
   if (section === "Discovery") return "Resolve people and public posts before following or watching";
+  if (section === "Notifications") return "Mentions, replies, and other account activity grouped for quick triage";
+  if (section === "DMs") return "Direct conversations kept separate from public and follower feeds";
   if (section === "Following") return "Read posts and manage the private list of accounts you follow";
   if (section === "Followers") return "Review requests and keep the public follower graph hidden from casual view";
   if (section === "Audience") return "Direct-audience lists with explicit sensitive-category boundaries";

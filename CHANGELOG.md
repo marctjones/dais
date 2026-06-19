@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `provider=tootfinder`, while `provider=activitypub` and `provider=all` include
   index-backed post discovery alongside the existing ActivityPub server fan-out.
 
+### Changed
+- Improved Dais Desk secondary-screen UX with consistent screen summaries,
+  clearer priority groups, and cleaner action/status rows for Notifications,
+  DMs, Deliveries, Followers, Following, Friends, Audience, Search, Sources,
+  Watches, Moderation, Diagnostics, Profile, Settings, Stats, and Posts.
+
 ## [1.28.99] - 2026-06-19
 
 ### Added
