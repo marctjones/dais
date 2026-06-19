@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.96] - 2026-06-19
+
+### Fixed
+- Switched Bluesky public search to the primary AppView host so public post
+  search returns results instead of the blocked public API endpoint.
+
 ## [1.28.95] - 2026-06-19
 
 ### Added

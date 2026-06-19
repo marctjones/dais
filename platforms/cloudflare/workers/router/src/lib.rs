@@ -45,6 +45,7 @@ const WATCH_SOURCE_TYPES: &[&str] = &[
 const DEFAULT_ACTIVITYPUB_SEARCH_SERVERS: &[&str] =
     &["mastodon.social", "mstdn.social", "fosstodon.org"];
 const MAX_ACTIVITYPUB_SEARCH_SERVERS: usize = 5;
+const BLUESKY_APPVIEW_BASE_URL: &str = "https://api.bsky.app";
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -6621,10 +6622,7 @@ async fn owner_public_search_bluesky_posts(
     for tag in &filters.tags {
         params.push(("tag".to_string(), tag.to_string()));
     }
-    let url = format!(
-        "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?{}",
-        encoded_query(&params)
-    );
+    let url = bluesky_appview_xrpc_url("app.bsky.feed.searchPosts", &encoded_query(&params));
     let body = fetch_json_with_accept(&url, "application/json", "bluesky post search").await?;
     Ok(body
         .get("posts")
@@ -6641,7 +6639,8 @@ async fn owner_public_search_bluesky_actors(
     limit: i32,
 ) -> std::result::Result<Vec<Map<String, Value>>, String> {
     let url = format!(
-        "https://public.api.bsky.app/xrpc/app.bsky.actor.searchActors?q={}&limit={}",
+        "{}?q={}&limit={}",
+        bluesky_appview_xrpc_url("app.bsky.actor.searchActors", ""),
         urlencoding::encode(term),
         limit
     );
@@ -6696,6 +6695,15 @@ async fn owner_public_search_mastodon(
         .filter_map(|value| owner_normalize_mastodon_account(server, value))
         .collect();
     Ok((posts, actors))
+}
+
+fn bluesky_appview_xrpc_url(method: &str, query: &str) -> String {
+    let base = format!("{BLUESKY_APPVIEW_BASE_URL}/xrpc/{method}");
+    if query.is_empty() {
+        base
+    } else {
+        format!("{base}?{query}")
+    }
 }
 
 fn activitypub_search_servers(env: &Env, options: &OwnerPublicSearchOptions) -> Vec<String> {
@@ -11190,11 +11198,12 @@ struct OwnerToken {
 #[cfg(test)]
 mod tests {
     use super::{
-        activitypub_watch_item, bluesky_actor_target, bluesky_post_uri, bluesky_watch_item,
-        normalize_ai_categories, normalize_discovered_public_post, owner_normalize_bluesky_post,
-        owner_public_post_row_from_discovered, parse_workers_ai_moderation,
-        source_type_for_watch_kind, strip_json_fence, OwnerPublicSearchOptions,
-        OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
+        activitypub_watch_item, bluesky_actor_target, bluesky_appview_xrpc_url, bluesky_post_uri,
+        bluesky_watch_item, normalize_ai_categories, normalize_discovered_public_post,
+        owner_normalize_bluesky_post, owner_public_post_row_from_discovered,
+        parse_workers_ai_moderation, source_type_for_watch_kind, strip_json_fence,
+        OwnerPublicSearchOptions, OwnerPublicSearchProvider, OwnerPublicSearchResultType,
+        SourcePolicy, PUBLIC_COLLECTION,
     };
     use serde_json::{Map, Value};
 
@@ -11271,6 +11280,14 @@ mod tests {
         assert_eq!(
             options.filters.tags,
             vec!["space".to_string(), "science".to_string()]
+        );
+    }
+
+    #[test]
+    fn bluesky_public_search_uses_appview_host() {
+        assert_eq!(
+            bluesky_appview_xrpc_url("app.bsky.feed.searchPosts", "q=science&limit=3"),
+            "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=science&limit=3"
         );
     }
 
