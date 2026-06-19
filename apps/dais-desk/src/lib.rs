@@ -3593,6 +3593,26 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         .or(notice.context_post_content.as_deref())
         .or(notice.content.as_deref())
         .unwrap_or("Open context to inspect the related post.");
+    let unread = !json_truthy(&notice.read);
+    let has_context_post = notice.context_post_id.is_some() || notice.post_id.is_some();
+    let is_conversational = matches!(notice.kind.as_str(), "mention" | "reply");
+    let (primary, secondary) = if has_context_post {
+        if unread {
+            if is_conversational {
+                ("Mark read", "Reply")
+            } else {
+                ("Mark read", "Open context")
+            }
+        } else if is_conversational {
+            ("Reply", "Open context")
+        } else {
+            ("Open context", "")
+        }
+    } else if unread {
+        ("Mark read", "")
+    } else {
+        ("", "")
+    };
     row(
         &format!("notification:{}", notice.id),
         &title,
@@ -3608,12 +3628,8 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         } else {
             "warn"
         },
-        if json_truthy(&notice.read) {
-            "Open context"
-        } else {
-            "Mark read"
-        },
-        "Reply",
+        primary,
+        secondary,
     )
 }
 
@@ -3631,7 +3647,9 @@ fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
 }
 
 fn follower_row(follower: &OwnerFollower) -> UiRow {
-    let (primary, secondary, tone) = match follower.status.as_str() {
+    let status = follower.status.to_ascii_lowercase();
+    let status_label = status.clone();
+    let (primary, secondary, tone) = match status.as_str() {
         "pending" => ("Approve", "Reject", "warn"),
         "approved" | "accepted" => ("", "Remove", "ok"),
         "rejected" => ("Approve", "", "danger"),
@@ -3643,9 +3661,9 @@ fn follower_row(follower: &OwnerFollower) -> UiRow {
         "Can read private posts only if approved",
         &format!(
             "Status: {}. Inbox details are hidden unless diagnostics are opened.",
-            follower.status
+            status_label
         ),
-        &follower.status,
+        &status_label,
         tone,
         primary,
         secondary,
@@ -3666,7 +3684,9 @@ fn friend_row(friend: &OwnerFriend) -> UiRow {
 }
 
 fn following_row(following: &OwnerFollowing) -> UiRow {
-    let (primary, secondary, tone) = match following.status.as_str() {
+    let status = following.status.to_ascii_lowercase();
+    let status_label = status.clone();
+    let (primary, secondary, tone) = match status.as_str() {
         "accepted" | "approved" => ("Unfollow", "", "ok"),
         "pending" => ("Cancel", "", "warn"),
         "failed" => ("Follow", "", "danger"),
@@ -3676,8 +3696,8 @@ fn following_row(following: &OwnerFollowing) -> UiRow {
         &format!("following:{}", following.target_actor_id),
         &following.target_actor_id,
         "Remote relationship may be visible to that server",
-        &format!("Follow status: {}", following.status),
-        &following.status,
+        &format!("Follow status: {}", status_label),
+        &status_label,
         tone,
         primary,
         secondary,
@@ -3691,6 +3711,16 @@ fn discovered_actor_row(actor: &OwnerDiscoveredActor) -> UiRow {
         .or(actor.preferred_username.as_deref())
         .or(actor.handle.as_deref())
         .unwrap_or(&actor.id);
+    let follow_status = actor
+        .following_status
+        .as_deref()
+        .unwrap_or("unknown")
+        .to_ascii_lowercase();
+    let follow_action = match follow_status.as_str() {
+        "accepted" | "approved" | "following" => "Unfollow",
+        "pending" | "requested" => "Cancel",
+        _ => "Follow",
+    };
     row(
         &format!("actor:{}", actor.id),
         title,
@@ -3698,9 +3728,9 @@ fn discovered_actor_row(actor: &OwnerDiscoveredActor) -> UiRow {
         actor.summary.as_deref().unwrap_or(
             "Discovered account. Follow may notify; Watch reads public posts privately.",
         ),
-        actor.following_status.as_deref().unwrap_or("Unknown"),
+        &follow_status,
         "info",
-        "Follow",
+        follow_action,
         "Watch",
     )
 }
@@ -4932,6 +4962,92 @@ mod tests {
         });
         assert_eq!(row.primary.as_str(), "");
         assert_eq!(row.secondary.as_str(), "Remove");
+    }
+
+    #[test]
+    fn normalizes_follower_status_when_rendering_actions() {
+        let pending = follower_row(&OwnerFollower {
+            id: "1".into(),
+            actor_id: "me".into(),
+            follower_actor_id: "them".into(),
+            follower_inbox: "https://example.test/inbox".into(),
+            follower_shared_inbox: None,
+            status: "Approved".into(),
+            created_at: None,
+            updated_at: None,
+        });
+        assert_eq!(pending.primary.as_str(), "");
+        assert_eq!(pending.secondary.as_str(), "Remove");
+        assert_eq!(pending.chip.as_str(), "approved");
+    }
+
+    #[test]
+    fn discovered_actor_primary_action_reflects_follow_state() {
+        let pending = discovered_actor_row(&OwnerDiscoveredActor {
+            id: "actor".into(),
+            actor_type: None,
+            inbox: "https://example.test/inbox".into(),
+            shared_inbox: None,
+            preferred_username: Some("friend".into()),
+            name: Some("Friend Name".into()),
+            summary: None,
+            url: None,
+            icon_url: None,
+            handle: Some("@friend@example.test".into()),
+            following_status: Some("pending".into()),
+            target_public_post: None,
+            recent_public_posts: Vec::new(),
+        });
+        assert_eq!(pending.primary.as_str(), "Cancel");
+        assert_eq!(pending.chip.as_str(), "pending");
+        assert_eq!(pending.secondary.as_str(), "Watch");
+    }
+
+    #[test]
+    fn notification_rows_expose_contextual_actions() {
+        let reply = notification_row(&OwnerNotification {
+            id: "n1".into(),
+            kind: "reply".into(),
+            actor_id: "https://friend.example/users/ada".into(),
+            actor_username: Some("ada".into()),
+            actor_display_name: Some("Ada".into()),
+            actor_avatar_url: None,
+            post_id: Some("post-id".into()),
+            activity_id: None,
+            content: Some("reply content".into()),
+            read: serde_json::Value::Bool(false),
+            created_at: Some("1m".into()),
+            context_post_id: None,
+            context_post_content: Some("context".into()),
+            context_post_content_html: None,
+            context_post_visibility: None,
+            context_post_protocol: None,
+            context_post_published_at: None,
+        });
+        assert_eq!(reply.primary.as_str(), "Mark read");
+        assert_eq!(reply.secondary.as_str(), "Reply");
+
+        let read_like = notification_row(&OwnerNotification {
+            id: "n2".into(),
+            kind: "like".into(),
+            actor_id: "https://friend.example/users/ada".into(),
+            actor_username: Some("ada".into()),
+            actor_display_name: Some("Ada".into()),
+            actor_avatar_url: None,
+            post_id: Some("post-id".into()),
+            activity_id: None,
+            content: Some("liked it".into()),
+            read: serde_json::Value::Bool(true),
+            created_at: Some("1m".into()),
+            context_post_id: None,
+            context_post_content: Some("context".into()),
+            context_post_content_html: None,
+            context_post_visibility: None,
+            context_post_protocol: None,
+            context_post_published_at: None,
+        });
+        assert_eq!(read_like.primary.as_str(), "Open context");
+        assert_eq!(read_like.secondary.as_str(), "");
     }
 
     #[test]
