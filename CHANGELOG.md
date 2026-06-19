@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.98] - 2026-06-19
+
+### Changed
+- Redesigned the Dais Desk owner GUI around macOS application conventions with a
+  grouped source-list sidebar, unified toolbar, first-screen daily workflow
+  layout, grouped result rows, and clearer privacy/status surfaces.
+
 ## [1.28.97] - 2026-06-19
 
 ### Fixed

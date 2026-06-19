@@ -162,6 +162,26 @@ dais followers reject @user@mastodon.social
 
 ---
 
+## Owner Desktop Workflow
+
+Dais Desk uses a macOS-style source list and toolbar. The Home screen is
+optimized for daily work: read the following feed, reply, compose with the
+audience preview visible, search public posts, find people, manage follows, and
+watch public posts privately.
+
+Navigation is grouped by workflow:
+
+- **Today** - Home, Compose, Search, Discovery, Notifications, DMs
+- **People** - Following, Friends, Followers, Audience
+- **Library** - Posts, Sources, Watches
+- **Operate** - Moderation, Deliveries, Stats, Profile, Settings, Diagnostics
+
+Follower and following lists are owner-only views. The sidebar and Home sharing
+defaults keep the current default visibility and protocol visible before you
+publish or change relationships.
+
+---
+
 ## Searching Public Posts and Accounts
 
 Owner search is local-only unless you opt into public providers.

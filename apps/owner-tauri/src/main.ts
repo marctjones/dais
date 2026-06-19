@@ -439,27 +439,26 @@ type OwnerStats = {
   closed_network: boolean;
 };
 
-const sections = [
-  "Home",
-  "Following",
-  "Friends",
-  "Audience",
-  "Discovery",
-  "Compose",
-  "Posts",
-  "Search",
-  "Sources",
-  "Watches",
-  "DMs",
-  "Notifications",
-  "Followers",
-  "Profile",
-  "Moderation",
-  "Deliveries",
-  "Stats",
-  "Settings",
-  "Diagnostics"
+const sectionGroups = [
+  {
+    label: "Today",
+    sections: ["Home", "Compose", "Search", "Discovery", "Notifications", "DMs"],
+  },
+  {
+    label: "People",
+    sections: ["Following", "Friends", "Followers", "Audience"],
+  },
+  {
+    label: "Library",
+    sections: ["Posts", "Sources", "Watches"],
+  },
+  {
+    label: "Operate",
+    sections: ["Moderation", "Deliveries", "Stats", "Profile", "Settings", "Diagnostics"],
+  },
 ];
+const sections = sectionGroups.flatMap((group) => group.sections);
+const toolbarSections = ["Compose", "Search", "Discovery", "Following", "Watches"];
 
 const smokeMode = new URLSearchParams(window.location.search).get("smoke") === "1";
 const smokePostId = "https://social.dais.social/users/social/posts/smoke-post";
@@ -973,24 +972,33 @@ function render() {
 
   const apiDiagnostic = snapshot.diagnostics.find((row) => row.key === "owner-api");
   app.innerHTML = `
-    <main class="shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="mark">d</div>
+    <main class="shell mac-shell">
+      <aside class="sidebar source-list">
+        <div class="brand account-card">
+          <div class="mark">${escapeHtml((snapshot.profile.username || "d").slice(0, 1).toLowerCase())}</div>
           <div>
-            <strong>dais owner</strong>
+            <strong>${escapeHtml(snapshot.profile.display_name || "dais owner")}</strong>
+            <span>${escapeHtml(snapshot.profile.public_handle || shortHost(snapshot.settings.instance_url))}</span>
             <span>${escapeHtml(shortHost(snapshot.settings.instance_url))}</span>
           </div>
         </div>
-        <nav class="nav">${sections.map(navButton).join("")}</nav>
+        <nav class="nav source-nav">${sectionGroups.map(navGroup).join("")}</nav>
+        <div class="sidebar-footer">
+          <span class="pill ${snapshot.settings.default_visibility === "Public" ? "warn" : "ok"}">${escapeHtml(audienceLabel(snapshot.settings.default_visibility))}</span>
+          <span>${escapeHtml(snapshot.settings.default_protocol)}</span>
+        </div>
       </aside>
       <section class="workspace">
-        <header class="topbar">
-          <div>
+        <header class="topbar toolbar">
+          <div class="title-stack">
+            <span class="breadcrumb">${escapeHtml(sectionGroupLabel(active))}</span>
             <h1>${escapeHtml(active)}</h1>
             <p>${escapeHtml(sectionSubtitle(active))}</p>
           </div>
-          <div class="top-actions">
+          <div class="toolbar-actions">
+            ${toolbarSections.map((section) => toolbarButton(section)).join("")}
+          </div>
+          <div class="top-actions status-cluster">
             <span class="pill ${snapshot.settings.owner_token_present ? "ok" : "warn"}">${
               snapshot.settings.owner_token_present ? "Token stored" : "Token needed"
             }</span>
@@ -999,8 +1007,10 @@ function render() {
             }</span>
           </div>
         </header>
-        ${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ""}
-        ${view(active, snapshot)}
+        <div class="workspace-scroll">
+          ${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ""}
+          ${view(active, snapshot)}
+        </div>
       </section>
     </main>`;
 
@@ -1211,9 +1221,49 @@ function render() {
 }
 
 function navButton(section: string) {
-  return `<button class="${section === active ? "active" : ""}" data-section="${escapeHtml(section)}">
-    <span>${navGlyph(section)}</span>${escapeHtml(section)}
+  return `<button class="${section === active ? "active" : ""}" data-section="${escapeAttr(section)}">
+    <span>${navGlyph(section)}</span>
+    <span>${escapeHtml(section)}</span>
+    ${navBadge(section)}
   </button>`;
+}
+
+function navGroup(group: { label: string; sections: string[] }) {
+  return `<section class="nav-group">
+    <h2>${escapeHtml(group.label)}</h2>
+    ${group.sections.map(navButton).join("")}
+  </section>`;
+}
+
+function toolbarButton(section: string) {
+  return `<button type="button" class="${section === active ? "active" : ""}" data-section="${escapeAttr(section)}">
+    <span>${navGlyph(section)}</span>${escapeHtml(toolbarLabel(section))}
+  </button>`;
+}
+
+function toolbarLabel(section: string) {
+  if (section === "Compose") return "New";
+  if (section === "Discovery") return "Find";
+  if (section === "Following") return "Follow";
+  if (section === "Watches") return "Watch";
+  return section;
+}
+
+function navBadge(section: string) {
+  if (!snapshot) return "";
+  if (section === "Notifications") {
+    const unread = ownerStats?.notifications_unread || notifications.filter((row) => !isRead(row.read)).length;
+    return unread ? `<strong>${escapeHtml(String(unread))}</strong>` : "";
+  }
+  if (section === "Followers") {
+    const pending = snapshot.followers.filter((row) => row.status === "pending").length;
+    return pending ? `<strong>${escapeHtml(String(pending))}</strong>` : "";
+  }
+  if (section === "Moderation") {
+    const queue = (moderationState || snapshot.moderation).reply_queue_count || 0;
+    return queue ? `<strong>${escapeHtml(String(queue))}</strong>` : "";
+  }
+  return "";
 }
 
 function view(section: string, data: OwnerSnapshot): string {
@@ -1441,25 +1491,76 @@ function watchesView(data: OwnerSnapshot) {
 function dashboardView(data: OwnerSnapshot) {
   const timeline = feedTimeline(data);
   return `
-    <section class="metrics">
-      <article><span>Posts</span><strong>${data.posts.length}</strong></article>
-      <article><span>Followers</span><strong>${data.followers.filter((row) => row.status === "approved").length}</strong></article>
-      <article><span>Friends</span><strong>${data.friends.length}</strong></article>
-      <article><span>Following</span><strong>${data.following.length}</strong></article>
-      <article><span>Sources</span><strong>${data.sources.length}</strong></article>
-    </section>
-    ${composeView(data)}
-    <section class="split">
-      <article class="panel">
-        <h2>Following feed</h2>
+    <section class="workflow-grid">
+      <article class="panel feed-pane">
+        <div class="section-heading">
+          <div>
+            <h2>Following feed</h2>
+            <p>Read first, then reply or publish with the audience preview visible.</p>
+          </div>
+          <span class="pill">${timeline.length} item${timeline.length === 1 ? "" : "s"}</span>
+        </div>
         ${feedControls()}
-        ${list(timeline.slice(0, 6).map(timelineCard), "No followed posts yet. Follow people or sources to build this feed.")}
+        ${list(timeline.slice(0, 8).map(timelineCard), "No followed posts yet. Follow people or sources to build this feed.")}
       </article>
+      <aside class="workflow-side">
+        ${composeView(data)}
+        ${quickActionsView(data)}
+        ${privacyStatusView(data)}
+      </aside>
+    </section>
+    <section class="overview-grid">
+      ${metric("Posts", data.posts.length, "recent local posts")}
+      ${metric("Followers", data.followers.filter((row) => row.status === "approved").length, "approved followers")}
+      ${metric("Friends", data.friends.length, "mutual relationships")}
+      ${metric("Following", data.following.length, "private graph")}
+      ${metric("Reader", data.sources.length, "source items")}
     </section>
     <section class="split">
-      <div>${list(data.posts.slice(0, 6).map(postCard), "No recent posts.")}</div>
-      <div>${list(data.diagnostics.map(diagnosticCard), "No diagnostics.")}</div>
+      <div>
+        <div class="section-heading"><h2>Recent posts</h2><button type="button" data-section="Posts">Show all</button></div>
+        ${list(data.posts.slice(0, 4).map(postCard), "No recent posts.")}
+      </div>
+      <div>
+        <div class="section-heading"><h2>Health</h2><button type="button" data-section="Diagnostics">Diagnostics</button></div>
+        ${list(data.diagnostics.map(diagnosticCard), "No diagnostics.")}
+      </div>
     </section>`;
+}
+
+function quickActionsView(data: OwnerSnapshot) {
+  const pendingFollowers = data.followers.filter((row) => row.status === "pending").length;
+  const queuedReplies = (moderationState || data.moderation).reply_queue_count || 0;
+  return `<article class="panel quick-actions">
+    <div>
+      <h2>Common workflows</h2>
+      <p>Most work starts with reading, replying, finding people, or watching public posts privately.</p>
+    </div>
+    <div class="action-grid">
+      <button type="button" data-section="Search">Search public posts</button>
+      <button type="button" data-section="Discovery">Find people</button>
+      <button type="button" data-section="Following">Manage follows</button>
+      <button type="button" data-section="Watches">Watch public posts</button>
+      <button type="button" data-section="Followers">${pendingFollowers ? `Review ${pendingFollowers} follower${pendingFollowers === 1 ? "" : "s"}` : "Followers"}</button>
+      <button type="button" data-section="Moderation">${queuedReplies ? `Review ${queuedReplies} repl${queuedReplies === 1 ? "y" : "ies"}` : "Moderation"}</button>
+    </div>
+  </article>`;
+}
+
+function privacyStatusView(data: OwnerSnapshot) {
+  const visibility = data.settings.default_visibility;
+  return `<article class="panel privacy-status">
+    <div class="section-heading">
+      <h2>Sharing defaults</h2>
+      <span class="pill ${visibility === "Public" ? "warn" : "ok"}">${escapeHtml(audienceLabel(visibility))}</span>
+    </div>
+    <dl>
+      <dt>Default protocol</dt><dd>${escapeHtml(data.settings.default_protocol)}</dd>
+      <dt>Public account</dt><dd>${escapeHtml(data.profile.public_handle)}</dd>
+      <dt>Follower list</dt><dd>Owner-only view</dd>
+      <dt>Following list</dt><dd>Owner-only view</dd>
+    </dl>
+  </article>`;
 }
 
 function followingView(data: OwnerSnapshot) {
@@ -3154,17 +3255,53 @@ function normalizeProtocol(value: string): ProtocolRoute {
 }
 
 function sectionSubtitle(section: string) {
+  if (section === "Home") return "Read, reply, publish, and move through the daily owner queue";
   if (section === "Compose") return "Private-by-default publishing with explicit public and E2EE modes";
+  if (section === "Search") return "Find public posts and accounts without exposing local searches";
+  if (section === "Discovery") return "Resolve people and public posts before following or watching";
+  if (section === "Following") return "Read posts and manage the private list of accounts you follow";
+  if (section === "Followers") return "Review requests and keep the public follower graph hidden from casual view";
   if (section === "Audience") return "Direct-audience lists with explicit sensitive-category boundaries";
   if (section === "Friends") return "Owner-only mutual relationships and friend feed";
+  if (section === "Posts") return "Inspect, reply to, delete, and revoke media from your posts";
   if (section === "Sources") return "Private reader items from public standards-based sources";
   if (section === "Watches") return "Private public-post monitoring without follows, approvals, or remote subscription records";
+  if (section === "Moderation") return "Reply review, federation safety, and AI advisory controls";
+  if (section === "Deliveries") return "Outbound delivery queue and federation send status";
+  if (section === "Stats") return "Operational counts for posts, relationships, delivery, and moderation";
+  if (section === "Settings") return "Connect this client to a Dais owner API token";
+  if (section === "Profile") return "Edit the public ActivityPub account profile";
   if (section === "Diagnostics") return "Instance, federation, delivery, and client health";
   return "Owner workspace for the live dais instance";
 }
 
+function sectionGroupLabel(section: string) {
+  return sectionGroups.find((group) => group.sections.includes(section))?.label || "Owner";
+}
+
 function navGlyph(section: string) {
-  return section.slice(0, 1);
+  const glyphs: Record<string, string> = {
+    Home: "H",
+    Compose: "+",
+    Search: "S",
+    Discovery: "F",
+    Notifications: "N",
+    DMs: "D",
+    Following: "F",
+    Friends: "M",
+    Followers: "R",
+    Audience: "A",
+    Posts: "P",
+    Sources: "L",
+    Watches: "W",
+    Moderation: "!",
+    Deliveries: "Q",
+    Stats: "#",
+    Profile: "U",
+    Settings: "*",
+    Diagnostics: "?"
+  };
+  return glyphs[section] || section.slice(0, 1);
 }
 
 function shortHost(value: string) {
