@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.97] - 2026-06-19
+
+### Fixed
+- Kept Mastodon-compatible public search anonymous by avoiding the
+  authenticated-only remote-resolution flag on server search fan-out.
+
 ## [1.28.96] - 2026-06-19
 
 ### Fixed

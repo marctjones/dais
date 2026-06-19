@@ -6661,20 +6661,7 @@ async fn owner_public_search_mastodon(
     limit: i32,
     options: &OwnerPublicSearchOptions,
 ) -> std::result::Result<(Vec<Map<String, Value>>, Vec<Map<String, Value>>), String> {
-    let mut params = vec![
-        ("q".to_string(), term.to_string()),
-        ("limit".to_string(), limit.to_string()),
-        ("resolve".to_string(), "true".to_string()),
-    ];
-    match options.result_type {
-        OwnerPublicSearchResultType::Posts => {
-            params.push(("type".to_string(), "statuses".to_string()));
-        }
-        OwnerPublicSearchResultType::Actors => {
-            params.push(("type".to_string(), "accounts".to_string()));
-        }
-        OwnerPublicSearchResultType::All => {}
-    }
+    let params = owner_public_search_mastodon_query_params(term, limit, &options.result_type);
     let url = format!("https://{server}/api/v2/search?{}", encoded_query(&params));
     let body =
         fetch_json_with_accept(&url, "application/json", "mastodon-compatible search").await?;
@@ -6695,6 +6682,27 @@ async fn owner_public_search_mastodon(
         .filter_map(|value| owner_normalize_mastodon_account(server, value))
         .collect();
     Ok((posts, actors))
+}
+
+fn owner_public_search_mastodon_query_params(
+    term: &str,
+    limit: i32,
+    result_type: &OwnerPublicSearchResultType,
+) -> Vec<(String, String)> {
+    let mut params = vec![
+        ("q".to_string(), term.to_string()),
+        ("limit".to_string(), limit.to_string()),
+    ];
+    match result_type {
+        OwnerPublicSearchResultType::Posts => {
+            params.push(("type".to_string(), "statuses".to_string()));
+        }
+        OwnerPublicSearchResultType::Actors => {
+            params.push(("type".to_string(), "accounts".to_string()));
+        }
+        OwnerPublicSearchResultType::All => {}
+    }
+    params
 }
 
 fn bluesky_appview_xrpc_url(method: &str, query: &str) -> String {
@@ -11201,9 +11209,9 @@ mod tests {
         activitypub_watch_item, bluesky_actor_target, bluesky_appview_xrpc_url, bluesky_post_uri,
         bluesky_watch_item, normalize_ai_categories, normalize_discovered_public_post,
         owner_normalize_bluesky_post, owner_public_post_row_from_discovered,
-        parse_workers_ai_moderation, source_type_for_watch_kind, strip_json_fence,
-        OwnerPublicSearchOptions, OwnerPublicSearchProvider, OwnerPublicSearchResultType,
-        SourcePolicy, PUBLIC_COLLECTION,
+        owner_public_search_mastodon_query_params, parse_workers_ai_moderation,
+        source_type_for_watch_kind, strip_json_fence, OwnerPublicSearchOptions,
+        OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
     };
     use serde_json::{Map, Value};
 
@@ -11289,6 +11297,21 @@ mod tests {
             bluesky_appview_xrpc_url("app.bsky.feed.searchPosts", "q=science&limit=3"),
             "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=science&limit=3"
         );
+    }
+
+    #[test]
+    fn mastodon_public_search_does_not_request_authenticated_resolution() {
+        let params = owner_public_search_mastodon_query_params(
+            "science",
+            3,
+            &OwnerPublicSearchResultType::Actors,
+        );
+        assert!(params
+            .iter()
+            .all(|(key, _)| key != "resolve" && key != "resolve[]"));
+        assert!(params
+            .iter()
+            .any(|(key, value)| key == "type" && value == "accounts"));
     }
 
     #[test]
