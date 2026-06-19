@@ -1890,12 +1890,17 @@ function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number]) {
       ${interactionCounts(post)}
       <button type="button" data-home-select="${escapeAttr(post.object_id)}">Inspect</button>
       <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.object_id)}">Reply</button>
-      <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.object_id)}">Like</button>
-      <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost</button>
-      <button type="button" data-timeline-action="bookmark" data-object="${escapeAttr(post.object_id)}">Bookmark</button>
-      <button type="button" data-search-watch data-watch-type="activitypub_object" data-watch-target="${escapeAttr(post.object_id)}" data-watch-title="${escapeAttr(author)}">Watch</button>
-      <button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>
-      <button type="button" data-home-block="${escapeAttr(post.actor_id)}">Mute/Block</button>
+      <details class="action-menu">
+        <summary>More</summary>
+        <div>
+          <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.object_id)}">Like/Favorite</button>
+          <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost/Repost</button>
+          <button type="button" data-timeline-action="bookmark" data-object="${escapeAttr(post.object_id)}">Bookmark</button>
+          <button type="button" data-search-watch data-watch-type="activitypub_object" data-watch-target="${escapeAttr(post.object_id)}" data-watch-title="${escapeAttr(author)}">Watch</button>
+          <button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>
+          <button type="button" data-home-block="${escapeAttr(post.actor_id)}">Mute/Block</button>
+        </div>
+      </details>
     </footer>
   </article>`;
 }
@@ -1924,12 +1929,17 @@ function homeInspectorView(data: OwnerSnapshot) {
     </dl>
     <div class="detail-actions">
       <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.object_id)}">Reply</button>
-      <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.object_id)}">Like/Favorite</button>
-      <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost/Repost</button>
-      <button type="button" data-timeline-action="bookmark" data-object="${escapeAttr(post.object_id)}">Bookmark</button>
-      <button type="button" data-search-watch data-watch-type="activitypub_object" data-watch-target="${escapeAttr(post.object_id)}" data-watch-title="${escapeAttr(author)}">Watch</button>
-      <button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>
-      <button type="button" data-home-block="${escapeAttr(post.actor_id)}">Mute/Block</button>
+      <details class="action-menu">
+        <summary>More actions</summary>
+        <div>
+          <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.object_id)}">Like/Favorite</button>
+          <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost/Repost</button>
+          <button type="button" data-timeline-action="bookmark" data-object="${escapeAttr(post.object_id)}">Bookmark</button>
+          <button type="button" data-search-watch data-watch-type="activitypub_object" data-watch-target="${escapeAttr(post.object_id)}" data-watch-title="${escapeAttr(author)}">Watch</button>
+          <button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>
+          <button type="button" data-home-block="${escapeAttr(post.actor_id)}">Mute/Block</button>
+        </div>
+      </details>
     </div>
     <p class="privacy-note">The inspector keeps thread context beside the daily queue, so marking an item done/read does not lose the post being reviewed.</p>
   </article>`;

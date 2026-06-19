@@ -528,6 +528,52 @@ h3 {
   text-decoration: underline;
 }
 
+.action-menu {
+  position: relative;
+}
+
+.action-menu summary {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  list-style: none;
+}
+
+.action-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.action-menu[open] summary {
+  background: var(--accent-pressed);
+}
+
+.action-menu div {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  min-width: 156px;
+  display: grid;
+  gap: 5px;
+  margin-top: 5px;
+  padding: 7px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.action-menu div button {
+  justify-content: flex-start;
+  text-align: left;
+}
+
 .home-inspector,
 .daily-queue {
   display: grid;
@@ -1333,6 +1379,7 @@ select {
   .feed-preset-panel,
   .home-lanes,
   .preset-detail,
+  .action-menu div,
   .queue-item,
   .detail-list article,
   .panel.item,
