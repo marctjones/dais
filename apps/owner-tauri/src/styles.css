@@ -1066,6 +1066,31 @@ button.summary-card:hover {
   color: var(--text);
 }
 
+.notification-context {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.notification-context-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.notification-context .section-label {
+  margin: 0;
+}
+
+.notification-context .post-body {
+  margin-top: 0;
+}
+
 .notification-empty {
   color: var(--secondary);
 }
@@ -1793,6 +1818,7 @@ button.inline-link.active {
   .reply-target,
   .media-box,
   .notification-copy,
+  .notification-context,
   .preview-card,
   .home-context-bar div,
   .feed-preset-panel,

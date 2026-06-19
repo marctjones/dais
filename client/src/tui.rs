@@ -2206,9 +2206,10 @@ impl App {
                         row.created_at.as_deref().unwrap_or("")
                     ),
                     details: format!(
-                        "actor: {}\ncontent: {}\npost: {}\nactivity: {}",
+                        "actor: {}\ncontent: {}\ncontext: {}\npost: {}\nactivity: {}",
                         row.actor_id,
                         row.content.as_deref().unwrap_or(""),
+                        row.context_post_content.as_deref().unwrap_or(""),
                         row.post_id.as_deref().unwrap_or(""),
                         row.activity_id.as_deref().unwrap_or("")
                     ),

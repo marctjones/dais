@@ -753,6 +753,12 @@ pub struct OwnerNotification {
     pub content: Option<String>,
     pub read: serde_json::Value,
     pub created_at: Option<String>,
+    pub context_post_id: Option<String>,
+    pub context_post_content: Option<String>,
+    pub context_post_content_html: Option<String>,
+    pub context_post_visibility: Option<String>,
+    pub context_post_protocol: Option<String>,
+    pub context_post_published_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

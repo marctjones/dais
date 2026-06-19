@@ -290,6 +290,12 @@ type OwnerNotification = {
   content_html?: string | null;
   read: boolean | number | string | null;
   created_at?: string | null;
+  context_post_id?: string | null;
+  context_post_content?: string | null;
+  context_post_content_html?: string | null;
+  context_post_visibility?: string | null;
+  context_post_protocol?: string | null;
+  context_post_published_at?: string | null;
 };
 
 type OwnerDelivery = {
@@ -1116,7 +1122,13 @@ function smokeNotifications(): OwnerNotification[] {
       activity_id: `${smokePostId}#mention`,
       content_html: `<p>Alice mentioned <strong>you</strong> in a <a href="https://example.com/thread">public thread</a>.</p><script>bad()</script>`,
       read: true,
-      created_at: "2026-06-16T14:08:00Z"
+      created_at: "2026-06-16T14:08:00Z",
+      context_post_id: smokePostId,
+      context_post_content: "Original Dais post with context for the notification.",
+      context_post_content_html: "<p>Original <strong>Dais post</strong> with context for the notification.</p>",
+      context_post_visibility: "Public",
+      context_post_protocol: "ActivityPub",
+      context_post_published_at: "2026-06-16T14:01:00Z"
     },
     {
       id: "notification-reply-smoke",
@@ -1127,7 +1139,30 @@ function smokeNotifications(): OwnerNotification[] {
       activity_id: `${smokePostId}#reply`,
       content: "&lt;p&gt;Alice replied and may need a &lt;em&gt;response&lt;/em&gt;.&lt;/p&gt;",
       read: false,
-      created_at: "2026-06-16T14:09:00Z"
+      created_at: "2026-06-16T14:09:00Z",
+      context_post_id: smokePostId,
+      context_post_content: "Dais Desk smoke post detail content.",
+      context_post_content_html: "<p>Dais Desk smoke post <strong>detail</strong> content.</p>",
+      context_post_visibility: "Followers",
+      context_post_protocol: "ActivityPub",
+      context_post_published_at: "2026-06-16T14:00:00Z"
+    },
+    {
+      id: "notification-favourite-smoke",
+      type: "favourite",
+      actor_id: "https://mastodon.example/users/alice",
+      actor_display_name: "Alice Example",
+      post_id: smokePostId,
+      activity_id: `${smokePostId}#favourite`,
+      content: "Alice liked your post.",
+      read: true,
+      created_at: "2026-06-16T14:10:00Z",
+      context_post_id: smokePostId,
+      context_post_content: "A post that was liked by Alice.",
+      context_post_content_html: "<p>A post that was <em>liked</em> by Alice.</p>",
+      context_post_visibility: "Public",
+      context_post_protocol: "ActivityPub",
+      context_post_published_at: "2026-06-16T13:59:00Z"
     }
   ];
 }
@@ -3469,12 +3504,13 @@ function notificationCard(row: OwnerNotification) {
         <span class="pill ${read ? "ok" : "warn"}">${read ? "read" : "unread"}</span>
       </div>
       ${notificationBodyHtml(row)}
+      ${notificationContextHtml(row)}
     </div>
     <footer>
       <span>${escapeHtml(label)}</span>
-      ${row.post_id ? `<span>Related post</span>` : ""}
+      ${notificationContextPostId(row) ? `<span>Related post</span>` : ""}
       ${row.created_at ? `<time>${escapeHtml(formatTime(row.created_at))}</time>` : ""}
-      ${row.post_id ? `<button type="button" data-post-detail="${escapeAttr(row.post_id)}">Post detail</button>` : ""}
+      ${notificationContextPostId(row) ? `<button type="button" data-post-detail="${escapeAttr(notificationContextPostId(row))}">Open context</button>` : ""}
       ${read ? "" : `<button type="button" data-notification-read="${escapeAttr(row.id)}">Mark read</button>`}
     </footer>
   </article>`;
@@ -3511,6 +3547,29 @@ function notificationHtmlSource(row: OwnerNotification) {
 
 function looksLikeHtml(value: string) {
   return /<\/?[a-z][a-z0-9-]*(?:\s[^>]*)?>/i.test(value);
+}
+
+function notificationContextPostId(row: OwnerNotification) {
+  return String(row.context_post_id || row.post_id || "").trim();
+}
+
+function notificationContextHtml(row: OwnerNotification) {
+  const postId = notificationContextPostId(row);
+  const content = String(row.context_post_content || "").trim();
+  const html = String(row.context_post_content_html || "").trim();
+  if (!postId || (!content && !html)) return "";
+  const meta = [
+    row.context_post_visibility ? compactAudienceLabel(row.context_post_visibility) : "",
+    row.context_post_protocol || "",
+    row.context_post_published_at ? formatTime(row.context_post_published_at) : ""
+  ].filter(Boolean);
+  return `<section class="notification-context">
+    <div class="notification-context-heading">
+      <span class="section-label">What this is about</span>
+      ${meta.length ? `<div class="panel-meta">${meta.map((value) => `<span class="pill">${escapeHtml(value)}</span>`).join("")}</div>` : ""}
+    </div>
+    ${postBodyHtml(content || stripTags(stripDangerousHtmlBlocks(decodeHtmlEntities(html))), html ? decodeHtmlEntities(html) : null)}
+  </section>`;
 }
 
 function deliveryCard(row: OwnerDelivery) {

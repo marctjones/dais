@@ -6115,10 +6115,18 @@ async fn owner_notifications(env: &Env, limit: i32) -> Result<Vec<Map<String, Va
     let limit_arg = D1Type::Integer(limit);
     db.prepare(
         r#"
-        SELECT id, type, actor_id, actor_username, actor_display_name, actor_avatar_url,
-               post_id, activity_id, content, read, created_at
-        FROM notifications
-        ORDER BY created_at DESC
+        SELECT n.id, n.type, n.actor_id, n.actor_username, n.actor_display_name,
+               n.actor_avatar_url, n.post_id, n.activity_id, n.content, n.read,
+               n.created_at,
+               p.id AS context_post_id,
+               p.content AS context_post_content,
+               p.content_html AS context_post_content_html,
+               p.visibility AS context_post_visibility,
+               p.protocol AS context_post_protocol,
+               p.published_at AS context_post_published_at
+        FROM notifications n
+        LEFT JOIN posts p ON p.id = n.post_id
+        ORDER BY n.created_at DESC
         LIMIT ?1
         "#,
     )

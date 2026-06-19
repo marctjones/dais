@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Public search can now query the opt-in Mastodon full-text index through
   `provider=tootfinder`, while `provider=activitypub` and `provider=all` include
   index-backed post discovery alongside the existing ActivityPub server fan-out.
+- Added semantic context fields to owner notifications and rendered referenced
+  post previews in Dais Desk so likes, replies, mentions, and boosts show what
+  the notice is about with an `Open context` action.
 
 ### Changed
 - Improved Dais Desk secondary-screen UX with consistent screen summaries,

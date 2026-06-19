@@ -1671,6 +1671,9 @@ fn print_owner_notifications(notifications: &[OwnerNotification]) {
         if let Some(content) = notification.content.as_deref() {
             println!("{content}");
         }
+        if let Some(context) = notification.context_post_content.as_deref() {
+            println!("context={context}");
+        }
         println!();
     }
 }
