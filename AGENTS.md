@@ -27,5 +27,6 @@ verification, and report what changed.
 ## Design docs
 
 - `docs/POSITIONING.md` — purpose, persona, three-mode product, business model
+- `docs/design/DAIS_DESK_PRODUCT_UX.md` — Desk GUI purpose, UX principles, and screen model
 - `docs/design/PRIVATE_MODE.md` — private-by-default build plan
 - `docs/design/PROTOCOL_ADAPTERS.md` — modular protocol-adapter architecture

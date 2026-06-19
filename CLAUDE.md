@@ -8,7 +8,8 @@ and **AT Protocol (Bluesky)**.
 
 - **Why & for whom:** `docs/POSITIONING.md` — purpose, persona, the three-mode
   product (post publicly · post privately to friends · DM a person).
-- **Design:** `docs/design/PRIVATE_MODE.md`, `docs/design/PROTOCOL_ADAPTERS.md`.
+- **Design:** `docs/design/PRIVATE_MODE.md`, `docs/design/PROTOCOL_ADAPTERS.md`,
+  `docs/design/DAIS_DESK_PRODUCT_UX.md`.
 - **Architecture:** `docs/ARCHITECTURE.md` (three layers: `core/` →
   `platforms/cloudflare/bindings` → worker shims). Rust core in `core/`,
   Cloudflare workers under `platforms/cloudflare/`, Rust CLI/TUI in `client/`.

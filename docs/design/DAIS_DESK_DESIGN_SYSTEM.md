@@ -3,8 +3,9 @@
 **Status:** Accepted design target for issue #173.
 **Scope:** Reusable interaction rules and UI primitives for the first-party Dais
 Desk GUI client.
-**Related:** `docs/design/DAIS_DESK_INFORMATION_ARCHITECTURE.md`,
-`docs/POSITIONING.md`, `docs/design/PRIVATE_MODE.md`,
+**Related:** `docs/design/DAIS_DESK_PRODUCT_UX.md`,
+`docs/design/DAIS_DESK_INFORMATION_ARCHITECTURE.md`, `docs/POSITIONING.md`,
+`docs/design/PRIVATE_MODE.md`,
 `docs/guides/OWNER_TAURI_APP.md`.
 
 ## 1. Design Posture
