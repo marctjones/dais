@@ -87,10 +87,11 @@ Complete feature list for dais single-user ActivityPub & AT Protocol server.
   owner API, CLI, and desktop owner app
 
 ### Public Search ✅
-- **Brokered Public Search** - Owner API mediates public Bluesky and ActivityPub
-  search so clients do not call providers directly
+- **Brokered Public Search** - Owner API mediates public Bluesky, ActivityPub,
+  and ActivityPub index search so clients do not call providers directly
 - **Provider Filters** - Search all providers, only Bluesky, or only
-  ActivityPub/Mastodon-compatible servers
+  ActivityPub/Mastodon-compatible servers and opt-in index providers such as
+  Tootfinder
 - **Result Filters** - Search posts, actors, tags, authors, languages, linked
   domains, and selected ActivityPub servers where providers support it
 - **Result Actions** - Public results expose Watch, Reply, Follow, Open, and

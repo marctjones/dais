@@ -46,6 +46,7 @@ const DEFAULT_ACTIVITYPUB_SEARCH_SERVERS: &[&str] =
     &["mastodon.social", "mstdn.social", "fosstodon.org"];
 const MAX_ACTIVITYPUB_SEARCH_SERVERS: usize = 5;
 const BLUESKY_APPVIEW_BASE_URL: &str = "https://api.bsky.app";
+const TOOTFINDER_SEARCH_BASE_URL: &str = "https://www.tootfinder.ch/rest/api/search";
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -6211,6 +6212,7 @@ enum OwnerPublicSearchProvider {
     All,
     Bluesky,
     ActivityPub,
+    Tootfinder,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6310,6 +6312,15 @@ impl OwnerPublicSearchOptions {
         )
     }
 
+    fn includes_tootfinder(&self) -> bool {
+        matches!(
+            self.provider,
+            OwnerPublicSearchProvider::All
+                | OwnerPublicSearchProvider::ActivityPub
+                | OwnerPublicSearchProvider::Tootfinder
+        )
+    }
+
     fn includes_posts(&self) -> bool {
         matches!(
             self.result_type,
@@ -6329,6 +6340,9 @@ fn owner_public_search_provider(value: &str) -> OwnerPublicSearchProvider {
     match value.trim().to_ascii_lowercase().as_str() {
         "bluesky" | "bsky" | "atproto" | "at" => OwnerPublicSearchProvider::Bluesky,
         "activitypub" | "ap" | "mastodon" | "fediverse" => OwnerPublicSearchProvider::ActivityPub,
+        "tootfinder" | "tootfinder.ch" | "activitypub-index" | "activitypub_index" | "index" => {
+            OwnerPublicSearchProvider::Tootfinder
+        }
         _ => OwnerPublicSearchProvider::All,
     }
 }
@@ -6592,6 +6606,16 @@ async fn owner_public_search(
             }
         }
     }
+    if options.includes_tootfinder() && options.includes_posts() {
+        match owner_public_search_tootfinder(term, limit).await {
+            Ok(posts) => results.posts.extend(posts),
+            Err(error) => results.provider_errors.push(owner_search_provider_error(
+                "tootfinder.ch",
+                "activitypub",
+                &error,
+            )),
+        }
+    }
 
     dedupe_owner_public_search(&mut results);
     results
@@ -6741,6 +6765,37 @@ fn activitypub_search_servers(env: &Env, options: &OwnerPublicSearchOptions) -> 
         .filter(|server| seen.insert(server.clone()))
         .take(MAX_ACTIVITYPUB_SEARCH_SERVERS)
         .collect()
+}
+
+async fn owner_public_search_tootfinder(
+    term: &str,
+    limit: i32,
+) -> std::result::Result<Vec<Map<String, Value>>, String> {
+    let url = tootfinder_search_url(term);
+    let body =
+        fetch_lenient_json_with_accept(&url, "application/json", "tootfinder search").await?;
+    Ok(tootfinder_search_items(&body)
+        .into_iter()
+        .filter_map(owner_normalize_tootfinder_status)
+        .take(limit.max(0) as usize)
+        .collect())
+}
+
+fn tootfinder_search_url(term: &str) -> String {
+    format!(
+        "{TOOTFINDER_SEARCH_BASE_URL}/{}",
+        urlencoding::encode(term.trim())
+    )
+}
+
+fn tootfinder_search_items(body: &Value) -> Vec<Value> {
+    if let Some(items) = body.as_array() {
+        return items.clone();
+    }
+    body.get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn encoded_query(params: &[(String, String)]) -> String {
@@ -7031,6 +7086,97 @@ fn owner_normalize_mastodon_account(provider: &str, value: &Value) -> Option<Map
         ]),
     );
     Some(row)
+}
+
+fn owner_normalize_tootfinder_status(value: Value) -> Option<Map<String, Value>> {
+    let object = value.as_object()?;
+    let id = object
+        .get("uri")
+        .or_else(|| object.get("url"))
+        .or_else(|| object.get("id"))
+        .and_then(optional_body_string)?;
+    let url = object
+        .get("url")
+        .and_then(optional_body_string)
+        .unwrap_or_else(|| id.clone());
+    let content_html = object
+        .get("content")
+        .and_then(optional_body_string)
+        .unwrap_or_default();
+    let summary = object
+        .get("spoiler_text")
+        .or_else(|| object.get("spoiler"))
+        .and_then(optional_body_string);
+    let mut content = strip_html(&content_html);
+    if content.is_empty() {
+        content = summary.clone().unwrap_or_default();
+    }
+    let actor_id = activitypub_actor_id_from_status_uri(&id).or_else(|| {
+        object
+            .get("uri")
+            .and_then(optional_body_string)
+            .and_then(|uri| activitypub_actor_id_from_status_uri(&uri))
+    });
+    let actor_handle = actor_handle_from_public_status_url(&url)
+        .or_else(|| actor_id.as_deref().and_then(actor_handle_from_actor_url));
+    let mut row = owner_public_post_row(OwnerPublicPostFields {
+        provider: "tootfinder.ch".to_string(),
+        network: "activitypub".to_string(),
+        id: id.clone(),
+        url: url.clone(),
+        actor_id,
+        actor_handle,
+        actor_display_name: None,
+        content,
+        content_html: (!content_html.is_empty()).then_some(content_html),
+        summary,
+        object_type: Some("Note".to_string()),
+        published_at: object.get("created_at").and_then(optional_body_string),
+    });
+    owner_add_public_post_actions(
+        &mut row,
+        "activitypub",
+        Some("activitypub_object"),
+        &id,
+        &url,
+    );
+    insert_optional_string(
+        &mut row,
+        "language",
+        object.get("language").and_then(optional_body_string),
+    );
+    Some(row)
+}
+
+fn activitypub_actor_id_from_status_uri(uri: &str) -> Option<String> {
+    let trimmed = uri.trim();
+    let (actor, _) = trimmed.split_once("/statuses/")?;
+    (!actor.is_empty()).then(|| actor.to_string())
+}
+
+fn actor_handle_from_public_status_url(url: &str) -> Option<String> {
+    let parsed = worker::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let path = parsed.path();
+    let username = path
+        .strip_prefix("/@")
+        .and_then(|rest| rest.split('/').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(format!("{username}@{host}"))
+}
+
+fn actor_handle_from_actor_url(url: &str) -> Option<String> {
+    let parsed = worker::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let path = parsed.path();
+    let username = path
+        .strip_prefix("/users/")
+        .or_else(|| path.strip_prefix("/@"))
+        .and_then(|rest| rest.split('/').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(format!("{username}@{host}"))
 }
 
 struct OwnerPublicPostFields {
@@ -8835,6 +8981,45 @@ async fn fetch_json_with_accept(
     label: &str,
 ) -> std::result::Result<Value, String> {
     fetch_json_with_accept_and_headers(url, accept, label, &[]).await
+}
+
+async fn fetch_lenient_json_with_accept(
+    url: &str,
+    accept: &str,
+    label: &str,
+) -> std::result::Result<Value, String> {
+    let headers = Headers::new();
+    headers
+        .set("Accept", accept)
+        .map_err(|error| error.to_string())?;
+    headers
+        .set("User-Agent", "dais-owner-api/1.0")
+        .map_err(|error| error.to_string())?;
+    let mut init = RequestInit::new();
+    init.with_method(worker::Method::Get).with_headers(headers);
+    let request = Request::new_with_init(url, &init).map_err(|error| error.to_string())?;
+    let mut response = Fetch::Request(request)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status_code();
+    if !(200..=299).contains(&status) {
+        return Err(format!("could not fetch {label} {url}: HTTP {status}"));
+    }
+    let body = response.text().await.map_err(|error| error.to_string())?;
+    parse_lenient_json_body(&body).map_err(|error| format!("could not parse {label} JSON: {error}"))
+}
+
+fn parse_lenient_json_body(body: &str) -> std::result::Result<Value, serde_json::Error> {
+    let trimmed = body.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return serde_json::from_str(trimmed);
+    }
+    let json_start = trimmed
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '{' | '[').then_some(index))
+        .unwrap_or(0);
+    serde_json::from_str(&trimmed[json_start..])
 }
 
 async fn fetch_json_with_accept_and_headers(
@@ -11211,9 +11396,10 @@ mod tests {
     use super::{
         activitypub_watch_item, bluesky_actor_target, bluesky_appview_xrpc_url, bluesky_post_uri,
         bluesky_watch_item, normalize_ai_categories, normalize_discovered_public_post,
-        owner_normalize_bluesky_post, owner_public_post_row_from_discovered,
-        owner_public_search_mastodon_query_params, parse_workers_ai_moderation,
-        source_type_for_watch_kind, strip_json_fence, OwnerPublicSearchOptions,
+        owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
+        owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
+        parse_lenient_json_body, parse_workers_ai_moderation, source_type_for_watch_kind,
+        strip_json_fence, tootfinder_search_items, tootfinder_search_url, OwnerPublicSearchOptions,
         OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
     };
     use serde_json::{Map, Value};
@@ -11295,6 +11481,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_tootfinder_public_search_provider() {
+        let url = worker::Url::parse(
+            "https://social.dais.social/api/dais/owner/search?q=science&scope=public&provider=tootfinder&type=posts",
+        )
+        .unwrap();
+        let options = OwnerPublicSearchOptions::from_url(&url);
+        assert_eq!(options.provider, OwnerPublicSearchProvider::Tootfinder);
+        assert!(options.includes_tootfinder());
+        assert!(options.includes_posts());
+        assert!(!options.includes_activitypub());
+    }
+
+    #[test]
     fn bluesky_public_search_uses_appview_host() {
         assert_eq!(
             bluesky_appview_xrpc_url("app.bsky.feed.searchPosts", "q=science&limit=3"),
@@ -11315,6 +11514,23 @@ mod tests {
         assert!(params
             .iter()
             .any(|(key, value)| key == "type" && value == "accounts"));
+    }
+
+    #[test]
+    fn tootfinder_public_search_url_encodes_path_query() {
+        assert_eq!(
+            tootfinder_search_url("san OR francisco"),
+            "https://www.tootfinder.ch/rest/api/search/san%20OR%20francisco"
+        );
+    }
+
+    #[test]
+    fn parses_tootfinder_json_after_warning_prelude() {
+        let body = r#"<br />
+<b>Warning</b>: Undefined array key<br />
+[{"id":"1","uri":"https://example.social/users/alice/statuses/1","url":"https://example.social/@alice/1","content":"<p>Hello</p>"}]"#;
+        let parsed = parse_lenient_json_body(body).expect("tootfinder JSON");
+        assert_eq!(tootfinder_search_items(&parsed).len(), 1);
     }
 
     #[test]
@@ -11366,6 +11582,38 @@ mod tests {
         assert_eq!(
             row.get("reply_target").and_then(Value::as_str),
             Some("https://example.com/posts/1")
+        );
+
+        let row = owner_normalize_tootfinder_status(serde_json::json!({
+            "id": "116430909593124640",
+            "created_at": "2026-04-19 10:31:29",
+            "spoiler": "",
+            "visibility": "public",
+            "language": "en",
+            "uri": "https://mastodon.social/users/ubuntourist/statuses/116430909593124640",
+            "url": "https://mastodon.social/@ubuntourist/116430909593124640",
+            "content": "<p>Searchable public science post</p>"
+        }))
+        .expect("tootfinder public search post");
+        assert_eq!(
+            row.get("provider").and_then(Value::as_str),
+            Some("tootfinder.ch")
+        );
+        assert_eq!(
+            row.get("actor_id").and_then(Value::as_str),
+            Some("https://mastodon.social/users/ubuntourist")
+        );
+        assert_eq!(
+            row.get("actor_handle").and_then(Value::as_str),
+            Some("ubuntourist@mastodon.social")
+        );
+        assert_eq!(
+            row.get("watch_type").and_then(Value::as_str),
+            Some("activitypub_object")
+        );
+        assert_eq!(
+            row.get("reply_target").and_then(Value::as_str),
+            Some("https://mastodon.social/users/ubuntourist/statuses/116430909593124640")
         );
     }
 

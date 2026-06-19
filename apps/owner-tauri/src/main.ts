@@ -1658,6 +1658,7 @@ function searchView() {
           <option value="all"${searchProvider === "all" ? " selected" : ""}>All providers</option>
           <option value="bluesky"${searchProvider === "bluesky" ? " selected" : ""}>Bluesky</option>
           <option value="activitypub"${searchProvider === "activitypub" ? " selected" : ""}>ActivityPub</option>
+          <option value="tootfinder"${searchProvider === "tootfinder" ? " selected" : ""}>Tootfinder index</option>
         </select>
         <select name="result_type">
           <option value="all"${searchResultType === "all" ? " selected" : ""}>Posts + actors</option>

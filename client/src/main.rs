@@ -1193,6 +1193,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .upload_media(&OwnerMediaUpload {
                     filename,
                     media_type,
+                    description: args.description,
                     access: args.access,
                     expires_in_seconds: args.expires_in_seconds,
                     require_authorized_fetch: args.require_authorized_fetch.then_some(true),

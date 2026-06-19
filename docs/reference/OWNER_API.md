@@ -38,7 +38,7 @@ Implemented endpoints:
 | `GET` | `/notifications` | Local notifications. |
 | `POST` | `/notifications/read` | Mark a notification as read. |
 | `GET` | `/deliveries` | ActivityPub delivery jobs. |
-| `GET` | `/search?q=<term>&scope=local\|public\|all` | Operator search. `local` searches Dais posts, follows, sources, and reader items. `public` queries explicit public Bluesky and ActivityPub providers. `all` returns both. Sensitive-looking public queries return `public_search_guard.blocked=true` and skip provider calls unless `confirm_public_sensitive=true` is supplied. |
+| `GET` | `/search?q=<term>&scope=local\|public\|all` | Operator search. `local` searches Dais posts, follows, sources, and reader items. `public` queries explicit public Bluesky and ActivityPub providers, including configured Mastodon-compatible servers and Tootfinder's opt-in ActivityPub index. `all` returns both. Sensitive-looking public queries return `public_search_guard.blocked=true` and skip provider calls unless `confirm_public_sensitive=true` is supplied. |
 | `GET` | `/sources` | Public source subscriptions and private reader items. |
 | `GET` | `/watches` | Private Watch subscriptions and harvested public posts. |
 | `POST` | `/watches` | Add an RSS, Atom, ActivityPub, or Bluesky public Watch target without creating a remote follow, approval request, graph record, or notification subscription. |
@@ -66,11 +66,14 @@ Watch add body:
 
 Public search accepts optional filters:
 
-- `provider=all|bluesky|activitypub`
+- `provider=all|bluesky|activitypub|tootfinder`
 - `type=all|posts|actors`
 - `server=<host>` for ActivityPub/Mastodon-compatible server fan-out. Repeat
   the parameter or use comma-separated hosts. If omitted, Dais uses
   `DAIS_ACTIVITYPUB_SEARCH_SERVERS` or a small built-in default set.
+- `provider=tootfinder` searches only Tootfinder's opt-in public Mastodon
+  full-text index. `provider=activitypub` includes both Mastodon-compatible
+  server search and Tootfinder index posts.
 - Bluesky post filters where supported by the AppView: `sort=latest|top`,
   `since`, `until`, `author`, `mentions`, `lang`, `domain`, `url`, and repeated
   `tag`.

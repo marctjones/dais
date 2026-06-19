@@ -892,7 +892,7 @@ pub struct OwnerSearchArgs {
     /// Search scope: local, public, or all.
     #[arg(long, default_value = "local")]
     pub scope: String,
-    /// Public provider: all, bluesky, or activitypub.
+    /// Public provider: all, bluesky, activitypub, or tootfinder.
     #[arg(long)]
     pub provider: Option<String>,
     /// Public result type: all, posts, or actors.
@@ -1015,6 +1015,9 @@ pub struct OwnerMediaUploadArgs {
     /// MIME type such as image/png or video/mp4. Guessed from filename when omitted.
     #[arg(long)]
     pub media_type: Option<String>,
+    /// Alt text or media description stored with the upload.
+    #[arg(long)]
+    pub description: Option<String>,
     /// Media access mode: public or private.
     #[arg(long)]
     pub access: Option<String>,

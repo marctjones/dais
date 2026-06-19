@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added Tootfinder as an ActivityPub public index provider for owner search.
+  Public search can now query the opt-in Mastodon full-text index through
+  `provider=tootfinder`, while `provider=activitypub` and `provider=all` include
+  index-backed post discovery alongside the existing ActivityPub server fan-out.
+
 ## [1.28.99] - 2026-06-19
 
 ### Added

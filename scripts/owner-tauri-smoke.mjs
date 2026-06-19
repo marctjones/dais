@@ -290,6 +290,7 @@ const screenChecks = [
       "All providers",
       "Bluesky",
       "ActivityPub",
+      "Tootfinder index",
       "Posts + actors",
       "ActivityPub servers",
       "Public posts",

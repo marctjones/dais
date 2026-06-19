@@ -212,6 +212,9 @@ dais owner search --scope public --provider bluesky --type posts --tag science l
 # Search specific ActivityPub/Mastodon-compatible servers
 dais owner search --scope public --provider activitypub --server mastodon.social --server fosstodon.org launch
 
+# Search Tootfinder's opt-in public Mastodon full-text index
+dais owner search --scope public --provider tootfinder --type posts launch
+
 # Confirm a sensitive-looking public query
 dais owner search --scope public --confirm-public-sensitive "medical privacy"
 ```
@@ -219,8 +222,11 @@ dais owner search --scope public --confirm-public-sensitive "medical privacy"
 The owner desktop app has the same public search controls in the Search section.
 Public result cards expose actions returned by the server, including Open,
 Watch, Reply, Follow, and ActivityPub Like/Boost where available. Public search
-queries are sent to the selected public provider servers; local search does not
-send the query outside the Dais server.
+queries are sent to the selected public provider servers or index providers;
+local search does not send the query outside the Dais server. The Tootfinder
+provider searches consenting users' public Mastodon posts in its external index;
+it is useful for broader ActivityPub post discovery but is not a universal
+fediverse index.
 
 ---
 
