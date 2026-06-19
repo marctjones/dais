@@ -668,7 +668,7 @@ impl DeskController {
                 "Reject" => self.set_follower_status(row_id, "rejected"),
                 "Remove" => self.set_follower_status(row_id, "removed"),
                 "Follow" => self.follow(row_id),
-                "Unfollow" | "Cancel" => self.unfollow(row_id),
+                "Unfollow" | "Cancel" | "Unfriend" => self.unfollow(row_id),
                 "Watch" => self.watch(row_id),
                 "Stop watching" => self.remove_source_or_watch(row_id),
                 "Refresh" => self.refresh_source_or_watch(row_id),
@@ -3678,7 +3678,7 @@ fn friend_row(friend: &OwnerFriend) -> UiRow {
         "Friend means both sides can participate in the private social graph. Manage group membership from Audience Groups.",
         "Friend",
         "ok",
-        "",
+        "Unfriend",
         "Block",
     )
 }
@@ -5001,6 +5001,20 @@ mod tests {
         assert_eq!(pending.primary.as_str(), "Cancel");
         assert_eq!(pending.chip.as_str(), "pending");
         assert_eq!(pending.secondary.as_str(), "Watch");
+    }
+
+    #[test]
+    fn friend_rows_expose_unfriend_action() {
+        let row = friend_row(&OwnerFriend {
+            friend_actor_id: "https://friend.example/users/alice".into(),
+            friend_inbox: Some("https://friend.example/inbox".into()),
+            friend_shared_inbox: None,
+            follower_since: Some("yesterday".into()),
+            following_since: Some("yesterday".into()),
+            accepted_at: Some("today".into()),
+        });
+        assert_eq!(row.primary.as_str(), "Unfriend");
+        assert_eq!(row.secondary.as_str(), "Block");
     }
 
     #[test]
