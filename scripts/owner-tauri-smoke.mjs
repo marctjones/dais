@@ -66,6 +66,12 @@ function assertIncludes(value, expected, context) {
   }
 }
 
+function assertNotIncludes(value, expected, context) {
+  if (value.includes(expected)) {
+    throw new Error(`${context} must not include ${JSON.stringify(expected)}`);
+  }
+}
+
 function assertMatches(value, pattern, context) {
   if (!pattern.test(value)) {
     throw new Error(`${context} missing pattern ${pattern}`);
@@ -293,6 +299,14 @@ const screenChecks = [
       "Pending",
       "Approved",
       "https://mastodon.example/users/alice",
+      'data-follower-status="rejected" data-follower="https://mastodon.example/users/alice">Remove',
+      'data-follower-status="approved" data-follower="https://mastodon.example/users/bob">Approve',
+      'data-follower-status="rejected" data-follower="https://mastodon.example/users/bob">Reject',
+    ],
+    forbidden: [
+      'data-follower-status="approved" data-follower="https://mastodon.example/users/alice">Approve',
+      'data-follower-status="pending" data-follower="https://mastodon.example/users/alice"',
+      'data-follower-status="pending" data-follower="https://mastodon.example/users/bob"',
     ],
   },
   {
@@ -347,6 +361,9 @@ for (const check of screenChecks) {
 
   for (const text of check.expected) {
     assertIncludes(app.innerHTML, text, `${check.section} smoke screen`);
+  }
+  for (const text of check.forbidden || []) {
+    assertNotIncludes(app.innerHTML, text, `${check.section} smoke screen`);
   }
   assertIncludes(app.innerHTML, 'aria-label="Active Dais account"', `${check.section} screen-reader account switcher`);
   coveredModes.add(check.mode);

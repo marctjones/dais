@@ -1913,10 +1913,10 @@ function homeLaneContent(data: OwnerSnapshot) {
   if (activeHomeLane === "Friends") {
     const friendActors = new Set(data.friends.map((row) => row.friend_actor_id));
     const rows = feedTimeline(data).filter((post) => friendActors.has(post.actor_id));
-    return list(rows.map(homeTimelineCard), "No friend posts yet. Mutual friends appear here without exposing your graph publicly.");
+    return list(rows.map((post) => homeTimelineCard(post, data)), "No friend posts yet. Mutual friends appear here without exposing your graph publicly.");
   }
   if (activeHomeLane === "Following") {
-    return list(feedTimeline(data).slice(0, 12).map(homeTimelineCard), "No followed posts yet. Follow people or sources to build this feed.");
+    return list(feedTimeline(data).slice(0, 12).map((post) => homeTimelineCard(post, data)), "No followed posts yet. Follow people or sources to build this feed.");
   }
   if (activeHomeLane === "Mentions") {
     return list(notifications.map(notificationCard), "No mentions or reply notifications are waiting.");
@@ -1927,7 +1927,7 @@ function homeLaneContent(data: OwnerSnapshot) {
   }
   if (activeHomeLane === "Public") {
     const rows = feedTimeline(data).filter((post) => String(post.visibility || "").toLowerCase() === "public");
-    return list(rows.map(homeTimelineCard), "No public lane items yet. Run public search or add public watches.");
+    return list(rows.map((post) => homeTimelineCard(post, data)), "No public lane items yet. Run public search or add public watches.");
   }
   return list(data.posts.map(postCard), "No saved posts or drafts are available yet.");
 }
@@ -1944,9 +1944,12 @@ function homeLaneCount(data: OwnerSnapshot, lane: HomeLane) {
   return data.posts.length;
 }
 
-function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number]) {
+function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number], data: OwnerSnapshot) {
   const author = post.actor_display_name || post.actor_username || actorLabel(post.actor_id);
   const selected = post.object_id === selectedHomePostId;
+  const followButton = canFollowActor(data, post.actor_id)
+    ? `<button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>`
+    : "";
   return `<article class="item timeline home-timeline-card ${selected ? "selected" : ""}">
     <div>
       <h2>${escapeHtml(author)}</h2>
@@ -1968,7 +1971,7 @@ function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number]) {
           <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost/Repost</button>
           <button type="button" data-timeline-action="bookmark" data-object="${escapeAttr(post.object_id)}">Bookmark</button>
           <button type="button" data-search-watch data-watch-type="activitypub_object" data-watch-target="${escapeAttr(post.object_id)}" data-watch-title="${escapeAttr(author)}">Watch</button>
-          <button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>
+          ${followButton}
           <button type="button" data-home-block="${escapeAttr(post.actor_id)}">Mute/Block</button>
         </div>
       </details>
@@ -2048,6 +2051,13 @@ function relationshipForActor(data: OwnerSnapshot, actorId: string) {
   if (data.following.some((row) => row.target_actor_id === actorId)) return "Following - private graph";
   if (data.followers.some((row) => row.follower_actor_id === actorId && row.status === "approved")) return "Follower - approved";
   return "Public or unknown actor";
+}
+
+function canFollowActor(data: OwnerSnapshot, actorId: string) {
+  return !data.following.some((row) => {
+    if (row.target_actor_id !== actorId) return false;
+    return followingStatusCanUnfollow(row.status);
+  });
 }
 
 function dailyQueueView(data: OwnerSnapshot) {
@@ -3147,16 +3157,17 @@ function watchLabel(sourceType: string) {
 
 function notificationCard(row: OwnerNotification) {
   const actor = row.actor_display_name || row.actor_username || actorLabel(row.actor_id);
+  const read = isRead(row.read);
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.type)} from ${escapeHtml(actor)}</h2>
       ${postBodyHtml(row.content || row.activity_id || "")}
     </div>
     <footer>
-      <span>${isRead(row.read) ? "read" : "unread"}</span>
+      <span>${read ? "read" : "unread"}</span>
       ${row.post_id ? `<span>${escapeHtml(shortUrl(row.post_id))}</span>` : ""}
       ${row.created_at ? `<time>${escapeHtml(formatTime(row.created_at))}</time>` : ""}
-      <button type="button" data-notification-read="${escapeAttr(row.id)}">Mark read</button>
+      ${read ? "" : `<button type="button" data-notification-read="${escapeAttr(row.id)}">Mark read</button>`}
     </footer>
   </article>`;
 }
@@ -3347,14 +3358,38 @@ function followerCard(row: OwnerSnapshot["followers"][number]) {
     <footer>
       <span>${escapeHtml(row.status)}</span>
       ${row.updated_at ? `<time>${escapeHtml(formatTime(row.updated_at))}</time>` : ""}
-      <button type="button" data-follower-status="approved" data-follower="${escapeAttr(row.follower_actor_id)}">Approve</button>
-      <button type="button" data-follower-status="pending" data-follower="${escapeAttr(row.follower_actor_id)}">Pending</button>
-      <button type="button" data-follower-status="rejected" data-follower="${escapeAttr(row.follower_actor_id)}">Reject</button>
+      ${followerStatusActions(row)}
     </footer>
   </article>`;
 }
 
+function followerStatusActions(row: OwnerSnapshot["followers"][number]) {
+  const status = String(row.status || "").toLowerCase();
+  const follower = escapeAttr(row.follower_actor_id);
+  if (status === "pending") {
+    return [
+      followerStatusButton(follower, "approved", "Approve"),
+      followerStatusButton(follower, "rejected", "Reject")
+    ].join("");
+  }
+  if (status === "approved" || status === "accepted") {
+    return followerStatusButton(follower, "rejected", "Remove");
+  }
+  if (status === "rejected" || status === "removed") {
+    return followerStatusButton(follower, "approved", "Approve");
+  }
+  return [
+    followerStatusButton(follower, "approved", "Approve"),
+    followerStatusButton(follower, "rejected", "Reject")
+  ].join("");
+}
+
+function followerStatusButton(follower: string, status: string, label: string) {
+  return `<button type="button" data-follower-status="${escapeAttr(status)}" data-follower="${follower}">${escapeHtml(label)}</button>`;
+}
+
 function followingCard(row: OwnerSnapshot["following"][number]) {
+  const canUnfollow = followingStatusCanUnfollow(row.status);
   return `<article class="panel item follower">
     <div>
       <h2>${escapeHtml(actorLabel(row.target_actor_id))}</h2>
@@ -3363,9 +3398,14 @@ function followingCard(row: OwnerSnapshot["following"][number]) {
     <footer>
       <span>${escapeHtml(row.status)}</span>
       ${row.accepted_at ? `<time>${escapeHtml(formatTime(row.accepted_at))}</time>` : ""}
-      <button type="button" data-unfollow="${escapeAttr(row.target_actor_id)}">Unfollow</button>
+      ${canUnfollow ? `<button type="button" data-unfollow="${escapeAttr(row.target_actor_id)}">Unfollow</button>` : ""}
     </footer>
   </article>`;
+}
+
+function followingStatusCanUnfollow(status: string) {
+  const normalized = String(status || "").toLowerCase();
+  return !["removed", "rejected", "unfollowed", "none"].includes(normalized);
 }
 
 function friendCard(row: OwnerSnapshot["friends"][number]) {
@@ -3385,6 +3425,7 @@ function friendCard(row: OwnerSnapshot["friends"][number]) {
 function discoveredActorCard(actor: DiscoveredActor) {
   const title = actor.name || actor.handle || actor.preferred_username || actor.id;
   const status = actor.following_status || "not-following";
+  const followButton = canFollowDiscoveredStatus(status) ? `<button type="button" data-follow-discovered="1">Follow</button>` : "";
   return `<article class="item actor-preview">
     <div>
       ${actor.icon_url ? `<img class="avatar" src="${escapeAttr(actor.icon_url)}" alt="" />` : ""}
@@ -3404,9 +3445,14 @@ function discoveredActorCard(actor: DiscoveredActor) {
       <span>${escapeHtml(status)}</span>
       <a href="${escapeAttr(actor.url || actor.id)}">${escapeHtml(shortUrl(actor.url || actor.id))}</a>
       <span>${escapeHtml(shortUrl(actor.inbox))}</span>
-      <button type="button" data-follow-discovered="1">Follow</button>
+      ${followButton}
     </footer>
   </article>`;
+}
+
+function canFollowDiscoveredStatus(status: string) {
+  const normalized = String(status || "").toLowerCase().replaceAll("_", "-");
+  return !["accepted", "following", "requested", "pending"].includes(normalized);
 }
 
 function discoveredPostCard(post: DiscoveredPost) {
@@ -3474,6 +3520,7 @@ function allowlistCard(row: ModerationAllowlistHost) {
 
 function moderationReplyCard(row: ModerationReply) {
   const ai = row.ai_moderation;
+  const actions = moderationReplyActions(row);
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</h2>
@@ -3486,11 +3533,23 @@ function moderationReplyCard(row: ModerationReply) {
       ${row.moderation_score != null ? `<span>${escapeHtml(row.moderation_score.toFixed(2))}</span>` : ""}
       <span>${isHiddenValue(row.hidden) ? "hidden" : "visible"}</span>
       ${row.published_at ? `<time>${escapeHtml(formatTime(row.published_at))}</time>` : ""}
-      <button type="button" data-reply-id="${escapeAttr(row.id)}" data-reply-status="approved">Approve</button>
-      <button type="button" data-reply-id="${escapeAttr(row.id)}" data-reply-status="hidden">Hide</button>
-      <button type="button" data-reply-id="${escapeAttr(row.id)}" data-reply-status="rejected">Reject</button>
+      ${actions}
     </footer>
   </article>`;
+}
+
+function moderationReplyActions(row: ModerationReply) {
+  const status = String(row.moderation_status || "").toLowerCase();
+  const hidden = isHiddenValue(row.hidden) || status === "hidden";
+  const actions = [];
+  if (status !== "approved") actions.push(replyStatusButton(row.id, "approved", "Approve"));
+  if (!hidden) actions.push(replyStatusButton(row.id, "hidden", "Hide"));
+  if (status !== "rejected") actions.push(replyStatusButton(row.id, "rejected", "Reject"));
+  return actions.join("");
+}
+
+function replyStatusButton(replyId: string, status: string, label: string) {
+  return `<button type="button" data-reply-id="${escapeAttr(replyId)}" data-reply-status="${escapeAttr(status)}">${escapeHtml(label)}</button>`;
 }
 
 function shortModel(value: string) {
