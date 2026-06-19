@@ -939,7 +939,10 @@ const tests = [
     const required = ["@context", "type", "id", "preferredUsername", "inbox", "outbox"];
     const missingFields = required.filter((field) => actor[field] === undefined);
     if (missingFields.length) return t.fail(`missing fields: ${missingFields.join(", ")}`);
-    if (actor.type !== "Person") return t.fail(`expected Person, got ${actor.type}`);
+    const activityStreamsActorTypes = new Set(["Application", "Group", "Organization", "Person", "Service"]);
+    if (!activityStreamsActorTypes.has(actor.type)) {
+      return t.fail(`expected ActivityStreams actor type, got ${actor.type}`);
+    }
     if (actor.id !== actorUrl) return t.fail(`expected id ${actorUrl}, got ${actor.id}`);
     if (!isHttpsUrl(actor.inbox) || !isHttpsUrl(actor.outbox)) {
       return t.fail("inbox/outbox must be HTTPS URLs");

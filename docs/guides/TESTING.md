@@ -55,7 +55,7 @@ wrangler --version
 
 ### Test Scripts
 
-#### `scripts/activitypub-conformance.mjs`
+#### ActivityPub Conformance
 
 Runs a production/local conformance audit for the public ActivityPub, WebFinger,
 Mastodon-compatibility, and dais private-by-default surfaces.
@@ -68,7 +68,7 @@ ActivityPub object, and deletes the temporary post during cleanup.
 
 **Usage:**
 ```bash
-npm run test:activitypub-conformance
+DAIS_CONFORMANCE_ONLY=activitypub cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 **Environment overrides:**
@@ -80,7 +80,7 @@ DAIS_ACCT_DOMAIN=dais.social \
 DAIS_PRIMARY_ACCT_DOMAIN=dais.social \
 DAIS_PUBLIC_POST_PATH=/users/social/posts/20260615220558-6fc8b18f \
 DAIS_PRIVATE_POST_PATH=/users/social/posts/20260608215639-2ddf52c8 \
-npm run test:activitypub-conformance
+DAIS_CONFORMANCE_ONLY=activitypub cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 The report uses separate result groups:
@@ -93,7 +93,7 @@ The report uses separate result groups:
 compatibility gaps that should be tracked as GitHub issues before becoming hard
 release gates.
 
-#### `scripts/bluesky-conformance.mjs`
+#### Bluesky Conformance
 
 Runs a Bluesky/PDS compatibility gate for the current public XRPC floor. It
 checks identity/DID shape, repo metadata, public feed and timeline records,
@@ -104,20 +104,20 @@ collection errors.
 
 **Usage:**
 ```bash
-npm run test:bluesky-conformance
+DAIS_CONFORMANCE_ONLY=bluesky cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 **Environment overrides:**
 ```bash
 DAIS_PDS_BASE_URL=https://pds.dais.social \
 DAIS_ACCT_DOMAIN=social.dais.social \
-npm run test:bluesky-conformance
+DAIS_CONFORMANCE_ONLY=bluesky cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 For the authenticated blob and write fixtures, provide an owner token:
 
 ```bash
-DAIS_MASTODON_BEARER_TOKEN=... npm run test:bluesky-conformance
+DAIS_MASTODON_BEARER_TOKEN=... DAIS_CONFORMANCE_ONLY=bluesky cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 `FAIL` exits non-zero. Without `DAIS_MASTODON_BEARER_TOKEN`, the script is
@@ -130,7 +130,7 @@ PDS, creates a temporary ATProto reply post and verifies
 verifies `listRecords`, and deletes all post and social-record fixtures before
 exit. Uploaded R2 blobs may remain after the fixture post is deleted.
 
-#### `scripts/federation-matrix.mjs`
+#### Federation Matrix
 
 Runs a compatibility matrix for the current dais deployment and optional remote
 fediverse targets. This is the v0.15 federation-lab gate: it checks discovery,
@@ -139,7 +139,7 @@ rejection, the read-only Mastodon API floor, and the AT Protocol PDS floor.
 
 **Usage:**
 ```bash
-npm run test:federation-matrix
+DAIS_CONFORMANCE_ONLY=federation-matrix cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 **Optional remote target probes:**
@@ -147,10 +147,11 @@ npm run test:federation-matrix
 DAIS_FEDERATION_TARGETS='[
   {"name":"mastodon.social","acct":"somebody@mastodon.social","actor":"https://mastodon.social/users/somebody"},
   {"name":"pixelfed.social","acct":"somebody@pixelfed.social"}
-]' npm run test:federation-matrix
+]' DAIS_CONFORMANCE_ONLY=federation-matrix cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
-The script emits a markdown table by default and JSON with:
+The current implementation emits a markdown table by default and can still be
+invoked directly for JSON output while the gate is being migrated fully to Rust:
 
 ```bash
 node scripts/federation-matrix.mjs --json
@@ -159,7 +160,7 @@ node scripts/federation-matrix.mjs --json
 `FAIL` exits non-zero. `INFO` rows mean a live lab target, token, or credential
 is not configured and do not block release by themselves.
 
-#### `scripts/federation-lab.mjs`
+#### Federation Lab
 
 Validates the checked-in Mastodon-family compatibility profile. This is the
 offline v0.15 gate for making sure Mastodon, Pleroma/Akkoma, Misskey/Firefish,
@@ -170,10 +171,10 @@ authorized fetch, and private visibility.
 
 **Usage:**
 ```bash
-npm run test:federation-lab
+DAIS_CONFORMANCE_ONLY=federation-lab cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 node scripts/federation-lab.mjs --json
 node scripts/federation-lab.mjs --profile docs/reference/federation-lab-targets.json
-npm run test:federation-lab -- --require-pass mastodon
+node scripts/federation-lab.mjs --require-pass mastodon
 ```
 
 Statuses:

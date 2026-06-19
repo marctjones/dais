@@ -17,7 +17,7 @@ Live instance: `@social@dais.social`
 - Cloudflare bindings: `platforms/cloudflare/bindings/`
 - Rust CLI/TUI client: `client/`
 - Shared owner-client models: `client-core/`
-- Tauri owner app shell: `apps/owner-tauri/`
+- Native Slint owner app: `apps/dais-desk/`
 - D1 migrations: `cli/migrations/`
 
 The old Python CLI and legacy `workers/` tree have been retired. Use the Rust
@@ -105,22 +105,26 @@ Private/followers visibility is the default. Public posting is explicit.
 
 ## Owner App
 
-The first-party desktop owner app lives in `apps/owner-tauri` and reuses Rust
-models plus HTTP owner API calls from `client-core`. It is an adaptive Tauri v2
-owner workspace with live snapshots, private-by-default compose, follower
-management, public profile configuration, and approved-follower selection for
-direct posts.
+The first-party desktop owner app lives in `apps/dais-desk` and reuses Rust
+models plus HTTP owner API calls from `client-core`. It is a native Slint owner
+workspace with live snapshots, private-by-default compose, timelines,
+notifications, DMs, public discovery, follows, followers, friends, watches,
+audience groups, moderation, deliveries, diagnostics, settings, and local
+multi-account profiles.
 
 ```bash
-cd apps/owner-tauri
-npm install
-npm run build
-npm run tauri:build
+cargo run --manifest-path apps/dais-desk/Cargo.toml
+cargo test --manifest-path apps/dais-desk/Cargo.toml
 ```
 
 Production owner API access requires the router worker secret
-`OWNER_API_TOKEN`. The local Tauri settings file stores the instance URL and
-owner token in the platform app-config directory.
+`OWNER_API_TOKEN`. The local Dais Desk settings file stores instance URLs and
+owner tokens in the platform app configuration directory. On macOS development
+builds this is under:
+
+```text
+~/Library/Application Support/social.dais.desk/owner-settings.json
+```
 
 ## Development
 
@@ -142,8 +146,7 @@ Run checks:
 cargo test --manifest-path core/Cargo.toml
 cargo check --manifest-path client/Cargo.toml
 cargo check --manifest-path platforms/cloudflare/workers/actor/Cargo.toml
-npm run test:activitypub-conformance
-npm run test:federation-matrix
+cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 Worker builds use current `worker-build` with the rustup toolchain path set in

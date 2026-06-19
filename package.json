@@ -1,14 +1,4 @@
 {
-  "scripts": {
-    "test:activitypub-conformance": "node scripts/activitypub-conformance.mjs",
-    "test:bluesky-conformance": "node scripts/bluesky-conformance.mjs",
-    "test:mastodon-api-conformance": "node scripts/mastodon-api-conformance.mjs",
-    "test:owner-tauri-smoke": "npm --prefix apps/owner-tauri run smoke",
-    "test:mastodon-client-smoke": "node scripts/mastodon-client-smoke.mjs",
-    "test:federation-smoke": "scripts/test-federation-smoke.sh",
-    "test:federation-matrix": "node scripts/federation-matrix.mjs",
-    "test:federation-lab": "node scripts/federation-lab.mjs"
-  },
   "devDependencies": {
     "wrangler": "^4.99.0"
   }

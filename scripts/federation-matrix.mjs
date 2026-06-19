@@ -168,7 +168,10 @@ async function daisBaseline() {
       if (actor[field] === undefined) throw new Error(`missing ${field}`);
     }
     if (actor.id !== actorUrl) throw new Error(`id mismatch: ${actor.id}`);
-    if (actor.type !== "Person") throw new Error(`expected Person, got ${actor.type}`);
+    const activityStreamsActorTypes = new Set(["Application", "Group", "Organization", "Person", "Service"]);
+    if (!activityStreamsActorTypes.has(actor.type)) {
+      throw new Error(`expected ActivityStreams actor type, got ${actor.type}`);
+    }
     if (!String(actor.publicKey?.publicKeyPem || "").includes("BEGIN PUBLIC KEY")) {
       throw new Error("missing PEM public key");
     }

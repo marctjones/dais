@@ -787,7 +787,7 @@ pub struct OwnerDirectMessage {
     pub created_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerSearchResult {
     #[serde(default)]
     pub posts: Vec<OwnerSearchPost>,
@@ -1291,7 +1291,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_serializes_for_tauri_commands() {
+    fn snapshot_serializes_for_owner_clients() {
         let snapshot = OwnerSnapshot {
             settings: OwnerSettings {
                 instance_url: "https://social.dais.social".to_string(),

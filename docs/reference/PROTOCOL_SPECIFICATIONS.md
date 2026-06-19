@@ -162,15 +162,13 @@ Bluesky parity requires substantially more than the existing endpoints:
 
 ## Current Test Hooks
 
-- `npm run test:activitypub-conformance` checks ActivityPub, Mastodon, dais
-  privacy, and ATProto public-read behavior, including authenticated live
-  fixtures for authorized fetch, signed partial follower synchronization, and
-  temporary rich public `Question` objects with media, summary, mentions,
-  hashtags, and poll options.
-- `npm run test:bluesky-conformance` checks the current PDS/AppView
-  compatibility floor for identity, repo metadata, public feed records,
-  owner-token public post/like/repost/follow writes and deletes, public image
-  blob reads, search, profiles, notifications, graph reads, privacy filtering,
-  and sync guidance.
-- The conformance runner should grow alongside this document.
+- `cargo test --manifest-path conformance/Cargo.toml -- --nocapture` checks
+  ActivityPub, Mastodon, dais privacy, Bluesky/PDS/AppView, federation matrix,
+  and the checked-in federation lab profile through the Rust conformance
+  harness.
+- `DAIS_CONFORMANCE_ONLY=activitypub`, `bluesky`, `mastodon-api`,
+  `federation-matrix`, `federation-lab`, or `mastodon-client-smoke` narrows the
+  Rust harness to one family.
+- The Rust conformance runner should grow alongside this document. Existing JS
+  scripts are implementation details until their checks are ported into Rust.
 - Gaps found by the runner should be filed as GitHub issues under epic #70.

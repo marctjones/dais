@@ -1,0 +1,8 @@
+[package]
+name = "dais-conformance"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rust test harness for dais live protocol conformance gates"
+
+[dev-dependencies]

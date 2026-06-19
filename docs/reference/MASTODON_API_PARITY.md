@@ -57,18 +57,23 @@ Run before closing v0.27 slices:
 ```bash
 cd platforms/cloudflare/workers/router
 cargo check --target wasm32-unknown-unknown
-npm run test:mastodon-api-conformance
+cd ../../../..
+DAIS_CONFORMANCE_ONLY=mastodon-api cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 For authenticated production checks:
 
 ```bash
-DAIS_MASTODON_BEARER_TOKEN="$OWNER_API_TOKEN" npm run test:mastodon-api-conformance
+DAIS_MASTODON_BEARER_TOKEN="$OWNER_API_TOKEN" \
+DAIS_CONFORMANCE_ONLY=mastodon-api \
+cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 For a third-party-client-shaped smoke that uses form-encoded OAuth/status
 requests and multipart media upload:
 
 ```bash
-DAIS_MASTODON_BEARER_TOKEN="$OWNER_API_TOKEN" npm run test:mastodon-client-smoke
+DAIS_MASTODON_BEARER_TOKEN="$OWNER_API_TOKEN" \
+DAIS_CONFORMANCE_ONLY=mastodon-client-smoke \
+cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```

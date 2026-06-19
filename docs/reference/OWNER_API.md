@@ -1,7 +1,7 @@
 # dais Owner API
 
 The owner API is the HTTPS boundary for first-party GUI/mobile clients. It lets
-the Tauri app, future Android app, CLI, and TUI converge on one secure client
+Dais Desk, future mobile apps, CLI, and TUI converge on one secure client
 surface instead of requiring Wrangler, raw D1 access, or Cloudflare admin
 credentials.
 
@@ -24,7 +24,7 @@ Implemented endpoints:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/snapshot` | Combined owner app state for Tauri/client startup. |
+| `GET` | `/snapshot` | Combined owner app state for Dais Desk/client startup. |
 | `GET` | `/profile` | Public actor/account profile metadata. |
 | `POST` | `/profile` | Update display name, actor type, summary, avatar/icon URL, and header image URL. |
 | `GET` | `/posts` | Recent local owner posts, including private and encrypted metadata. |

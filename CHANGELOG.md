@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added the native Slint `apps/dais-desk` owner client with Home, People, and
+  Server workflows, local multi-account profiles, accessible source-list/row
+  controls, Slint interaction tests, and native screenshot smoke coverage.
 - Added Tootfinder as an ActivityPub public index provider for owner search.
   Public search can now query the opt-in Mastodon full-text index through
   `provider=tootfinder`, while `provider=activitypub` and `provider=all` include
@@ -17,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the notice is about with an `Open context` action.
 
 ### Changed
+- Replaced the legacy WebView owner app with the Rust-native Dais Desk client and
+  moved the UI release gate to `cargo test --manifest-path apps/dais-desk/Cargo.toml`.
 - Improved Dais Desk secondary-screen UX with consistent screen summaries,
   clearer priority groups, and cleaner action/status rows for Notifications,
   DMs, Deliveries, Followers, Following, Friends, Audience, Search, Sources,

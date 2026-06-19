@@ -5,14 +5,15 @@ reading, discovery, moderation, settings, privacy warnings, or account switching
 
 ## Required Command
 
-Run the owner app smoke from the Tauri app directory:
+Run the Dais Desk smoke gate from the repository root:
 
 ```bash
-cd apps/owner-tauri
-npm run smoke
+cargo test --manifest-path apps/dais-desk/Cargo.toml
 ```
 
-The command builds the Vite bundle and runs `scripts/owner-tauri-smoke.mjs`.
+The command runs Rust unit tests, Slint interaction tests, and the native visual
+smoke test. The visual smoke writes PNG screenshots to
+`apps/dais-desk/target/dais-desk-screenshots/`.
 
 ## Required Coverage
 
@@ -29,12 +30,15 @@ The smoke gate must cover:
 
 The smoke gate checks:
 
-- Keyboard-operable navigation uses controls rather than inert text.
-- Visible focus styling exists.
-- Screen-reader labeling exists for the account switcher.
+- Source-list navigation uses accessible controls rather than inert text.
+- Slint accessibility labels exist for the primary source-list controls and row
+  cards.
+- User-like automated activation can move through Home, People, Followers,
+  Server, and Accounts & Tokens.
 - Core text colors meet contrast requirements.
 - Font sizing does not depend on viewport width.
-- Dark-mode and narrow-layout CSS are present.
+- Native screenshots for Home, People/Followers, and Server/Accounts are
+  nonblank and visually varied.
 
 Future GUI changes that add new icon-only controls, dialogs, sheets, or custom
 interactive widgets should extend the smoke gate with targeted checks for those
@@ -62,10 +66,10 @@ Every UI release issue should include:
 UI release gate evidence
 - Branch:
 - Commit:
-- Command: cd apps/owner-tauri && npm run smoke
+- Command: cargo test --manifest-path apps/dais-desk/Cargo.toml
 - Result:
 - Covered modes: Home, People, Server
-- Covered sections: Home, Compose, Settings, Discovery, Moderation
+- Covered sections: Home, Followers, Accounts & Tokens, visual screenshots
 - Accessibility notes:
 - Privacy notes:
 - Screenshots or video, if visual behavior changed:

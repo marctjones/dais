@@ -6,7 +6,7 @@ Desk GUI client.
 **Related:** `docs/design/DAIS_DESK_PRODUCT_UX.md`,
 `docs/design/DAIS_DESK_INFORMATION_ARCHITECTURE.md`, `docs/POSITIONING.md`,
 `docs/design/PRIVATE_MODE.md`,
-`docs/guides/OWNER_TAURI_APP.md`.
+`docs/guides/DAIS_DESK_APP.md`.
 
 ## 1. Design Posture
 
@@ -388,11 +388,12 @@ Minimum acceptance:
 
 - Prefer native platform conventions for shortcut names, button ordering, and
   sheet/dialog behavior.
-- In the Tauri web UI, use semantic HTML first. Add ARIA only where semantics are
-  insufficient.
-- Use a small token set in CSS custom properties before adding component-specific
-  colors.
-- Keep component sizing in CSS variables so smoke tests can assert dimensions.
+- In the Slint UI, declare accessibility roles, labels, and default actions on
+  custom controls instead of relying only on visible text.
+- Use a small token set in shared Slint component properties before adding
+  component-specific colors.
+- Keep component sizing explicit enough that smoke tests can assert dimensions
+  and screenshots cannot stretch sparse lists into oversized controls.
 - Avoid nested cards and page sections styled as floating cards. Cards are for
   repeated items, modals, and deliberately framed tools.
 - Add or adopt an icon library before drawing custom icons by hand. Icons used

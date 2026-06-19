@@ -1,0 +1,669 @@
+import {
+    Button,
+    CheckBox,
+    LineEdit,
+    ScrollView,
+    TextEdit,
+} from "std-widgets.slint";
+
+export struct NavItem {
+    id: string,
+    title: string,
+    count: string,
+    active: bool,
+}
+
+export struct UiRow {
+    id: string,
+    title: string,
+    subtitle: string,
+    detail: string,
+    chip: string,
+    tone: string,
+    primary: string,
+    secondary: string,
+}
+
+export struct AccountRow {
+    id: string,
+    title: string,
+    subtitle: string,
+    active: bool,
+    token: bool,
+}
+
+component Chip inherits Rectangle {
+    in property <string> label;
+    in property <string> tone;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: tone == "danger" ? #c23b3b : tone == "warn" ? #a76f14 : tone == "ok" ? #1f7a45 : #b8c0ca;
+    background: tone == "danger" ? #fff0f0 : tone == "warn" ? #fff6df : tone == "ok" ? #eef9f1 : #f4f6f8;
+    min-height: 24px;
+    horizontal-stretch: 0;
+
+    Text {
+        text: root.label;
+        color: root.tone == "danger" ? #7b1c1c : root.tone == "warn" ? #6d470b : root.tone == "ok" ? #145a32 : #39424e;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 10px;
+        width: root.width - 20px;
+        height: root.height;
+    }
+}
+
+component SourceButton inherits Rectangle {
+    in property <NavItem> item;
+    callback activate(string);
+
+    height: 34px;
+    border-radius: 6px;
+    background: item.active ? #e8edf5 : transparent;
+    border-width: item.active ? 1px : 0px;
+    border-color: #cdd6e2;
+    accessible-role: button;
+    accessible-label: root.item.title;
+    accessible-description: root.item.count == "" ? root.item.title : root.item.title + " " + root.item.count;
+    accessible-action-default => {
+        root.activate(root.item.id);
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 8px;
+        spacing: 8px;
+
+        Text {
+            text: item.title;
+            color: item.active ? #172033 : #344055;
+            font-size: 13px;
+            font-weight: item.active ? 700 : 500;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        if item.count != "" : Rectangle {
+            min-width: 26px;
+            height: 20px;
+            border-radius: 10px;
+            background: item.active ? #d3dceb : #eef1f4;
+
+            Text {
+                text: item.count;
+                color: #334155;
+                font-size: 11px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.activate(root.item.id);
+        }
+    }
+}
+
+component RowCard inherits Rectangle {
+    in property <UiRow> entry;
+    in property <bool> selected;
+    callback open(string);
+    callback action(string, string);
+
+    height: 144px;
+    vertical-stretch: 0;
+    border-radius: 7px;
+    border-width: 1px;
+    border-color: selected ? #7aa5d8 : #d9dee6;
+    background: selected ? #eef6ff : #ffffff;
+    accessible-role: list-item;
+    accessible-label: root.entry.title;
+    accessible-description: root.entry.subtitle + " " + root.entry.detail;
+    accessible-action-default => {
+        root.open(root.entry.id);
+    }
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 10px;
+
+            VerticalLayout {
+                spacing: 3px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: root.entry.title;
+                    color: #121820;
+                    font-size: 14px;
+                    font-weight: 700;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: root.entry.subtitle;
+                    color: #5c6674;
+                    font-size: 12px;
+                    overflow: elide;
+                }
+            }
+
+            if root.entry.chip != "" : Chip {
+                label: root.entry.chip;
+                tone: root.entry.tone;
+            }
+        }
+
+        Text {
+            text: root.entry.detail;
+            color: #27313f;
+            font-size: 13px;
+            wrap: word-wrap;
+            max-height: 48px;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            height: 34px;
+            spacing: 8px;
+            Button {
+                height: 34px;
+                text: "Open";
+                clicked => {
+                    root.open(root.entry.id);
+                }
+            }
+            if root.entry.primary != "" : Button {
+                height: 34px;
+                text: root.entry.primary;
+                clicked => {
+                    root.action(root.entry.id, root.entry.primary);
+                }
+            }
+            if root.entry.secondary != "" : Button {
+                height: 34px;
+                text: root.entry.secondary;
+                clicked => {
+                    root.action(root.entry.id, root.entry.secondary);
+                }
+            }
+        }
+    }
+}
+
+component InspectorRow inherits Rectangle {
+    in property <UiRow> entry;
+    callback action(string, string);
+
+    min-height: 72px;
+    vertical-stretch: 0;
+    border-radius: 6px;
+    background: #f8fafc;
+    border-width: 1px;
+    border-color: #e3e7ee;
+    accessible-role: list-item;
+    accessible-label: root.entry.title;
+    accessible-description: root.entry.detail;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.entry.title;
+                font-size: 13px;
+                font-weight: 700;
+                color: #152033;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            if root.entry.chip != "" : Chip {
+                label: root.entry.chip;
+                tone: root.entry.tone;
+            }
+        }
+
+        Text {
+            text: root.entry.detail;
+            font-size: 12px;
+            color: #445064;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            height: 32px;
+            spacing: 8px;
+            if root.entry.primary != "" : Button {
+                height: 32px;
+                text: root.entry.primary;
+                clicked => {
+                    root.action(root.entry.id, root.entry.primary);
+                }
+            }
+            if root.entry.secondary != "" : Button {
+                height: 32px;
+                text: root.entry.secondary;
+                clicked => {
+                    root.action(root.entry.id, root.entry.secondary);
+                }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Dais Desk";
+    preferred-width: 1180px;
+    preferred-height: 760px;
+    min-width: 920px;
+    min-height: 620px;
+    background: #eef1f5;
+
+    in property <[NavItem]> mode-nav;
+    in property <[NavItem]> screen-nav;
+    in property <[UiRow]> rows;
+    in property <[UiRow]> inspector-rows;
+    in property <[AccountRow]> accounts;
+    in property <string> active-mode;
+    in property <string> active-screen;
+    in property <string> selected-row;
+    in property <string> window-title;
+    in property <string> window-subtitle;
+    in property <string> attention-summary;
+    in property <string> privacy-status;
+    in property <string> status-message;
+    in-out property <string> command-text;
+    in-out property <string> compose-text;
+    in-out property <string> compose-recipients;
+    in-out property <string> compose-media-description;
+    in-out property <bool> compose-encrypt;
+    in property <string> compose-visibility;
+    in property <string> compose-protocol;
+    in property <string> compose-warning;
+    in property <bool> compose-can-send;
+    in-out property <string> account-label;
+    in-out property <string> account-url;
+    in-out property <string> account-token;
+
+    callback select-mode(string);
+    callback select-screen(string);
+    callback select-row(string);
+    callback row-action(string, string);
+    callback refresh();
+    callback run-command(string);
+    callback save-account(string, string, string);
+    callback switch-account(string);
+    callback delete-account(string);
+    callback compose-send();
+    callback compose-set-visibility(string);
+    callback compose-set-protocol(string);
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            width: 232px;
+            background: #f6f7f9;
+            border-width: 1px;
+            border-color: #d7dde6;
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+
+                Text {
+                    text: "Dais Desk";
+                    font-size: 18px;
+                    font-weight: 800;
+                    color: #101828;
+                }
+
+                Text {
+                    text: root.privacy-status;
+                    font-size: 12px;
+                    color: #536175;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: #d7dde6;
+                }
+
+                for item in mode-nav : SourceButton {
+                    item: item;
+                    activate(id) => {
+                        root.select-mode(id);
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: #d7dde6;
+                }
+
+                Text {
+                    text: "Screens";
+                    font-size: 11px;
+                    color: #687386;
+                    font-weight: 700;
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    viewport-height: 470px;
+                    VerticalLayout {
+                        spacing: 4px;
+                        for item in screen-nav : SourceButton {
+                            item: item;
+                            activate(id) => {
+                                root.select-screen(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 0px;
+            horizontal-stretch: 1;
+
+            Rectangle {
+                height: 58px;
+                background: #ffffff;
+                border-width: 1px;
+                border-color: #d7dde6;
+
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    spacing: 10px;
+
+                    LineEdit {
+                        text <=> root.command-text;
+                        placeholder-text: "Search, paste a handle, URL, feed, domain, or command";
+                        horizontal-stretch: 1;
+                        accepted => {
+                            root.run-command(root.command-text);
+                        }
+                    }
+
+                    Button {
+                        text: "Find";
+                        clicked => {
+                            root.run-command(root.command-text);
+                        }
+                    }
+
+                    Button {
+                        text: "Compose";
+                        clicked => {
+                            root.select-screen("compose");
+                        }
+                    }
+
+                    Button {
+                        text: "Refresh";
+                        clicked => {
+                            root.refresh();
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 0px;
+                vertical-stretch: 1;
+
+                Rectangle {
+                    background: #fdfefe;
+                    horizontal-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            VerticalLayout {
+                                spacing: 2px;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: root.window-title;
+                                    color: #101828;
+                                    font-size: 20px;
+                                    font-weight: 800;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: root.window-subtitle;
+                                    color: #5b6676;
+                                    font-size: 12px;
+                                    overflow: elide;
+                                }
+                            }
+
+                            Chip {
+                                label: root.attention-summary;
+                                tone: root.attention-summary == "All clear" ? "ok" : "warn";
+                            }
+                        }
+
+                        if root.active-screen == "compose" : Rectangle {
+                            height: 292px;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #ccd6e3;
+                            background: #fbfdff;
+
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 8px;
+
+                                Text {
+                                    text: "Compose with audience first";
+                                    font-size: 15px;
+                                    font-weight: 800;
+                                    color: #111827;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Button {
+                                        text: "Followers";
+                                        clicked => { root.compose-set-visibility("followers"); }
+                                    }
+                                    Button {
+                                        text: "Direct";
+                                        clicked => { root.compose-set-visibility("direct"); }
+                                    }
+                                    Button {
+                                        text: "Public";
+                                        clicked => { root.compose-set-visibility("public"); }
+                                    }
+                                    Button {
+                                        text: "ActivityPub";
+                                        clicked => { root.compose-set-protocol("activitypub"); }
+                                    }
+                                    Button {
+                                        text: "Both";
+                                        clicked => { root.compose-set-protocol("both"); }
+                                    }
+                                }
+
+                                Text {
+                                    text: "Audience: " + root.compose-visibility + "   Route: " + root.compose-protocol;
+                                    color: #344055;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                }
+
+                                TextEdit {
+                                    text <=> root.compose-text;
+                                    height: 82px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    LineEdit {
+                                        text <=> root.compose-recipients;
+                                        placeholder-text: "Direct recipients or audience group members";
+                                        horizontal-stretch: 1;
+                                    }
+                                    CheckBox {
+                                        text: "Encrypt";
+                                        checked <=> root.compose-encrypt;
+                                    }
+                                }
+
+                                LineEdit {
+                                    text <=> root.compose-media-description;
+                                    placeholder-text: "Media alt text / sensitivity note";
+                                }
+
+                                Text {
+                                    text: root.compose-warning;
+                                    color: root.compose-warning == "Ready to send privately." ? #1f7a45 : #8a4d0a;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+
+                                Button {
+                                    text: root.compose-visibility == "public" ? "Post Publicly" : "Send";
+                                    enabled: root.compose-text != "" && (root.compose-visibility != "direct" || root.compose-recipients != "");
+                                    clicked => {
+                                        root.compose-send();
+                                    }
+                                }
+                            }
+                        }
+
+                        ScrollView {
+                            vertical-stretch: 1;
+                            viewport-height: 520px;
+                            VerticalLayout {
+                                spacing: 10px;
+                                for row in rows : RowCard {
+                                    entry: row;
+                                    selected: row.id == root.selected-row;
+                                    open(id) => {
+                                        root.select-row(id);
+                                    }
+                                    action(id, action) => {
+                                        root.row-action(id, action);
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: root.status-message;
+                            color: #536175;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 360px;
+                    background: #f7f9fc;
+                    border-width: 1px;
+                    border-color: #d7dde6;
+
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+
+                        Text {
+                            text: "Inspector";
+                            font-size: 16px;
+                            font-weight: 800;
+                            color: #101828;
+                        }
+
+                        Text {
+                            text: "Context, consequences, and less common actions stay here.";
+                            font-size: 12px;
+                            color: #5b6676;
+                            wrap: word-wrap;
+                        }
+
+                        if root.active-screen == "accounts" : Rectangle {
+                            min-height: 188px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            border-color: #d9dee6;
+                            background: #ffffff;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 8px;
+                                Text { text: "Account profile"; font-weight: 800; font-size: 13px; }
+                                LineEdit { text <=> root.account-label; placeholder-text: "Label"; }
+                                LineEdit { text <=> root.account-url; placeholder-text: "Instance URL"; }
+                                LineEdit { text <=> root.account-token; placeholder-text: "Owner token"; }
+                                Button {
+                                    text: "Save account";
+                                    clicked => {
+                                        root.save-account(root.account-label, root.account-url, root.account-token);
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.active-screen == "accounts" : ScrollView {
+                            height: 172px;
+                            VerticalLayout {
+                                spacing: 8px;
+                                for account in accounts : Rectangle {
+                                    min-height: 72px;
+                                    border-radius: 6px;
+                                    background: account.active ? #eef6ff : #ffffff;
+                                    border-width: 1px;
+                                    border-color: account.active ? #7aa5d8 : #d9dee6;
+
+                                    VerticalLayout {
+                                        padding: 8px;
+                                        spacing: 5px;
+                                        Text { text: account.title; font-weight: 800; color: #172033; overflow: elide; }
+                                        Text { text: account.subtitle; color: #5b6676; font-size: 11px; overflow: elide; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            Button { text: "Switch"; enabled: !account.active; clicked => { root.switch-account(account.id); } }
+                                            Button { text: "Delete"; clicked => { root.delete-account(account.id); } }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        ScrollView {
+                            vertical-stretch: 1;
+                            viewport-height: 470px;
+                            VerticalLayout {
+                                spacing: 10px;
+                                for row in inspector-rows : InspectorRow {
+                                    entry: row;
+                                    action(id, action) => {
+                                        root.row-action(id, action);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

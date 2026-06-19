@@ -3,7 +3,7 @@ name = "dais-client-core"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Shared owner-client models and workflow state for dais CLI, TUI, Tauri, and future mobile clients"
+description = "Shared owner-client models and workflow state for dais CLI, TUI, Dais Desk, and future mobile clients"
 
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

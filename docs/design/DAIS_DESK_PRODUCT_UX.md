@@ -5,7 +5,7 @@
 Desk GUI client.
 **Related:** `docs/POSITIONING.md`, `docs/design/PRIVATE_MODE.md`,
 `docs/design/DAIS_DESK_INFORMATION_ARCHITECTURE.md`,
-`docs/design/DAIS_DESK_DESIGN_SYSTEM.md`, `docs/guides/OWNER_TAURI_APP.md`.
+`docs/design/DAIS_DESK_DESIGN_SYSTEM.md`, `docs/guides/DAIS_DESK_APP.md`.
 
 ## 1. Purpose
 

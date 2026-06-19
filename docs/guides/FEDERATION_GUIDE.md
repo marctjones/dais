@@ -148,13 +148,13 @@ Mastodon-family servers dais cares about first:
 Run the deterministic coverage gate:
 
 ```bash
-npm run test:federation-lab
+DAIS_CONFORMANCE_ONLY=federation-lab cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 Require the Mastodon row to be fully covered before a Mastodon-family release:
 
 ```bash
-npm run test:federation-lab -- --require-pass mastodon
+node scripts/federation-lab.mjs --require-pass mastodon
 ```
 
 Run live endpoint probes against configured remote accounts:
@@ -170,7 +170,9 @@ DAIS_FEDERATION_TARGETS='[
       "reply": {"status": "manual", "detail": "requires live account action"}
     }
   }
-]' npm run test:federation-matrix
+]' \
+DAIS_CONFORMANCE_ONLY=federation-matrix \
+cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 For local federation tests that need an internet-reachable URL, start the local

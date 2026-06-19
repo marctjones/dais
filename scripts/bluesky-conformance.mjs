@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
-import WebSocket from "ws";
+import crypto from "node:crypto";
+import net from "node:net";
+import tls from "node:tls";
 
 const config = {
   pdsBaseUrl: process.env.DAIS_PDS_BASE_URL || "https://pds.dais.social",
@@ -138,34 +140,123 @@ function assertCarLooksValid(bytes) {
 
 function subscribeReposMessages(timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
+    const url = new URL(websocketUrl("/xrpc/com.atproto.sync.subscribeRepos"));
+    const secure = url.protocol === "wss:";
+    const port = url.port ? Number(url.port) : secure ? 443 : 80;
+    const key = crypto.randomBytes(16).toString("base64");
     const messages = [];
-    const ws = new WebSocket(websocketUrl("/xrpc/com.atproto.sync.subscribeRepos"));
+    const socket = secure
+      ? tls.connect({ host: url.hostname, port, servername: url.hostname })
+      : net.connect({ host: url.hostname, port });
+    let buffer = Buffer.alloc(0);
+    let handshakeComplete = false;
+    let settled = false;
+    const complete = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      callback(value);
+    };
     const timeout = setTimeout(() => {
-      ws.close();
-      reject(new Error(`subscribeRepos WebSocket timed out after ${timeoutMs}ms with ${messages.length} message(s)`));
+      complete(reject, new Error(`subscribeRepos WebSocket timed out after ${timeoutMs}ms with ${messages.length} message(s)`));
     }, timeoutMs);
-    ws.on("message", (data) => {
-      const text = data.toString();
+
+    const requestPath = `${url.pathname}${url.search || ""}`;
+    const sendHandshake = () => {
+      socket.write(
+        [
+          `GET ${requestPath} HTTP/1.1`,
+          `Host: ${url.host}`,
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          `Sec-WebSocket-Key: ${key}`,
+          "Sec-WebSocket-Version: 13",
+          "User-Agent: dais-conformance",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+    };
+
+    const onTextMessage = (text) => {
       try {
         messages.push(JSON.parse(text));
       } catch {
         messages.push({ parseError: true, text });
       }
       if (messages.some((message) => message.t === "#info") && messages.some((message) => message.t === "#commit")) {
-        clearTimeout(timeout);
-        ws.close();
-        resolve(messages);
+        complete(resolve, messages);
       }
-    });
-    ws.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    ws.on("close", () => {
-      if (messages.some((message) => message.t === "#info") && messages.some((message) => message.t === "#commit")) {
-        clearTimeout(timeout);
-        resolve(messages);
+    };
+
+    const parseFrames = () => {
+      while (buffer.length >= 2) {
+        const first = buffer[0];
+        const second = buffer[1];
+        const opcode = first & 0x0f;
+        const masked = (second & 0x80) !== 0;
+        let length = second & 0x7f;
+        let offset = 2;
+        if (length === 126) {
+          if (buffer.length < 4) return;
+          length = buffer.readUInt16BE(2);
+          offset = 4;
+        } else if (length === 127) {
+          if (buffer.length < 10) return;
+          const bigLength = buffer.readBigUInt64BE(2);
+          if (bigLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+            complete(reject, new Error("subscribeRepos WebSocket frame is too large"));
+            return;
+          }
+          length = Number(bigLength);
+          offset = 10;
+        }
+
+        let mask;
+        if (masked) {
+          if (buffer.length < offset + 4) return;
+          mask = buffer.subarray(offset, offset + 4);
+          offset += 4;
+        }
+        if (buffer.length < offset + length) return;
+
+        let payload = buffer.subarray(offset, offset + length);
+        buffer = buffer.subarray(offset + length);
+        if (masked) {
+          payload = Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]));
+        }
+
+        if (opcode === 0x1) {
+          onTextMessage(payload.toString("utf8"));
+        } else if (opcode === 0x8) {
+          complete(reject, new Error("subscribeRepos WebSocket closed before expected messages arrived"));
+          return;
+        }
       }
+    };
+
+    const onData = (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!handshakeComplete) {
+        const headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd < 0) return;
+        const header = buffer.subarray(0, headerEnd).toString("utf8");
+        if (!header.startsWith("HTTP/1.1 101") && !header.startsWith("HTTP/1.0 101")) {
+          complete(reject, new Error(`subscribeRepos WebSocket upgrade failed: ${header.split("\r\n")[0] || header}`));
+          return;
+        }
+        handshakeComplete = true;
+        buffer = buffer.subarray(headerEnd + 4);
+      }
+      parseFrames();
+    };
+
+    socket.once(secure ? "secureConnect" : "connect", sendHandshake);
+    socket.on("data", onData);
+    socket.on("error", (error) => complete(reject, error));
+    socket.on("end", () => {
+      if (!settled) complete(reject, new Error("subscribeRepos WebSocket ended before expected messages arrived"));
     });
   });
 }
