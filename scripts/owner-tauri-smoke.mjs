@@ -185,6 +185,9 @@ const screenChecks = [
       "Reply",
       "Boost/Repost",
     ],
+    forbidden: [
+      'data-search-follow="https://mastodon.example/users/alice">Follow',
+    ],
   },
   {
     mode: "Server",
@@ -208,6 +211,10 @@ const screenChecks = [
       "Open original",
       "Delete post",
       "Revoke media",
+    ],
+    forbidden: [
+      'data-timeline-action="like" data-object="https://social.dais.social/users/social/posts/smoke-post">Like',
+      'data-timeline-action="boost" data-object="https://social.dais.social/users/social/posts/smoke-post">Boost',
     ],
   },
   {
@@ -291,6 +298,20 @@ const screenChecks = [
     ],
   },
   {
+    mode: "Home",
+    section: "Notifications",
+    expected: [
+      "mention from Alice Example",
+      "read",
+      "reply from Alice Example",
+      "unread",
+      'data-notification-read="notification-reply-smoke">Mark read',
+    ],
+    forbidden: [
+      'data-notification-read="notification-mention-smoke">Mark read',
+    ],
+  },
+  {
     mode: "People",
     section: "Followers",
     expected: [
@@ -320,6 +341,11 @@ const screenChecks = [
       "Add or update account",
       "https://skeptical.engineer",
       "https://joneslaw.io",
+      'data-account-switch="account-skeptical-engineer">Use',
+      'data-account-delete="account-skeptical-engineer">Forget',
+    ],
+    forbidden: [
+      'data-account-delete="account-social-dais-social">Forget',
     ],
   },
   {
@@ -333,6 +359,9 @@ const screenChecks = [
       "This is a medical update reply that should stay in review.",
       "AI advisory (llama-guard-3-8b): Likely private medical content.",
       "Save policy",
+    ],
+    forbidden: [
+      'data-reply-id="https://social.dais.social/users/social/posts/smoke-post#pending-reply" data-reply-status="hidden">Hide',
     ],
   },
   {

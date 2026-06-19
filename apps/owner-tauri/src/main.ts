@@ -1103,7 +1103,7 @@ function smokeNotifications(): OwnerNotification[] {
       post_id: smokePostId,
       activity_id: `${smokePostId}#mention`,
       content: "Alice mentioned you in a public thread.",
-      read: false,
+      read: true,
       created_at: "2026-06-16T14:08:00Z"
     },
     {
@@ -2008,6 +2008,9 @@ function homeInspectorView(data: OwnerSnapshot) {
     </article>`;
   }
   const author = post.actor_display_name || post.actor_username || actorLabel(post.actor_id);
+  const followButton = canFollowActor(data, post.actor_id)
+    ? `<button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>`
+    : "";
   return `<article class="panel home-inspector">
     <div class="section-heading">
       <h2>Post inspector</h2>
@@ -2033,7 +2036,7 @@ function homeInspectorView(data: OwnerSnapshot) {
           <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost/Repost</button>
           <button type="button" data-timeline-action="bookmark" data-object="${escapeAttr(post.object_id)}">Bookmark</button>
           <button type="button" data-search-watch data-watch-type="activitypub_object" data-watch-target="${escapeAttr(post.object_id)}" data-watch-title="${escapeAttr(author)}">Watch</button>
-          <button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>
+          ${followButton}
           <button type="button" data-home-block="${escapeAttr(post.actor_id)}">Mute/Block</button>
         </div>
       </details>
@@ -2171,7 +2174,7 @@ function dailyQueueCard(item: DailyQueueItem) {
     <footer>
       ${item.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
       <button type="button" data-section="${escapeAttr(item.section)}">Open</button>
-      <button type="button" data-daily-done="${escapeAttr(item.id)}">${done ? "Marked done/read" : "Mark done/read"}</button>
+      ${done ? `<span>Marked done/read</span>` : `<button type="button" data-daily-done="${escapeAttr(item.id)}">Mark done/read</button>`}
     </footer>
   </article>`;
 }
@@ -2904,7 +2907,7 @@ function accountCard(account: OwnerAccountProfile) {
       <span class="pill ${account.active ? "ok" : ""}">${account.active ? "Active" : "Saved"}</span>
       <span class="pill ${account.owner_token_present ? "ok" : "warn"}">${account.owner_token_present ? "Token stored" : "Token needed"}</span>
       ${account.active ? "" : `<button type="button" data-account-switch="${escapeAttr(account.id)}">Use</button>`}
-      ${accountProfiles.length > 1 ? `<button type="button" data-account-delete="${escapeAttr(account.id)}">Forget</button>` : ""}
+      ${!account.active && accountProfiles.length > 1 ? `<button type="button" data-account-delete="${escapeAttr(account.id)}">Forget</button>` : ""}
     </footer>
   </article>`;
 }
@@ -2962,8 +2965,6 @@ function postDetailView(post: OwnerPostDetail) {
     ${postBodyHtml(post.content, post.content_html)}
     <div class="detail-actions">
       <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.id)}">Reply</button>
-      <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.id)}">Like</button>
-      <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.id)}">Boost</button>
       <button type="button" data-copy-link="${escapeAttr(post.id)}">Copy link</button>
       <button type="button" data-open-link="${escapeAttr(post.id)}">Open original</button>
       <button type="button" data-delete-post="${escapeAttr(post.id)}">Delete post</button>
