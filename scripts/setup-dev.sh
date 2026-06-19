@@ -14,8 +14,11 @@ fi
 echo "Rust found: $(cargo --version)"
 
 if ! command -v wrangler &> /dev/null; then
-    echo "wrangler not found. Installing..."
-    npm install -g wrangler
+    echo "wrangler not found."
+    echo "Install the Cloudflare Wrangler CLI outside this repository and ensure it is on PATH:"
+    echo "  npm install -g wrangler"
+    echo "  https://developers.cloudflare.com/workers/wrangler/install-and-update/"
+    exit 1
 fi
 echo "wrangler found: $(wrangler --version)"
 

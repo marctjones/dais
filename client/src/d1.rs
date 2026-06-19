@@ -1567,16 +1567,11 @@ fn escape_html(value: &str) -> String {
 }
 
 fn wrangler_bin() -> Result<PathBuf> {
-    let local = std::env::current_dir()?
-        .join("node_modules")
-        .join(".bin")
-        .join(if cfg!(windows) {
-            "wrangler.cmd"
-        } else {
-            "wrangler"
-        });
-    if local.exists() {
-        return Ok(local);
+    if let Ok(path) = std::env::var("WRANGLER") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
     }
 
     Ok(Path::new("wrangler").to_path_buf())

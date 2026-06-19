@@ -247,90 +247,48 @@ curl https://yourdomain.com/api/auth/logout
 
 ## Client Implementation
 
-### JavaScript/TypeScript (Web/Desktop)
+### Rust (Desktop/CLI)
 
-```typescript
-class CloudflareAccessAuth {
-  private teamDomain: string;
-  private appDomain: string;
-  private loginUrl: string;
+```rust
+use reqwest::blocking::Client;
+use serde::Deserialize;
 
-  constructor(appDomain: string) {
-    this.appDomain = appDomain;
-  }
-
-  async initialize(): Promise<void> {
-    // Get login info from API
-    const response = await fetch(`https://${this.appDomain}/api/auth/login`);
-    const data = await response.json();
-
-    this.teamDomain = data.team_domain;
-    this.loginUrl = data.login_url;
-  }
-
-  /**
-   * Redirect user to Cloudflare Access login
-   */
-  login(): void {
-    window.location.href = this.loginUrl;
-  }
-
-  /**
-   * Check if user is authenticated
-   */
-  async isAuthenticated(): Promise<boolean> {
-    try {
-      const response = await fetch(`https://${this.appDomain}/api/auth/verify`, {
-        credentials: 'include' // Include cookies
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        return data.authenticated === true;
-      }
-
-      return false;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Make authenticated API request
-   */
-  async makeRequest(url: string, options: RequestInit = {}): Promise<Response> {
-    // Cookies are sent automatically with credentials: 'include'
-    return fetch(url, {
-      ...options,
-      credentials: 'include'
-    });
-  }
-
-  /**
-   * Logout user
-   */
-  async logout(): Promise<void> {
-    const response = await fetch(`https://${this.appDomain}/api/auth/logout`);
-    const data = await response.json();
-
-    // Redirect to logout URL
-    window.location.href = data.logout_url;
-  }
+#[derive(Debug, Deserialize)]
+struct LoginInfo {
+    login_url: String,
+    team_domain: String,
 }
 
-// Usage
-const auth = new CloudflareAccessAuth('yourdomain.com');
-await auth.initialize();
-
-// Check if authenticated
-if (!await auth.isAuthenticated()) {
-  // Redirect to login
-  auth.login();
+#[derive(Debug, Deserialize)]
+struct VerifyResponse {
+    authenticated: bool,
 }
 
-// Make authenticated requests
-const response = await auth.makeRequest('https://yourdomain.com/api/posts');
-const posts = await response.json();
+let app_domain = "yourdomain.com";
+let client = Client::builder().cookie_store(true).build()?;
+
+let login: LoginInfo = client
+    .get(format!("https://{app_domain}/api/auth/login"))
+    .send()?
+    .error_for_status()?
+    .json()?;
+
+println!("Open this URL to sign in: {}", login.login_url);
+
+let verified: VerifyResponse = client
+    .get(format!("https://{app_domain}/api/auth/verify"))
+    .send()?
+    .error_for_status()?
+    .json()?;
+
+if verified.authenticated {
+    let posts: serde_json::Value = client
+        .get(format!("https://{app_domain}/api/posts"))
+        .send()?
+        .error_for_status()?
+        .json()?;
+    println!("{posts:#}");
+}
 ```
 
 ### Python (Desktop/Scripts)
@@ -537,16 +495,6 @@ response = requests.get(
     "https://yourdomain.com/api/posts",
     headers=headers
 )
-```
-
-**JavaScript Example:**
-```javascript
-const response = await fetch('https://yourdomain.com/api/posts', {
-  headers: {
-    'CF-Access-Client-Id': 'YOUR_CLIENT_ID',
-    'CF-Access-Client-Secret': 'YOUR_CLIENT_SECRET'
-  }
-});
 ```
 
 ---

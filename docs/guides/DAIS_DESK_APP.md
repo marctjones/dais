@@ -52,7 +52,7 @@ Configure production owner API access:
 
 ```bash
 cd platforms/cloudflare/workers/router
-printf '%s' '<random-token>' | npx wrangler secret put OWNER_API_TOKEN --env production
+printf '%s' '<random-token>' | wrangler secret put OWNER_API_TOKEN --env production
 ```
 
 Dais Desk stores local account profiles in the platform app configuration

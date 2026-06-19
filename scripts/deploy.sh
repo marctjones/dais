@@ -35,8 +35,7 @@ set -euo pipefail
 # --- config ------------------------------------------------------------------
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKERS_DIR="$ROOT/platforms/cloudflare/workers"
-WRANGLER="$ROOT/node_modules/.bin/wrangler"
-[ -x "$WRANGLER" ] || WRANGLER="wrangler"
+WRANGLER="${WRANGLER:-wrangler}"
 BUILD_PATH="$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:$PATH"
 
 # Deploy order: backends first, router LAST (it proxies to the others' URLs).
@@ -94,12 +93,12 @@ fi
 env_flag() { [ "$ENVIRONMENT" = "production" ] && printf -- "--env production" || printf ""; }
 
 require_wrangler() {
-  if [ "$WRANGLER" = "wrangler" ] && ! command -v wrangler >/dev/null 2>&1; then
-    err "wrangler not found (run: npm install)"
+  if ! command -v "$WRANGLER" >/dev/null 2>&1 && [ ! -x "$WRANGLER" ]; then
+    err "wrangler not found. Install the Cloudflare Wrangler CLI and ensure it is on PATH, or set WRANGLER=/path/to/wrangler."
     exit 1
   fi
   if ! "$WRANGLER" whoami >/dev/null 2>&1; then
-    warn "Not logged in to Cloudflare - run: npx wrangler login"; exit 1
+    warn "Not logged in to Cloudflare - run: wrangler login"; exit 1
   fi
 }
 
@@ -129,7 +128,7 @@ check_delivery_queue_consumer() {
   if printf "%s\n" "$consumers" | grep -q "delivery-queue[[:space:]]"; then
     err "delivery-queue has a stale consumer attached to script 'delivery-queue'."
     err "Remove it before production deploy:"
-    err "  npx wrangler queues consumer remove delivery-queue delivery-queue"
+    err "  wrangler queues consumer remove delivery-queue delivery-queue"
     err "Then redeploy delivery-queue-production."
     exit 1
   fi
@@ -143,7 +142,6 @@ do_list() {
     cfg="missing"; [ -f "$dir/wrangler.toml" ] && cfg="ok"
     entry="?"
     [ -f "$dir/Cargo.toml" ] && entry="rust"
-    [ "$entry" = "?" ] && [ -f "$dir/src/index.js" ] && entry="js"
     printf "  %-16s wrangler:%-8s entry:%s\n" "$w" "$cfg" "$entry"
   done
 }

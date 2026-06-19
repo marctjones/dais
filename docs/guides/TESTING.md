@@ -672,11 +672,6 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '20'
-
     - name: Setup Python
       uses: actions/setup-python@v4
       with:
@@ -686,9 +681,6 @@ jobs:
       uses: actions-rs/toolchain@v1
       with:
         toolchain: stable
-
-    - name: Install Wrangler
-      run: npm install -g wrangler
 
     - name: Install CLI dependencies
       run: cargo run --manifest-path client/Cargo.toml -- --help

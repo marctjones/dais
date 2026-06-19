@@ -11,7 +11,8 @@ Before installing dais, ensure you have:
 - **Domain Name** - Must be added to Cloudflare DNS
 - **Python 3.10+** - [Download Python](https://www.python.org/downloads/)
 - **Rust** - [Install Rust](https://rustup.rs/)
-- **wrangler CLI** - Install with `npm install -g wrangler`
+- **Node.js/npm** - External runtime for the Cloudflare Wrangler CLI only
+- **wrangler CLI** - Install outside this repository and ensure `wrangler` is on `PATH`
 
 ### Optional
 - **Git** - For cloning repository
@@ -231,6 +232,7 @@ See [TUI_SHORTCUTS.md](TUI_SHORTCUTS.md) for all shortcuts.
 Install wrangler:
 ```bash
 npm install -g wrangler
+wrangler --version
 ```
 
 ### "Cloudflare authentication failed"
