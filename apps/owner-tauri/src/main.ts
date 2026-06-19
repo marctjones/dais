@@ -241,6 +241,7 @@ type InteractionResult = {
 type UploadedMedia = {
   url: string;
   media_type?: string | null;
+  description?: string | null;
   access?: string | null;
   attachment: unknown;
 };
@@ -476,9 +477,10 @@ let accountProfiles: OwnerAccountProfile[] = [];
 let active = smokeSection() || "Home";
 let notice = "";
 let draftAttachments: string[] = smokeMode
-  ? [JSON.stringify({ url: "https://social.dais.social/media/smoke-upload.png", mediaType: "image/png", name: "smoke-upload.png" })]
+  ? [JSON.stringify({ url: "https://social.dais.social/media/smoke-upload.png", mediaType: "image/png", name: "Smoke upload alt text" })]
   : [];
 let draftReplyTo = "";
+let draftMediaDescription = smokeMode ? "Smoke upload alt text" : "";
 let discoveredActor: DiscoveredActor | null = null;
 let selectedPostDetail: OwnerPostDetail | null = null;
 let notifications: OwnerNotification[] = [];
@@ -1803,6 +1805,14 @@ function composeView(data: OwnerSnapshot) {
       <input name="recipients" value="${escapeAttr(state.recipients)}" placeholder="Direct/E2EE actor URLs, comma separated" />
     </label>
     <section class="media-box">
+      <div class="section-heading">
+        <h3>Media</h3>
+        <span class="pill ${state.visibility === "Public" ? "warn" : "ok"}">${escapeHtml(mediaAccessLabel(state.visibility))}</span>
+      </div>
+      <p class="privacy-note media-access-note">${escapeHtml(mediaAccessNote(state.visibility))}</p>
+      <label>Alt text / media description
+        <input name="media_description" value="${escapeAttr(draftMediaDescription)}" placeholder="Describe the image or video before uploading" />
+      </label>
       <div class="media-row">
         <input id="media-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm" />
         <button id="media-upload" type="button">Upload</button>
@@ -1838,6 +1848,20 @@ function composeView(data: OwnerSnapshot) {
       <button type="submit">${escapeHtml(composeSubmitLabel(state))}</button>
     </div>
   </form>`;
+}
+
+function mediaAccessLabel(visibility: Visibility) {
+  return visibility === "Public" || visibility === "Unlisted" ? "Public media" : "Private media";
+}
+
+function mediaAccessNote(visibility: Visibility) {
+  if (visibility === "Public") {
+    return "Public media uploads use public URLs and can be copied, indexed, or shared outside Dais.";
+  }
+  if (visibility === "Unlisted") {
+    return "Unlisted media uploads use public URLs; anyone with the URL may share them.";
+  }
+  return "Media uploaded now uses private access for followers-only and direct posts.";
 }
 
 function audienceOption(
@@ -1884,6 +1908,7 @@ function ensureComposeState(data: OwnerSnapshot) {
 }
 
 function readComposeState(form: HTMLFormElement, data: OwnerSnapshot): ComposeDraftState {
+  draftMediaDescription = String(form.get("media_description") || "");
   return {
     text: String(form.get("text") || ""),
     visibility: normalizeVisibility(String(form.get("visibility") || data.settings.default_visibility)),
@@ -1924,6 +1949,7 @@ function composePreviewHtml(data: OwnerSnapshot, state: ComposeDraftState) {
   );
   const sensitiveCategories = sensitiveCategoriesForText(state.text);
   const warnings = composeWarnings(state, sensitiveCategories, audienceList, recipients.length);
+  const requiresWarningConfirmation = composeWarningOverrideRequired(state, sensitiveCategories, draftAttachments.length > 0);
   const surfaces = visibilitySurfaceRows(state);
   return `<article class="preview-card">
     <div class="section-heading">
@@ -1956,6 +1982,11 @@ function composePreviewHtml(data: OwnerSnapshot, state: ComposeDraftState) {
         : `<p class="privacy-note">No routing or sensitivity warnings detected for this draft.</p>`
     }
     ${
+      requiresWarningConfirmation
+        ? `<label class="check warning-confirmation"><input name="confirm_warnings" type="checkbox" /> I reviewed these warnings and still want to publish.</label>`
+        : ""
+    }
+    ${
       recipients.length
         ? `<div class="preview-recipient-list">
             <span class="section-label">Recipients</span>
@@ -1964,6 +1995,16 @@ function composePreviewHtml(data: OwnerSnapshot, state: ComposeDraftState) {
         : ""
     }
   </article>`;
+}
+
+function composeWarningOverrideRequired(
+  state: ComposeDraftState,
+  sensitiveCategories: SensitiveCategory[],
+  hasAttachments: boolean
+) {
+  if (state.visibility === "Public" && hasAttachments) return true;
+  if (!sensitiveCategories.length) return false;
+  return state.visibility === "Public" || state.visibility === "Unlisted" || state.visibility === "Followers";
 }
 
 function visibilityFacts(state: ComposeDraftState, recipientCount: number) {
@@ -2952,10 +2993,20 @@ async function publishPost(event: SubmitEvent) {
   const visibility = String(form.get("visibility") || "Followers");
   const protocol = String(form.get("protocol") || "ActivityPub");
   const audienceListId = String(form.get("audience_list_id") || "").trim();
-  const audienceList = snapshot && composeState ? selectedAudienceList(snapshot, composeState) : null;
+  const currentComposeState = composeState || {
+    text,
+    visibility: normalizeVisibility(visibility),
+    protocol: normalizeProtocol(protocol),
+    encrypt: form.get("encrypt") === "on",
+    audienceListId,
+    recipients: String(form.get("recipients") || ""),
+    selectedRecipients: form.getAll("follower_recipient").map((value) => String(value)),
+  };
+  const sensitiveCategories = sensitiveCategoriesForText(currentComposeState.text);
+  const audienceList = snapshot ? selectedAudienceList(snapshot, currentComposeState) : null;
   const disallowedCategories =
-    audienceList && composeState
-      ? sensitiveCategoriesForText(composeState.text).filter((label) => !audienceList.allowed_categories.includes(label))
+    audienceList
+      ? sensitiveCategories.filter((label) => !audienceList.allowed_categories.includes(label))
       : [];
   if (draftAttachments.length > 0 && protocol !== "ActivityPub") {
     notice = "Media attachments currently require ActivityPub routing.";
@@ -2983,6 +3034,14 @@ async function publishPost(event: SubmitEvent) {
   }
   if (disallowedCategories.length) {
     notice = `Selected audience list does not permit ${disallowedCategories.join(", ")} content.`;
+    render();
+    return;
+  }
+  if (
+    composeWarningOverrideRequired(currentComposeState, sensitiveCategories, draftAttachments.length > 0) &&
+    form.get("confirm_warnings") !== "on"
+  ) {
+    notice = "Review the compose warnings and check the confirmation before publishing.";
     render();
     return;
   }
@@ -3023,6 +3082,13 @@ async function uploadSelectedMedia() {
   const visibility = String(data.get("visibility") || "Followers");
   const protocol = String(data.get("protocol") || "ActivityPub");
   const encrypt = data.get("encrypt") === "on";
+  const description = String(data.get("media_description") || "").trim();
+  draftMediaDescription = description;
+  if (!description) {
+    notice = "Add alt text or a media description before uploading.";
+    render();
+    return;
+  }
   if (protocol !== "ActivityPub") {
     notice = "Media attachments currently require ActivityPub routing.";
     render();
@@ -3038,6 +3104,7 @@ async function uploadSelectedMedia() {
   const uploaded = await ownerInvoke<UploadedMedia>("upload_owner_media", {
     filename: file.name,
     mediaType: file.type || null,
+    description,
     access,
     dataBase64
   });

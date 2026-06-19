@@ -593,6 +593,7 @@ pub struct OwnerInteractionResult {
 pub struct OwnerMediaUpload {
     pub filename: String,
     pub media_type: Option<String>,
+    pub description: Option<String>,
     pub access: Option<String>,
     pub expires_in_seconds: Option<u64>,
     pub require_authorized_fetch: Option<bool>,
@@ -603,6 +604,7 @@ pub struct OwnerMediaUpload {
 pub struct OwnerMedia {
     pub url: String,
     pub media_type: Option<String>,
+    pub description: Option<String>,
     pub access: Option<String>,
     pub authorized_fetch: Option<bool>,
     pub expires_at: Option<String>,

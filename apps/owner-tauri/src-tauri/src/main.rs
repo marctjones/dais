@@ -653,6 +653,7 @@ async fn upload_owner_media(
     app: tauri::AppHandle,
     filename: String,
     media_type: Option<String>,
+    description: Option<String>,
     access: Option<String>,
     data_base64: String,
 ) -> Result<OwnerMedia, String> {
@@ -667,6 +668,7 @@ async fn upload_owner_media(
         .upload_media(&OwnerMediaUpload {
             filename,
             media_type,
+            description: optional_trimmed(description.unwrap_or_default()),
             access,
             expires_in_seconds: None,
             require_authorized_fetch: None,

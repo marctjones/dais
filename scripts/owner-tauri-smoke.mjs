@@ -135,6 +135,9 @@ function runStaticReleaseGates() {
   assertIncludes(sourceText, "recipient server operators may be able to read delivered copies", "federation plaintext warning");
   assertIncludes(sourceText, "Direct posts need at least one named recipient.", "direct-recipient validation");
   assertIncludes(sourceText, "Private and direct posts need media uploaded while that visibility is selected.", "private media visibility guard");
+  assertIncludes(sourceText, "Add alt text or a media description before uploading.", "media alt-text gate");
+  assertIncludes(sourceText, "Public media uploads use public URLs", "public media warning");
+  assertIncludes(sourceText, "I reviewed these warnings and still want to publish.", "advisory warning override");
   assertMatches(
     sourceText,
     /const access = visibility === "Followers" \|\| visibility === "Direct" \? "private" : "public";/,
@@ -190,6 +193,10 @@ const screenChecks = [
       "Public internet",
       "Direct / E2EE",
       "Post to Followers",
+      "Alt text / media description",
+      "Private media",
+      "Media uploaded now uses private access",
+      "Smoke upload alt text",
       "social.dais.social/media/smoke-upload.png",
       "Revoke upload",
       "Audience preview",

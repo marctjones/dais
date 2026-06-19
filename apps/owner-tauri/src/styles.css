@@ -783,6 +783,18 @@ select {
   color: var(--danger);
 }
 
+.warning-confirmation {
+  justify-content: flex-start;
+  padding: 8px 10px;
+  border: 1px solid rgba(180, 35, 24, 0.22);
+  border-radius: 8px;
+  background: #fffaf2;
+}
+
+.media-access-note {
+  margin-top: 0;
+}
+
 .media-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -4063,7 +4063,10 @@ async fn owner_upload_media(
     );
     attachment.insert("mediaType".to_string(), Value::String(media_type.clone()));
     attachment.insert("url".to_string(), Value::String(url.clone()));
-    attachment.insert("name".to_string(), Value::String(safe_name));
+    attachment.insert(
+        "name".to_string(),
+        Value::String(description.clone().unwrap_or(safe_name)),
+    );
 
     let mut response = Map::new();
     response.insert("url".to_string(), Value::String(url));
