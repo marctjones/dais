@@ -617,6 +617,25 @@ h3 {
   border-left: 3px solid var(--accent);
 }
 
+.home-timeline-card footer button,
+.home-timeline-card footer .action-menu summary {
+  border-color: var(--border);
+  background: linear-gradient(#ffffff, #f2f2f4);
+  color: var(--text);
+}
+
+.home-timeline-card footer button:hover,
+.home-timeline-card footer .action-menu summary:hover {
+  border-color: #b7b7c0;
+  background: linear-gradient(#ffffff, #e9e9ed);
+}
+
+.home-timeline-card footer button[data-timeline-action="reply"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
 .post-body {
   margin-top: 4px;
   color: var(--secondary);
@@ -1519,6 +1538,24 @@ select {
   .control-menu[open] summary {
     background: #2d3948;
     color: var(--text);
+  }
+
+  .home-timeline-card footer button,
+  .home-timeline-card footer .action-menu summary {
+    border-color: var(--hairline);
+    background: #242428;
+    color: var(--text);
+  }
+
+  .home-timeline-card footer button:hover,
+  .home-timeline-card footer .action-menu summary:hover {
+    background: #2c2c31;
+  }
+
+  .home-timeline-card footer button[data-timeline-action="reply"] {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #ffffff;
   }
 
   input,

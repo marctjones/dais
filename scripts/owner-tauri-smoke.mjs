@@ -140,6 +140,7 @@ function runStaticReleaseGates() {
   assertIncludes(sourceText, "safePostHtmlTags", "safe post HTML allowlist");
   assertIncludes(sourceText, "post-body", "rich post body rendering");
   assertIncludes(sourceText, "postLinkLabel", "compact post link labels");
+  assertIncludes(sourceText, "markdownPostLinkLabel", "markdown post link labels");
   assertIncludes(sourceText, "I reviewed these warnings and still want to publish.", "advisory warning override");
   assertMatches(
     sourceText,

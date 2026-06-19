@@ -4396,15 +4396,43 @@ function safePostHref(value: string) {
 }
 
 function linkifyPlainText(value: string) {
+  const raw = value || "";
+  const markdownLinkPattern = /\[([^\]\n]{1,180})\]\((https?:\/\/[^)\s]+|mailto:[^)]+)\)/gi;
+  let cursor = 0;
+  const parts: string[] = [];
+  for (const match of raw.matchAll(markdownLinkPattern)) {
+    const index = match.index || 0;
+    const label = match[1] || "";
+    const url = match[2] || "";
+    parts.push(linkifyPlainTextSegment(raw.slice(cursor, index)));
+    const href = safePostHref(url);
+    parts.push(href ? postLinkAnchor(href, markdownPostLinkLabel(label, href)) : escapeHtml(match[0] || ""));
+    cursor = index + (match[0] || "").length;
+  }
+  parts.push(linkifyPlainTextSegment(raw.slice(cursor)));
+  return parts.join("");
+}
+
+function linkifyPlainTextSegment(value: string) {
   const escaped = escapeHtml(value || "");
   return escaped
     .replace(/https?:\/\/[^\s<]+/g, (url) => {
       const trailing = url.match(/[),.;!?]+$/)?.[0] || "";
       const clean = trailing ? url.slice(0, -trailing.length) : url;
       const href = safePostHref(clean);
-      return href ? `<a href="${escapeAttr(href)}" rel="nofollow noopener noreferrer" target="_blank" title="${escapeAttr(href)}">${escapeHtml(postLinkLabel(clean))}</a>${escapeHtml(trailing)}` : url;
+      return href ? `${postLinkAnchor(href, postLinkLabel(clean))}${escapeHtml(trailing)}` : url;
     })
     .replaceAll("\n", "<br>");
+}
+
+function postLinkAnchor(href: string, label: string) {
+  return `<a href="${escapeAttr(href)}" rel="nofollow noopener noreferrer" target="_blank" title="${escapeAttr(href)}">${escapeHtml(label)}</a>`;
+}
+
+function markdownPostLinkLabel(label: string, href: string) {
+  const trimmed = label.trim();
+  if (!trimmed || looksLikeUrlText(trimmed)) return postLinkLabel(href);
+  return trimmed.length > 72 ? `${trimmed.slice(0, 69)}...` : trimmed;
 }
 
 function looksLikeUrlText(value: string) {
@@ -4417,13 +4445,9 @@ function looksLikeUrlText(value: string) {
 function postLinkLabel(value: string) {
   try {
     const url = new URL(value, window.location.href);
-    if (url.protocol === "mailto:") return url.pathname || value;
+    if (url.protocol === "mailto:") return `Email ${decodeURIComponent(url.pathname || value)}`;
     const host = url.hostname.replace(/^www\./, "");
-    const parts = url.pathname.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
-    if (!parts.length) return host;
-    const path = parts.length <= 2 ? parts.join("/") : `${parts[0]}/.../${parts[parts.length - 1]}`;
-    const query = url.search ? "?" : "";
-    return `${host}/${path}${query}`;
+    return url.pathname === "/" && !url.search ? host : `Read at ${host}`;
   } catch {
     return value.length > 52 ? `${value.slice(0, 24)}...${value.slice(-20)}` : value;
   }
