@@ -137,6 +137,8 @@ function runStaticReleaseGates() {
   assertIncludes(sourceText, "Private and direct posts need media uploaded while that visibility is selected.", "private media visibility guard");
   assertIncludes(sourceText, "Add alt text or a media description before uploading.", "media alt-text gate");
   assertIncludes(sourceText, "Public media uploads use public URLs", "public media warning");
+  assertIncludes(sourceText, "safePostHtmlTags", "safe post HTML allowlist");
+  assertIncludes(sourceText, "post-body", "rich post body rendering");
   assertIncludes(sourceText, "I reviewed these warnings and still want to publish.", "advisory warning override");
   assertMatches(
     sourceText,
@@ -169,7 +171,8 @@ const screenChecks = [
       "Delivery failures",
       "Mark done/read",
       "A followed public post with reply, like, and boost actions.",
-      "Private default",
+      "Sharing defaults",
+      "Followers - approved followers",
       "Reply",
       "Boost/Repost",
     ],

@@ -485,6 +485,49 @@ h3 {
   border-left: 3px solid var(--accent);
 }
 
+.post-body {
+  margin-top: 4px;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.post-body p {
+  margin: 0 0 7px;
+}
+
+.post-body p:last-child {
+  margin-bottom: 0;
+}
+
+.post-body blockquote {
+  margin: 7px 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--hairline);
+}
+
+.post-body pre,
+.post-body code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.post-body pre {
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(120, 120, 128, 0.12);
+}
+
+.post-body a {
+  color: var(--accent);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.post-body a:hover {
+  text-decoration: underline;
+}
+
 .home-inspector,
 .daily-queue {
   display: grid;
@@ -586,6 +629,7 @@ h3 {
 }
 
 .overview-grid article,
+.overview-grid .metric-card,
 .metrics article,
 .panel {
   background: var(--surface-soft);
@@ -595,8 +639,24 @@ h3 {
 }
 
 .overview-grid article,
+.overview-grid .metric-card,
 .metrics article {
   padding: 11px 12px;
+}
+
+.overview-grid .metric-card {
+  min-height: 76px;
+  display: block;
+  width: 100%;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface-soft);
+  box-shadow: var(--shadow);
+}
+
+.overview-grid .metric-card:hover {
+  border-color: rgba(0, 113, 227, 0.36);
+  background: #f2f7ff;
 }
 
 .overview-grid span,
@@ -1322,6 +1382,14 @@ select {
 
   .audience-option.public.selected {
     background: #3a211f;
+  }
+
+  .overview-grid .metric-card:hover {
+    background: #172d45;
+  }
+
+  .post-body pre {
+    background: rgba(255, 255, 255, 0.1);
   }
 
   .follower button[data-follower-status="pending"] {

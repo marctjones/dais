@@ -1788,26 +1788,12 @@ function dashboardView(data: OwnerSnapshot) {
         ${privacyStatusView(data)}
       </aside>
     </section>
-    <section class="home-support-grid">
-      ${composeView(data)}
-      ${quickActionsView(data)}
-    </section>
     <section class="overview-grid">
-      ${metric("Posts", data.posts.length, "recent local posts")}
-      ${metric("Followers", data.followers.filter((row) => row.status === "approved").length, "approved followers")}
-      ${metric("Friends", data.friends.length, "mutual relationships")}
-      ${metric("Following", data.following.length, "private graph")}
-      ${metric("Reader", data.sources.length, "source items")}
-    </section>
-    <section class="split">
-      <div>
-        <div class="section-heading"><h2>Recent posts</h2><button type="button" data-section="Posts">Show all</button></div>
-        ${list(data.posts.slice(0, 4).map(postCard), "No recent posts.")}
-      </div>
-      <div>
-        <div class="section-heading"><h2>Health</h2><button type="button" data-section="Diagnostics">Diagnostics</button></div>
-        ${list(data.diagnostics.map(diagnosticCard), "No diagnostics.")}
-      </div>
+      ${metric("Posts", data.posts.length, "recent local posts", "Posts")}
+      ${metric("Followers", data.followers.filter((row) => row.status === "approved").length, "approved followers", "Followers")}
+      ${metric("Friends", data.friends.length, "mutual relationships", "Friends")}
+      ${metric("Following", data.following.length, "private graph", "Following")}
+      ${metric("Reader", data.sources.length, "source items", "Sources")}
     </section>`;
 }
 
@@ -1893,7 +1879,7 @@ function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number]) {
   return `<article class="item timeline home-timeline-card ${selected ? "selected" : ""}">
     <div>
       <h2>${escapeHtml(author)}</h2>
-      <p>${escapeHtml(post.content)}</p>
+      ${postBodyHtml(post.content, post.content_html)}
       ${sensitivityBadgesHtml(post.content)}
     </div>
     <footer>
@@ -1928,7 +1914,7 @@ function homeInspectorView(data: OwnerSnapshot) {
       <h2>Post inspector</h2>
       <span class="pill">${escapeHtml(shortUrl(post.object_id))}</span>
     </div>
-    <p>${escapeHtml(post.content)}</p>
+    ${postBodyHtml(post.content, post.content_html)}
     <dl>
       <dt>Thread context</dt><dd>${post.in_reply_to ? `Reply to ${escapeHtml(shortUrl(post.in_reply_to))}` : "Top-level post"} with ${post.reply_count || 0} repl${(post.reply_count || 0) === 1 ? "y" : "ies"}</dd>
       <dt>Relationship context</dt><dd>${escapeHtml(relationshipForActor(data, post.actor_id))}</dd>
@@ -2832,7 +2818,7 @@ function postCard(post: OwnerSnapshot["posts"][number]) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(post.title || post.id)}</h2>
-      <p>${escapeHtml(post.content)}</p>
+      ${postBodyHtml(post.content)}
       ${sensitivityBadgesHtml(post.content)}
     </div>
     <footer>
@@ -2850,7 +2836,7 @@ function postCard(post: OwnerSnapshot["posts"][number]) {
 
 function postDetailView(post: OwnerPostDetail) {
   return `<div class="detail-body">
-    <p>${escapeHtml(post.content)}</p>
+    ${postBodyHtml(post.content, post.content_html)}
     <div class="detail-actions">
       <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.id)}">Reply</button>
       <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.id)}">Like</button>
@@ -2902,7 +2888,7 @@ function postDetailReplies(rows: PostReply[]) {
       rows.length
         ? rows.map((row) => `<article>
             <strong>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</strong>
-            <p>${escapeHtml(row.content || row.id)}</p>
+            ${postBodyHtml(row.content || row.id, row.content_html)}
             ${row.content ? sensitivityBadgesHtml(row.content) : ""}
             ${row.published_at || row.created_at ? `<time>${escapeHtml(formatTime(row.published_at || row.created_at || ""))}</time>` : ""}
           </article>`).join("")
@@ -2931,7 +2917,7 @@ function timelineCard(post: OwnerSnapshot["home_timeline"][number]) {
   return `<article class="item timeline">
     <div>
       <h2>${escapeHtml(author)}</h2>
-      <p>${escapeHtml(post.content)}</p>
+      ${postBodyHtml(post.content, post.content_html)}
       ${sensitivityBadgesHtml(post.content)}
     </div>
     <footer>
@@ -2977,7 +2963,7 @@ function sourceCard(source: OwnerSnapshot["sources"][number]) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(source.title)}</h2>
-      <p>${escapeHtml(source.excerpt || "")}</p>
+      ${source.excerpt ? postBodyHtml(source.excerpt) : ""}
     </div>
     <footer>
       <span>${escapeHtml(source.source_type)}</span>
@@ -3042,7 +3028,7 @@ function notificationCard(row: OwnerNotification) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.type)} from ${escapeHtml(actor)}</h2>
-      <p>${escapeHtml(row.content || row.activity_id || "")}</p>
+      ${postBodyHtml(row.content || row.activity_id || "")}
     </div>
     <footer>
       <span>${isRead(row.read) ? "read" : "unread"}</span>
@@ -3072,7 +3058,7 @@ function directMessageCard(row: OwnerDirectMessage) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(actorLabel(row.sender_id))}</h2>
-      <p>${escapeHtml(row.content)}</p>
+      ${postBodyHtml(row.content)}
     </div>
     <footer>
       <span>${escapeHtml(row.conversation_id)}</span>
@@ -3085,7 +3071,7 @@ function searchPostCard(row: OwnerSearchResult["posts"][number]) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.name || shortUrl(row.id))}</h2>
-      <p>${escapeHtml(row.content)}</p>
+      ${postBodyHtml(row.content, row.content_html)}
       ${sensitivityBadgesHtml([row.name || "", row.summary || "", row.content || ""].join(" "))}
     </div>
     <footer>
@@ -3130,7 +3116,7 @@ function searchPublicPostCard(row: OwnerSearchResult["public_posts"][number]) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.actor_display_name || row.actor_handle || shortUrl(row.url))}</h2>
-      <p>${escapeHtml(row.content || row.summary || "")}</p>
+      ${postBodyHtml(row.content || row.summary || "", row.content_html)}
       ${sensitivityBadgesHtml([row.actor_display_name || "", row.actor_handle || "", row.content || "", row.summary || ""].join(" "))}
     </div>
     <footer>
@@ -3187,7 +3173,7 @@ function searchSourceItemCard(row: OwnerSearchResult["source_items"][number]) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.title)}</h2>
-      ${row.excerpt ? `<p>${escapeHtml(row.excerpt)}</p>` : ""}
+      ${row.excerpt ? postBodyHtml(row.excerpt) : ""}
     </div>
     <footer>
       <span>${escapeHtml(row.source_type)}</span>
@@ -3198,12 +3184,14 @@ function searchSourceItemCard(row: OwnerSearchResult["source_items"][number]) {
   </article>`;
 }
 
-function metric(label: string, value: string | number, detail: string) {
-  return `<article>
+function metric(label: string, value: string | number, detail: string, section?: string) {
+  const content = `
     <span>${escapeHtml(label)}</span>
     <strong>${escapeHtml(String(value))}</strong>
-    ${detail ? `<small>${escapeHtml(detail)}</small>` : ""}
-  </article>`;
+    ${detail ? `<small>${escapeHtml(detail)}</small>` : ""}`;
+  return section
+    ? `<button type="button" class="metric-card" data-section="${escapeAttr(section)}">${content}</button>`
+    : `<article>${content}</article>`;
 }
 
 function audienceListCard(row: OwnerAudienceList) {
@@ -3304,7 +3292,7 @@ function discoveredPostCard(post: DiscoveredPost) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(title)}</h2>
-      ${post.content && post.content !== title ? `<p>${escapeHtml(post.content)}</p>` : ""}
+      ${post.content && post.content !== title ? postBodyHtml(post.content) : ""}
       ${sensitivityBadgesHtml([post.name || "", post.summary || "", post.content || ""].join(" "))}
     </div>
     <footer>
@@ -3367,7 +3355,7 @@ function moderationReplyCard(row: ModerationReply) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</h2>
-      <p>${escapeHtml(row.content)}</p>
+      ${postBodyHtml(row.content)}
       ${row.moderation_flags?.length ? `<div class="sensitivity-tags">${row.moderation_flags.map((label) => `<span class="sensitive-chip">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
       ${ai?.summary ? `<p class="privacy-note">AI advisory${ai.model ? ` (${escapeHtml(shortModel(ai.model))})` : ""}: ${escapeHtml(ai.summary)}</p>` : ""}
     </div>
@@ -4205,6 +4193,100 @@ function attachmentLabel(value: string) {
 
 function stripTags(value: string) {
   return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+const safePostHtmlTags = new Set([
+  "a",
+  "p",
+  "br",
+  "strong",
+  "b",
+  "em",
+  "i",
+  "code",
+  "pre",
+  "blockquote",
+  "ul",
+  "ol",
+  "li",
+  "span",
+  "del",
+  "s",
+  "sub",
+  "sup"
+]);
+
+function postBodyHtml(text: string, html?: string | null) {
+  const body = html ? sanitizePostHtml(html) : linkifyPlainText(text);
+  return `<div class="post-body">${body || ""}</div>`;
+}
+
+function sanitizePostHtml(html: string) {
+  if (typeof DOMParser === "undefined") {
+    return linkifyPlainText(stripTags(html));
+  }
+  const document = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+  sanitizePostChildren(document.body);
+  return document.body.innerHTML.trim() || linkifyPlainText(stripTags(html));
+}
+
+function sanitizePostChildren(parent: Node) {
+  for (const child of Array.from(parent.childNodes)) {
+    if (child.nodeType === Node.COMMENT_NODE) {
+      child.remove();
+      continue;
+    }
+    if (child.nodeType !== Node.ELEMENT_NODE) continue;
+    const element = child as HTMLElement;
+    const tag = element.tagName.toLowerCase();
+    if (tag === "script" || tag === "style" || tag === "iframe" || tag === "object" || tag === "embed") {
+      element.remove();
+      continue;
+    }
+    sanitizePostChildren(element);
+    if (!safePostHtmlTags.has(tag)) {
+      element.replaceWith(...Array.from(element.childNodes));
+      continue;
+    }
+    sanitizePostAttributes(element, tag);
+  }
+}
+
+function sanitizePostAttributes(element: HTMLElement, tag: string) {
+  const href = tag === "a" ? element.getAttribute("href") || "" : "";
+  for (const attr of Array.from(element.attributes)) {
+    element.removeAttribute(attr.name);
+  }
+  if (tag !== "a") return;
+  const safeHref = safePostHref(href);
+  if (!safeHref) {
+    element.replaceWith(...Array.from(element.childNodes));
+    return;
+  }
+  element.setAttribute("href", safeHref);
+  element.setAttribute("rel", "nofollow noopener noreferrer");
+  element.setAttribute("target", "_blank");
+}
+
+function safePostHref(value: string) {
+  try {
+    const url = new URL(value, window.location.href);
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function linkifyPlainText(value: string) {
+  const escaped = escapeHtml(value || "");
+  return escaped
+    .replace(/https?:\/\/[^\s<]+/g, (url) => {
+      const trailing = url.match(/[),.;!?]+$/)?.[0] || "";
+      const clean = trailing ? url.slice(0, -trailing.length) : url;
+      const href = safePostHref(clean);
+      return href ? `<a href="${escapeAttr(href)}" rel="nofollow noopener noreferrer" target="_blank">${escapeHtml(clean)}</a>${escapeHtml(trailing)}` : url;
+    })
+    .replaceAll("\n", "<br>");
 }
 
 function actorLabel(value: string) {
