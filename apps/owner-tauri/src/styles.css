@@ -693,7 +693,8 @@ select {
 }
 
 .preview-meta,
-.privacy-status dl {
+.privacy-status dl,
+.surface-preview dl {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 6px 12px;
@@ -702,6 +703,7 @@ select {
 
 .preview-meta dt,
 .privacy-status dt,
+.surface-preview dt,
 .detail-body dt {
   color: var(--secondary);
   font-weight: 700;
@@ -709,11 +711,33 @@ select {
 
 .preview-meta dd,
 .privacy-status dd,
+.surface-preview dd,
 .detail-body dd {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text);
+}
+
+.visibility-facts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+}
+
+.surface-preview {
+  display: grid;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.surface-preview .section-label {
+  margin-bottom: 0;
 }
 
 .preview-tags,
@@ -1226,6 +1250,7 @@ select {
 
   .media-row,
   .preview-meta,
+  .surface-preview dl,
   .privacy-status dl,
   .detail-body dl {
     grid-template-columns: 1fr;

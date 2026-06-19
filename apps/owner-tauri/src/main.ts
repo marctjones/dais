@@ -1924,12 +1924,22 @@ function composePreviewHtml(data: OwnerSnapshot, state: ComposeDraftState) {
   );
   const sensitiveCategories = sensitiveCategoriesForText(state.text);
   const warnings = composeWarnings(state, sensitiveCategories, audienceList, recipients.length);
+  const surfaces = visibilitySurfaceRows(state);
   return `<article class="preview-card">
     <div class="section-heading">
       <h3>Audience preview</h3>
       <span class="pill ${state.visibility === "Public" ? "warn" : "ok"}">${escapeHtml(audienceLabel(state.visibility))}</span>
     </div>
     <p>${escapeHtml(audience)}</p>
+    <ul class="visibility-facts">
+      ${visibilityFacts(state, recipients.length).map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}
+    </ul>
+    <div class="surface-preview">
+      <span class="section-label">Where this can appear</span>
+      <dl>
+        ${surfaces.map((row) => `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`).join("")}
+      </dl>
+    </div>
     <dl class="preview-meta">
       <dt>Protocol</dt><dd>${escapeHtml(state.protocol)}</dd>
       <dt>Audience list</dt><dd>${audienceList ? escapeHtml(`${audienceList.name} (${audienceList.member_count})`) : "none"}</dd>
@@ -1954,6 +1964,79 @@ function composePreviewHtml(data: OwnerSnapshot, state: ComposeDraftState) {
         : ""
     }
   </article>`;
+}
+
+function visibilityFacts(state: ComposeDraftState, recipientCount: number) {
+  if (state.encrypt && state.visibility === "Direct") {
+    return [
+      `Encrypted DM for ${recipientCount || "no"} named recipient${recipientCount === 1 ? "" : "s"}.`,
+      "Dais encrypts the message content before sending it.",
+    ];
+  }
+  if (state.visibility === "Direct") {
+    return [
+      `Direct post for ${recipientCount || "no"} named recipient${recipientCount === 1 ? "" : "s"}.`,
+      "Recipient servers may process plaintext unless E2EE is enabled.",
+    ];
+  }
+  if (state.visibility === "Public") {
+    return [
+      "Public internet-visible post.",
+      "Anyone may copy, index, boost, quote, or archive it.",
+    ];
+  }
+  if (state.visibility === "Unlisted") {
+    return [
+      "Link-visible post kept out of most public listing surfaces.",
+      "Anyone with the URL may still share it.",
+    ];
+  }
+  return [
+    "Followers-only post for approved followers.",
+    "Approved follower servers receive a delivered copy.",
+  ];
+}
+
+function visibilitySurfaceRows(state: ComposeDraftState) {
+  const routesBluesky = state.protocol === "Both" || state.protocol === "AtProto";
+  if (state.visibility === "Public") {
+    return [
+      { label: "ActivityPub public feeds", value: "Yes" },
+      { label: "Bluesky", value: routesBluesky ? "Yes" : "No, route not selected" },
+      { label: "Search", value: "Possible" },
+      { label: "Boosts/reposts", value: "Allowed by public recipients" },
+      { label: "Profile pages", value: "Yes" },
+      { label: "Remote inboxes", value: "Delivered to addressed recipients" },
+    ];
+  }
+  if (state.visibility === "Unlisted") {
+    return [
+      { label: "ActivityPub public feeds", value: "Usually no" },
+      { label: "Bluesky", value: routesBluesky ? "Would become public; review route" : "No, route not selected" },
+      { label: "Search", value: "Possible by URL or remote indexing" },
+      { label: "Boosts/reposts", value: "May spread if recipients share it" },
+      { label: "Profile pages", value: "Link-visible where supported" },
+      { label: "Remote inboxes", value: "Delivered to addressed recipients" },
+    ];
+  }
+  if (state.visibility === "Direct") {
+    return [
+      { label: "ActivityPub public feeds", value: "No" },
+      { label: "Bluesky", value: "No; direct visibility is not supported" },
+      { label: "Search", value: "No public search target" },
+      { label: "Boosts/reposts", value: "Not a public repost target" },
+      { label: "Profile pages", value: "No" },
+      { label: "Remote inboxes", value: state.encrypt ? "Encrypted content delivered" : "Plaintext delivered to recipient servers" },
+    ];
+  }
+  return [
+    { label: "ActivityPub public feeds", value: "No" },
+    { label: "Bluesky", value: "No; followers-only is not supported" },
+    { label: "Search", value: "No public search target" },
+    { label: "Boosts/reposts", value: "Limited to recipient behavior" },
+    { label: "Profile pages", value: "Hidden from anonymous public view" },
+    { label: "Remote inboxes", value: state.encrypt ? "Encrypted content delivered" : "Plaintext delivered to follower servers" },
+  ];
 }
 
 function audienceForCompose(
@@ -2012,6 +2095,9 @@ function composeWarnings(
   }
   if (state.visibility === "Direct" && recipientCount === 0) {
     warnings.push("Direct posts need at least one named recipient.");
+  }
+  if ((state.visibility === "Followers" || state.visibility === "Direct") && !state.encrypt) {
+    warnings.push("Private federation is not E2EE; recipient server operators may be able to read delivered copies.");
   }
   if (audienceList && state.visibility !== "Direct") {
     warnings.push("Audience lists currently apply only to direct posts.");

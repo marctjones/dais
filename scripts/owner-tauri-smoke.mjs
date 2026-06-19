@@ -131,6 +131,8 @@ function runStaticReleaseGates() {
   assertIncludes(sourceText, "Send Encrypted DM", "encrypted direct submit label");
   assertIncludes(sourceText, "Public posts are visible on the open web and public feeds.", "public-post warning");
   assertIncludes(sourceText, "Followers-only posts reach", "followers-only routing preview");
+  assertIncludes(sourceText, "Where this can appear", "visibility surface preview");
+  assertIncludes(sourceText, "recipient server operators may be able to read delivered copies", "federation plaintext warning");
   assertIncludes(sourceText, "Direct posts need at least one named recipient.", "direct-recipient validation");
   assertIncludes(sourceText, "Private and direct posts need media uploaded while that visibility is selected.", "private media visibility guard");
   assertMatches(
@@ -192,9 +194,13 @@ const screenChecks = [
       "Revoke upload",
       "Audience preview",
       "Followers-only posts reach 1 approved follower.",
+      "Where this can appear",
+      "ActivityPub public feeds",
+      "Bluesky",
+      "Plaintext delivered to follower servers",
+      "recipient server operators may be able to read delivered copies",
       "Direct/E2EE actor URLs",
       "No obvious sensitive content",
-      "No routing or sensitivity warnings detected for this draft.",
       "Approved followers",
     ],
   },
