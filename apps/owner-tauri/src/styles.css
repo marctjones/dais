@@ -469,6 +469,114 @@ h3 {
   gap: 10px;
 }
 
+.compose-identity {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 10px;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.compose-identity .section-label {
+  grid-row: span 2;
+  margin: 2px 0 0;
+}
+
+.compose-identity strong,
+.compose-identity span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compose-identity span:last-child {
+  color: var(--secondary);
+}
+
+.audience-picker {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.audience-picker legend {
+  padding: 0 5px;
+  color: var(--secondary);
+  font-weight: 800;
+}
+
+.audience-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.audience-option {
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-content: start;
+  gap: 3px 8px;
+  padding: 9px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.audience-option input {
+  grid-row: span 3;
+  min-height: auto;
+  margin-top: 2px;
+}
+
+.audience-option strong,
+.audience-option span,
+.audience-option small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.audience-option span {
+  color: var(--secondary);
+  font-weight: 600;
+}
+
+.audience-option small {
+  color: var(--tertiary);
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.audience-option.selected {
+  border-color: rgba(0, 113, 227, 0.5);
+  background: #f2f7ff;
+}
+
+.audience-option.public.selected {
+  border-color: rgba(180, 35, 24, 0.38);
+  background: #fff3f0;
+}
+
+.audience-option.public.selected strong,
+.audience-option.public.selected small {
+  color: var(--danger);
+}
+
+.audience-help {
+  margin: 0;
+  color: var(--secondary);
+  font-size: 0.9rem;
+}
+
 textarea {
   width: 100%;
   min-height: 128px;
@@ -954,6 +1062,9 @@ select {
   input,
   select,
   textarea,
+  .audience-picker,
+  .audience-option,
+  .compose-identity,
   .reply-target,
   .media-box,
   .preview-card,
@@ -996,6 +1107,14 @@ select {
   .privacy-warning {
     background: #3a211f;
     color: #ffc8c0;
+  }
+
+  .audience-option.selected {
+    background: #172d45;
+  }
+
+  .audience-option.public.selected {
+    background: #3a211f;
   }
 
   .follower button[data-follower-status="pending"] {
@@ -1083,7 +1202,8 @@ select {
   }
 
   .compact-form,
-  .form-grid {
+  .form-grid,
+  .audience-options {
     grid-template-columns: 1fr;
   }
 }

@@ -125,6 +125,10 @@ function runStaticReleaseGates() {
   assertIncludes(sourceText, 'aria-label="Active Dais account"', "screen-reader labels");
   assertIncludes(sourceText, '<button type="button" data-section', "keyboard-operable navigation");
   assertIncludes(sourceText, "Public is internet-visible. Followers goes to approved followers. Direct is for named recipients only.", "compose privacy explainer");
+  assertIncludes(sourceText, "Posting as", "compose identity selector");
+  assertIncludes(sourceText, "Who can see this?", "compose audience selector");
+  assertIncludes(sourceText, "Post Publicly", "public submit label");
+  assertIncludes(sourceText, "Send Encrypted DM", "encrypted direct submit label");
   assertIncludes(sourceText, "Public posts are visible on the open web and public feeds.", "public-post warning");
   assertIncludes(sourceText, "Followers-only posts reach", "followers-only routing preview");
   assertIncludes(sourceText, "Direct posts need at least one named recipient.", "direct-recipient validation");
@@ -179,6 +183,11 @@ const screenChecks = [
     section: "Compose",
     expected: [
       "New post",
+      "Posting as",
+      "Who can see this?",
+      "Public internet",
+      "Direct / E2EE",
+      "Post to Followers",
       "social.dais.social/media/smoke-upload.png",
       "Revoke upload",
       "Audience preview",

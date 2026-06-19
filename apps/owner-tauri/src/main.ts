@@ -1749,11 +1749,31 @@ function composeView(data: OwnerSnapshot) {
   const state = ensureComposeState(data);
   const approvedFollowers = data.followers.filter((row) => row.status === "approved");
   const availableAudienceLists = data.audience_lists;
+  const activeAccount = activeAccountProfile();
+  const identityLabel = activeAccount?.label || data.profile.display_name || data.profile.public_handle;
+  const identityDetail = activeAccount
+    ? `${shortHost(activeAccount.instance_url)} · ${data.profile.public_handle}`
+    : `${shortHost(data.settings.instance_url)} · ${data.profile.public_handle}`;
   return `<form id="compose-form" class="panel compose">
     <div class="compose-head">
       <h2>New post</h2>
-      <span class="pill ok">Private default</span>
+      <span class="pill ${data.settings.default_visibility === "Public" ? "warn" : "ok"}">${escapeHtml(audienceLabel(data.settings.default_visibility))}</span>
     </div>
+    <section class="compose-identity">
+      <span class="section-label">Posting as</span>
+      <strong>${escapeHtml(identityLabel || "Dais account")}</strong>
+      <span>${escapeHtml(identityDetail)}</span>
+    </section>
+    <fieldset class="audience-picker">
+      <legend>Who can see this?</legend>
+      <div class="audience-options">
+        ${audienceOption("Followers", "Followers", `Approved followers (${approvedFollowers.length})`, "Private default", state.visibility)}
+        ${audienceOption("Public", "Public internet", "Open web and public feeds", "Requires explicit public state", state.visibility)}
+        ${audienceOption("Unlisted", "Unlisted", "Visible by link", "Still shareable outside Dais", state.visibility)}
+        ${audienceOption("Direct", "Direct / E2EE", "Named recipients only", "Use E2EE for encrypted DMs", state.visibility)}
+      </div>
+      <p class="audience-help">Close friends and custom groups use Audience list. Encrypted DM uses Direct with E2EE enabled.</p>
+    </fieldset>
     <textarea name="text" placeholder="Write to approved followers by default">${escapeHtml(state.text)}</textarea>
     ${
       draftReplyTo
@@ -1764,15 +1784,7 @@ function composeView(data: OwnerSnapshot) {
         : ""
     }
     <div class="form-grid">
-      <label>Visibility
-        <select name="visibility">
-          ${option("Followers", state.visibility === "Followers")}
-          ${option("Public", state.visibility === "Public")}
-          ${option("Unlisted", state.visibility === "Unlisted")}
-          ${option("Direct", state.visibility === "Direct")}
-        </select>
-      </label>
-      <label>Protocol
+      <label>Advanced route
         <select name="protocol">
           ${option("ActivityPub", state.protocol === "ActivityPub")}
           ${option("Both", state.protocol === "Both")}
@@ -1823,9 +1835,33 @@ function composeView(data: OwnerSnapshot) {
     </fieldset>
     <div class="compose-actions">
       <label class="check"><input name="encrypt" type="checkbox"${state.encrypt ? " checked" : ""} /> E2EE</label>
-      <button type="submit">Publish</button>
+      <button type="submit">${escapeHtml(composeSubmitLabel(state))}</button>
     </div>
   </form>`;
+}
+
+function audienceOption(
+  value: Visibility,
+  label: string,
+  detail: string,
+  consequence: string,
+  selected: Visibility
+) {
+  const active = value === selected;
+  return `<label class="audience-option ${active ? "selected" : ""} ${value === "Public" ? "public" : ""}">
+    <input type="radio" name="visibility" value="${escapeAttr(value)}"${active ? " checked" : ""} />
+    <strong>${escapeHtml(label)}</strong>
+    <span>${escapeHtml(detail)}</span>
+    <small>${escapeHtml(consequence)}</small>
+  </label>`;
+}
+
+function composeSubmitLabel(state: ComposeDraftState) {
+  if (state.encrypt && state.visibility === "Direct") return "Send Encrypted DM";
+  if (state.visibility === "Direct") return "Send Direct";
+  if (state.visibility === "Public") return "Post Publicly";
+  if (state.visibility === "Unlisted") return "Post Unlisted";
+  return "Post to Followers";
 }
 
 function defaultComposeState(data: OwnerSnapshot): ComposeDraftState {
