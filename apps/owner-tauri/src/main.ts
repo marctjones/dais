@@ -448,6 +448,80 @@ type OwnerStats = {
   closed_network: boolean;
 };
 
+const homeLaneOrder = ["Friends", "Following", "Mentions", "Watches", "Public", "Drafts/Saved"] as const;
+type HomeLane = (typeof homeLaneOrder)[number];
+
+const dailyQueueFilterOrder = ["All", "Unread", "Needs reply", "Blocked/hidden", "Protocol/source"] as const;
+type DailyQueueFilter = (typeof dailyQueueFilterOrder)[number];
+
+type DailyQueueItem = {
+  id: string;
+  label: string;
+  count: number;
+  detail: string;
+  section: string;
+  tags: DailyQueueFilter[];
+  urgency: "high" | "medium" | "low";
+};
+
+type FeedPreset = {
+  id: string;
+  label: string;
+  lane: HomeLane;
+  description: string;
+  why: string;
+  privacy: string;
+  ranking: string;
+};
+
+const feedPresets: FeedPreset[] = [
+  {
+    id: "friends-first",
+    label: "Friends first",
+    lane: "Friends",
+    description: "Mutual relationships, chronological.",
+    why: "Shown because the actor is both followed by you and approved as a follower.",
+    privacy: "Feed membership is private unless explicitly shared.",
+    ranking: "Chronological default"
+  },
+  {
+    id: "following-only",
+    label: "Following only",
+    lane: "Following",
+    description: "People you follow, without engagement ranking.",
+    why: "Shown because you follow the actor from this Dais instance.",
+    privacy: "Following membership stays operator-only by default.",
+    ranking: "Chronological default"
+  },
+  {
+    id: "watch-reader",
+    label: "Watch reader",
+    lane: "Watches",
+    description: "Public sources harvested without sending follow requests.",
+    why: "Shown because the operator added a private watch target.",
+    privacy: "Watch membership is private and does not create a remote relationship.",
+    ranking: "Chronological default"
+  },
+  {
+    id: "public-search",
+    label: "Public search",
+    lane: "Public",
+    description: "Public posts surfaced from searches and public lanes.",
+    why: "Shown because it matched a public-source or public-search rule.",
+    privacy: "Search presets are local until deliberately shared.",
+    ranking: "Optional ranking off"
+  },
+  {
+    id: "saved-research",
+    label: "Science saved search",
+    lane: "Drafts/Saved",
+    description: "Saved search and bookmarked reading queue.",
+    why: "Shown because it is saved by this operator, not because it is boosted.",
+    privacy: "Saved searches are private unless explicitly shared.",
+    ranking: "Chronological default"
+  }
+];
+
 const sectionGroups = [
   {
     label: "Today",
@@ -505,6 +579,11 @@ let searchResults: OwnerSearchResult = emptySearchResults();
 let ownerStats: OwnerStats | null = null;
 let showTimelineReplies = false;
 let showSourceItems = true;
+let activeHomeLane: HomeLane = "Following";
+let activeFeedPresetId = "following-only";
+let selectedHomePostId = smokePostId;
+let activeDailyQueueFilter: DailyQueueFilter = "All";
+let dismissedDailyQueueItems: string[] = [];
 let composeState: ComposeDraftState | null = null;
 const supportedSensitiveCategories: SensitiveCategory[] = [
   "medical",
@@ -608,7 +687,7 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
       posts_total: data.posts.length,
       activities_total: 4,
       deliveries_total: 3,
-      deliveries_failed: 0,
+      deliveries_failed: 1,
       deliveries_queued: 1,
       deliveries_retry: 0,
       deliveries_delivered: 2,
@@ -624,9 +703,9 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
       closed_network: false
     } as T;
   }
-  if (command === "owner_notifications") return [] as T;
-  if (command === "owner_deliveries") return [] as T;
-  if (command === "owner_direct_messages") return [] as T;
+  if (command === "owner_notifications") return smokeNotifications() as T;
+  if (command === "owner_deliveries") return smokeDeliveries() as T;
+  if (command === "owner_direct_messages") return smokeDirectMessages() as T;
   if (command === "owner_diagnostics") return data.diagnostics as T;
   if (command === "revoke_owner_media") return { ok: true } as T;
   if (command === "owner_moderation") return data.moderation as T;
@@ -768,6 +847,21 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
       delivery_ids: ["delivery-smoke"]
     } as T;
   }
+  if (command === "follow_actor" || command === "unfollow_actor") {
+    return {
+      ok: true,
+      following: {
+        id: "following-smoke",
+        actor_id: "https://social.dais.social/users/social",
+        target_actor_id: String(args?.target || "https://mastodon.example/users/alice"),
+        target_inbox: "https://mastodon.example/inbox",
+        status: command === "follow_actor" ? "requested" : "removed",
+        accepted_at: null
+      },
+      delivery_ids: ["delivery-follow-smoke"]
+    } as T;
+  }
+  if (command === "block_owner_actor") return { ok: true, actor_id: String(args?.actorId || args?.actor_id || "") } as T;
   return {} as T;
 }
 
@@ -833,6 +927,13 @@ function smokeSnapshot(): OwnerSnapshot {
         follower_actor_id: "https://mastodon.example/users/alice",
         follower_inbox: "https://mastodon.example/inbox",
         status: "approved"
+      },
+      {
+        id: "follower-pending-smoke",
+        actor_id: "https://social.dais.social/users/social",
+        follower_actor_id: "https://mastodon.example/users/bob",
+        follower_inbox: "https://mastodon.example/inbox",
+        status: "pending"
       }
     ],
     friends: [
@@ -991,6 +1092,63 @@ function smokeWatchItem(): OwnerSnapshot["sources"][number] {
   };
 }
 
+function smokeNotifications(): OwnerNotification[] {
+  return [
+    {
+      id: "notification-mention-smoke",
+      type: "mention",
+      actor_id: "https://mastodon.example/users/alice",
+      actor_display_name: "Alice Example",
+      post_id: smokePostId,
+      activity_id: `${smokePostId}#mention`,
+      content: "Alice mentioned you in a public thread.",
+      read: false,
+      created_at: "2026-06-16T14:08:00Z"
+    },
+    {
+      id: "notification-reply-smoke",
+      type: "reply",
+      actor_id: "https://mastodon.example/users/alice",
+      actor_display_name: "Alice Example",
+      post_id: smokePostId,
+      activity_id: `${smokePostId}#reply`,
+      content: "Alice replied and may need a response.",
+      read: false,
+      created_at: "2026-06-16T14:09:00Z"
+    }
+  ];
+}
+
+function smokeDeliveries(): OwnerDelivery[] {
+  return [
+    {
+      id: "delivery-failed-smoke",
+      post_id: smokePostId,
+      target_type: "shared_inbox",
+      target_url: "https://mastodon.example/inbox",
+      protocol: "ActivityPub",
+      status: "failed",
+      retry_count: 2,
+      last_attempt_at: "2026-06-16T14:10:00Z",
+      error_message: "Smoke delivery failure for daily queue review.",
+      activity_type: "Create",
+      created_at: "2026-06-16T14:00:00Z"
+    }
+  ];
+}
+
+function smokeDirectMessages(): OwnerDirectMessage[] {
+  return [
+    {
+      id: "dm-smoke",
+      conversation_id: "conversation-alice-smoke",
+      sender_id: "https://mastodon.example/users/alice",
+      content: "Private smoke DM that belongs in the daily queue.",
+      published_at: "2026-06-16T14:11:00Z"
+    }
+  ];
+}
+
 async function load() {
   render();
   accountProfiles = await ownerInvoke<OwnerAccountProfile[]>("owner_accounts");
@@ -1070,6 +1228,45 @@ function render() {
       notice = "";
       render();
       void loadLiveSection(active);
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-home-lane]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const lane = button.dataset.homeLane || "";
+      if (isHomeLane(lane)) {
+        activeHomeLane = lane;
+        render();
+      }
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-feed-preset]").forEach((button) => {
+    button.addEventListener("click", () => {
+      applyFeedPreset(button.dataset.feedPreset || "");
+      render();
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-home-select]").forEach((button) => {
+    button.addEventListener("click", () => {
+      selectedHomePostId = button.dataset.homeSelect || selectedHomePostId;
+      render();
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-daily-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const filter = button.dataset.dailyFilter || "";
+      if (isDailyQueueFilter(filter)) {
+        activeDailyQueueFilter = filter;
+        render();
+      }
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-daily-done]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.dataset.dailyDone || "";
+      if (id && !dismissedDailyQueueItems.includes(id)) {
+        dismissedDailyQueueItems = [...dismissedDailyQueueItems, id];
+      }
+      render();
     });
   });
   app.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", saveSettings);
@@ -1201,6 +1398,11 @@ function render() {
   app.querySelectorAll<HTMLButtonElement>("[data-search-follow]").forEach((button) => {
     button.addEventListener("click", () => {
       void followTarget(button.dataset.searchFollow || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-home-block]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void blockActorTarget(button.dataset.homeBlock || "");
     });
   });
   app.querySelectorAll<HTMLButtonElement>("[data-search-interaction]").forEach((button) => {
@@ -1565,25 +1767,30 @@ function watchesView(data: OwnerSnapshot) {
 }
 
 function dashboardView(data: OwnerSnapshot) {
-  const timeline = feedTimeline(data);
   return `
-    <section class="workflow-grid">
-      <article class="panel feed-pane">
+    <section class="home-grid">
+      <article class="panel feed-pane home-feed">
         <div class="section-heading">
           <div>
-            <h2>Following feed</h2>
-            <p>Read first, then reply or publish with the audience preview visible.</p>
+            <h2>Daily social home</h2>
+            <p>Read first, respond to the daily queue, and keep audience context visible.</p>
           </div>
-          <span class="pill">${timeline.length} item${timeline.length === 1 ? "" : "s"}</span>
+          <span class="pill">${homeLaneCount(data, activeHomeLane)} item${homeLaneCount(data, activeHomeLane) === 1 ? "" : "s"}</span>
         </div>
+        ${feedPresetView()}
+        ${homeLaneControls(data)}
         ${feedControls()}
-        ${list(timeline.slice(0, 8).map(timelineCard), "No followed posts yet. Follow people or sources to build this feed.")}
+        ${homeLaneContent(data)}
       </article>
       <aside class="workflow-side">
-        ${composeView(data)}
-        ${quickActionsView(data)}
+        ${homeInspectorView(data)}
+        ${dailyQueueView(data)}
         ${privacyStatusView(data)}
       </aside>
+    </section>
+    <section class="home-support-grid">
+      ${composeView(data)}
+      ${quickActionsView(data)}
     </section>
     <section class="overview-grid">
       ${metric("Posts", data.posts.length, "recent local posts")}
@@ -1602,6 +1809,262 @@ function dashboardView(data: OwnerSnapshot) {
         ${list(data.diagnostics.map(diagnosticCard), "No diagnostics.")}
       </div>
     </section>`;
+}
+
+function feedPresetView() {
+  const activePreset = feedPresets.find((preset) => preset.id === activeFeedPresetId) || feedPresets[0];
+  return `<section class="feed-preset-panel" aria-label="Feed presets">
+    <div class="section-heading">
+      <h2>Feed presets</h2>
+      <span class="pill">${escapeHtml(activePreset.ranking)}</span>
+    </div>
+    <div class="feed-presets">
+      ${feedPresets
+        .map((preset) => `<button type="button" class="preset-button ${preset.id === activeFeedPresetId ? "active" : ""}" data-feed-preset="${escapeAttr(preset.id)}">
+          <strong>${escapeHtml(preset.label)}</strong>
+          <span>${escapeHtml(preset.description)}</span>
+        </button>`)
+        .join("")}
+    </div>
+    <div class="preset-detail">
+      <strong>Why this item appears</strong>
+      <p>${escapeHtml(activePreset.why)}</p>
+      <span>${escapeHtml(activePreset.privacy)}</span>
+      <span>Saved searches are private unless explicitly shared.</span>
+    </div>
+  </section>`;
+}
+
+function homeLaneControls(data: OwnerSnapshot) {
+  return `<section class="home-lanes" aria-label="Feed lanes">
+    <div class="section-heading">
+      <h2>Feed lanes</h2>
+      <span>Chronological, not engagement ranked</span>
+    </div>
+    <div class="lane-tabs">
+      ${homeLaneOrder
+        .map((lane) => `<button type="button" class="lane-button ${lane === activeHomeLane ? "active" : ""}" data-home-lane="${escapeAttr(lane)}">
+          <strong>${escapeHtml(lane)}</strong>
+          <span>${homeLaneCount(data, lane)}</span>
+        </button>`)
+        .join("")}
+    </div>
+  </section>`;
+}
+
+function homeLaneContent(data: OwnerSnapshot) {
+  if (activeHomeLane === "Friends") {
+    const friendActors = new Set(data.friends.map((row) => row.friend_actor_id));
+    const rows = feedTimeline(data).filter((post) => friendActors.has(post.actor_id));
+    return list(rows.map(homeTimelineCard), "No friend posts yet. Mutual friends appear here without exposing your graph publicly.");
+  }
+  if (activeHomeLane === "Following") {
+    return list(feedTimeline(data).slice(0, 12).map(homeTimelineCard), "No followed posts yet. Follow people or sources to build this feed.");
+  }
+  if (activeHomeLane === "Mentions") {
+    return list(notifications.map(notificationCard), "No mentions or reply notifications are waiting.");
+  }
+  if (activeHomeLane === "Watches") {
+    const items = watchItems.length ? watchItems : data.sources;
+    return list(items.map(sourceCard), "No watched public posts are available yet.");
+  }
+  if (activeHomeLane === "Public") {
+    const rows = feedTimeline(data).filter((post) => String(post.visibility || "").toLowerCase() === "public");
+    return list(rows.map(homeTimelineCard), "No public lane items yet. Run public search or add public watches.");
+  }
+  return list(data.posts.map(postCard), "No saved posts or drafts are available yet.");
+}
+
+function homeLaneCount(data: OwnerSnapshot, lane: HomeLane) {
+  if (lane === "Friends") {
+    const friendActors = new Set(data.friends.map((row) => row.friend_actor_id));
+    return feedTimeline(data).filter((post) => friendActors.has(post.actor_id)).length;
+  }
+  if (lane === "Following") return feedTimeline(data).length;
+  if (lane === "Mentions") return notifications.length || ownerStats?.notifications_unread || 0;
+  if (lane === "Watches") return (watchItems.length ? watchItems : data.sources).length;
+  if (lane === "Public") return feedTimeline(data).filter((post) => String(post.visibility || "").toLowerCase() === "public").length;
+  return data.posts.length;
+}
+
+function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number]) {
+  const author = post.actor_display_name || post.actor_username || actorLabel(post.actor_id);
+  const selected = post.object_id === selectedHomePostId;
+  return `<article class="item timeline home-timeline-card ${selected ? "selected" : ""}">
+    <div>
+      <h2>${escapeHtml(author)}</h2>
+      <p>${escapeHtml(post.content)}</p>
+      ${sensitivityBadgesHtml(post.content)}
+    </div>
+    <footer>
+      <span title="${escapeAttr(audienceDescription(post.visibility))}">${escapeHtml(audienceLabel(post.visibility))}</span>
+      ${post.protocol ? `<span>${escapeHtml(post.protocol)}</span>` : ""}
+      ${post.in_reply_to ? "<span>reply</span>" : ""}
+      ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
+      ${interactionCounts(post)}
+      <button type="button" data-home-select="${escapeAttr(post.object_id)}">Inspect</button>
+      <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.object_id)}">Reply</button>
+      <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.object_id)}">Like</button>
+      <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost</button>
+      <button type="button" data-timeline-action="bookmark" data-object="${escapeAttr(post.object_id)}">Bookmark</button>
+      <button type="button" data-search-watch data-watch-type="activitypub_object" data-watch-target="${escapeAttr(post.object_id)}" data-watch-title="${escapeAttr(author)}">Watch</button>
+      <button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>
+      <button type="button" data-home-block="${escapeAttr(post.actor_id)}">Mute/Block</button>
+    </footer>
+  </article>`;
+}
+
+function homeInspectorView(data: OwnerSnapshot) {
+  const post = selectedHomePost(data);
+  if (!post) {
+    return `<article class="panel home-inspector">
+      <h2>Post inspector</h2>
+      <p>Select a feed item to inspect thread, relationship, visibility, and moderation context without navigating away.</p>
+    </article>`;
+  }
+  const author = post.actor_display_name || post.actor_username || actorLabel(post.actor_id);
+  return `<article class="panel home-inspector">
+    <div class="section-heading">
+      <h2>Post inspector</h2>
+      <span class="pill">${escapeHtml(shortUrl(post.object_id))}</span>
+    </div>
+    <p>${escapeHtml(post.content)}</p>
+    <dl>
+      <dt>Thread context</dt><dd>${post.in_reply_to ? `Reply to ${escapeHtml(shortUrl(post.in_reply_to))}` : "Top-level post"} with ${post.reply_count || 0} repl${(post.reply_count || 0) === 1 ? "y" : "ies"}</dd>
+      <dt>Relationship context</dt><dd>${escapeHtml(relationshipForActor(data, post.actor_id))}</dd>
+      <dt>Visibility</dt><dd>${escapeHtml(audienceLabel(post.visibility))}</dd>
+      <dt>Protocol/source</dt><dd>${escapeHtml(post.protocol || "unknown")} from ${escapeHtml(author)}</dd>
+      <dt>Moderation context</dt><dd>${escapeHtml((moderationState || data.moderation).reply_policy || "warn")} replies, ${(moderationState || data.moderation).reply_queue_count || 0} waiting for review</dd>
+    </dl>
+    <div class="detail-actions">
+      <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.object_id)}">Reply</button>
+      <button type="button" data-timeline-action="like" data-object="${escapeAttr(post.object_id)}">Like/Favorite</button>
+      <button type="button" data-timeline-action="boost" data-object="${escapeAttr(post.object_id)}">Boost/Repost</button>
+      <button type="button" data-timeline-action="bookmark" data-object="${escapeAttr(post.object_id)}">Bookmark</button>
+      <button type="button" data-search-watch data-watch-type="activitypub_object" data-watch-target="${escapeAttr(post.object_id)}" data-watch-title="${escapeAttr(author)}">Watch</button>
+      <button type="button" data-search-follow="${escapeAttr(post.actor_id)}">Follow</button>
+      <button type="button" data-home-block="${escapeAttr(post.actor_id)}">Mute/Block</button>
+    </div>
+    <p class="privacy-note">The inspector keeps thread context beside the daily queue, so marking an item done/read does not lose the post being reviewed.</p>
+  </article>`;
+}
+
+function selectedHomePost(data: OwnerSnapshot) {
+  return data.home_timeline.find((post) => post.object_id === selectedHomePostId) || data.home_timeline[0] || null;
+}
+
+function relationshipForActor(data: OwnerSnapshot, actorId: string) {
+  if (data.friends.some((row) => row.friend_actor_id === actorId)) return "Friend - mutual approved relationship";
+  if (data.following.some((row) => row.target_actor_id === actorId)) return "Following - private graph";
+  if (data.followers.some((row) => row.follower_actor_id === actorId && row.status === "approved")) return "Follower - approved";
+  return "Public or unknown actor";
+}
+
+function dailyQueueView(data: OwnerSnapshot) {
+  const items = filteredDailyQueueItems(data);
+  const total = dailyAttentionCount(data);
+  return `<article class="panel daily-queue">
+    <div class="section-heading">
+      <div>
+        <h2>Daily queue</h2>
+        <p>Mentions, replies, DMs, follow requests, moderation, and delivery failures grouped by urgency.</p>
+      </div>
+      <span class="pill ${total ? "warn" : "ok"}">${total} open</span>
+    </div>
+    <div class="queue-filters">
+      ${dailyQueueFilterOrder.map((filter) => `<button type="button" class="${filter === activeDailyQueueFilter ? "active" : ""}" data-daily-filter="${escapeAttr(filter)}">${escapeHtml(filter)}</button>`).join("")}
+    </div>
+    <section class="queue-list">
+      ${items.map(dailyQueueCard).join("") || `<article class="empty"><p>No items match this queue filter.</p></article>`}
+    </section>
+  </article>`;
+}
+
+function dailyQueueItems(data: OwnerSnapshot): DailyQueueItem[] {
+  const unreadNotifications = notifications.length
+    ? notifications.filter((row) => !isRead(row.read)).length
+    : ownerStats?.notifications_unread || 0;
+  const pendingFollowers = data.followers.filter((row) => row.status === "pending").length;
+  const replyQueue = (moderationState || data.moderation).reply_queue_count || 0;
+  const flaggedReplies = (moderationState || data.moderation).flagged_reply_count || 0;
+  const failedDeliveries = deliveries.length
+    ? deliveries.filter((row) => row.status === "failed").length
+    : ownerStats?.deliveries_failed || 0;
+  return [
+    {
+      id: "mentions-replies",
+      label: "Mentions and replies",
+      count: unreadNotifications,
+      detail: "Unread mentions and reply notifications that may need a response.",
+      section: "Notifications",
+      tags: ["Unread", "Needs reply", "Protocol/source"],
+      urgency: unreadNotifications ? "high" : "low"
+    },
+    {
+      id: "direct-messages",
+      label: "Direct messages",
+      count: directMessages.length,
+      detail: "Private DMs stay out of public and friends feeds.",
+      section: "DMs",
+      tags: ["Unread", "Needs reply"],
+      urgency: directMessages.length ? "high" : "low"
+    },
+    {
+      id: "follow-requests",
+      label: "Follow requests",
+      count: pendingFollowers,
+      detail: "Review who can enter follower-only audiences.",
+      section: "Followers",
+      tags: ["Unread", "Protocol/source"],
+      urgency: pendingFollowers ? "medium" : "low"
+    },
+    {
+      id: "moderation-replies",
+      label: "Review replies",
+      count: replyQueue,
+      detail: `${flaggedReplies} blocked/hidden or sensitive repl${flaggedReplies === 1 ? "y" : "ies"} need moderation review.`,
+      section: "Moderation",
+      tags: ["Needs reply", "Blocked/hidden"],
+      urgency: replyQueue ? "high" : "low"
+    },
+    {
+      id: "delivery-failures",
+      label: "Delivery failures",
+      count: failedDeliveries,
+      detail: "Protocol delivery failures that may explain missing replies or follows.",
+      section: "Deliveries",
+      tags: ["Protocol/source"],
+      urgency: failedDeliveries ? "medium" : "low"
+    }
+  ];
+}
+
+function filteredDailyQueueItems(data: OwnerSnapshot) {
+  const items = dailyQueueItems(data);
+  if (activeDailyQueueFilter === "All") return items;
+  return items.filter((item) => item.tags.includes(activeDailyQueueFilter));
+}
+
+function dailyAttentionCount(data: OwnerSnapshot) {
+  return dailyQueueItems(data)
+    .filter((item) => !dismissedDailyQueueItems.includes(item.id))
+    .reduce((sum, item) => sum + item.count, 0);
+}
+
+function dailyQueueCard(item: DailyQueueItem) {
+  const done = dismissedDailyQueueItems.includes(item.id);
+  return `<article class="queue-item ${item.urgency} ${done ? "done" : ""}">
+    <div>
+      <strong>${escapeHtml(item.label)}</strong>
+      <p>${escapeHtml(item.detail)}</p>
+    </div>
+    <span class="queue-count">${done ? "done" : escapeHtml(String(item.count))}</span>
+    <footer>
+      ${item.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
+      <button type="button" data-section="${escapeAttr(item.section)}">Open</button>
+      <button type="button" data-daily-done="${escapeAttr(item.id)}">${done ? "Marked done/read" : "Mark done/read"}</button>
+    </footer>
+  </article>`;
 }
 
 function quickActionsView(data: OwnerSnapshot) {
@@ -1722,6 +2185,21 @@ function feedControls() {
     <label><input type="checkbox" data-feed-toggle="replies" ${showTimelineReplies ? "checked" : ""} /> Show replies</label>
     <span>Chronological, not engagement ranked</span>
   </div>`;
+}
+
+function isHomeLane(value: string): value is HomeLane {
+  return homeLaneOrder.includes(value as HomeLane);
+}
+
+function isDailyQueueFilter(value: string): value is DailyQueueFilter {
+  return dailyQueueFilterOrder.includes(value as DailyQueueFilter);
+}
+
+function applyFeedPreset(id: string) {
+  const preset = feedPresets.find((row) => row.id === id);
+  if (!preset) return;
+  activeFeedPresetId = preset.id;
+  activeHomeLane = preset.lane;
 }
 
 function sourceControls() {
@@ -2962,6 +3440,11 @@ function resetAccountScopedState() {
   directMessages = [];
   searchResults = emptySearchResults();
   ownerStats = null;
+  activeHomeLane = "Following";
+  activeFeedPresetId = "following-only";
+  selectedHomePostId = smokePostId;
+  activeDailyQueueFilter = "All";
+  dismissedDailyQueueItems = [];
 }
 
 async function saveProfile(event: SubmitEvent) {
@@ -3317,6 +3800,17 @@ async function blockActor(event: SubmitEvent) {
   await loadLiveSection("Moderation");
 }
 
+async function blockActorTarget(actorId: string) {
+  if (!actorId) return;
+  await ownerInvoke("block_owner_actor", { actorId, reason: null });
+  notice = `Blocked ${shortUrl(actorId)}.`;
+  if (active === "Moderation") {
+    await loadLiveSection("Moderation");
+  } else {
+    render();
+  }
+}
+
 async function blockDomain(event: SubmitEvent) {
   event.preventDefault();
   const form = new FormData(event.currentTarget as HTMLFormElement);
@@ -3452,7 +3946,26 @@ function openLink(url: string) {
 }
 
 async function loadLiveSection(section: string) {
-  if (section === "Notifications") {
+  if (section === "Home") {
+    const [statsResult, notificationsResult, deliveriesResult, directMessagesResult, watchesResult, moderationResult] = await Promise.allSettled([
+      ownerInvoke<OwnerStats>("owner_stats"),
+      ownerInvoke<OwnerNotification[]>("owner_notifications"),
+      ownerInvoke<OwnerDelivery[]>("owner_deliveries"),
+      ownerInvoke<OwnerDirectMessage[]>("owner_direct_messages"),
+      ownerInvoke<OwnerSources>("owner_watches"),
+      ownerInvoke<ModerationState>("owner_moderation")
+    ]);
+    if (statsResult.status === "fulfilled") ownerStats = statsResult.value;
+    if (notificationsResult.status === "fulfilled") notifications = notificationsResult.value;
+    if (deliveriesResult.status === "fulfilled") deliveries = deliveriesResult.value;
+    if (directMessagesResult.status === "fulfilled") directMessages = directMessagesResult.value;
+    if (watchesResult.status === "fulfilled") {
+      watchSubscriptions = watchesResult.value.subscriptions;
+      watchItems = watchesResult.value.items;
+    }
+    if (moderationResult.status === "fulfilled") moderationState = moderationResult.value;
+    render();
+  } else if (section === "Notifications") {
     notifications = await ownerInvoke<OwnerNotification[]>("owner_notifications");
     render();
   } else if (section === "Deliveries") {
