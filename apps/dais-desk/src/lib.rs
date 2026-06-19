@@ -3049,12 +3049,39 @@ fn default_instance_url() -> String {
 
 fn load_settings_from(path: &PathBuf) -> Result<StoredOwnerSettings, String> {
     if !path.exists() {
+        if let Some(settings) = load_legacy_settings_for(path)? {
+            persist_settings_to(path, settings.clone())?;
+            return Ok(settings);
+        }
         return Ok(StoredOwnerSettings::default());
     }
+    read_settings_file(path)
+}
+
+fn read_settings_file(path: &PathBuf) -> Result<StoredOwnerSettings, String> {
     let json = fs::read_to_string(path).map_err(|error| error.to_string())?;
     let settings: StoredOwnerSettings =
         serde_json::from_str(&json).map_err(|error| error.to_string())?;
     Ok(normalize_settings(settings))
+}
+
+fn load_legacy_settings_for(path: &PathBuf) -> Result<Option<StoredOwnerSettings>, String> {
+    if std::env::var_os("DAIS_DESK_SETTINGS").is_some() {
+        return Ok(None);
+    }
+    let Some(default_path) = platform_default_settings_path() else {
+        return Ok(None);
+    };
+    if path != &default_path {
+        return Ok(None);
+    }
+    let Some(legacy_path) = legacy_settings_path() else {
+        return Ok(None);
+    };
+    if !legacy_path.exists() {
+        return Ok(None);
+    }
+    read_settings_file(&legacy_path).map(Some)
 }
 
 fn persist_settings_to(path: &PathBuf, settings: StoredOwnerSettings) -> Result<(), String> {
@@ -3197,22 +3224,55 @@ fn default_settings_path() -> PathBuf {
     if let Ok(path) = std::env::var("DAIS_DESK_SETTINGS") {
         return PathBuf::from(path);
     }
+    platform_default_settings_path().unwrap_or_else(|| PathBuf::from("owner-settings.json"))
+}
+
+fn platform_default_settings_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     #[cfg(target_os = "macos")]
     {
-        return home
-            .join("Library")
-            .join("Application Support")
-            .join("social.dais.desk")
-            .join("owner-settings.json");
+        Some(
+            home.join("Library")
+                .join("Application Support")
+                .join("social.dais.desk")
+                .join("owner-settings.json"),
+        )
     }
     #[cfg(not(target_os = "macos"))]
     {
-        home.join(".config")
-            .join("dais-desk")
-            .join("owner-settings.json")
+        Some(
+            home.join(".config")
+                .join("dais-desk")
+                .join("owner-settings.json"),
+        )
+    }
+}
+
+fn legacy_settings_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("DAIS_DESK_LEGACY_SETTINGS") {
+        return Some(PathBuf::from(path));
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(target_os = "macos")]
+    {
+        Some(
+            home.join("Library")
+                .join("Application Support")
+                .join("social.dais.owner")
+                .join("owner-settings.json"),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Some(
+            home.join(".config")
+                .join("dais-owner")
+                .join("owner-settings.json"),
+        )
     }
 }
 
@@ -3269,6 +3329,54 @@ mod tests {
             settings.active_account_id.as_deref(),
             Some("account-joneslaw-io")
         );
+    }
+
+    #[test]
+    fn migrates_legacy_owner_settings_to_desk_path() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let previous_home = std::env::var_os("HOME");
+        let previous_settings = std::env::var_os("DAIS_DESK_SETTINGS");
+        let previous_legacy = std::env::var_os("DAIS_DESK_LEGACY_SETTINGS");
+
+        std::env::set_var("HOME", temp.path());
+        std::env::remove_var("DAIS_DESK_SETTINGS");
+        std::env::remove_var("DAIS_DESK_LEGACY_SETTINGS");
+
+        let legacy_path = legacy_settings_path().expect("legacy path");
+        fs::create_dir_all(legacy_path.parent().expect("legacy parent")).expect("legacy dir");
+        fs::write(
+            &legacy_path,
+            r#"{
+  "instance_url": "https://social.dais.social",
+  "owner_token": "secret-token",
+  "active_account_id": null,
+  "accounts": []
+}"#,
+        )
+        .expect("legacy settings");
+
+        let desk_path = default_settings_path();
+        assert!(!desk_path.exists());
+        let settings = load_settings_from(&desk_path).expect("migrated settings");
+        assert_eq!(settings.instance_url, DEFAULT_INSTANCE_URL);
+        assert_eq!(settings.owner_token.as_deref(), Some("secret-token"));
+        assert!(desk_path.exists());
+
+        if let Some(value) = previous_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = previous_settings {
+            std::env::set_var("DAIS_DESK_SETTINGS", value);
+        } else {
+            std::env::remove_var("DAIS_DESK_SETTINGS");
+        }
+        if let Some(value) = previous_legacy {
+            std::env::set_var("DAIS_DESK_LEGACY_SETTINGS", value);
+        } else {
+            std::env::remove_var("DAIS_DESK_LEGACY_SETTINGS");
+        }
     }
 
     #[test]

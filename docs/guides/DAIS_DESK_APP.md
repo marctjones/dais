@@ -62,6 +62,11 @@ directory. On macOS development builds this is under:
 ~/Library/Application Support/social.dais.desk/owner-settings.json
 ```
 
+On first launch, Dais Desk also checks the retired owner-app settings path
+`~/Library/Application Support/social.dais.owner/owner-settings.json` and
+migrates the saved owner API token into the Desk settings file when the Desk
+settings file does not exist yet.
+
 Use the Accounts & Tokens screen to add a label, instance URL, and owner token
 for each Dais instance. Switching accounts changes the active owner API target
 for reads, compose, replies, follows, watches, moderation, diagnostics, delivery

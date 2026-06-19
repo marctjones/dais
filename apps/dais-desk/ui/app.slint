@@ -172,13 +172,6 @@ component RowCard inherits Rectangle {
         HorizontalLayout {
             height: 34px;
             spacing: 8px;
-            Button {
-                height: 34px;
-                text: "Open";
-                clicked => {
-                    root.open(root.entry.id);
-                }
-            }
             if root.entry.primary != "" : Button {
                 height: 34px;
                 text: root.entry.primary;
