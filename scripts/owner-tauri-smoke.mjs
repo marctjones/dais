@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const assetDir = new URL("../apps/owner-tauri/dist/assets/", import.meta.url);
@@ -8,6 +8,8 @@ const asset = readdirSync(assetDir).find((name) => /^index-.*\.js$/.test(name));
 if (!asset) {
   throw new Error("build apps/owner-tauri before running owner-tauri-smoke");
 }
+const sourceText = readFileSync(new URL("../apps/owner-tauri/src/main.ts", import.meta.url), "utf8");
+const styleText = readFileSync(new URL("../apps/owner-tauri/src/styles.css", import.meta.url), "utf8");
 
 class AppElement {
   innerHTML = "";
@@ -58,8 +60,87 @@ globalThis.btoa = (value) => Buffer.from(value, "binary").toString("base64");
 
 const bundleUrl = pathToFileURL(new URL(asset, assetDir).pathname).href;
 
-for (const check of [
+function assertIncludes(value, expected, context) {
+  if (!value.includes(expected)) {
+    throw new Error(`${context} missing ${JSON.stringify(expected)}`);
+  }
+}
+
+function assertMatches(value, pattern, context) {
+  if (!pattern.test(value)) {
+    throw new Error(`${context} missing pattern ${pattern}`);
+  }
+}
+
+function assertNotMatches(value, pattern, context) {
+  if (pattern.test(value)) {
+    throw new Error(`${context} must not match ${pattern}`);
+  }
+}
+
+function cssHexVar(name) {
+  const match = styleText.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
+  if (!match) {
+    throw new Error(`styles.css missing CSS variable --${name}`);
+  }
+  return match[1];
+}
+
+function srgbChannel(value) {
+  const normalized = value / 255;
+  return normalized <= 0.03928
+    ? normalized / 12.92
+    : ((normalized + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(hex) {
+  const value = hex.replace("#", "");
+  const red = parseInt(value.slice(0, 2), 16);
+  const green = parseInt(value.slice(2, 4), 16);
+  const blue = parseInt(value.slice(4, 6), 16);
+  return 0.2126 * srgbChannel(red) + 0.7152 * srgbChannel(green) + 0.0722 * srgbChannel(blue);
+}
+
+function contrastRatio(foreground, background) {
+  const light = Math.max(luminance(foreground), luminance(background));
+  const dark = Math.min(luminance(foreground), luminance(background));
+  return (light + 0.05) / (dark + 0.05);
+}
+
+function assertContrast(label, foreground, background, minimum) {
+  const ratio = contrastRatio(foreground, background);
+  if (ratio < minimum) {
+    throw new Error(`${label} contrast ${ratio.toFixed(2)} is below ${minimum}`);
+  }
+}
+
+function runStaticReleaseGates() {
+  assertIncludes(styleText, ":focus-visible", "visible focus CSS");
+  assertIncludes(styleText, "@media (prefers-color-scheme: dark)", "dark-mode CSS");
+  assertIncludes(styleText, "@media (max-width: 560px)", "narrow text-scaling CSS");
+  assertNotMatches(styleText, /font(?:-size)?:[^;]*\bvw\b/i, "font sizing");
+  assertContrast("primary text on surface", cssHexVar("text"), cssHexVar("surface"), 4.5);
+  assertContrast("secondary text on surface", cssHexVar("secondary"), cssHexVar("surface"), 4.5);
+
+  assertIncludes(sourceText, 'aria-label="Active Dais account"', "screen-reader labels");
+  assertIncludes(sourceText, '<button type="button" data-section', "keyboard-operable navigation");
+  assertIncludes(sourceText, "Public is internet-visible. Followers goes to approved followers. Direct is for named recipients only.", "compose privacy explainer");
+  assertIncludes(sourceText, "Public posts are visible on the open web and public feeds.", "public-post warning");
+  assertIncludes(sourceText, "Followers-only posts reach", "followers-only routing preview");
+  assertIncludes(sourceText, "Direct posts need at least one named recipient.", "direct-recipient validation");
+  assertIncludes(sourceText, "Private and direct posts need media uploaded while that visibility is selected.", "private media visibility guard");
+  assertMatches(
+    sourceText,
+    /const access = visibility === "Followers" \|\| visibility === "Direct" \? "private" : "public";/,
+    "media access routing"
+  );
+  assertIncludes(sourceText, "Switching changes which Dais instance receives reads, posts, replies, follows, watches, moderation, and operator commands.", "account-switching privacy note");
+  console.log("PASS static release gates");
+}
+
+const screenChecks = [
   {
+    mode: "Home",
     section: "Home",
     expected: [
       "Following feed",
@@ -70,6 +151,7 @@ for (const check of [
     ],
   },
   {
+    mode: "Server",
     section: "Profile",
     expected: [
       "Dais Smoke Account",
@@ -79,6 +161,7 @@ for (const check of [
     ],
   },
   {
+    mode: "Home",
     section: "Posts",
     expected: [
       "Smoke public post",
@@ -92,6 +175,7 @@ for (const check of [
     ],
   },
   {
+    mode: "Home",
     section: "Compose",
     expected: [
       "New post",
@@ -99,12 +183,14 @@ for (const check of [
       "Revoke upload",
       "Audience preview",
       "Followers-only posts reach 1 approved follower.",
+      "Direct/E2EE actor URLs",
       "No obvious sensitive content",
       "No routing or sensitivity warnings detected for this draft.",
       "Approved followers",
     ],
   },
   {
+    mode: "People",
     section: "Audience",
     expected: [
       "Audience lists",
@@ -116,6 +202,7 @@ for (const check of [
     ],
   },
   {
+    mode: "People",
     section: "Watches",
     expected: [
       "Watches",
@@ -130,6 +217,7 @@ for (const check of [
     ],
   },
   {
+    mode: "People",
     section: "Search",
     expected: [
       "Search",
@@ -144,6 +232,28 @@ for (const check of [
     ],
   },
   {
+    mode: "People",
+    section: "Discovery",
+    expected: [
+      "Find actor",
+      "@user@example.social or https://...",
+      "Lookup",
+      "Actor preview",
+    ],
+  },
+  {
+    mode: "People",
+    section: "Followers",
+    expected: [
+      "Follower lists are owner-token views.",
+      "Dais does not advertise them publicly by default.",
+      "Pending",
+      "Approved",
+      "https://mastodon.example/users/alice",
+    ],
+  },
+  {
+    mode: "Server",
     section: "Settings",
     expected: [
       "Accounts",
@@ -156,6 +266,7 @@ for (const check of [
     ],
   },
   {
+    mode: "Server",
     section: "Moderation",
     expected: [
       "Federation safety",
@@ -167,7 +278,22 @@ for (const check of [
       "Save policy",
     ],
   },
-]) {
+  {
+    mode: "Server",
+    section: "Diagnostics",
+    expected: [
+      "owner-api",
+      "Smoke fixture owner API",
+    ],
+  },
+];
+
+runStaticReleaseGates();
+
+const coveredModes = new Set();
+const coveredSections = new Set();
+
+for (const check of screenChecks) {
   app.innerHTML = "";
   globalThis.window = {
     location: { search: `?smoke=1&section=${encodeURIComponent(check.section)}` },
@@ -177,9 +303,24 @@ for (const check of [
   await new Promise((resolve) => setTimeout(resolve, 25));
 
   for (const text of check.expected) {
-    if (!app.innerHTML.includes(text)) {
-      throw new Error(`${check.section} smoke screen missing ${JSON.stringify(text)}`);
-    }
+    assertIncludes(app.innerHTML, text, `${check.section} smoke screen`);
   }
-  console.log(`PASS ${check.section}`);
+  assertIncludes(app.innerHTML, 'aria-label="Active Dais account"', `${check.section} screen-reader account switcher`);
+  coveredModes.add(check.mode);
+  coveredSections.add(check.section);
+  console.log(`PASS ${check.mode}/${check.section}`);
 }
+
+for (const mode of ["Home", "People", "Server"]) {
+  if (!coveredModes.has(mode)) {
+    throw new Error(`smoke coverage missing IA mode ${mode}`);
+  }
+}
+
+for (const section of ["Home", "Compose", "Settings", "Discovery", "Moderation"]) {
+  if (!coveredSections.has(section)) {
+    throw new Error(`smoke coverage missing required section ${section}`);
+  }
+}
+
+console.log("PASS release gate coverage: Home, People, Server, Compose, Settings, Discovery, Moderation");

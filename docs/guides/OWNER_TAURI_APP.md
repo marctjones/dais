@@ -8,7 +8,8 @@ The target information architecture for the next GUI pass is documented in
 `docs/design/DAIS_DESK_INFORMATION_ARCHITECTURE.md`: Home for daily social work,
 People for relationships and discovery, and Server for operator tasks. Reusable
 interaction rules and UI primitives are documented in
-`docs/design/DAIS_DESK_DESIGN_SYSTEM.md`.
+`docs/design/DAIS_DESK_DESIGN_SYSTEM.md`. UI release gates are documented in
+`docs/guides/UI_RELEASE_GATES.md`.
 
 Current status:
 
