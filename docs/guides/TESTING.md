@@ -150,12 +150,7 @@ DAIS_FEDERATION_TARGETS='[
 ]' DAIS_CONFORMANCE_ONLY=federation-matrix cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
-The current implementation emits a markdown table by default and can still be
-invoked directly for JSON output while the gate is being migrated fully to Rust:
-
-```bash
-node scripts/federation-matrix.mjs --json
-```
+The Rust harness emits a markdown table by default.
 
 `FAIL` exits non-zero. `INFO` rows mean a live lab target, token, or credential
 is not configured and do not block release by themselves.
@@ -172,9 +167,12 @@ authorized fetch, and private visibility.
 **Usage:**
 ```bash
 DAIS_CONFORMANCE_ONLY=federation-lab cargo test --manifest-path conformance/Cargo.toml -- --nocapture
-node scripts/federation-lab.mjs --json
-node scripts/federation-lab.mjs --profile docs/reference/federation-lab-targets.json
-node scripts/federation-lab.mjs --require-pass mastodon
+DAIS_FEDERATION_LAB_PROFILE=docs/reference/federation-lab-targets.json \
+  DAIS_CONFORMANCE_ONLY=federation-lab \
+  cargo test --manifest-path conformance/Cargo.toml -- --nocapture
+DAIS_FEDERATION_REQUIRE_PASS=mastodon \
+  DAIS_CONFORMANCE_ONLY=federation-lab \
+  cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 Statuses:

@@ -169,6 +169,6 @@ Bluesky parity requires substantially more than the existing endpoints:
 - `DAIS_CONFORMANCE_ONLY=activitypub`, `bluesky`, `mastodon-api`,
   `federation-matrix`, `federation-lab`, or `mastodon-client-smoke` narrows the
   Rust harness to one family.
-- The Rust conformance runner should grow alongside this document. Existing JS
-  scripts are implementation details until their checks are ported into Rust.
+- The Rust conformance runner should grow alongside this document. Protocol
+  conformance checks live in the `conformance` Cargo crate, not in Node scripts.
 - Gaps found by the runner should be filed as GitHub issues under epic #70.

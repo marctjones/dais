@@ -154,7 +154,9 @@ DAIS_CONFORMANCE_ONLY=federation-lab cargo test --manifest-path conformance/Carg
 Require the Mastodon row to be fully covered before a Mastodon-family release:
 
 ```bash
-node scripts/federation-lab.mjs --require-pass mastodon
+DAIS_FEDERATION_REQUIRE_PASS=mastodon \
+DAIS_CONFORMANCE_ONLY=federation-lab \
+cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 Run live endpoint probes against configured remote accounts:

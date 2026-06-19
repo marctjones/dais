@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Replaced the legacy WebView owner app with the Rust-native Dais Desk client and
   moved the UI release gate to `cargo test --manifest-path apps/dais-desk/Cargo.toml`.
+- Ported the live ActivityPub, Bluesky, Mastodon API, federation matrix, federation
+  lab, and Mastodon client-smoke conformance gates into the Rust `conformance`
+  crate and removed the retired Node script implementations.
 - Improved Dais Desk secondary-screen UX with consistent screen summaries,
   clearer priority groups, and cleaner action/status rows for Notifications,
   DMs, Deliveries, Followers, Following, Friends, Audience, Search, Sources,

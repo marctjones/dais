@@ -8,7 +8,7 @@
       "capabilities": {
         "webfinger": {
           "status": "pass",
-          "detail": "Covered by activitypub-conformance and federation-matrix."
+          "detail": "Covered by the ActivityPub and federation-matrix Rust conformance gates."
         },
         "actor": {
           "status": "pass",
