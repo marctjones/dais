@@ -139,6 +139,7 @@ function runStaticReleaseGates() {
   assertIncludes(sourceText, "Public media uploads use public URLs", "public media warning");
   assertIncludes(sourceText, "safePostHtmlTags", "safe post HTML allowlist");
   assertIncludes(sourceText, "post-body", "rich post body rendering");
+  assertIncludes(sourceText, "postLinkLabel", "compact post link labels");
   assertIncludes(sourceText, "I reviewed these warnings and still want to publish.", "advisory warning override");
   assertMatches(
     sourceText,
@@ -155,15 +156,16 @@ const screenChecks = [
     section: "Home",
     expected: [
       "Daily social home",
+      "Display",
       "Feed presets",
       "Following only",
       "Saved searches are private unless explicitly shared.",
       "Feed lanes",
       "Drafts/Saved",
-      "Post inspector",
-      "Relationship context",
-      "Moderation context",
+      "Top-level posts",
+      "Post details",
       "Daily queue",
+      "Filter",
       "Mentions and replies",
       "Direct messages",
       "Follow requests",

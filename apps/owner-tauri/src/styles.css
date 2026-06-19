@@ -396,7 +396,7 @@ h3 {
 
 .home-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.18fr) minmax(340px, 0.82fr);
+  grid-template-columns: minmax(0, 1.42fr) minmax(300px, 0.58fr);
   gap: 14px;
   align-items: start;
 }
@@ -411,7 +411,53 @@ h3 {
 
 .home-feed {
   display: grid;
-  gap: 12px;
+  gap: 10px;
+}
+
+.home-heading {
+  align-items: flex-start;
+}
+
+.home-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.home-context-bar {
+  display: grid;
+  grid-template-columns: minmax(116px, 0.7fr) minmax(116px, 0.7fr) minmax(0, 1.1fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--hairline);
+}
+
+.home-context-bar div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+
+.home-context-bar span {
+  color: var(--tertiary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.home-context-bar strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .feed-preset-panel,
@@ -422,6 +468,83 @@ h3 {
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.control-menu {
+  position: relative;
+}
+
+.control-menu summary {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 750;
+  list-style: none;
+}
+
+.control-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.control-menu[open] summary {
+  border-color: rgba(0, 113, 227, 0.34);
+  background: #f2f7ff;
+  color: #123c69;
+}
+
+.control-menu-panel {
+  position: absolute;
+  z-index: 7;
+  right: 0;
+  width: min(520px, calc(100vw - 42px));
+  max-height: min(680px, calc(100vh - 120px));
+  display: grid;
+  gap: 12px;
+  margin-top: 7px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18);
+}
+
+.control-menu-panel section {
+  display: grid;
+  gap: 8px;
+}
+
+.control-menu-panel h3,
+.control-menu-panel p {
+  margin: 0;
+}
+
+.control-menu-panel h3 {
+  font-size: 0.9rem;
+}
+
+.control-menu-panel p,
+.control-menu-panel small,
+.menu-note {
+  color: var(--secondary);
+}
+
+.menu-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.menu-check input {
+  min-height: auto;
 }
 
 .feed-presets,
@@ -447,9 +570,18 @@ h3 {
   flex: 1 1 148px;
 }
 
+.feed-presets.compact .preset-button {
+  flex: 1 1 152px;
+}
+
 .lane-button {
   grid-template-columns: minmax(0, 1fr) auto;
   flex: 1 1 118px;
+}
+
+.lane-tabs.compact .lane-button {
+  min-width: 104px;
+  flex: 1 1 104px;
 }
 
 .preset-button strong,
@@ -519,9 +651,15 @@ h3 {
 }
 
 .post-body a {
+  display: inline-block;
+  max-width: 100%;
   color: var(--accent);
   font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-decoration: none;
+  vertical-align: bottom;
+  white-space: nowrap;
 }
 
 .post-body a:hover {
@@ -580,6 +718,14 @@ h3 {
   gap: 11px;
 }
 
+.home-inspector.collapsed {
+  gap: 4px;
+}
+
+.home-inspector.collapsed p {
+  margin: 2px 0 0;
+}
+
 .home-inspector dl {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -604,14 +750,14 @@ h3 {
 
 .queue-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .queue-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px 10px;
-  padding: 10px;
+  padding: 9px 10px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--surface);
@@ -631,6 +777,8 @@ h3 {
 
 .queue-item p {
   margin-top: 3px;
+  color: var(--secondary);
+  font-size: 0.86rem;
 }
 
 .queue-count {
@@ -647,6 +795,7 @@ h3 {
 
 .queue-item footer {
   grid-column: 1 / -1;
+  gap: 5px;
 }
 
 .workflow-grid {
@@ -1367,6 +1516,11 @@ select {
     background: linear-gradient(#424249, #35353b);
   }
 
+  .control-menu[open] summary {
+    background: #2d3948;
+    color: var(--text);
+  }
+
   input,
   select,
   textarea,
@@ -1376,10 +1530,13 @@ select {
   .reply-target,
   .media-box,
   .preview-card,
+  .home-context-bar div,
   .feed-preset-panel,
   .home-lanes,
   .preset-detail,
   .action-menu div,
+  .control-menu summary,
+  .control-menu-panel,
   .queue-item,
   .detail-list article,
   .panel.item,
@@ -1560,6 +1717,25 @@ select {
   .home-inspector dl,
   .detail-body dl {
     grid-template-columns: 1fr;
+  }
+
+  .home-context-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .control-menu,
+  .control-menu summary {
+    width: 100%;
+  }
+
+  .control-menu summary {
+    justify-content: center;
+  }
+
+  .control-menu-panel {
+    left: 0;
+    right: auto;
+    width: min(100%, calc(100vw - 36px));
   }
 
   .toolbar-actions button {

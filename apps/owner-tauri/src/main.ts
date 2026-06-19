@@ -582,6 +582,7 @@ let showSourceItems = true;
 let activeHomeLane: HomeLane = "Following";
 let activeFeedPresetId = "following-only";
 let selectedHomePostId = smokePostId;
+let showHomeInspector = false;
 let activeDailyQueueFilter: DailyQueueFilter = "All";
 let dismissedDailyQueueItems: string[] = [];
 let composeState: ComposeDraftState | null = null;
@@ -1248,6 +1249,13 @@ function render() {
   app.querySelectorAll<HTMLButtonElement>("[data-home-select]").forEach((button) => {
     button.addEventListener("click", () => {
       selectedHomePostId = button.dataset.homeSelect || selectedHomePostId;
+      showHomeInspector = true;
+      render();
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-home-hide-inspector]").forEach((button) => {
+    button.addEventListener("click", () => {
+      showHomeInspector = false;
       render();
     });
   });
@@ -1770,21 +1778,22 @@ function dashboardView(data: OwnerSnapshot) {
   return `
     <section class="home-grid">
       <article class="panel feed-pane home-feed">
-        <div class="section-heading">
+        <div class="section-heading home-heading">
           <div>
             <h2>Daily social home</h2>
-            <p>Read first, respond to the daily queue, and keep audience context visible.</p>
+            <p>${escapeHtml(activeHomeSummary())}</p>
           </div>
-          <span class="pill">${homeLaneCount(data, activeHomeLane)} item${homeLaneCount(data, activeHomeLane) === 1 ? "" : "s"}</span>
+          <div class="home-header-actions">
+            <span class="pill">${homeLaneCount(data, activeHomeLane)} item${homeLaneCount(data, activeHomeLane) === 1 ? "" : "s"}</span>
+            ${homeDisplayMenu(data)}
+          </div>
         </div>
-        ${feedPresetView()}
-        ${homeLaneControls(data)}
-        ${feedControls()}
+        ${homeContextBar(data)}
         ${homeLaneContent(data)}
       </article>
       <aside class="workflow-side">
-        ${homeInspectorView(data)}
         ${dailyQueueView(data)}
+        ${showHomeInspector ? homeInspectorView(data) : homeSelectionHint(data)}
         ${privacyStatusView(data)}
       </aside>
     </section>
@@ -1795,6 +1804,68 @@ function dashboardView(data: OwnerSnapshot) {
       ${metric("Following", data.following.length, "private graph", "Following")}
       ${metric("Reader", data.sources.length, "source items", "Sources")}
     </section>`;
+}
+
+function activeHomeSummary() {
+  if (activeHomeLane === "Friends") return "Mutual friends first, without exposing your graph publicly.";
+  if (activeHomeLane === "Mentions") return "Mentions, replies, and DMs that may need a response.";
+  if (activeHomeLane === "Watches") return "Public sources watched privately, with no follow request sent.";
+  if (activeHomeLane === "Public") return "Public posts and search results, separate from private relationships.";
+  if (activeHomeLane === "Drafts/Saved") return "Saved reading and drafts kept local unless deliberately shared.";
+  return "People you follow, sorted chronologically and kept private by default.";
+}
+
+function homeContextBar(data: OwnerSnapshot) {
+  const activePreset = feedPresets.find((preset) => preset.id === activeFeedPresetId) || feedPresets[0];
+  return `<section class="home-context-bar" aria-label="Current feed view">
+    <div>
+      <span>${escapeHtml(activePreset.label)}</span>
+      <strong>${escapeHtml(activeHomeLane)}</strong>
+    </div>
+    <div>
+      <span>${showTimelineReplies ? "Replies included" : "Top-level posts"}</span>
+      <strong>${escapeHtml(activePreset.ranking)}</strong>
+    </div>
+    <div>
+      <span>Privacy</span>
+      <strong>${escapeHtml(activePreset.privacy)}</strong>
+    </div>
+  </section>`;
+}
+
+function homeDisplayMenu(data: OwnerSnapshot) {
+  const activePreset = feedPresets.find((preset) => preset.id === activeFeedPresetId) || feedPresets[0];
+  return `<details class="control-menu home-display-menu">
+    <summary>Display</summary>
+    <div class="control-menu-panel">
+      <section>
+        <h3>Feed presets</h3>
+        <p>${escapeHtml(activePreset.why)}</p>
+        <div class="feed-presets compact">
+          ${feedPresets
+            .map((preset) => `<button type="button" class="preset-button ${preset.id === activeFeedPresetId ? "active" : ""}" data-feed-preset="${escapeAttr(preset.id)}">
+              <strong>${escapeHtml(preset.label)}</strong>
+              <span>${escapeHtml(preset.description)}</span>
+            </button>`)
+            .join("")}
+        </div>
+        <small>Saved searches are private unless explicitly shared.</small>
+      </section>
+      <section>
+        <h3>Feed lanes</h3>
+        <div class="lane-tabs compact">
+          ${homeLaneOrder
+            .map((lane) => `<button type="button" class="lane-button ${lane === activeHomeLane ? "active" : ""}" data-home-lane="${escapeAttr(lane)}">
+              <strong>${escapeHtml(lane)}</strong>
+              <span>${homeLaneCount(data, lane)}</span>
+            </button>`)
+            .join("")}
+        </div>
+      </section>
+      <label class="menu-check"><input type="checkbox" data-feed-toggle="replies" ${showTimelineReplies ? "checked" : ""} /> Show replies in feed</label>
+      <p class="menu-note">Chronological, not engagement ranked. Filtering changes only what this client displays.</p>
+    </div>
+  </details>`;
 }
 
 function feedPresetView() {
@@ -1888,7 +1959,7 @@ function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number]) {
       ${post.in_reply_to ? "<span>reply</span>" : ""}
       ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
       ${interactionCounts(post)}
-      <button type="button" data-home-select="${escapeAttr(post.object_id)}">Inspect</button>
+      <button type="button" data-home-select="${escapeAttr(post.object_id)}">Details</button>
       <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.object_id)}">Reply</button>
       <details class="action-menu">
         <summary>More</summary>
@@ -1905,6 +1976,26 @@ function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number]) {
   </article>`;
 }
 
+function homeSelectionHint(data: OwnerSnapshot) {
+  const post = selectedHomePost(data);
+  if (!post) {
+    return `<article class="panel home-inspector collapsed">
+      <h2>Post details</h2>
+      <p>Select Details on a post to inspect thread, relationship, visibility, and moderation context.</p>
+    </article>`;
+  }
+  const author = post.actor_display_name || post.actor_username || actorLabel(post.actor_id);
+  return `<article class="panel home-inspector collapsed">
+    <div class="section-heading">
+      <div>
+        <h2>Post details</h2>
+        <p>${escapeHtml(author)} - ${escapeHtml(audienceLabel(post.visibility))}</p>
+      </div>
+      <button type="button" data-home-select="${escapeAttr(post.object_id)}">Open</button>
+    </div>
+  </article>`;
+}
+
 function homeInspectorView(data: OwnerSnapshot) {
   const post = selectedHomePost(data);
   if (!post) {
@@ -1917,7 +2008,10 @@ function homeInspectorView(data: OwnerSnapshot) {
   return `<article class="panel home-inspector">
     <div class="section-heading">
       <h2>Post inspector</h2>
-      <span class="pill">${escapeHtml(shortUrl(post.object_id))}</span>
+      <div class="detail-actions">
+        <span class="pill">${escapeHtml(shortUrl(post.object_id))}</span>
+        <button type="button" data-home-hide-inspector>Hide</button>
+      </div>
     </div>
     ${postBodyHtml(post.content, post.content_html)}
     <dl>
@@ -1959,19 +2053,28 @@ function relationshipForActor(data: OwnerSnapshot, actorId: string) {
 function dailyQueueView(data: OwnerSnapshot) {
   const items = filteredDailyQueueItems(data);
   const total = dailyAttentionCount(data);
+  const visibleItems = activeDailyQueueFilter === "All" ? items.filter((item) => item.count > 0 || item.urgency !== "low") : items;
   return `<article class="panel daily-queue">
     <div class="section-heading">
       <div>
         <h2>Daily queue</h2>
-        <p>Mentions, replies, DMs, follow requests, moderation, and delivery failures grouped by urgency.</p>
+        <p>Open items only by default. Use Filter for the full queue.</p>
       </div>
-      <span class="pill ${total ? "warn" : "ok"}">${total} open</span>
-    </div>
-    <div class="queue-filters">
-      ${dailyQueueFilterOrder.map((filter) => `<button type="button" class="${filter === activeDailyQueueFilter ? "active" : ""}" data-daily-filter="${escapeAttr(filter)}">${escapeHtml(filter)}</button>`).join("")}
+      <div class="home-header-actions">
+        <span class="pill ${total ? "warn" : "ok"}">${total} open</span>
+        <details class="control-menu queue-menu">
+          <summary>Filter</summary>
+          <div class="control-menu-panel">
+            <h3>Daily queue filters</h3>
+            <div class="queue-filters">
+              ${dailyQueueFilterOrder.map((filter) => `<button type="button" class="${filter === activeDailyQueueFilter ? "active" : ""}" data-daily-filter="${escapeAttr(filter)}">${escapeHtml(filter)}</button>`).join("")}
+            </div>
+          </div>
+        </details>
+      </div>
     </div>
     <section class="queue-list">
-      ${items.map(dailyQueueCard).join("") || `<article class="empty"><p>No items match this queue filter.</p></article>`}
+      ${visibleItems.map(dailyQueueCard).join("") || `<article class="empty"><p>No open items match this queue filter.</p></article>`}
     </section>
   </article>`;
 }
@@ -4264,6 +4367,7 @@ function sanitizePostChildren(parent: Node) {
 
 function sanitizePostAttributes(element: HTMLElement, tag: string) {
   const href = tag === "a" ? element.getAttribute("href") || "" : "";
+  const label = tag === "a" ? element.textContent || "" : "";
   for (const attr of Array.from(element.attributes)) {
     element.removeAttribute(attr.name);
   }
@@ -4273,9 +4377,13 @@ function sanitizePostAttributes(element: HTMLElement, tag: string) {
     element.replaceWith(...Array.from(element.childNodes));
     return;
   }
+  if (!label.trim() || looksLikeUrlText(label)) {
+    element.textContent = postLinkLabel(safeHref);
+  }
   element.setAttribute("href", safeHref);
   element.setAttribute("rel", "nofollow noopener noreferrer");
   element.setAttribute("target", "_blank");
+  element.setAttribute("title", safeHref);
 }
 
 function safePostHref(value: string) {
@@ -4294,9 +4402,31 @@ function linkifyPlainText(value: string) {
       const trailing = url.match(/[),.;!?]+$/)?.[0] || "";
       const clean = trailing ? url.slice(0, -trailing.length) : url;
       const href = safePostHref(clean);
-      return href ? `<a href="${escapeAttr(href)}" rel="nofollow noopener noreferrer" target="_blank">${escapeHtml(clean)}</a>${escapeHtml(trailing)}` : url;
+      return href ? `<a href="${escapeAttr(href)}" rel="nofollow noopener noreferrer" target="_blank" title="${escapeAttr(href)}">${escapeHtml(postLinkLabel(clean))}</a>${escapeHtml(trailing)}` : url;
     })
     .replaceAll("\n", "<br>");
+}
+
+function looksLikeUrlText(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (/^https?:\/\//i.test(trimmed) || /^mailto:/i.test(trimmed)) return true;
+  return trimmed.length > 48 && /[./?=&]/.test(trimmed);
+}
+
+function postLinkLabel(value: string) {
+  try {
+    const url = new URL(value, window.location.href);
+    if (url.protocol === "mailto:") return url.pathname || value;
+    const host = url.hostname.replace(/^www\./, "");
+    const parts = url.pathname.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
+    if (!parts.length) return host;
+    const path = parts.length <= 2 ? parts.join("/") : `${parts[0]}/.../${parts[parts.length - 1]}`;
+    const query = url.search ? "?" : "";
+    return `${host}/${path}${query}`;
+  } catch {
+    return value.length > 52 ? `${value.slice(0, 24)}...${value.slice(-20)}` : value;
+  }
 }
 
 function actorLabel(value: string) {
