@@ -1284,6 +1284,37 @@ select {
   font-size: 0.82rem;
 }
 
+button.inline-link,
+.item button.inline-link,
+.timeline button.inline-link,
+.follower button.inline-link,
+.actor-preview button.inline-link,
+.detail-list button.inline-link {
+  min-height: auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+
+button.inline-link:hover,
+button.inline-link:focus-visible {
+  background: transparent;
+  color: var(--accent-pressed);
+  text-decoration: underline;
+}
+
+button.inline-link:active,
+button.inline-link.active {
+  background: transparent;
+  color: var(--accent-pressed);
+}
+
 .follower button[data-follower-status="pending"] {
   border-color: #a6a6ad;
   background: #f2f2f4;

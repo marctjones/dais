@@ -10,6 +10,7 @@ if (!asset) {
 }
 const sourceText = readFileSync(new URL("../apps/owner-tauri/src/main.ts", import.meta.url), "utf8");
 const styleText = readFileSync(new URL("../apps/owner-tauri/src/styles.css", import.meta.url), "utf8");
+const capabilityText = readFileSync(new URL("../apps/owner-tauri/src-tauri/capabilities/default.json", import.meta.url), "utf8");
 
 class AppElement {
   innerHTML = "";
@@ -147,6 +148,12 @@ function runStaticReleaseGates() {
   assertIncludes(sourceText, "post-body", "rich post body rendering");
   assertIncludes(sourceText, "postLinkLabel", "compact post link labels");
   assertIncludes(sourceText, "markdownPostLinkLabel", "markdown post link labels");
+  assertIncludes(sourceText, '@tauri-apps/plugin-opener', "native external-link opener");
+  assertIncludes(sourceText, "openUrl(href)", "default browser handoff");
+  assertIncludes(sourceText, "safeExternalUrl", "external link protocol guard");
+  assertIncludes(sourceText, "data-actor-feed", "clickable actor feed controls");
+  assertIncludes(sourceText, "actorFeedContextHtml", "actor-feed search context");
+  assertIncludes(capabilityText, '"opener:default"', "Tauri opener capability");
   assertIncludes(sourceText, "I reviewed these warnings and still want to publish.", "advisory warning override");
   assertMatches(
     sourceText,
@@ -184,6 +191,7 @@ const screenChecks = [
       "Followers - approved followers",
       "Reply",
       "Boost/Repost",
+      'data-actor-feed="https://mastodon.example/users/alice"',
     ],
     forbidden: [
       'data-search-follow="https://mastodon.example/users/alice">Follow',
@@ -211,6 +219,7 @@ const screenChecks = [
       "Open original",
       "Delete post",
       "Revoke media",
+      'data-actor-feed="https://mastodon.example/users/alice"',
     ],
     forbidden: [
       'data-timeline-action="like" data-object="https://social.dais.social/users/social/posts/smoke-post">Like',
@@ -270,6 +279,7 @@ const screenChecks = [
       "Harvested public posts",
       "Public launch update",
       "A public post harvested into the private watch reader.",
+      'data-open-link="https://bsky.app/profile/nasa.gov/post/3smoke"',
     ],
   },
   {
@@ -301,10 +311,12 @@ const screenChecks = [
     mode: "Home",
     section: "Notifications",
     expected: [
-      "mention from Alice Example",
+      "mention from",
+      "Alice Example",
       "read",
-      "reply from Alice Example",
+      "reply from",
       "unread",
+      'data-actor-feed="https://mastodon.example/users/alice"',
       'data-notification-read="notification-reply-smoke">Mark read',
     ],
     forbidden: [
@@ -320,6 +332,7 @@ const screenChecks = [
       "Pending",
       "Approved",
       "https://mastodon.example/users/alice",
+      'data-actor-feed="https://mastodon.example/users/alice"',
       'data-follower-status="rejected" data-follower="https://mastodon.example/users/alice">Remove',
       'data-follower-status="approved" data-follower="https://mastodon.example/users/bob">Approve',
       'data-follower-status="rejected" data-follower="https://mastodon.example/users/bob">Reject',

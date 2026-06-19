@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "./styles.css";
 
 type Visibility = "Public" | "Unlisted" | "Followers" | "Direct";
@@ -1324,6 +1325,12 @@ function render() {
   app.querySelector<HTMLButtonElement>("[data-confirm-public-search]")?.addEventListener("click", () => {
     void executeSearch(searchQuery, searchScope, true);
   });
+  app.querySelector<HTMLButtonElement>("[data-clear-author-feed]")?.addEventListener("click", () => {
+    searchAuthor = "";
+    searchResultType = "all";
+    notice = "Actor feed filter cleared.";
+    render();
+  });
   app.querySelector<HTMLFormElement>("#block-actor-form")?.addEventListener("submit", blockActor);
   app.querySelector<HTMLFormElement>("#block-domain-form")?.addEventListener("submit", blockDomain);
   app.querySelector<HTMLFormElement>("#allow-host-form")?.addEventListener("submit", allowHost);
@@ -1369,6 +1376,11 @@ function render() {
       void loadPostDetail(button.dataset.postDetail || "");
     });
   });
+  app.querySelectorAll<HTMLButtonElement>("[data-actor-feed]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void openActorFeed(button.dataset.actorFeed || "");
+    });
+  });
   app.querySelectorAll<HTMLButtonElement>("[data-delete-post]").forEach((button) => {
     button.addEventListener("click", () => {
       void deletePost(button.dataset.deletePost || "");
@@ -1379,9 +1391,15 @@ function render() {
       void copyLink(button.dataset.copyLink || "");
     });
   });
-  app.querySelectorAll<HTMLButtonElement>("[data-open-link]").forEach((button) => {
+  app.querySelectorAll<HTMLButtonElement>("button[data-open-link]").forEach((button) => {
     button.addEventListener("click", () => {
-      openLink(button.dataset.openLink || "");
+      void openLink(button.dataset.openLink || "");
+    });
+  });
+  app.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
+    anchor.addEventListener("click", (event) => {
+      event.preventDefault();
+      void openLink(anchor.dataset.openLink || anchor.getAttribute("href") || "");
     });
   });
   app.querySelectorAll<HTMLButtonElement>("[data-search-watch]").forEach((button) => {
@@ -1656,6 +1674,7 @@ function searchView() {
         <input name="lang" value="${escapeAttr(searchLang)}" placeholder="Lang" />
         <button type="submit">Search</button>
       </form>
+      ${actorFeedContextHtml()}
       ${searchPublicGuardHtml(searchResults.public_search_guard)}
       <h2 class="section-label">Posts</h2>
       ${list(searchResults.posts.map(searchPostCard), "No matching posts.")}
@@ -1677,6 +1696,15 @@ function searchView() {
       ${list((searchResults.provider_errors || []).map(searchProviderErrorCard), "Providers returned normally.")}
     </article>
   </section>`;
+}
+
+function actorFeedContextHtml() {
+  if (!searchAuthor) return "";
+  return `<div class="privacy-note actor-feed-context">
+    <strong>Actor feed</strong>
+    <p>Showing posts authored by ${actorLink(searchAuthor)}.</p>
+    <button type="button" data-clear-author-feed>Clear actor filter</button>
+  </div>`;
 }
 
 function searchPublicGuardHtml(guard: OwnerSearchResult["public_search_guard"]) {
@@ -1952,7 +1980,7 @@ function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number], data: Ow
     : "";
   return `<article class="item timeline home-timeline-card ${selected ? "selected" : ""}">
     <div>
-      <h2>${escapeHtml(author)}</h2>
+      <h2>${actorLink(post.actor_id, author)}</h2>
       ${postBodyHtml(post.content, post.content_html)}
       ${sensitivityBadgesHtml(post.content)}
     </div>
@@ -1992,7 +2020,7 @@ function homeSelectionHint(data: OwnerSnapshot) {
     <div class="section-heading">
       <div>
         <h2>Post details</h2>
-        <p>${escapeHtml(author)} - ${escapeHtml(audienceLabel(post.visibility))}</p>
+        <p>${actorLink(post.actor_id, author)} - ${escapeHtml(audienceLabel(post.visibility))}</p>
       </div>
       <button type="button" data-home-select="${escapeAttr(post.object_id)}">Open</button>
     </div>
@@ -2024,7 +2052,7 @@ function homeInspectorView(data: OwnerSnapshot) {
       <dt>Thread context</dt><dd>${post.in_reply_to ? `Reply to ${escapeHtml(shortUrl(post.in_reply_to))}` : "Top-level post"} with ${post.reply_count || 0} repl${(post.reply_count || 0) === 1 ? "y" : "ies"}</dd>
       <dt>Relationship context</dt><dd>${escapeHtml(relationshipForActor(data, post.actor_id))}</dd>
       <dt>Visibility</dt><dd>${escapeHtml(audienceLabel(post.visibility))}</dd>
-      <dt>Protocol/source</dt><dd>${escapeHtml(post.protocol || "unknown")} from ${escapeHtml(author)}</dd>
+      <dt>Protocol/source</dt><dd>${escapeHtml(post.protocol || "unknown")} from ${actorLink(post.actor_id, author)}</dd>
       <dt>Moderation context</dt><dd>${escapeHtml((moderationState || data.moderation).reply_policy || "warn")} replies, ${(moderationState || data.moderation).reply_queue_count || 0} waiting for review</dd>
     </dl>
     <div class="detail-actions">
@@ -3011,7 +3039,7 @@ function postDetailReplies(rows: PostReply[]) {
     ${
       rows.length
         ? rows.map((row) => `<article>
-            <strong>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</strong>
+            <strong>${actorLink(row.actor_id, row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</strong>
             ${postBodyHtml(row.content || row.id, row.content_html)}
             ${row.content ? sensitivityBadgesHtml(row.content) : ""}
             ${row.published_at || row.created_at ? `<time>${escapeHtml(formatTime(row.published_at || row.created_at || ""))}</time>` : ""}
@@ -3027,8 +3055,8 @@ function postDetailInteractions(title: string, rows: PostInteraction[]) {
     ${
       rows.length
         ? rows.map((row) => `<article>
-            <strong>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</strong>
-            <span>${escapeHtml(shortUrl(row.actor_id))}</span>
+            <strong>${actorLink(row.actor_id, row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</strong>
+            <span>${actorLink(row.actor_id, shortUrl(row.actor_id))}</span>
             ${row.created_at ? `<time>${escapeHtml(formatTime(row.created_at))}</time>` : ""}
           </article>`).join("")
         : `<p>None</p>`
@@ -3040,7 +3068,7 @@ function timelineCard(post: OwnerSnapshot["home_timeline"][number]) {
   const author = post.actor_display_name || post.actor_username || actorLabel(post.actor_id);
   return `<article class="item timeline">
     <div>
-      <h2>${escapeHtml(author)}</h2>
+      <h2>${actorLink(post.actor_id, author)}</h2>
       ${postBodyHtml(post.content, post.content_html)}
       ${sensitivityBadgesHtml(post.content)}
     </div>
@@ -3101,7 +3129,7 @@ function sourceCard(source: OwnerSnapshot["sources"][number]) {
     <footer>
       <span>${escapeHtml(source.source_type)}</span>
       <span>${source.read ? "Read" : "Unread"}</span>
-      ${source.canonical_url ? `<a href="${escapeAttr(source.canonical_url)}">${escapeHtml(shortHost(source.canonical_url))}</a>` : ""}
+      ${externalLink(source.canonical_url, source.canonical_url ? shortHost(source.canonical_url) : "")}
     </footer>
   </article>`;
 }
@@ -3110,7 +3138,7 @@ function sourceSubscriptionCard(source: SourceSubscription) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(source.title || shortHost(source.url))}</h2>
-      <p>${escapeHtml(source.url)}</p>
+      <p>${externalLink(source.url, shortUrl(source.url))}</p>
     </div>
     <footer>
       <span>${escapeHtml(source.source_type)}</span>
@@ -3130,7 +3158,7 @@ function watchSubscriptionCard(source: SourceSubscription) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(source.title || source.url)}</h2>
-      <p>${escapeHtml(source.url)}</p>
+      <p>${externalLink(source.url, shortUrl(source.url))}</p>
     </div>
     <footer>
       <span>${escapeHtml(watchLabel(source.source_type))}</span>
@@ -3161,7 +3189,7 @@ function notificationCard(row: OwnerNotification) {
   const read = isRead(row.read);
   return `<article class="panel item">
     <div>
-      <h2>${escapeHtml(row.type)} from ${escapeHtml(actor)}</h2>
+      <h2>${escapeHtml(row.type)} from ${actorLink(row.actor_id, actor)}</h2>
       ${postBodyHtml(row.content || row.activity_id || "")}
     </div>
     <footer>
@@ -3191,7 +3219,7 @@ function deliveryCard(row: OwnerDelivery) {
 function directMessageCard(row: OwnerDirectMessage) {
   return `<article class="panel item">
     <div>
-      <h2>${escapeHtml(actorLabel(row.sender_id))}</h2>
+      <h2>${actorLink(row.sender_id)}</h2>
       ${postBodyHtml(row.content)}
     </div>
     <footer>
@@ -3205,6 +3233,7 @@ function searchPostCard(row: OwnerSearchResult["posts"][number]) {
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.name || shortUrl(row.id))}</h2>
+      ${row.actor_id ? `<p>${actorLink(row.actor_id)}</p>` : ""}
       ${postBodyHtml(row.content, row.content_html)}
       ${sensitivityBadgesHtml([row.name || "", row.summary || "", row.content || ""].join(" "))}
     </div>
@@ -3222,7 +3251,7 @@ function searchPostCard(row: OwnerSearchResult["posts"][number]) {
 function searchUserCard(row: OwnerSearchResult["users"][number]) {
   return `<article class="panel item">
     <div>
-      <h2>${escapeHtml(actorLabel(row.actor_id))}</h2>
+      <h2>${actorLink(row.actor_id)}</h2>
       <p>${escapeHtml(row.actor_id)}</p>
     </div>
     <footer>
@@ -3249,7 +3278,7 @@ function searchPublicPostCard(row: OwnerSearchResult["public_posts"][number]) {
     : "";
   return `<article class="panel item">
     <div>
-      <h2>${escapeHtml(row.actor_display_name || row.actor_handle || shortUrl(row.url))}</h2>
+      <h2>${row.actor_id ? actorLink(row.actor_id, row.actor_display_name || row.actor_handle || actorLabel(row.actor_id)) : escapeHtml(row.actor_display_name || row.actor_handle || shortUrl(row.url))}</h2>
       ${postBodyHtml(row.content || row.summary || "", row.content_html)}
       ${sensitivityBadgesHtml([row.actor_display_name || "", row.actor_handle || "", row.content || "", row.summary || ""].join(" "))}
     </div>
@@ -3257,7 +3286,7 @@ function searchPublicPostCard(row: OwnerSearchResult["public_posts"][number]) {
       <span>${escapeHtml(row.network)}</span>
       <span>${escapeHtml(row.provider)}</span>
       ${row.published_at ? `<time>${escapeHtml(formatTime(row.published_at))}</time>` : ""}
-      <a href="${escapeAttr(row.url)}">${escapeHtml(shortHost(row.url))}</a>
+      ${externalLink(row.url, shortHost(row.url))}
       <button type="button" data-open-link="${escapeAttr(row.url)}">Open</button>
       ${watchButton}
       ${replyButton}
@@ -3277,13 +3306,13 @@ function searchPublicActorCard(row: OwnerSearchResult["public_actors"][number]) 
     : "";
   return `<article class="panel item">
     <div>
-      <h2>${escapeHtml(row.display_name || row.handle || actorLabel(row.id))}</h2>
+      <h2>${actorLink(row.follow_target || row.id, row.display_name || row.handle || actorLabel(row.id))}</h2>
       <p>${escapeHtml(row.handle || row.id)}</p>
     </div>
     <footer>
       <span>${escapeHtml(row.network)}</span>
       <span>${escapeHtml(row.provider)}</span>
-      ${row.url ? `<a href="${escapeAttr(row.url)}">${escapeHtml(shortHost(row.url))}</a>` : ""}
+      ${externalLink(row.url, row.url ? shortHost(row.url) : "")}
       ${row.url ? `<button type="button" data-open-link="${escapeAttr(row.url)}">Open</button>` : ""}
       ${watchButton}
       ${followButton}
@@ -3313,7 +3342,7 @@ function searchSourceItemCard(row: OwnerSearchResult["source_items"][number]) {
       <span>${escapeHtml(row.source_type)}</span>
       <span>${row.read ? "Read" : "Unread"}</span>
       ${row.published_at ? `<time>${escapeHtml(formatTime(row.published_at))}</time>` : ""}
-      ${row.canonical_url ? `<a href="${escapeAttr(row.canonical_url)}">${escapeHtml(shortHost(row.canonical_url))}</a>` : ""}
+      ${externalLink(row.canonical_url, row.canonical_url ? shortHost(row.canonical_url) : "")}
     </footer>
   </article>`;
 }
@@ -3353,7 +3382,7 @@ function audienceListCard(row: OwnerAudienceList) {
 function followerCard(row: OwnerSnapshot["followers"][number]) {
   return `<article class="panel item follower">
     <div>
-      <h2>${escapeHtml(actorLabel(row.follower_actor_id))}</h2>
+      <h2>${actorLink(row.follower_actor_id)}</h2>
       <p>${escapeHtml(row.follower_actor_id)}</p>
     </div>
     <footer>
@@ -3393,7 +3422,7 @@ function followingCard(row: OwnerSnapshot["following"][number]) {
   const canUnfollow = followingStatusCanUnfollow(row.status);
   return `<article class="panel item follower">
     <div>
-      <h2>${escapeHtml(actorLabel(row.target_actor_id))}</h2>
+      <h2>${actorLink(row.target_actor_id)}</h2>
       <p>${escapeHtml(row.target_actor_id)}</p>
     </div>
     <footer>
@@ -3412,7 +3441,7 @@ function followingStatusCanUnfollow(status: string) {
 function friendCard(row: OwnerSnapshot["friends"][number]) {
   return `<article class="panel item follower">
     <div>
-      <h2>${escapeHtml(actorLabel(row.friend_actor_id))}</h2>
+      <h2>${actorLink(row.friend_actor_id)}</h2>
       <p>${escapeHtml(row.friend_actor_id)}</p>
     </div>
     <footer>
@@ -3430,7 +3459,7 @@ function discoveredActorCard(actor: DiscoveredActor) {
   return `<article class="item actor-preview">
     <div>
       ${actor.icon_url ? `<img class="avatar" src="${escapeAttr(actor.icon_url)}" alt="" />` : ""}
-      <h2>${escapeHtml(title)}</h2>
+      <h2>${actorLink(actor.id, title)}</h2>
       ${actor.actor_type ? `<p>${escapeHtml(actor.actor_type)}</p>` : ""}
       ${actor.handle ? `<p>${escapeHtml(actor.handle)}</p>` : ""}
       ${actor.summary ? `<p>${escapeHtml(stripTags(actor.summary))}</p>` : ""}
@@ -3444,7 +3473,7 @@ function discoveredActorCard(actor: DiscoveredActor) {
     </div>
     <footer>
       <span>${escapeHtml(status)}</span>
-      <a href="${escapeAttr(actor.url || actor.id)}">${escapeHtml(shortUrl(actor.url || actor.id))}</a>
+      ${externalLink(actor.url || actor.id, shortUrl(actor.url || actor.id))}
       <span>${escapeHtml(shortUrl(actor.inbox))}</span>
       ${followButton}
     </footer>
@@ -3466,9 +3495,9 @@ function discoveredPostCard(post: DiscoveredPost) {
     </div>
     <footer>
       <span>${escapeHtml(post.type)}</span>
-      ${post.actor_id ? `<span>${escapeHtml(actorLabel(post.actor_id))}</span>` : ""}
+      ${post.actor_id ? `<span>${actorLink(post.actor_id)}</span>` : ""}
       ${post.published ? `<time>${escapeHtml(formatTime(post.published))}</time>` : ""}
-      ${post.url ? `<a href="${escapeAttr(post.url)}">${escapeHtml(shortUrl(post.url))}</a>` : ""}
+      ${externalLink(post.url, post.url ? shortUrl(post.url) : "")}
     </footer>
   </article>`;
 }
@@ -3495,7 +3524,7 @@ function blockCard(row: ModerationBlock) {
   const value = row.blocked_domain || row.actor_id || row.id;
   return `<article class="panel item">
     <div>
-      <h2>${escapeHtml(row.blocked_domain || actorLabel(row.actor_id))}</h2>
+      <h2>${row.blocked_domain ? escapeHtml(row.blocked_domain) : actorLink(row.actor_id)}</h2>
       <p>${escapeHtml(row.reason || row.actor_id || row.id)}</p>
     </div>
     <footer>
@@ -3524,7 +3553,7 @@ function moderationReplyCard(row: ModerationReply) {
   const actions = moderationReplyActions(row);
   return `<article class="panel item">
     <div>
-      <h2>${escapeHtml(row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</h2>
+      <h2>${actorLink(row.actor_id, row.actor_display_name || row.actor_username || actorLabel(row.actor_id))}</h2>
       ${postBodyHtml(row.content)}
       ${row.moderation_flags?.length ? `<div class="sensitivity-tags">${row.moderation_flags.map((label) => `<span class="sensitive-chip">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
       ${ai?.summary ? `<p class="privacy-note">AI advisory${ai.model ? ` (${escapeHtml(shortModel(ai.model))})` : ""}: ${escapeHtml(ai.summary)}</p>` : ""}
@@ -4101,6 +4130,28 @@ async function loadPostDetail(objectId: string) {
   render();
 }
 
+async function openActorFeed(actorId: string) {
+  const target = actorId.trim();
+  if (!target) return;
+  active = "Search";
+  searchScope = "all";
+  searchProvider = "all";
+  searchResultType = "posts";
+  searchSort = "latest";
+  searchQuery = "";
+  searchAuthor = target;
+  searchTag = "";
+  searchLang = "";
+  notice = `Showing posts from ${actorLabel(target)}.`;
+  render();
+  try {
+    await executeSearch("", searchScope, false);
+  } catch (error) {
+    notice = `Actor feed set for ${actorLabel(target)}, but search failed: ${String(error)}`;
+    render();
+  }
+}
+
 async function copyLink(url: string) {
   if (!url) return;
   await navigator.clipboard.writeText(url);
@@ -4108,10 +4159,19 @@ async function copyLink(url: string) {
   render();
 }
 
-function openLink(url: string) {
-  if (!url) return;
-  window.open(url, "_blank", "noopener");
-  notice = `Opened ${shortUrl(url)}.`;
+async function openLink(url: string) {
+  const href = safeExternalUrl(url);
+  if (!href) {
+    notice = "Only http, https, and mailto links can be opened externally.";
+    render();
+    return;
+  }
+  try {
+    await openUrl(href);
+    notice = `Opened ${postLinkLabel(href)}.`;
+  } catch (error) {
+    notice = `Could not open ${postLinkLabel(href)}: ${String(error)}`;
+  }
   render();
 }
 
@@ -4193,7 +4253,8 @@ async function executeSearch(query: string, scope: string, confirmPublicSensitiv
   searchScope = scope;
   const servers = searchServers.split(",").map((value) => value.trim()).filter(Boolean);
   const tags = searchTag.split(",").map((value) => value.trim().replace(/^#/, "")).filter(Boolean);
-  searchResults = query
+  const hasSearch = Boolean(query || searchAuthor || searchLang || servers.length || tags.length);
+  searchResults = hasSearch
     ? normalizeSearchResults(await ownerInvoke<OwnerSearchResult>("owner_search", {
         query,
         scope,
@@ -4207,7 +4268,7 @@ async function executeSearch(query: string, scope: string, confirmPublicSensitiv
         confirmPublicSensitive
       }))
     : emptySearchResults();
-  notice = query
+  notice = hasSearch
     ? searchNotice(searchResults)
     : "";
   render();
@@ -4343,6 +4404,28 @@ function shortUrl(value: string) {
   }
 }
 
+function safeExternalUrl(value: string) {
+  try {
+    const url = new URL(value, window.location.href);
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function externalLink(url: string | null | undefined, label?: string | null) {
+  const href = safeExternalUrl(String(url || ""));
+  if (!href) return "";
+  return `<a href="${escapeAttr(href)}" data-open-link="${escapeAttr(href)}" rel="nofollow noopener noreferrer" title="${escapeAttr(href)}">${escapeHtml(label || postLinkLabel(href))}</a>`;
+}
+
+function actorLink(actorId: string | null | undefined, label?: string | null) {
+  const actorIdText = String(actorId || "").trim();
+  const display = String(label || (actorIdText ? actorLabel(actorIdText) : "unknown actor"));
+  if (!actorIdText) return escapeHtml(display);
+  return `<button type="button" class="inline-link actor-link" data-actor-feed="${escapeAttr(actorIdText)}" title="Show posts from ${escapeAttr(actorLabel(actorIdText))}">${escapeHtml(display)}</button>`;
+}
+
 function arrayBufferToBase64(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -4450,18 +4533,13 @@ function sanitizePostAttributes(element: HTMLElement, tag: string) {
     element.textContent = postLinkLabel(safeHref);
   }
   element.setAttribute("href", safeHref);
+  element.setAttribute("data-open-link", safeHref);
   element.setAttribute("rel", "nofollow noopener noreferrer");
-  element.setAttribute("target", "_blank");
   element.setAttribute("title", safeHref);
 }
 
 function safePostHref(value: string) {
-  try {
-    const url = new URL(value, window.location.href);
-    return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.href : "";
-  } catch {
-    return "";
-  }
+  return safeExternalUrl(value);
 }
 
 function linkifyPlainText(value: string) {
@@ -4495,7 +4573,7 @@ function linkifyPlainTextSegment(value: string) {
 }
 
 function postLinkAnchor(href: string, label: string) {
-  return `<a href="${escapeAttr(href)}" rel="nofollow noopener noreferrer" target="_blank" title="${escapeAttr(href)}">${escapeHtml(label)}</a>`;
+  return `<a href="${escapeAttr(href)}" data-open-link="${escapeAttr(href)}" rel="nofollow noopener noreferrer" title="${escapeAttr(href)}">${escapeHtml(label)}</a>`;
 }
 
 function markdownPostLinkLabel(label: string, href: string) {

@@ -1228,6 +1228,7 @@ mod tests {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             owner_snapshot,
             save_owner_settings,
