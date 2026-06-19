@@ -3642,7 +3642,7 @@ fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
         "Direct",
         "ok",
         "Reply",
-        "Open context",
+        "",
     )
 }
 
@@ -5015,6 +5015,20 @@ mod tests {
         });
         assert_eq!(row.primary.as_str(), "Unfriend");
         assert_eq!(row.secondary.as_str(), "Block");
+    }
+
+    #[test]
+    fn dm_rows_only_allow_reply_action() {
+        let row = dm_row(&OwnerDirectMessage {
+            id: "dm".into(),
+            conversation_id: "conv".into(),
+            sender_id: "https://friend.example/users/ada".into(),
+            content: "hello".into(),
+            published_at: "now".into(),
+            created_at: Some("now".into()),
+        });
+        assert_eq!(row.primary.as_str(), "Reply");
+        assert_eq!(row.secondary.as_str(), "");
     }
 
     #[test]
