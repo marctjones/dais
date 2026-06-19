@@ -9,7 +9,8 @@ Current status:
 - Adaptive desktop/narrow layout for Home, Posts, Sources, Notifications,
   Followers, Watches, Profile, Moderation, Deliveries, Settings, and
   Diagnostics.
-- Local settings storage for instance URL and owner token.
+- Local multi-account settings storage for Dais instance profiles, with an
+  active-account sidebar switcher and per-instance owner tokens.
 - Shared Rust `dais-client-core` models and `OwnerApiClient` HTTP calls for
   snapshots, compose, profile updates, and follower status updates.
 - Live owner snapshot loading and private-by-default post creation when an owner
@@ -60,12 +61,18 @@ cd platforms/cloudflare/workers/router
 printf '%s' '<random-token>' | npx wrangler secret put OWNER_API_TOKEN --env production
 ```
 
-The Tauri app stores its local instance URL and owner token in the platform app
-configuration directory. On macOS development builds this is under:
+The Tauri app stores local account profiles in the platform app configuration
+directory. Existing single-account settings are migrated automatically into the
+first account profile. On macOS development builds this is under:
 
 ```text
 ~/Library/Application Support/social.dais.owner/owner-settings.json
 ```
+
+Use the Settings screen to add a label, instance URL, and owner token for each
+Dais instance. Switching accounts changes the active owner API target for all
+client workflows, including timelines, compose, replies, following, watches,
+profile edits, moderation, diagnostics, and delivery inspection.
 
 Android readiness notes:
 

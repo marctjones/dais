@@ -15,17 +15,52 @@ use tauri::Manager;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct StoredOwnerSettings {
+    #[serde(default = "default_instance_url")]
+    instance_url: String,
+    #[serde(default)]
+    owner_token: Option<String>,
+    #[serde(default)]
+    active_account_id: Option<String>,
+    #[serde(default)]
+    accounts: Vec<StoredOwnerAccount>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct StoredOwnerAccount {
+    id: String,
+    label: String,
     instance_url: String,
     owner_token: Option<String>,
 }
 
 impl Default for StoredOwnerSettings {
     fn default() -> Self {
-        Self {
-            instance_url: "https://social.dais.social".to_string(),
+        let account = StoredOwnerAccount {
+            id: account_id_for(&default_instance_url(), &[]),
+            label: "Dais Social".to_string(),
+            instance_url: default_instance_url(),
             owner_token: None,
+        };
+        Self {
+            instance_url: account.instance_url.clone(),
+            owner_token: account.owner_token.clone(),
+            active_account_id: Some(account.id.clone()),
+            accounts: vec![account],
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct OwnerAccountSummary {
+    id: String,
+    label: String,
+    instance_url: String,
+    active: bool,
+    owner_token_present: bool,
+}
+
+fn default_instance_url() -> String {
+    "https://social.dais.social".to_string()
 }
 
 #[tauri::command]
@@ -752,20 +787,93 @@ fn save_owner_settings(
     app: tauri::AppHandle,
     instance_url: String,
     owner_token: String,
+    account_id: Option<String>,
+    label: Option<String>,
 ) -> Result<(), String> {
     let mut settings = load_settings(&app)?;
-    if !instance_url.trim().is_empty() {
-        settings.instance_url = instance_url.trim().trim_end_matches('/').to_string();
+    let instance_url =
+        normalize_instance_url(&instance_url).unwrap_or_else(|| settings.instance_url.clone());
+    let label = label
+        .and_then(optional_trimmed)
+        .unwrap_or_else(|| account_label(&instance_url));
+    let account_id = account_id.and_then(optional_trimmed);
+    let existing_index = account_id
+        .as_deref()
+        .and_then(|id| {
+            settings
+                .accounts
+                .iter()
+                .position(|account| account.id == id)
+        })
+        .or_else(|| {
+            settings
+                .accounts
+                .iter()
+                .position(|account| account.instance_url == instance_url)
+        });
+    let saved_id = if let Some(index) = existing_index {
+        let account = &mut settings.accounts[index];
+        account.label = label;
+        account.instance_url = instance_url;
+        if !owner_token.is_empty() {
+            account.owner_token = Some(owner_token);
+        }
+        account.id.clone()
+    } else {
+        let existing_ids: Vec<String> = settings
+            .accounts
+            .iter()
+            .map(|account| account.id.clone())
+            .collect();
+        let account = StoredOwnerAccount {
+            id: account_id.unwrap_or_else(|| account_id_for(&instance_url, &existing_ids)),
+            label,
+            instance_url,
+            owner_token: (!owner_token.is_empty()).then_some(owner_token),
+        };
+        let saved_id = account.id.clone();
+        settings.accounts.push(account);
+        saved_id
+    };
+    settings.active_account_id = Some(saved_id);
+    persist_settings(&app, normalize_settings(settings))
+}
+
+#[tauri::command]
+fn owner_accounts(app: tauri::AppHandle) -> Result<Vec<OwnerAccountSummary>, String> {
+    let settings = load_settings(&app)?;
+    Ok(account_summaries(&settings))
+}
+
+#[tauri::command]
+fn switch_owner_account(app: tauri::AppHandle, account_id: String) -> Result<(), String> {
+    let mut settings = load_settings(&app)?;
+    if !settings
+        .accounts
+        .iter()
+        .any(|account| account.id == account_id)
+    {
+        return Err("account not found".to_string());
     }
-    if !owner_token.is_empty() {
-        settings.owner_token = Some(owner_token);
+    settings.active_account_id = Some(account_id);
+    persist_settings(&app, normalize_settings(settings))
+}
+
+#[tauri::command]
+fn delete_owner_account(app: tauri::AppHandle, account_id: String) -> Result<(), String> {
+    let mut settings = load_settings(&app)?;
+    if settings.accounts.len() <= 1 {
+        return Err("at least one account is required".to_string());
     }
-    let path = settings_path(&app)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let before = settings.accounts.len();
+    settings.accounts.retain(|account| account.id != account_id);
+    if settings.accounts.len() == before {
+        return Err("account not found".to_string());
     }
-    let json = serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?;
-    fs::write(path, json).map_err(|error| error.to_string())
+    if settings.active_account_id.as_deref() == Some(account_id.as_str()) {
+        settings.active_account_id = settings.accounts.first().map(|account| account.id.clone());
+    }
+    persist_settings(&app, normalize_settings(settings))
 }
 
 #[tauri::command]
@@ -923,7 +1031,132 @@ fn load_settings(app: &tauri::AppHandle) -> Result<StoredOwnerSettings, String> 
         return Ok(StoredOwnerSettings::default());
     }
     let json = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    serde_json::from_str(&json).map_err(|error| error.to_string())
+    let settings: StoredOwnerSettings =
+        serde_json::from_str(&json).map_err(|error| error.to_string())?;
+    Ok(normalize_settings(settings))
+}
+
+fn persist_settings(app: &tauri::AppHandle, settings: StoredOwnerSettings) -> Result<(), String> {
+    let path = settings_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?;
+    fs::write(path, json).map_err(|error| error.to_string())
+}
+
+fn normalize_settings(mut settings: StoredOwnerSettings) -> StoredOwnerSettings {
+    settings.instance_url =
+        normalize_instance_url(&settings.instance_url).unwrap_or_else(default_instance_url);
+    if settings.accounts.is_empty() {
+        settings.accounts.push(StoredOwnerAccount {
+            id: account_id_for(&settings.instance_url, &[]),
+            label: account_label(&settings.instance_url),
+            instance_url: settings.instance_url.clone(),
+            owner_token: settings.owner_token.clone(),
+        });
+    }
+
+    let mut existing_ids: Vec<String> = Vec::new();
+    for account in &mut settings.accounts {
+        account.instance_url =
+            normalize_instance_url(&account.instance_url).unwrap_or_else(default_instance_url);
+        if account.label.trim().is_empty() {
+            account.label = account_label(&account.instance_url);
+        } else {
+            account.label = account.label.trim().to_string();
+        }
+        if account.id.trim().is_empty() || existing_ids.iter().any(|id| id == &account.id) {
+            account.id = account_id_for(&account.instance_url, &existing_ids);
+        }
+        existing_ids.push(account.id.clone());
+    }
+
+    let active_id = settings
+        .active_account_id
+        .as_deref()
+        .and_then(|id| settings.accounts.iter().find(|account| account.id == id))
+        .map(|account| account.id.clone())
+        .unwrap_or_else(|| settings.accounts[0].id.clone());
+    settings.active_account_id = Some(active_id.clone());
+    if let Some(account) = settings
+        .accounts
+        .iter()
+        .find(|account| account.id == active_id)
+    {
+        settings.instance_url = account.instance_url.clone();
+        settings.owner_token = account.owner_token.clone();
+    }
+    settings
+}
+
+fn account_summaries(settings: &StoredOwnerSettings) -> Vec<OwnerAccountSummary> {
+    settings
+        .accounts
+        .iter()
+        .map(|account| OwnerAccountSummary {
+            id: account.id.clone(),
+            label: account.label.clone(),
+            instance_url: account.instance_url.clone(),
+            active: settings.active_account_id.as_deref() == Some(account.id.as_str()),
+            owner_token_present: account
+                .owner_token
+                .as_deref()
+                .is_some_and(|value| !value.is_empty()),
+        })
+        .collect()
+}
+
+fn normalize_instance_url(value: &str) -> Option<String> {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        Some(trimmed.to_string())
+    } else {
+        Some(format!("https://{trimmed}"))
+    }
+}
+
+fn account_label(instance_url: &str) -> String {
+    let host = instance_url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or(instance_url);
+    if host == "social.dais.social" {
+        "Dais Social".to_string()
+    } else {
+        host.to_string()
+    }
+}
+
+fn account_id_for(instance_url: &str, existing_ids: &[String]) -> String {
+    let host = account_label(instance_url).to_lowercase();
+    let mut slug = String::new();
+    for character in host.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        slug.push_str("dais");
+    }
+    let base = format!("account-{slug}");
+    let mut candidate = base.clone();
+    let mut suffix = 2;
+    while existing_ids.iter().any(|id| id == &candidate) {
+        candidate = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    candidate
 }
 
 fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -934,11 +1167,71 @@ fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("owner-settings.json"))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_legacy_single_account_settings() {
+        let settings = normalize_settings(StoredOwnerSettings {
+            instance_url: "joneslaw.io/".to_string(),
+            owner_token: Some("owner-token".to_string()),
+            active_account_id: None,
+            accounts: Vec::new(),
+        });
+
+        assert_eq!(settings.instance_url, "https://joneslaw.io");
+        assert_eq!(settings.owner_token.as_deref(), Some("owner-token"));
+        assert_eq!(settings.accounts.len(), 1);
+        assert_eq!(settings.accounts[0].label, "joneslaw.io");
+        assert_eq!(
+            settings.active_account_id.as_deref(),
+            Some("account-joneslaw-io")
+        );
+    }
+
+    #[test]
+    fn mirrors_active_account_to_legacy_fields() {
+        let settings = normalize_settings(StoredOwnerSettings {
+            instance_url: "https://social.dais.social".to_string(),
+            owner_token: Some("old-token".to_string()),
+            active_account_id: Some("account-skeptical-engineer".to_string()),
+            accounts: vec![
+                StoredOwnerAccount {
+                    id: "account-dais-social".to_string(),
+                    label: "Dais Social".to_string(),
+                    instance_url: "https://social.dais.social".to_string(),
+                    owner_token: Some("dais-token".to_string()),
+                },
+                StoredOwnerAccount {
+                    id: "account-skeptical-engineer".to_string(),
+                    label: "Skeptical Engineer".to_string(),
+                    instance_url: "skeptical.engineer".to_string(),
+                    owner_token: Some("skeptical-token".to_string()),
+                },
+            ],
+        });
+
+        assert_eq!(settings.instance_url, "https://skeptical.engineer");
+        assert_eq!(settings.owner_token.as_deref(), Some("skeptical-token"));
+        assert_eq!(
+            account_summaries(&settings)
+                .into_iter()
+                .find(|account| account.active)
+                .map(|account| account.label),
+            Some("Skeptical Engineer".to_string())
+        );
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             owner_snapshot,
             save_owner_settings,
+            owner_accounts,
+            switch_owner_account,
+            delete_owner_account,
             create_owner_post,
             delete_owner_post,
             upload_owner_media,

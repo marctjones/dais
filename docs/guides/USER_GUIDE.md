@@ -1,7 +1,7 @@
 # Dais User Guide
 
 **Version:** 1.0
-**Last Updated:** June 18, 2026
+**Last Updated:** June 19, 2026
 
 ## Table of Contents
 
@@ -179,6 +179,19 @@ Navigation is grouped by workflow:
 Follower and following lists are owner-only views. The sidebar and Home sharing
 defaults keep the current default visibility and protocol visible before you
 publish or change relationships.
+
+### Multiple Accounts
+
+Dais Desk can store multiple local account profiles. Each profile contains an
+account label, a Dais instance URL, and that instance's owner API token. Use the
+account picker in the sidebar to switch which server receives reads, posts,
+replies, follows, watches, moderation, and operator commands.
+
+Use **Settings** to add or update accounts. Saving a new instance URL creates a
+new local profile and activates it. Saving an existing instance updates its
+label or token. This lets one desktop client manage separate Dais instances such
+as `social.dais.social`, `skeptical.engineer`, and `joneslaw.io` without
+editing the settings file by hand.
 
 ---
 

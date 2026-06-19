@@ -5,6 +5,14 @@ type Visibility = "Public" | "Unlisted" | "Followers" | "Direct";
 type ProtocolRoute = "ActivityPub" | "AtProto" | "Both";
 type SensitiveCategory = "medical" | "adult" | "political" | "family-only" | "work-sensitive";
 
+type OwnerAccountProfile = {
+  id: string;
+  label: string;
+  instance_url: string;
+  active: boolean;
+  owner_token_present: boolean;
+};
+
 type OwnerAudienceList = {
   id: string;
   name: string;
@@ -464,6 +472,7 @@ const smokeMode = new URLSearchParams(window.location.search).get("smoke") === "
 const smokePostId = "https://social.dais.social/users/social/posts/smoke-post";
 
 let snapshot: OwnerSnapshot | null = null;
+let accountProfiles: OwnerAccountProfile[] = [];
 let active = smokeSection() || "Home";
 let notice = "";
 let draftAttachments: string[] = smokeMode
@@ -532,6 +541,10 @@ async function ownerInvoke<T>(command: string, args?: Record<string, unknown>): 
 async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const data = smokeSnapshot();
   if (command === "owner_snapshot") return data as T;
+  if (command === "owner_accounts") return smokeAccounts() as T;
+  if (command === "switch_owner_account" || command === "delete_owner_account" || command === "save_owner_settings") {
+    return undefined as T;
+  }
   if (command === "owner_post_detail") return smokePostDetail(String(args?.objectId || smokePostId)) as T;
   if (command === "delete_owner_post") {
     return {
@@ -880,6 +893,32 @@ function smokeSnapshot(): OwnerSnapshot {
   };
 }
 
+function smokeAccounts(): OwnerAccountProfile[] {
+  return [
+    {
+      id: "account-social-dais-social",
+      label: "Dais Social",
+      instance_url: "https://social.dais.social",
+      active: true,
+      owner_token_present: true
+    },
+    {
+      id: "account-skeptical-engineer",
+      label: "Skeptical Engineer",
+      instance_url: "https://skeptical.engineer",
+      active: false,
+      owner_token_present: false
+    },
+    {
+      id: "account-joneslaw-io",
+      label: "Jones Law",
+      instance_url: "https://joneslaw.io",
+      active: false,
+      owner_token_present: false
+    }
+  ];
+}
+
 function smokePostDetail(objectId: string): OwnerPostDetail {
   return {
     ...smokeSnapshot().posts[0],
@@ -952,7 +991,17 @@ function smokeWatchItem(): OwnerSnapshot["sources"][number] {
 
 async function load() {
   render();
+  accountProfiles = await ownerInvoke<OwnerAccountProfile[]>("owner_accounts");
   snapshot = await ownerInvoke<OwnerSnapshot>("owner_snapshot");
+  if (!accountProfiles.length) {
+    accountProfiles = [{
+      id: "active",
+      label: snapshot.profile.display_name || shortHost(snapshot.settings.instance_url),
+      instance_url: snapshot.settings.instance_url,
+      active: true,
+      owner_token_present: snapshot.settings.owner_token_present
+    }];
+  }
   composeState ||= defaultComposeState(snapshot);
   active = active || snapshot.active_section || "Home";
   if (smokeMode && active === "Posts") {
@@ -980,13 +1029,10 @@ function render() {
             <strong>${escapeHtml(snapshot.profile.display_name || "dais owner")}</strong>
             <span>${escapeHtml(snapshot.profile.public_handle || shortHost(snapshot.settings.instance_url))}</span>
             <span>${escapeHtml(shortHost(snapshot.settings.instance_url))}</span>
+            ${accountSwitcher()}
           </div>
         </div>
         <nav class="nav source-nav">${sectionGroups.map(navGroup).join("")}</nav>
-        <div class="sidebar-footer">
-          <span class="pill ${snapshot.settings.default_visibility === "Public" ? "warn" : "ok"}">${escapeHtml(audienceLabel(snapshot.settings.default_visibility))}</span>
-          <span>${escapeHtml(snapshot.settings.default_protocol)}</span>
-        </div>
       </aside>
       <section class="workspace">
         <header class="topbar toolbar">
@@ -999,6 +1045,8 @@ function render() {
             ${toolbarSections.map((section) => toolbarButton(section)).join("")}
           </div>
           <div class="top-actions status-cluster">
+            <span class="pill ${snapshot.settings.default_visibility === "Public" ? "warn" : "ok"}">${escapeHtml(audienceLabel(snapshot.settings.default_visibility))}</span>
+            <span class="pill">${escapeHtml(snapshot.settings.default_protocol)}</span>
             <span class="pill ${snapshot.settings.owner_token_present ? "ok" : "warn"}">${
               snapshot.settings.owner_token_present ? "Token stored" : "Token needed"
             }</span>
@@ -1023,6 +1071,19 @@ function render() {
     });
   });
   app.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", saveSettings);
+  app.querySelector<HTMLSelectElement>("#account-switcher")?.addEventListener("change", (event) => {
+    void switchAccount((event.currentTarget as HTMLSelectElement).value);
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-account-switch]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void switchAccount(button.dataset.accountSwitch || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-account-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void deleteAccount(button.dataset.accountDelete || "");
+    });
+  });
   app.querySelector<HTMLFormElement>("#profile-form")?.addEventListener("submit", saveProfile);
   app.querySelector<HTMLFormElement>("#compose-form")?.addEventListener("submit", publishPost);
   app.querySelector<HTMLFormElement>("#compose-form")?.addEventListener("input", updateComposeStateFromForm);
@@ -1233,6 +1294,19 @@ function navGroup(group: { label: string; sections: string[] }) {
     <h2>${escapeHtml(group.label)}</h2>
     ${group.sections.map(navButton).join("")}
   </section>`;
+}
+
+function accountSwitcher() {
+  if (!accountProfiles.length) return "";
+  return `<select id="account-switcher" class="account-switcher" aria-label="Active Dais account">
+    ${accountProfiles
+      .map((account) => `<option value="${escapeAttr(account.id)}"${account.active ? " selected" : ""}>${escapeHtml(account.label)}</option>`)
+      .join("")}
+  </select>`;
+}
+
+function activeAccountProfile() {
+  return accountProfiles.find((account) => account.active) || accountProfiles[0] || null;
 }
 
 function toolbarButton(section: string) {
@@ -2042,11 +2116,47 @@ function pendingLiveView(section: string) {
 }
 
 function settingsView(data: OwnerSnapshot) {
-  return `<form id="settings-form" class="panel settings">
-    <label>Instance URL<input name="instance" value="${escapeAttr(data.settings.instance_url)}" /></label>
-    <label>Owner token<input name="token" type="password" placeholder="${data.settings.owner_token_present ? "stored" : "required"}" /></label>
-    <button>Save settings</button>
-  </form>`;
+  const activeAccount = activeAccountProfile();
+  return `<section class="split">
+    <article class="panel settings account-manager">
+      <div class="section-heading">
+        <h2>Accounts</h2>
+        <span class="pill ${accountProfiles.length > 1 ? "ok" : "warn"}">${accountProfiles.length} configured</span>
+      </div>
+      <p class="privacy-note">Accounts are local client profiles. Switching changes which Dais instance receives reads, posts, replies, follows, watches, moderation, and operator commands.</p>
+      ${list(accountProfiles.map(accountCard), "No local account profiles are configured.")}
+    </article>
+    <form id="settings-form" class="panel settings">
+      <div>
+        <h2>Add or update account</h2>
+        <p>${activeAccount ? `Active: ${escapeHtml(activeAccount.label)} · ${escapeHtml(shortHost(activeAccount.instance_url))}` : "Connect a Dais owner API token."}</p>
+      </div>
+      <label>Account label
+        <input name="label" value="${escapeAttr(activeAccount?.label || "")}" placeholder="Skeptical Engineer" />
+      </label>
+      <label>Instance URL
+        <input name="instance" value="${escapeAttr(activeAccount?.instance_url || data.settings.instance_url)}" placeholder="https://skeptical.engineer" />
+      </label>
+      <label>Owner token
+        <input name="token" type="password" placeholder="${activeAccount?.owner_token_present || data.settings.owner_token_present ? "stored" : "required"}" />
+      </label>
+      <p>Saving an existing instance updates its local label or token. Saving a new instance creates it and makes it active.</p>
+      <button>Save account</button>
+    </form>
+  </section>`;
+}
+
+function accountCard(account: OwnerAccountProfile) {
+  return `<article class="item account-item">
+    <h3>${escapeHtml(account.label)}</h3>
+    <p>${escapeHtml(account.instance_url)}</p>
+    <footer>
+      <span class="pill ${account.active ? "ok" : ""}">${account.active ? "Active" : "Saved"}</span>
+      <span class="pill ${account.owner_token_present ? "ok" : "warn"}">${account.owner_token_present ? "Token stored" : "Token needed"}</span>
+      ${account.active ? "" : `<button type="button" data-account-switch="${escapeAttr(account.id)}">Use</button>`}
+      ${accountProfiles.length > 1 ? `<button type="button" data-account-delete="${escapeAttr(account.id)}">Forget</button>` : ""}
+    </footer>
+  </article>`;
 }
 
 function profileView(data: OwnerSnapshot) {
@@ -2644,11 +2754,51 @@ async function saveSettings(event: SubmitEvent) {
   event.preventDefault();
   const form = new FormData(event.target as HTMLFormElement);
   await ownerInvoke("save_owner_settings", {
+    label: String(form.get("label") || ""),
     instanceUrl: String(form.get("instance") || ""),
     ownerToken: String(form.get("token") || "")
   });
-  notice = "Settings saved.";
+  resetAccountScopedState();
+  notice = "Account saved and activated.";
   await load();
+}
+
+async function switchAccount(accountId: string) {
+  if (!accountId) return;
+  const account = accountProfiles.find((profile) => profile.id === accountId);
+  await ownerInvoke("switch_owner_account", { accountId });
+  resetAccountScopedState();
+  notice = `Switched to ${account?.label || "selected account"}.`;
+  await load();
+}
+
+async function deleteAccount(accountId: string) {
+  if (!accountId) return;
+  const account = accountProfiles.find((profile) => profile.id === accountId);
+  await ownerInvoke("delete_owner_account", { accountId });
+  resetAccountScopedState();
+  notice = `Forgot ${account?.label || "account"}.`;
+  await load();
+}
+
+function resetAccountScopedState() {
+  snapshot = null;
+  composeState = null;
+  draftAttachments = [];
+  draftReplyTo = "";
+  discoveredActor = null;
+  selectedPostDetail = null;
+  notifications = [];
+  deliveries = [];
+  sourceSubscriptions = [];
+  sourceItems = [];
+  watchSubscriptions = [];
+  watchItems = [];
+  moderationState = null;
+  moderationReplies = [];
+  directMessages = [];
+  searchResults = emptySearchResults();
+  ownerStats = null;
 }
 
 async function saveProfile(event: SubmitEvent) {

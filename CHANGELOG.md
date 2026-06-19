@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.99] - 2026-06-19
+
+### Added
+- Added local multi-account support to Dais Desk so the owner client can store
+  multiple Dais instance profiles, switch the active account from the sidebar or
+  Settings, and route owner API reads, posts, replies, follows, watches, and
+  moderation actions through the selected instance.
+
 ## [1.28.98] - 2026-06-19
 
 ### Changed

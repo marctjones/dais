@@ -102,7 +102,7 @@ textarea:focus-visible {
   border-right: 1px solid var(--hairline);
   background: linear-gradient(180deg, rgba(244, 244, 247, 0.94), rgba(232, 232, 237, 0.94));
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .brand {
@@ -145,6 +145,15 @@ textarea:focus-visible {
   background: linear-gradient(180deg, #2d8cff, #006bd6);
   color: #ffffff;
   font-weight: 800;
+}
+
+.account-switcher {
+  width: 100%;
+  min-height: 28px;
+  margin-top: 7px;
+  border-color: var(--hairline);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
 }
 
 .nav {
@@ -221,14 +230,6 @@ textarea:focus-visible {
 .nav button.active span:first-child {
   background: var(--accent);
   color: #ffffff;
-}
-
-.sidebar-footer {
-  display: grid;
-  gap: 6px;
-  padding: 11px 14px 14px;
-  border-top: 1px solid var(--hairline);
-  color: var(--secondary);
 }
 
 .workspace {
@@ -763,6 +764,14 @@ select {
   max-width: 760px;
 }
 
+.account-manager {
+  align-self: start;
+}
+
+.account-item footer {
+  justify-content: flex-start;
+}
+
 .list {
   display: grid;
   gap: 8px;
@@ -1016,8 +1025,7 @@ select {
     grid-template-rows: auto;
   }
 
-  .brand,
-  .sidebar-footer {
+  .brand {
     display: none;
   }
 

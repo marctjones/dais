@@ -144,6 +144,18 @@ for (const check of [
     ],
   },
   {
+    section: "Settings",
+    expected: [
+      "Accounts",
+      "Dais Social",
+      "Skeptical Engineer",
+      "Jones Law",
+      "Add or update account",
+      "https://skeptical.engineer",
+      "https://joneslaw.io",
+    ],
+  },
+  {
     section: "Moderation",
     expected: [
       "Federation safety",
