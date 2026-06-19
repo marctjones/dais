@@ -2717,7 +2717,7 @@ impl DeskController {
                 ),
                 "Actor",
                 "info",
-                "Copy evidence",
+                "",
                 "",
             ),
         ]
@@ -2892,7 +2892,7 @@ impl DeskController {
             "Raw ActivityPub, AT Protocol, delivery IDs, and provider payloads belong in Diagnostics, not normal reading rows.",
             "Debug",
             "info",
-            "Copy evidence",
+            "",
             "",
         ));
         rows
@@ -3855,7 +3855,7 @@ fn diagnostic_row(diagnostic: &DiagnosticStatus) -> UiRow {
         &diagnostic.detail,
         if diagnostic.ok { "OK" } else { "Issue" },
         if diagnostic.ok { "ok" } else { "warn" },
-        if diagnostic.ok { "" } else { "Copy evidence" },
+        "",
         "",
     )
 }
