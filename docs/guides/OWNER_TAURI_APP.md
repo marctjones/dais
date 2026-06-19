@@ -4,6 +4,10 @@ The first-party owner app lives in `apps/owner-tauri`. It is a Tauri v2 desktop
 shell intended to share Rust owner-client models with the CLI/TUI through
 `client-core`, and to become Android-capable later without a UI rewrite.
 
+The target information architecture for the next GUI pass is documented in
+`docs/design/DAIS_DESK_INFORMATION_ARCHITECTURE.md`: Home for daily social work,
+People for relationships and discovery, and Server for operator tasks.
+
 Current status:
 
 - Adaptive desktop/narrow layout for Home, Posts, Sources, Notifications,
