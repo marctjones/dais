@@ -1954,10 +1954,10 @@ function homeTimelineCard(post: OwnerSnapshot["home_timeline"][number]) {
       ${sensitivityBadgesHtml(post.content)}
     </div>
     <footer>
-      <span title="${escapeAttr(audienceDescription(post.visibility))}">${escapeHtml(audienceLabel(post.visibility))}</span>
+      <span title="${escapeAttr(audienceDescription(post.visibility))}">${escapeHtml(compactAudienceLabel(post.visibility))}</span>
       ${post.protocol ? `<span>${escapeHtml(post.protocol)}</span>` : ""}
       ${post.in_reply_to ? "<span>reply</span>" : ""}
-      ${post.published_at ? `<time>${escapeHtml(formatTime(post.published_at))}</time>` : ""}
+      ${post.published_at ? `<time title="${escapeAttr(formatTime(post.published_at))}">${escapeHtml(formatFeedTime(post.published_at))}</time>` : ""}
       ${interactionCounts(post)}
       <button type="button" data-home-select="${escapeAttr(post.object_id)}">Details</button>
       <button type="button" data-timeline-action="reply" data-object="${escapeAttr(post.object_id)}">Reply</button>
@@ -3061,6 +3061,15 @@ function audienceLabel(value: unknown) {
   if (normalized === "followers" || normalized === "private") return "Followers - approved followers";
   if (normalized === "direct") return "Direct - named recipients";
   return `${String(value || "Unknown")} - check audience`;
+}
+
+function compactAudienceLabel(value: unknown) {
+  const normalized = String(value || "unknown").toLowerCase();
+  if (normalized === "public") return "Public";
+  if (normalized === "unlisted") return "Unlisted";
+  if (normalized === "followers" || normalized === "private") return "Followers";
+  if (normalized === "direct") return "Direct";
+  return String(value || "Unknown");
 }
 
 function audienceDescription(value: unknown) {
@@ -4466,6 +4475,19 @@ function actorLabel(value: string) {
 function formatTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatFeedTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
 }
 
 function escapeHtml(value: string) {
