@@ -1053,6 +1053,23 @@ button.summary-card:hover {
   border-left: 3px solid var(--warning);
 }
 
+.notification-copy {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.notification-copy .post-body {
+  margin-top: 0;
+  color: var(--text);
+}
+
+.notification-empty {
+  color: var(--secondary);
+}
+
 .delivery-item.failed,
 .diagnostic-item.bad {
   border-left-color: var(--danger);
@@ -1775,6 +1792,7 @@ button.inline-link.active {
   .compose-identity,
   .reply-target,
   .media-box,
+  .notification-copy,
   .preview-card,
   .home-context-bar div,
   .feed-preset-panel,

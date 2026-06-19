@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DMs, Deliveries, Followers, Following, Friends, Audience, Search, Sources,
   Watches, Moderation, Diagnostics, Profile, Settings, Stats, and Posts.
 
+### Fixed
+- Rendered Dais Desk notification content as safe rich text so ActivityPub HTML,
+  HTML-escaped markup, and links display as readable notification copy instead
+  of raw markup or activity identifiers.
+
 ## [1.28.99] - 2026-06-19
 
 ### Added

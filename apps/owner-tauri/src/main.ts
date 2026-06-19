@@ -287,6 +287,7 @@ type OwnerNotification = {
   post_id?: string | null;
   activity_id?: string | null;
   content?: string | null;
+  content_html?: string | null;
   read: boolean | number | string | null;
   created_at?: string | null;
 };
@@ -1113,7 +1114,7 @@ function smokeNotifications(): OwnerNotification[] {
       actor_display_name: "Alice Example",
       post_id: smokePostId,
       activity_id: `${smokePostId}#mention`,
-      content: "Alice mentioned you in a public thread.",
+      content_html: `<p>Alice mentioned <strong>you</strong> in a <a href="https://example.com/thread">public thread</a>.</p><script>bad()</script>`,
       read: true,
       created_at: "2026-06-16T14:08:00Z"
     },
@@ -1124,7 +1125,7 @@ function smokeNotifications(): OwnerNotification[] {
       actor_display_name: "Alice Example",
       post_id: smokePostId,
       activity_id: `${smokePostId}#reply`,
-      content: "Alice replied and may need a response.",
+      content: "&lt;p&gt;Alice replied and may need a &lt;em&gt;response&lt;/em&gt;.&lt;/p&gt;",
       read: false,
       created_at: "2026-06-16T14:09:00Z"
     }
@@ -3460,22 +3461,56 @@ function notificationCard(row: OwnerNotification) {
   const actor = row.actor_display_name || row.actor_username || actorLabel(row.actor_id);
   const read = isRead(row.read);
   const kind = notificationKind(row.type);
+  const label = notificationTypeLabel(kind);
   return `<article class="panel item notification-item ${read ? "read" : "unread"}">
     <div>
       <div class="item-title-row">
-        <h2>${escapeHtml(kind)} from ${actorLink(row.actor_id, actor)}</h2>
+        <h2>${escapeHtml(label)} from ${actorLink(row.actor_id, actor)}</h2>
         <span class="pill ${read ? "ok" : "warn"}">${read ? "read" : "unread"}</span>
       </div>
-      ${postBodyHtml(row.content || row.activity_id || "")}
+      ${notificationBodyHtml(row)}
     </div>
     <footer>
-      <span>${escapeHtml(row.type)}</span>
-      ${row.post_id ? `<span>${escapeHtml(shortUrl(row.post_id))}</span>` : ""}
+      <span>${escapeHtml(label)}</span>
+      ${row.post_id ? `<span>Related post</span>` : ""}
       ${row.created_at ? `<time>${escapeHtml(formatTime(row.created_at))}</time>` : ""}
       ${row.post_id ? `<button type="button" data-post-detail="${escapeAttr(row.post_id)}">Post detail</button>` : ""}
       ${read ? "" : `<button type="button" data-notification-read="${escapeAttr(row.id)}">Mark read</button>`}
     </footer>
   </article>`;
+}
+
+function notificationTypeLabel(kind: string) {
+  const normalized = String(kind || "notification").toLowerCase().replaceAll("_", " ");
+  if (normalized === "favourite" || normalized === "favorite") return "Like";
+  if (normalized === "reblog" || normalized === "boost") return "Boost";
+  if (normalized === "follow request") return "Follow request";
+  return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
+}
+
+function notificationBodyHtml(row: OwnerNotification) {
+  const html = notificationHtmlSource(row);
+  if (html) {
+    return `<div class="notification-copy">${postBodyHtml(stripTags(stripDangerousHtmlBlocks(decodeHtmlEntities(html))), html)}</div>`;
+  }
+  const text = String(row.content || "").trim();
+  if (text) {
+    return `<div class="notification-copy">${postBodyHtml(decodeHtmlEntities(text))}</div>`;
+  }
+  return `<p class="notification-copy notification-empty">No preview text available.</p>`;
+}
+
+function notificationHtmlSource(row: OwnerNotification) {
+  const explicit = String(row.content_html || "").trim();
+  if (explicit) return decodeHtmlEntities(explicit);
+  const content = String(row.content || "").trim();
+  if (!content) return "";
+  const decoded = decodeHtmlEntities(content);
+  return looksLikeHtml(decoded) ? decoded : "";
+}
+
+function looksLikeHtml(value: string) {
+  return /<\/?[a-z][a-z0-9-]*(?:\s[^>]*)?>/i.test(value);
 }
 
 function deliveryCard(row: OwnerDelivery) {
@@ -4751,6 +4786,27 @@ function stripTags(value: string) {
   return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function stripDangerousHtmlBlocks(value: string) {
+  return String(value || "").replace(
+    /<(script|style|iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1>/gi,
+    " "
+  );
+}
+
+function decodeHtmlEntities(value: string) {
+  const raw = String(value || "");
+  return raw
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, number) => String.fromCodePoint(parseInt(number, 10)))
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
 const safePostHtmlTags = new Set([
   "a",
   "p",
@@ -4779,7 +4835,7 @@ function postBodyHtml(text: string, html?: string | null) {
 
 function sanitizePostHtml(html: string) {
   if (typeof DOMParser === "undefined") {
-    return linkifyPlainText(stripTags(html));
+    return linkifyPlainText(stripTags(stripDangerousHtmlBlocks(html)));
   }
   const document = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
   sanitizePostChildren(document.body);
