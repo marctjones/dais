@@ -320,10 +320,25 @@ textarea {
 }
 
 .inline-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 14px;
+}
+
+.inline-form input {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+
+.inline-form select {
+  flex: 1 1 126px;
+  min-width: 0;
+}
+
+.inline-form button {
+  flex: 0 0 auto;
 }
 
 label {

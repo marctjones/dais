@@ -28,8 +28,8 @@ use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient,
     OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing,
     OwnerFriend, OwnerInteraction, OwnerMediaUpload, OwnerNotification, OwnerPostDetail,
-    OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd,
-    OwnerSources, OwnerStats, OwnerWatchAdd, ProtocolRoute as OwnerProtocolRoute,
+    OwnerProfile, OwnerProfileUpdate, OwnerSearchQuery, OwnerSearchResult, OwnerSnapshot,
+    OwnerSourceAdd, OwnerSources, OwnerStats, OwnerWatchAdd, ProtocolRoute as OwnerProtocolRoute,
     Visibility as OwnerVisibility,
 };
 use posting::{
@@ -1082,11 +1082,23 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
         }
         OwnerCommand::Search(args) => {
             let results = owner_api(&args.api)
-                .search_with_scope_confirmation(
-                    &args.query,
-                    &args.scope,
-                    args.confirm_public_sensitive,
-                )
+                .search_with_options(&OwnerSearchQuery {
+                    query: args.query.clone(),
+                    scope: args.scope.clone(),
+                    confirm_public_sensitive: args.confirm_public_sensitive,
+                    provider: args.provider.clone(),
+                    result_type: args.result_type.clone(),
+                    servers: args.servers.clone(),
+                    sort: args.sort.clone(),
+                    since: args.since.clone(),
+                    until: args.until.clone(),
+                    author: args.author.clone(),
+                    mentions: args.mentions.clone(),
+                    lang: args.lang.clone(),
+                    domain: args.domain.clone(),
+                    url: args.url.clone(),
+                    tags: args.tags.clone(),
+                })
                 .await
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_search(&results);
@@ -1799,6 +1811,18 @@ fn print_owner_search(results: &OwnerSearchResult) {
             println!("author={handle}");
         }
         println!("url={}", post.url);
+        if let Some(watch_type) = post.watch_type.as_deref() {
+            println!("watch_type={watch_type}");
+        }
+        if let Some(watch_target) = post.watch_target.as_deref() {
+            println!("watch_target={watch_target}");
+        }
+        if let Some(reply_target) = post.reply_target.as_deref() {
+            println!("reply_target={reply_target}");
+        }
+        if !post.actions.is_empty() {
+            println!("actions={}", post.actions.join(","));
+        }
         println!("{}", post.content);
         println!();
     }
@@ -1816,6 +1840,18 @@ fn print_owner_search(results: &OwnerSearchResult) {
         }
         if let Some(url) = actor.url.as_deref() {
             println!("url={url}");
+        }
+        if let Some(watch_type) = actor.watch_type.as_deref() {
+            println!("watch_type={watch_type}");
+        }
+        if let Some(watch_target) = actor.watch_target.as_deref() {
+            println!("watch_target={watch_target}");
+        }
+        if let Some(follow_target) = actor.follow_target.as_deref() {
+            println!("follow_target={follow_target}");
+        }
+        if !actor.actions.is_empty() {
+            println!("actions={}", actor.actions.join(","));
         }
     }
     if !results.provider_errors.is_empty() {

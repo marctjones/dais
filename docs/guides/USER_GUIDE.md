@@ -162,6 +162,35 @@ dais followers reject @user@mastodon.social
 
 ---
 
+## Searching Public Posts and Accounts
+
+Owner search is local-only unless you opt into public providers.
+
+```bash
+# Search only Dais-local posts, follows, sources, and reader items
+dais owner search launch
+
+# Search public Bluesky and ActivityPub providers
+dais owner search --scope public --provider all launch
+
+# Search only Bluesky public posts
+dais owner search --scope public --provider bluesky --type posts --tag science launch
+
+# Search specific ActivityPub/Mastodon-compatible servers
+dais owner search --scope public --provider activitypub --server mastodon.social --server fosstodon.org launch
+
+# Confirm a sensitive-looking public query
+dais owner search --scope public --confirm-public-sensitive "medical privacy"
+```
+
+The owner desktop app has the same public search controls in the Search section.
+Public result cards expose actions returned by the server, including Open,
+Watch, Reply, Follow, and ActivityPub Like/Boost where available. Public search
+queries are sent to the selected public provider servers; local search does not
+send the query outside the Dais server.
+
+---
+
 ## Watching Public Posts
 
 Watch is private public-post monitoring. It is separate from following or

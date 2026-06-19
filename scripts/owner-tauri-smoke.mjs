@@ -130,6 +130,20 @@ for (const check of [
     ],
   },
   {
+    section: "Search",
+    expected: [
+      "Search",
+      "All providers",
+      "Bluesky",
+      "ActivityPub",
+      "Posts + actors",
+      "ActivityPub servers",
+      "Public posts",
+      "Public actors",
+      "Providers",
+    ],
+  },
+  {
     section: "Moderation",
     expected: [
       "Federation safety",

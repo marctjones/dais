@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Expanded owner public search into a brokered Bluesky and ActivityPub discovery
+  flow with provider/type/server filters, Bluesky AppView post filters, direct
+  ActivityPub URL/handle resolution, normalized result actions, CLI flags, and
+  desktop owner controls for Watch, Reply, Follow, Open, and ActivityPub
+  Like/Boost actions.
+
 ## [1.28.92] - 2026-06-18
 
 ### Fixed

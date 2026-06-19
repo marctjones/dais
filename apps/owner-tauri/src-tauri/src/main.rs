@@ -3,9 +3,10 @@ use dais_client_core::{
     OwnerActionResult, OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert,
     OwnerCreatedPost, OwnerDeletedPost, OwnerDelivery, OwnerDiscoveredActor, OwnerFollowResult,
     OwnerInteraction, OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification,
-    OwnerPost, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSearchResult, OwnerSection,
-    OwnerSettings, OwnerSnapshot, OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult,
-    OwnerSources, OwnerStats, OwnerWatchAdd, ProtocolRoute, SourceItem, Visibility,
+    OwnerPost, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSearchQuery,
+    OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSnapshot, OwnerSourceAdd,
+    OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources, OwnerStats, OwnerWatchAdd,
+    ProtocolRoute, SourceItem, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -201,6 +202,18 @@ async fn owner_search(
     app: tauri::AppHandle,
     query: String,
     scope: Option<String>,
+    provider: Option<String>,
+    result_type: Option<String>,
+    servers: Option<Vec<String>>,
+    sort: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    author: Option<String>,
+    mentions: Option<String>,
+    lang: Option<String>,
+    domain: Option<String>,
+    url: Option<String>,
+    tags: Option<Vec<String>>,
     confirm_public_sensitive: Option<bool>,
 ) -> Result<OwnerSearchResult, String> {
     let stored = load_settings(&app)?;
@@ -211,11 +224,23 @@ async fn owner_search(
         .ok_or_else(|| "owner token is required".to_string())?;
     let client = OwnerApiClient::new(&stored.instance_url, token);
     client
-        .search_with_scope_confirmation(
-            &query,
-            scope.as_deref().unwrap_or("local"),
-            confirm_public_sensitive.unwrap_or(false),
-        )
+        .search_with_options(&OwnerSearchQuery {
+            query,
+            scope: scope.unwrap_or_else(|| "local".to_string()),
+            confirm_public_sensitive: confirm_public_sensitive.unwrap_or(false),
+            provider,
+            result_type,
+            servers: servers.unwrap_or_default(),
+            sort,
+            since,
+            until,
+            author,
+            mentions,
+            lang,
+            domain,
+            url,
+            tags: tags.unwrap_or_default(),
+        })
         .await
         .map_err(|error| error.to_string())
 }

@@ -892,6 +892,42 @@ pub struct OwnerSearchArgs {
     /// Search scope: local, public, or all.
     #[arg(long, default_value = "local")]
     pub scope: String,
+    /// Public provider: all, bluesky, or activitypub.
+    #[arg(long)]
+    pub provider: Option<String>,
+    /// Public result type: all, posts, or actors.
+    #[arg(long = "type")]
+    pub result_type: Option<String>,
+    /// ActivityPub/Mastodon-compatible server to search. May be repeated.
+    #[arg(long = "server")]
+    pub servers: Vec<String>,
+    /// Public post sort where supported: latest or top.
+    #[arg(long)]
+    pub sort: Option<String>,
+    /// Search public posts after this ISO date/time where supported.
+    #[arg(long)]
+    pub since: Option<String>,
+    /// Search public posts before this ISO date/time where supported.
+    #[arg(long)]
+    pub until: Option<String>,
+    /// Filter public posts by author where supported.
+    #[arg(long)]
+    pub author: Option<String>,
+    /// Filter public posts mentioning this account where supported.
+    #[arg(long)]
+    pub mentions: Option<String>,
+    /// Filter public posts by language where supported.
+    #[arg(long)]
+    pub lang: Option<String>,
+    /// Filter public posts linking to this domain where supported.
+    #[arg(long)]
+    pub domain: Option<String>,
+    /// Filter public posts linking to this URL where supported.
+    #[arg(long)]
+    pub url: Option<String>,
+    /// Filter public posts by tag where supported. May be repeated.
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
     /// Allow sensitive-looking queries to be sent to public search providers.
     #[arg(long)]
     pub confirm_public_sensitive: bool,

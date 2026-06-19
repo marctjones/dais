@@ -86,6 +86,18 @@ Complete feature list for dais single-user ActivityPub & AT Protocol server.
 - **Owner Controls** - Add, list, refresh, and remove Watch targets from the
   owner API, CLI, and desktop owner app
 
+### Public Search ✅
+- **Brokered Public Search** - Owner API mediates public Bluesky and ActivityPub
+  search so clients do not call providers directly
+- **Provider Filters** - Search all providers, only Bluesky, or only
+  ActivityPub/Mastodon-compatible servers
+- **Result Filters** - Search posts, actors, tags, authors, languages, linked
+  domains, and selected ActivityPub servers where providers support it
+- **Result Actions** - Public results expose Watch, Reply, Follow, Open, and
+  ActivityPub Like/Boost actions when the target supports them
+- **Privacy Guardrails** - Public search is opt-in, blocks sensitive-looking
+  provider queries until confirmed, and keeps local search private
+
 ### Notifications ✅
 - **Follow Notifications** - New follower alerts
 - **Mention Notifications** - @-mentions

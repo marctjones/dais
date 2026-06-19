@@ -177,12 +177,63 @@ impl OwnerApiClient {
         scope: &str,
         confirm_public_sensitive: bool,
     ) -> ClientResult<OwnerSearchResult> {
-        let mut path = format!(
-            "/api/dais/owner/search?q={}&scope={}",
-            url_encode(query),
-            url_encode(scope)
-        );
-        if confirm_public_sensitive {
+        self.search_with_options(&OwnerSearchQuery {
+            query: query.to_string(),
+            scope: scope.to_string(),
+            confirm_public_sensitive,
+            ..OwnerSearchQuery::default()
+        })
+        .await
+    }
+
+    pub async fn search_with_options(
+        &self,
+        options: &OwnerSearchQuery,
+    ) -> ClientResult<OwnerSearchResult> {
+        let mut params = vec![
+            ("q", options.query.as_str()),
+            ("scope", options.scope.as_str()),
+        ];
+        if let Some(provider) = options.provider.as_deref() {
+            params.push(("provider", provider));
+        }
+        if let Some(result_type) = options.result_type.as_deref() {
+            params.push(("type", result_type));
+        }
+        if let Some(sort) = options.sort.as_deref() {
+            params.push(("sort", sort));
+        }
+        if let Some(since) = options.since.as_deref() {
+            params.push(("since", since));
+        }
+        if let Some(until) = options.until.as_deref() {
+            params.push(("until", until));
+        }
+        if let Some(author) = options.author.as_deref() {
+            params.push(("author", author));
+        }
+        if let Some(mentions) = options.mentions.as_deref() {
+            params.push(("mentions", mentions));
+        }
+        if let Some(lang) = options.lang.as_deref() {
+            params.push(("lang", lang));
+        }
+        if let Some(domain) = options.domain.as_deref() {
+            params.push(("domain", domain));
+        }
+        if let Some(url) = options.url.as_deref() {
+            params.push(("url", url));
+        }
+        let mut path = format!("/api/dais/owner/search?{}", encode_query(&params));
+        for server in &options.servers {
+            path.push_str("&server=");
+            path.push_str(&url_encode(server));
+        }
+        for tag in &options.tags {
+            path.push_str("&tag=");
+            path.push_str(&url_encode(tag));
+        }
+        if options.confirm_public_sensitive {
             path.push_str("&confirm_public_sensitive=true");
         }
         self.get(&path).await
@@ -748,6 +799,25 @@ pub struct OwnerSearchResult {
     pub public_search_guard: OwnerPublicSearchGuard,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OwnerSearchQuery {
+    pub query: String,
+    pub scope: String,
+    pub confirm_public_sensitive: bool,
+    pub provider: Option<String>,
+    pub result_type: Option<String>,
+    pub servers: Vec<String>,
+    pub sort: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub author: Option<String>,
+    pub mentions: Option<String>,
+    pub lang: Option<String>,
+    pub domain: Option<String>,
+    pub url: Option<String>,
+    pub tags: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerPublicSearchGuard {
     #[serde(default)]
@@ -812,6 +882,7 @@ pub struct OwnerPublicSearchPost {
     pub id: String,
     pub url: String,
     pub content: String,
+    pub canonical_url: Option<String>,
     pub actor_id: Option<String>,
     pub actor_handle: Option<String>,
     pub actor_display_name: Option<String>,
@@ -819,6 +890,11 @@ pub struct OwnerPublicSearchPost {
     pub summary: Option<String>,
     pub object_type: Option<String>,
     pub published_at: Option<String>,
+    pub watch_type: Option<String>,
+    pub watch_target: Option<String>,
+    pub reply_target: Option<String>,
+    #[serde(default)]
+    pub actions: Vec<String>,
     pub cid: Option<String>,
     pub reply_count: Option<u64>,
     pub repost_count: Option<u64>,
@@ -835,6 +911,11 @@ pub struct OwnerPublicSearchActor {
     pub summary: Option<String>,
     pub url: Option<String>,
     pub avatar_url: Option<String>,
+    pub watch_type: Option<String>,
+    pub watch_target: Option<String>,
+    pub follow_target: Option<String>,
+    #[serde(default)]
+    pub actions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1152,6 +1233,14 @@ fn url_encode(value: &str) -> String {
         }
     }
     encoded
+}
+
+fn encode_query(params: &[(&str, &str)]) -> String {
+    params
+        .iter()
+        .map(|(key, value)| format!("{}={}", url_encode(key), url_encode(value)))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 #[cfg(test)]

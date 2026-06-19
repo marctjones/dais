@@ -369,6 +369,7 @@ type OwnerSearchResult = {
     id: string;
     url: string;
     content: string;
+    canonical_url?: string | null;
     actor_id?: string | null;
     actor_handle?: string | null;
     actor_display_name?: string | null;
@@ -376,6 +377,10 @@ type OwnerSearchResult = {
     summary?: string | null;
     object_type?: string | null;
     published_at?: string | null;
+    watch_type?: string | null;
+    watch_target?: string | null;
+    reply_target?: string | null;
+    actions?: string[] | null;
     cid?: string | null;
     reply_count?: number | null;
     repost_count?: number | null;
@@ -390,6 +395,10 @@ type OwnerSearchResult = {
     summary?: string | null;
     url?: string | null;
     avatar_url?: string | null;
+    watch_type?: string | null;
+    watch_target?: string | null;
+    follow_target?: string | null;
+    actions?: string[] | null;
   }>;
   provider_errors: Array<{
     provider: string;
@@ -475,6 +484,13 @@ let moderationReplies: ModerationReply[] = [];
 let directMessages: OwnerDirectMessage[] = [];
 let searchQuery = "";
 let searchScope = "local";
+let searchProvider = "all";
+let searchResultType = "all";
+let searchServers = "";
+let searchSort = "latest";
+let searchLang = "";
+let searchAuthor = "";
+let searchTag = "";
 let searchResults: OwnerSearchResult = emptySearchResults();
 let ownerStats: OwnerStats | null = null;
 let showTimelineReplies = false;
@@ -696,7 +712,11 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
           url: "https://bsky.app/profile/smoke.example/post/3smoke",
           content: "Public smoke result",
           actor_handle: "smoke.example",
-          published_at: "2026-06-17T12:00:00Z"
+          published_at: "2026-06-17T12:00:00Z",
+          watch_type: "bluesky_post",
+          watch_target: "at://did:plc:smoke/app.bsky.feed.post/3smoke",
+          reply_target: "at://did:plc:smoke/app.bsky.feed.post/3smoke",
+          actions: ["open", "watch", "reply"]
         }
       ] : [],
       public_actors: includePublic && !publicBlocked ? [
@@ -705,7 +725,12 @@ async function smokeInvoke<T>(command: string, args?: Record<string, unknown>): 
           network: "activitypub",
           id: "https://mastodon.social/@smoke",
           handle: "smoke@mastodon.social",
-          display_name: "Smoke"
+          display_name: "Smoke",
+          url: "https://mastodon.social/@smoke",
+          watch_type: "activitypub_actor",
+          watch_target: "https://mastodon.social/@smoke",
+          follow_target: "https://mastodon.social/@smoke",
+          actions: ["watch", "follow", "open"]
         }
       ] : [],
       provider_errors: [],
@@ -1081,6 +1106,35 @@ function render() {
       openLink(button.dataset.openLink || "");
     });
   });
+  app.querySelectorAll<HTMLButtonElement>("[data-search-watch]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void addWatchTarget(
+        button.dataset.watchType || "",
+        button.dataset.watchTarget || "",
+        button.dataset.watchTitle || ""
+      );
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-search-reply]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = button.dataset.searchReply || "";
+      if (!target) return;
+      draftReplyTo = target;
+      active = "Compose";
+      notice = `Replying to ${shortUrl(target)}.`;
+      render();
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-search-follow]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void followTarget(button.dataset.searchFollow || "");
+    });
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-search-interaction]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void ownerInteraction(button.dataset.object || "", button.dataset.searchInteraction || "");
+    });
+  });
   app.querySelectorAll<HTMLButtonElement>("[data-notification-read]").forEach((button) => {
     button.addEventListener("click", () => {
       void markNotificationRead(button.dataset.notificationRead || "");
@@ -1246,6 +1300,24 @@ function searchView() {
           <option value="public"${searchScope === "public" ? " selected" : ""}>Public</option>
           <option value="all"${searchScope === "all" ? " selected" : ""}>All</option>
         </select>
+        <select name="provider">
+          <option value="all"${searchProvider === "all" ? " selected" : ""}>All providers</option>
+          <option value="bluesky"${searchProvider === "bluesky" ? " selected" : ""}>Bluesky</option>
+          <option value="activitypub"${searchProvider === "activitypub" ? " selected" : ""}>ActivityPub</option>
+        </select>
+        <select name="result_type">
+          <option value="all"${searchResultType === "all" ? " selected" : ""}>Posts + actors</option>
+          <option value="posts"${searchResultType === "posts" ? " selected" : ""}>Posts</option>
+          <option value="actors"${searchResultType === "actors" ? " selected" : ""}>Actors</option>
+        </select>
+        <select name="sort">
+          <option value="latest"${searchSort === "latest" ? " selected" : ""}>Latest</option>
+          <option value="top"${searchSort === "top" ? " selected" : ""}>Top</option>
+        </select>
+        <input name="servers" value="${escapeAttr(searchServers)}" placeholder="ActivityPub servers" />
+        <input name="author" value="${escapeAttr(searchAuthor)}" placeholder="Author" />
+        <input name="tag" value="${escapeAttr(searchTag)}" placeholder="Tag" />
+        <input name="lang" value="${escapeAttr(searchLang)}" placeholder="Lang" />
         <button type="submit">Search</button>
       </form>
       ${searchPublicGuardHtml(searchResults.public_search_guard)}
@@ -2190,6 +2262,19 @@ function searchUserCard(row: OwnerSearchResult["users"][number]) {
 }
 
 function searchPublicPostCard(row: OwnerSearchResult["public_posts"][number]) {
+  const actions = new Set(row.actions || []);
+  const watchButton = actions.has("watch") && row.watch_type && row.watch_target
+    ? `<button type="button" data-search-watch="1" data-watch-type="${escapeAttr(row.watch_type)}" data-watch-target="${escapeAttr(row.watch_target)}" data-watch-title="${escapeAttr(row.actor_display_name || row.actor_handle || row.content || row.url)}">Watch</button>`
+    : "";
+  const replyButton = actions.has("reply") && row.reply_target
+    ? `<button type="button" data-search-reply="${escapeAttr(row.reply_target)}">Reply</button>`
+    : "";
+  const likeButton = actions.has("like")
+    ? `<button type="button" data-search-interaction="like" data-object="${escapeAttr(row.id)}">Like</button>`
+    : "";
+  const boostButton = actions.has("boost")
+    ? `<button type="button" data-search-interaction="boost" data-object="${escapeAttr(row.id)}">Boost</button>`
+    : "";
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.actor_display_name || row.actor_handle || shortUrl(row.url))}</h2>
@@ -2201,11 +2286,23 @@ function searchPublicPostCard(row: OwnerSearchResult["public_posts"][number]) {
       <span>${escapeHtml(row.provider)}</span>
       ${row.published_at ? `<time>${escapeHtml(formatTime(row.published_at))}</time>` : ""}
       <a href="${escapeAttr(row.url)}">${escapeHtml(shortHost(row.url))}</a>
+      <button type="button" data-open-link="${escapeAttr(row.url)}">Open</button>
+      ${watchButton}
+      ${replyButton}
+      ${likeButton}
+      ${boostButton}
     </footer>
   </article>`;
 }
 
 function searchPublicActorCard(row: OwnerSearchResult["public_actors"][number]) {
+  const actions = new Set(row.actions || []);
+  const watchButton = actions.has("watch") && row.watch_type && row.watch_target
+    ? `<button type="button" data-search-watch="1" data-watch-type="${escapeAttr(row.watch_type)}" data-watch-target="${escapeAttr(row.watch_target)}" data-watch-title="${escapeAttr(row.display_name || row.handle || row.id)}">Watch</button>`
+    : "";
+  const followButton = actions.has("follow") && row.follow_target
+    ? `<button type="button" data-search-follow="${escapeAttr(row.follow_target)}">Follow</button>`
+    : "";
   return `<article class="panel item">
     <div>
       <h2>${escapeHtml(row.display_name || row.handle || actorLabel(row.id))}</h2>
@@ -2215,6 +2312,9 @@ function searchPublicActorCard(row: OwnerSearchResult["public_actors"][number]) 
       <span>${escapeHtml(row.network)}</span>
       <span>${escapeHtml(row.provider)}</span>
       ${row.url ? `<a href="${escapeAttr(row.url)}">${escapeHtml(shortHost(row.url))}</a>` : ""}
+      ${row.url ? `<button type="button" data-open-link="${escapeAttr(row.url)}">Open</button>` : ""}
+      ${watchButton}
+      ${followButton}
     </footer>
   </article>`;
 }
@@ -2728,6 +2828,22 @@ async function addWatch(event: SubmitEvent) {
   await loadLiveSection("Watches");
 }
 
+async function addWatchTarget(watchType: string, target: string, title: string) {
+  if (!watchType || !target) return;
+  const result = await ownerInvoke<{ source: SourceSubscription }>("add_owner_watch", {
+    watchType,
+    target,
+    title: title || null,
+    cadenceMinutes: 60
+  });
+  notice = `Watching ${result.source.title || result.source.url}.`;
+  if (active === "Watches") {
+    await loadLiveSection("Watches");
+  } else {
+    render();
+  }
+}
+
 async function refreshWatch(id: string | null) {
   const result = await ownerInvoke<{ ok: boolean; items: Array<{ id: string; ok: boolean; error?: string | null }> }>(
     "refresh_owner_watch",
@@ -2936,18 +3052,35 @@ async function loadLiveSection(section: string) {
 async function runSearch(event: Event) {
   event.preventDefault();
   const form = event.currentTarget as HTMLFormElement;
-  const query = String(new FormData(form).get("query") || "").trim();
-  const scope = String(new FormData(form).get("scope") || "local").trim() || "local";
+  const data = new FormData(form);
+  const query = String(data.get("query") || "").trim();
+  const scope = String(data.get("scope") || "local").trim() || "local";
+  searchProvider = String(data.get("provider") || "all").trim() || "all";
+  searchResultType = String(data.get("result_type") || "all").trim() || "all";
+  searchServers = String(data.get("servers") || "").trim();
+  searchSort = String(data.get("sort") || "latest").trim() || "latest";
+  searchAuthor = String(data.get("author") || "").trim();
+  searchTag = String(data.get("tag") || "").trim();
+  searchLang = String(data.get("lang") || "").trim();
   await executeSearch(query, scope, false);
 }
 
 async function executeSearch(query: string, scope: string, confirmPublicSensitive: boolean) {
   searchQuery = query;
   searchScope = scope;
+  const servers = searchServers.split(",").map((value) => value.trim()).filter(Boolean);
+  const tags = searchTag.split(",").map((value) => value.trim().replace(/^#/, "")).filter(Boolean);
   searchResults = query
     ? normalizeSearchResults(await ownerInvoke<OwnerSearchResult>("owner_search", {
         query,
         scope,
+        provider: searchProvider,
+        resultType: searchResultType,
+        servers,
+        sort: searchSort,
+        author: searchAuthor || null,
+        lang: searchLang || null,
+        tags,
         confirmPublicSensitive
       }))
     : emptySearchResults();
