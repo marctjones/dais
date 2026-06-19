@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.95] - 2026-06-19
+
 ### Added
 - Expanded owner public search into a brokered Bluesky and ActivityPub discovery
   flow with provider/type/server filters, Bluesky AppView post filters, direct
