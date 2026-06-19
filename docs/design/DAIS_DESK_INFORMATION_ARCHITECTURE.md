@@ -4,7 +4,8 @@
 **Scope:** The first-party GUI client, currently `apps/owner-tauri`, as the
 owner/operator surface for one or more Dais instances.
 **Related:** `docs/POSITIONING.md`, `docs/design/PRIVATE_MODE.md`,
-`docs/design/CLIENT_REDESIGN.md`, `docs/guides/OWNER_TAURI_APP.md`.
+`docs/design/DAIS_DESK_DESIGN_SYSTEM.md`, `docs/design/CLIENT_REDESIGN.md`,
+`docs/guides/OWNER_TAURI_APP.md`.
 
 ## 1. Goal
 

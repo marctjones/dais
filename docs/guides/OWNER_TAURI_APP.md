@@ -6,7 +6,9 @@ shell intended to share Rust owner-client models with the CLI/TUI through
 
 The target information architecture for the next GUI pass is documented in
 `docs/design/DAIS_DESK_INFORMATION_ARCHITECTURE.md`: Home for daily social work,
-People for relationships and discovery, and Server for operator tasks.
+People for relationships and discovery, and Server for operator tasks. Reusable
+interaction rules and UI primitives are documented in
+`docs/design/DAIS_DESK_DESIGN_SYSTEM.md`.
 
 Current status:
 
