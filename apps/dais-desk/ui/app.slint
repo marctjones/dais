@@ -320,6 +320,11 @@ export component MainWindow inherits Window {
     in-out property <string> moderation-block-reason;
     in-out property <string> moderation-allow-host;
     in-out property <string> moderation-allow-note;
+    in-out property <string> settings-default-visibility;
+    in-out property <string> settings-default-protocol;
+    in-out property <bool> settings-require-authorized-fetch;
+    in-out property <bool> settings-manually-approves-followers;
+    in-out property <bool> settings-closed-network;
     in-out property <string> media-file-path;
     in-out property <string> media-type;
     in-out property <string> media-description;
@@ -341,6 +346,7 @@ export component MainWindow inherits Window {
     callback save-audience(string, string, string, string, string);
     callback delete-audience(string);
     callback save-moderation(string, bool, string, string);
+    callback save-settings(string, string, bool, bool, bool);
     callback block-actor(string, string);
     callback block-domain(string, string);
     callback allow-host(string, string);
@@ -972,7 +978,7 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                                if root.active-screen == "blocks" : Rectangle {
+                        if root.active-screen == "blocks" : Rectangle {
                             min-height: 174px;
                             border-radius: 7px;
                             border-width: 1px;
@@ -989,6 +995,42 @@ export component MainWindow inherits Window {
                                     spacing: 8px;
                                     Button { text: "Allow host"; clicked => { root.allow-host(root.moderation-allow-host, root.moderation-allow-note); } }
                                     Button { text: "Remove host"; clicked => { root.disallow-host(root.moderation-allow-host); } }
+                                }
+                            }
+                        }
+
+                        if root.active-screen == "settings" : Rectangle {
+                            min-height: 242px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            border-color: #d9dee6;
+                            background: #ffffff;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 8px;
+                                Text { text: "Owner defaults"; font-weight: 800; font-size: 13px; color: #172033; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    LineEdit {
+                                        text <=> root.settings-default-visibility;
+                                        placeholder-text: "followers, public, unlisted, direct";
+                                        horizontal-stretch: 1;
+                                    }
+                                    LineEdit {
+                                        text <=> root.settings-default-protocol;
+                                        placeholder-text: "activitypub, bluesky, both";
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                                CheckBox { text: "Require authorized fetch"; checked <=> root.settings-require-authorized-fetch; }
+                                CheckBox { text: "Approve followers manually"; checked <=> root.settings-manually-approves-followers; }
+                                CheckBox { text: "Closed network"; checked <=> root.settings-closed-network; }
+                                Button {
+                                    text: "Save defaults";
+                                    clicked => {
+                                        root.save-settings(root.settings-default-visibility, root.settings-default-protocol, root.settings-require-authorized-fetch, root.settings-manually-approves-followers, root.settings-closed-network);
+                                    }
                                 }
                             }
                         }

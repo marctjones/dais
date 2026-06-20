@@ -26,6 +26,17 @@ impl OwnerApiClient {
         self.get("/api/dais/owner/snapshot").await
     }
 
+    pub async fn settings(&self) -> ClientResult<OwnerSettings> {
+        self.get("/api/dais/owner/settings").await
+    }
+
+    pub async fn update_settings(
+        &self,
+        settings: &OwnerSettingsUpdate,
+    ) -> ClientResult<OwnerSettings> {
+        self.post("/api/dais/owner/settings", settings).await
+    }
+
     pub async fn home_timeline(
         &self,
         limit: usize,
@@ -150,6 +161,22 @@ impl OwnerApiClient {
     pub async fn deliveries(&self) -> ClientResult<Vec<OwnerDelivery>> {
         let response: OwnerItems<OwnerDelivery> = self.get("/api/dais/owner/deliveries").await?;
         Ok(response.items)
+    }
+
+    pub async fn retry_delivery(&self, id: &str) -> ClientResult<OwnerDelivery> {
+        self.post(
+            &format!("/api/dais/owner/deliveries/{}/retry", url_encode(id)),
+            &OwnerEmptyBody {},
+        )
+        .await
+    }
+
+    pub async fn cancel_delivery(&self, id: &str) -> ClientResult<OwnerDelivery> {
+        self.post(
+            &format!("/api/dais/owner/deliveries/{}/cancel", url_encode(id)),
+            &OwnerEmptyBody {},
+        )
+        .await
     }
 
     pub async fn direct_messages(&self) -> ClientResult<Vec<OwnerDirectMessage>> {
@@ -487,6 +514,15 @@ pub struct OwnerSettings {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSettingsUpdate {
+    pub default_visibility: Visibility,
+    pub default_protocol: ProtocolRoute,
+    pub require_authorized_fetch: bool,
+    pub manually_approves_followers: bool,
+    pub closed_network: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ComposeDraft {
     pub text: String,
     pub visibility: Visibility,
@@ -636,6 +672,9 @@ struct FollowTarget<'a> {
 struct NotificationRead<'a> {
     id: &'a str,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct OwnerEmptyBody {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct OwnerItems<T> {

@@ -3385,6 +3385,32 @@ fn origin(url: &worker::Url) -> String {
     format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default())
 }
 
+fn owner_instance_url(env: &Env) -> String {
+    let domain = env
+        .var("DOMAIN")
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| "social.dais.social".to_string());
+    if domain.starts_with("http://") || domain.starts_with("https://") {
+        domain.trim_end_matches('/').to_string()
+    } else {
+        format!("https://{}", domain.trim_end_matches('/'))
+    }
+}
+
+async fn column_exists(env: &Env, table: &str, column: &str) -> Result<bool> {
+    let db = env.d1("DB")?;
+    let sql = format!("PRAGMA table_info({table})");
+    let rows = db
+        .prepare(&sql)
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| string_field(Some(row), "name"))
+        .any(|name| name == column))
+}
+
 async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Result<Response> {
     if req.method() == worker::Method::Options {
         return api_json(&serde_json::json!({}), 204);
@@ -3406,6 +3432,14 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
 
     match (req.method(), owner_path) {
         (worker::Method::Get, "/snapshot") => api_json(&owner_snapshot(&env).await?, 200),
+        (worker::Method::Get, "/settings") => api_json(&owner_snapshot_settings(&env).await?, 200),
+        (worker::Method::Post, "/settings") => {
+            let body = read_json(&mut req).await;
+            match owner_update_settings(&env, &body).await {
+                Ok(settings) => api_json(&settings, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, "/profile") => api_json(&owner_profile(&env).await?, 200),
         (worker::Method::Post, "/profile") => {
             let body = read_json(&mut req).await;
@@ -3627,6 +3661,20 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Post, _) if owner_path.starts_with("/deliveries/") => {
+            match owner_delivery_action_path(owner_path) {
+                Some((delivery_id, action)) => {
+                    match owner_update_delivery_status(&env, delivery_id.as_str(), action).await {
+                        Ok(delivery) => api_json(&delivery, 200),
+                        Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+                    }
+                }
+                None => api_json(
+                    &serde_json::json!({ "error": "unsupported delivery action" }),
+                    404,
+                ),
+            }
+        }
         (worker::Method::Get, "/direct-messages") => api_json(
             &OwnerItems {
                 items: owner_direct_messages(&env, limit).await?,
@@ -3822,6 +3870,11 @@ fn owner_api_required_scopes(method: worker::Method, path: &str) -> &'static [&'
             &["follow"]
         }
         _ if path.starts_with("/moderation/") => &["moderation"],
+        _ if method != worker::Method::Get
+            && (path == "/settings" || path.starts_with("/deliveries/")) =>
+        {
+            &["write"]
+        }
         worker::Method::Get => &["read"],
         worker::Method::Delete => &["write"],
         _ if path == "/media" || path == "/media/revoke" => &["media"],
@@ -4239,28 +4292,150 @@ async fn owner_diagnostics(env: &Env) -> Result<Vec<OwnerDiagnostic>> {
 
 async fn owner_settings(env: &Env) -> Result<Map<String, Value>> {
     let db = env.d1("DB")?;
+    let has_default_protocol = column_exists(env, "instance_settings", "default_protocol").await?;
+    let select = if has_default_protocol {
+        r#"
+        SELECT default_visibility,
+               COALESCE(default_protocol, 'activitypub') AS default_protocol,
+               require_authorized_fetch, manually_approves_followers,
+               COALESCE(closed_network, 0) AS closed_network
+        FROM instance_settings
+        WHERE id = 1
+        "#
+    } else {
+        r#"
+        SELECT default_visibility, require_authorized_fetch, manually_approves_followers,
+               COALESCE(closed_network, 0) AS closed_network
+        FROM instance_settings
+        WHERE id = 1
+        "#
+    };
     Ok(db
-        .prepare(
-            r#"
-            SELECT default_visibility, require_authorized_fetch, manually_approves_followers,
-                   COALESCE(closed_network, 0) AS closed_network
-            FROM instance_settings
-            WHERE id = 1
-            "#,
-        )
+        .prepare(select)
         .first::<Map<String, Value>>(None)
         .await?
+        .map(|mut settings| {
+            settings
+                .entry("default_protocol".to_string())
+                .or_insert_with(|| Value::String("activitypub".to_string()));
+            settings
+        })
         .unwrap_or_else(|| {
             let mut settings = Map::new();
             settings.insert(
                 "default_visibility".to_string(),
                 Value::String("followers".to_string()),
             );
+            settings.insert(
+                "default_protocol".to_string(),
+                Value::String("activitypub".to_string()),
+            );
             settings.insert("require_authorized_fetch".to_string(), Value::from(1));
             settings.insert("manually_approves_followers".to_string(), Value::from(1));
             settings.insert("closed_network".to_string(), Value::from(0));
             settings
         }))
+}
+
+async fn owner_snapshot_settings(env: &Env) -> Result<Map<String, Value>> {
+    let settings = owner_settings(env).await?;
+    let default_visibility = string_field(Some(&settings), "default_visibility")
+        .unwrap_or_else(|| "followers".to_string());
+    let default_protocol = string_field(Some(&settings), "default_protocol")
+        .unwrap_or_else(|| "activitypub".to_string());
+    let mut snapshot_settings = Map::new();
+    snapshot_settings.insert(
+        "instance_url".to_string(),
+        Value::String(owner_instance_url(env)),
+    );
+    snapshot_settings.insert("owner_token_present".to_string(), Value::Bool(true));
+    snapshot_settings.insert(
+        "default_visibility".to_string(),
+        Value::String(title_visibility(Some(default_visibility.as_str()))),
+    );
+    snapshot_settings.insert(
+        "default_protocol".to_string(),
+        Value::String(title_protocol(Some(default_protocol.as_str()))),
+    );
+    Ok(snapshot_settings)
+}
+
+async fn owner_update_settings(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let Some(default_visibility) = normalize_visibility(
+        string_like_any(body, &["default_visibility", "defaultVisibility"])
+            .unwrap_or_else(|| "followers".to_string())
+            .as_str(),
+    ) else {
+        return Err("unsupported default_visibility".to_string());
+    };
+    let Some(default_protocol) = normalize_protocol(
+        string_like_any(body, &["default_protocol", "defaultProtocol"])
+            .unwrap_or_else(|| "activitypub".to_string())
+            .as_str(),
+    ) else {
+        return Err("unsupported default_protocol".to_string());
+    };
+    if matches!(default_visibility.as_str(), "followers" | "direct")
+        && default_protocol == "atproto"
+    {
+        return Err("private defaults cannot route only to atproto".to_string());
+    }
+    let require_authorized_fetch = body
+        .get("require_authorized_fetch")
+        .or_else(|| body.get("requireAuthorizedFetch"))
+        .map(js_truthy)
+        .unwrap_or(true);
+    let manually_approves_followers = body
+        .get("manually_approves_followers")
+        .or_else(|| body.get("manuallyApprovesFollowers"))
+        .map(js_truthy)
+        .unwrap_or(true);
+    let closed_network = body
+        .get("closed_network")
+        .or_else(|| body.get("closedNetwork"))
+        .map(js_truthy)
+        .unwrap_or(false);
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let default_visibility_arg = D1Type::Text(&default_visibility);
+    let default_protocol_arg = D1Type::Text(&default_protocol);
+    let require_arg = D1Type::Integer(if require_authorized_fetch { 1 } else { 0 });
+    let manual_arg = D1Type::Integer(if manually_approves_followers { 1 } else { 0 });
+    let closed_arg = D1Type::Integer(if closed_network { 1 } else { 0 });
+    db.prepare(
+        r#"
+        INSERT INTO instance_settings (
+            id, default_visibility, default_protocol, require_authorized_fetch,
+            manually_approves_followers, closed_network, updated_at
+        ) VALUES (
+            1, ?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            default_visibility = excluded.default_visibility,
+            default_protocol = excluded.default_protocol,
+            require_authorized_fetch = excluded.require_authorized_fetch,
+            manually_approves_followers = excluded.manually_approves_followers,
+            closed_network = excluded.closed_network,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind_refs(&[
+        default_visibility_arg,
+        default_protocol_arg,
+        require_arg,
+        manual_arg,
+        closed_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    owner_snapshot_settings(env)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn owner_snapshot(env: &Env) -> Result<Map<String, Value>> {
@@ -4274,24 +4449,7 @@ async fn owner_snapshot(env: &Env) -> Result<Map<String, Value>> {
     let sources = owner_source_items(env, 20).await?;
     let moderation = owner_moderation(env).await?;
     let diagnostics = owner_diagnostics(env).await?;
-    let settings = owner_settings(env).await?;
-
-    let mut snapshot_settings = Map::new();
-    snapshot_settings.insert(
-        "instance_url".to_string(),
-        Value::String("https://social.dais.social".to_string()),
-    );
-    snapshot_settings.insert("owner_token_present".to_string(), Value::Bool(true));
-    let default_visibility = string_field(Some(&settings), "default_visibility")
-        .unwrap_or_else(|| "followers".to_string());
-    snapshot_settings.insert(
-        "default_visibility".to_string(),
-        Value::String(title_visibility(Some(default_visibility.as_str()))),
-    );
-    snapshot_settings.insert(
-        "default_protocol".to_string(),
-        Value::String("Both".to_string()),
-    );
+    let snapshot_settings = owner_snapshot_settings(env).await?;
 
     let mut snapshot = Map::new();
     snapshot.insert("settings".to_string(), Value::Object(snapshot_settings));
@@ -6162,6 +6320,99 @@ async fn owner_deliveries(env: &Env, limit: i32) -> Result<Vec<Map<String, Value
     .all()
     .await?
     .results::<Map<String, Value>>()
+}
+
+fn owner_delivery_action_path(path: &str) -> Option<(String, &'static str)> {
+    let rest = path.strip_prefix("/deliveries/")?;
+    if let Some(id) = rest.strip_suffix("/retry") {
+        return (!id.is_empty()).then(|| (decode_component(id), "retry"));
+    }
+    if let Some(id) = rest.strip_suffix("/cancel") {
+        return (!id.is_empty()).then(|| (decode_component(id), "cancel"));
+    }
+    None
+}
+
+async fn owner_delivery_by_id(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare(
+        r#"
+        SELECT id, post_id, target_type, target_url, protocol, status, retry_count,
+               last_attempt_at, error_message, activity_type, created_at, delivered_at
+        FROM deliveries
+        WHERE id = ?1
+        LIMIT 1
+        "#,
+    )
+    .bind_refs(&id_arg)?
+    .first::<Map<String, Value>>(None)
+    .await
+}
+
+async fn owner_update_delivery_status(
+    env: &Env,
+    id: &str,
+    action: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    if id.trim().is_empty() {
+        return Err("delivery id is required".to_string());
+    }
+    let Some(existing) = owner_delivery_by_id(env, id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Err("delivery not found".to_string());
+    };
+    let status = string_field(Some(&existing), "status").unwrap_or_default();
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(id);
+    match action {
+        "retry" => {
+            if status == "delivered" {
+                return Err("delivered deliveries cannot be retried".to_string());
+            }
+            db.prepare(
+                r#"
+                UPDATE deliveries
+                SET status = 'queued',
+                    retry_count = COALESCE(retry_count, 0) + 1,
+                    error_message = NULL,
+                    delivered_at = NULL
+                WHERE id = ?1
+                "#,
+            )
+            .bind_refs(&id_arg)
+            .map_err(|error| error.to_string())?
+            .run()
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        "cancel" => {
+            if status == "delivered" {
+                return Err("delivered deliveries cannot be cancelled".to_string());
+            }
+            db.prepare(
+                r#"
+                UPDATE deliveries
+                SET status = 'failed',
+                    error_message = 'cancelled by owner',
+                    delivered_at = NULL
+                WHERE id = ?1
+                "#,
+            )
+            .bind_refs(&id_arg)
+            .map_err(|error| error.to_string())?
+            .run()
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        _ => return Err("unsupported delivery action".to_string()),
+    }
+    owner_delivery_by_id(env, id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "delivery not found after update".to_string())
 }
 
 async fn owner_direct_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {

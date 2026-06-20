@@ -7,9 +7,9 @@ use dais_client_core::{
     OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerInteractionResult, OwnerMedia,
     OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
     OwnerProfileUpdate, OwnerPublicSearchActor, OwnerPublicSearchPost, OwnerSearchQuery,
-    OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSourceAdd, OwnerSourceAddResult,
-    OwnerSourceRefreshResult, OwnerSources, OwnerStats, OwnerTimelinePost, OwnerWatchAdd,
-    ProtocolRoute, SourceItem, SourceSubscription, Visibility,
+    OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSettingsUpdate, OwnerSourceAdd,
+    OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources, OwnerStats, OwnerTimelinePost,
+    OwnerWatchAdd, ProtocolRoute, SourceItem, SourceSubscription, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -274,6 +274,27 @@ impl Default for ModerationFormState {
 }
 
 #[derive(Clone, Debug)]
+pub struct SettingsFormState {
+    pub default_visibility: String,
+    pub default_protocol: String,
+    pub require_authorized_fetch: bool,
+    pub manually_approves_followers: bool,
+    pub closed_network: bool,
+}
+
+impl Default for SettingsFormState {
+    fn default() -> Self {
+        Self {
+            default_visibility: "followers".into(),
+            default_protocol: "activitypub".into(),
+            require_authorized_fetch: true,
+            manually_approves_followers: true,
+            closed_network: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct MediaFormState {
     pub file_path: String,
     pub media_type: String,
@@ -384,6 +405,11 @@ pub struct UiProjection {
     pub moderation_block_reason: String,
     pub moderation_allow_host: String,
     pub moderation_allow_note: String,
+    pub settings_default_visibility: String,
+    pub settings_default_protocol: String,
+    pub settings_require_authorized_fetch: bool,
+    pub settings_manually_approves_followers: bool,
+    pub settings_closed_network: bool,
     pub media_file_path: String,
     pub media_type: String,
     pub media_description: String,
@@ -409,6 +435,7 @@ pub struct DeskController {
     profile_form: ProfileFormState,
     audience_form: AudienceFormState,
     moderation_form: ModerationFormState,
+    settings_form: SettingsFormState,
     media_form: MediaFormState,
     status_message: String,
     account_form_label: String,
@@ -453,6 +480,7 @@ impl DeskController {
             profile_form: ProfileFormState::default(),
             audience_form: AudienceFormState::default(),
             moderation_form: ModerationFormState::default(),
+            settings_form: SettingsFormState::default(),
             media_form: MediaFormState::default(),
             status_message: "Ready.".to_string(),
             account_form_label,
@@ -486,6 +514,7 @@ impl DeskController {
             profile_form: ProfileFormState::default(),
             audience_form: AudienceFormState::default(),
             moderation_form: ModerationFormState::default(),
+            settings_form: SettingsFormState::default(),
             media_form: MediaFormState::default(),
             status_message: "Fixture mode.".to_string(),
             account_form_label: "Dais Social".to_string(),
@@ -538,6 +567,13 @@ impl DeskController {
         self.moderation_form.ai_enabled = moderation.ai_enabled;
         self.moderation_form.ai_model = moderation.ai_model.clone().unwrap_or_default();
         self.moderation_form.ai_daily_budget = moderation.ai_daily_budget.to_string();
+        self.settings_form.default_visibility =
+            visibility_label(&self.data.snapshot.settings.default_visibility).to_ascii_lowercase();
+        self.settings_form.default_protocol =
+            protocol_label(&self.data.snapshot.settings.default_protocol).to_ascii_lowercase();
+        self.settings_form.require_authorized_fetch = moderation.require_authorized_fetch;
+        self.settings_form.manually_approves_followers = moderation.manually_approves_followers;
+        self.settings_form.closed_network = moderation.closed_network;
 
         if self.audience_form.id.is_empty() {
             if let Some(list) = self.data.snapshot.audience_lists.first() {
@@ -774,6 +810,8 @@ impl DeskController {
                 "Watch" => self.watch(row_id),
                 "Stop watching" => self.remove_source_or_watch(row_id),
                 "Refresh" => self.refresh_source_or_watch(row_id),
+                "Retry delivery" => self.retry_delivery(row_id),
+                "Cancel delivery" => self.cancel_delivery(row_id),
                 "Approve reply" => self.set_reply_status(row_id, "approved"),
                 "Hide reply" => self.set_reply_status(row_id, "hidden"),
                 "Reject reply" => self.set_reply_status(row_id, "rejected"),
@@ -797,7 +835,41 @@ impl DeskController {
                     self.selected_row = row_id.to_string();
                     Ok("Opened delivery inspector.".to_string())
                 }
-                "Copy evidence" => Ok("Evidence is available in Diagnostics details.".to_string()),
+                "Copy evidence" => {
+                    if let Some(row) = self.find_row(row_id) {
+                        let evidence =
+                            if row.id.starts_with("health:") || row.id.starts_with("diagnostic:") {
+                                let detail = if row.detail.is_empty() {
+                                    "open diagnostics on server for raw evidence"
+                                } else {
+                                    row.detail.as_str()
+                                };
+                                format!("Evidence: {} — {}", row.subtitle, detail)
+                            } else if let Some(delivery_id) = row.id.strip_prefix("delivery:") {
+                                self.data
+                                    .deliveries
+                                    .iter()
+                                    .find(|delivery| delivery.id == delivery_id)
+                                    .map(|delivery| {
+                                        format!(
+                                            "Delivery evidence: {} {} (status: {}, activity: {})",
+                                            compact_url(&delivery.target_url),
+                                            delivery.error_message.clone().unwrap_or_default(),
+                                            delivery.status,
+                                            delivery.activity_type.as_deref().unwrap_or("Unknown")
+                                        )
+                                    })
+                                    .unwrap_or_else(|| {
+                                        "Open delivery list on server for raw evidence".to_string()
+                                    })
+                            } else {
+                                format!("Evidence: {}", row.title)
+                            };
+                        Ok(evidence)
+                    } else {
+                        Ok("No evidence target was found for this row.".to_string())
+                    }
+                }
                 _ => Ok(format!(
                     "{action} is visible but not destructive in preview mode."
                 )),
@@ -823,6 +895,8 @@ impl DeskController {
                 | "Cancel"
                 | "Stop watching"
                 | "Refresh"
+                | "Retry delivery"
+                | "Cancel delivery"
                 | "Approve reply"
                 | "Hide reply"
                 | "Reject reply"
@@ -1068,6 +1142,30 @@ impl DeskController {
         }
     }
 
+    pub fn save_settings_from_form(
+        &mut self,
+        default_visibility: &str,
+        default_protocol: &str,
+        require_authorized_fetch: bool,
+        manually_approves_followers: bool,
+        closed_network: bool,
+    ) {
+        self.settings_form = SettingsFormState {
+            default_visibility: default_visibility.trim().if_empty("followers"),
+            default_protocol: default_protocol.trim().if_empty("activitypub"),
+            require_authorized_fetch,
+            manually_approves_followers,
+            closed_network,
+        };
+        match self.save_settings_inner() {
+            Ok(message) => {
+                self.status_message = message;
+                self.refresh();
+            }
+            Err(error) => self.status_message = format!("Settings save failed: {error}"),
+        }
+    }
+
     pub fn block_actor_from_form(&mut self, actor_id: &str, reason: &str) {
         self.moderation_form.block_actor = actor_id.trim().to_string();
         self.moderation_form.block_reason = reason.trim().to_string();
@@ -1258,6 +1356,11 @@ impl DeskController {
             moderation_block_reason: self.moderation_form.block_reason.clone(),
             moderation_allow_host: self.moderation_form.allow_host.clone(),
             moderation_allow_note: self.moderation_form.allow_note.clone(),
+            settings_default_visibility: self.settings_form.default_visibility.clone(),
+            settings_default_protocol: self.settings_form.default_protocol.clone(),
+            settings_require_authorized_fetch: self.settings_form.require_authorized_fetch,
+            settings_manually_approves_followers: self.settings_form.manually_approves_followers,
+            settings_closed_network: self.settings_form.closed_network,
             media_file_path: self.media_form.file_path.clone(),
             media_type: self.media_form.media_type.clone(),
             media_description: self.media_form.description.clone(),
@@ -1591,6 +1694,48 @@ impl DeskController {
             "Updated moderation policy {}. AI advisory is {}.",
             result.reply_policy,
             if result.ai_enabled { "on" } else { "off" }
+        ))
+    }
+
+    fn save_settings_inner(&self) -> Result<String, String> {
+        let default_visibility = visibility_from_value(&self.settings_form.default_visibility)
+            .ok_or_else(|| "unsupported default visibility".to_string())?;
+        let default_protocol = protocol_from_value(&self.settings_form.default_protocol)
+            .ok_or_else(|| "unsupported default protocol".to_string())?;
+        if matches!(
+            default_visibility,
+            Visibility::Followers | Visibility::Direct
+        ) && matches!(default_protocol, ProtocolRoute::AtProto)
+        {
+            return Err("private defaults cannot route only to Bluesky".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview owner settings saved.".into());
+        }
+        let client = self.client()?;
+        let settings = OwnerSettingsUpdate {
+            default_visibility,
+            default_protocol,
+            require_authorized_fetch: self.settings_form.require_authorized_fetch,
+            manually_approves_followers: self.settings_form.manually_approves_followers,
+            closed_network: self.settings_form.closed_network,
+        };
+        let result: OwnerSettings = self.runtime.block_on(async move {
+            client
+                .update_settings(&settings)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!(
+            "Updated defaults to {} via {}.",
+            visibility_label(&result.default_visibility),
+            protocol_label(&result.default_protocol)
         ))
     }
 
@@ -2198,6 +2343,56 @@ impl DeskController {
             .map_err(|error| error.to_string())
         })?;
         Ok(format!("Refresh checked {} source(s).", result.items.len()))
+    }
+
+    fn retry_delivery(&self, row_id: &str) -> Result<String, String> {
+        let id = row_id
+            .strip_prefix("delivery:")
+            .ok_or_else(|| "no delivery id".to_string())?;
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview delivery retry queued.".into());
+        }
+        let client = self.client()?;
+        let delivery: OwnerDelivery = self.runtime.block_on(async move {
+            client
+                .retry_delivery(id)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!(
+            "Delivery {} requeued with {} retry attempt(s).",
+            delivery.id,
+            delivery.retry_count.unwrap_or_default()
+        ))
+    }
+
+    fn cancel_delivery(&self, row_id: &str) -> Result<String, String> {
+        let id = row_id
+            .strip_prefix("delivery:")
+            .ok_or_else(|| "no delivery id".to_string())?;
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview delivery cancelled.".into());
+        }
+        let client = self.client()?;
+        let delivery: OwnerDelivery = self.runtime.block_on(async move {
+            client
+                .cancel_delivery(id)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!("Delivery {} cancelled.", delivery.id))
     }
 
     fn set_reply_status(&self, row_id: &str, status: &str) -> Result<String, String> {
@@ -3355,6 +3550,27 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
 
     let weak = window.as_weak();
     let ctrl = controller.clone();
+    window.on_save_settings(
+        move |default_visibility,
+              default_protocol,
+              require_authorized_fetch,
+              manually_approves_followers,
+              closed_network| {
+            if let Some(window) = weak.upgrade() {
+                ctrl.borrow_mut().save_settings_from_form(
+                    default_visibility.as_str(),
+                    default_protocol.as_str(),
+                    require_authorized_fetch,
+                    manually_approves_followers,
+                    closed_network,
+                );
+                apply_controller_projection(&window, &ctrl);
+            }
+        },
+    );
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
     window.on_block_actor(move |actor_id, reason| {
         if let Some(window) = weak.upgrade() {
             ctrl.borrow_mut()
@@ -3636,6 +3852,12 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_moderation_block_reason(s(&projection.moderation_block_reason));
     window.set_moderation_allow_host(s(&projection.moderation_allow_host));
     window.set_moderation_allow_note(s(&projection.moderation_allow_note));
+    window.set_settings_default_visibility(s(&projection.settings_default_visibility));
+    window.set_settings_default_protocol(s(&projection.settings_default_protocol));
+    window.set_settings_require_authorized_fetch(projection.settings_require_authorized_fetch);
+    window
+        .set_settings_manually_approves_followers(projection.settings_manually_approves_followers);
+    window.set_settings_closed_network(projection.settings_closed_network);
     window.set_media_file_path(s(&projection.media_file_path));
     window.set_media_type(s(&projection.media_type));
     window.set_media_description(s(&projection.media_description));
@@ -3722,11 +3944,7 @@ fn post_row(post: &OwnerPost) -> UiRow {
     row(
         &format!("post:{}", post.id),
         title,
-        &format!(
-            "{} via {}",
-            visibility_label(&post.visibility),
-            protocol_label(&post.protocol)
-        ),
+        visibility_label(&post.visibility),
         &post.content,
         visibility_label(&post.visibility),
         visibility_tone_enum(&post.visibility),
@@ -3745,23 +3963,41 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         .as_deref()
         .or(notice.actor_username.as_deref())
         .unwrap_or(&notice.actor_id);
-    let title = match notice.kind.as_str() {
-        "mention" => format!("Mention from {actor}"),
-        "reply" => format!("Reply from {actor}"),
-        "favourite" | "favorite" | "like" => format!("Like from {actor}"),
-        "repost" | "boost" => format!("Boost from {actor}"),
-        "follow" => format!("Follow request from {actor}"),
-        kind => format!("{kind} from {actor}"),
+    let action = match notice.kind.as_str() {
+        "mention" => "Mentioned",
+        "reply" => "Replied",
+        "favourite" | "favorite" | "like" => "Liked",
+        "repost" | "boost" => "Boosted",
+        "follow" => "Follow requested",
+        kind => kind,
     };
-    let context = notice
+    let title = format!("{action} • {actor}");
+    let context = format!(
+        "{} {}",
+        notice
+            .context_post_visibility
+            .as_deref()
+            .unwrap_or("related"),
+        if notice.context_post_id.is_some() || notice.post_id.is_some() {
+            "post"
+        } else {
+            "notice"
+        }
+    );
+    let source = notice
         .context_post_content_html
         .as_deref()
         .or(notice.context_post_content.as_deref())
         .or(notice.content.as_deref())
-        .unwrap_or("Open context to inspect the related post.");
+        .unwrap_or("Open this notice to inspect details.");
     let unread = !json_truthy(&notice.read);
     let has_context_post = notice.context_post_id.is_some() || notice.post_id.is_some();
     let is_conversational = matches!(notice.kind.as_str(), "mention" | "reply");
+    let has_open_link = has_openable_link([
+        notice.context_post_content_html.as_deref(),
+        notice.context_post_content.as_deref(),
+        notice.content.as_deref(),
+    ]);
     let (primary, secondary) = if has_context_post {
         if unread {
             if is_conversational {
@@ -3774,16 +4010,27 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         } else {
             ("Open context", "")
         }
+    } else if has_open_link {
+        if unread {
+            ("Mark read", "Open link")
+        } else {
+            ("Open link", "")
+        }
     } else if unread {
         ("Mark read", "")
     } else {
         ("", "")
     };
+    let subtitle = format!(
+        "{} · {}",
+        context,
+        notice.created_at.as_deref().unwrap_or("notification")
+    );
     row(
         &format!("notification:{}", notice.id),
         &title,
-        notice.created_at.as_deref().unwrap_or("Notification"),
-        context,
+        subtitle.trim(),
+        &preview_markdown_safe(source),
         if json_truthy(&notice.read) {
             "Read"
         } else {
@@ -4068,7 +4315,10 @@ fn diagnostic_row(diagnostic: &DiagnosticStatus) -> UiRow {
 
 fn delivery_attention_row(delivery: &OwnerDelivery) -> UiRow {
     let mut row = delivery_row(delivery);
-    row.primary = s("Inspect delivery");
+    if delivery.status == "failed" {
+        row.primary = s("Retry delivery");
+        row.secondary = s("Inspect delivery");
+    }
     row
 }
 
@@ -4078,6 +4328,12 @@ fn delivery_row(delivery: &OwnerDelivery) -> UiRow {
         "delivered" => "ok",
         "retry" | "queued" => "warn",
         _ => "info",
+    };
+    let (primary, secondary) = match delivery.status.as_str() {
+        "failed" | "retry" => ("Retry delivery", "Cancel delivery"),
+        "queued" => ("Cancel delivery", "Inspect delivery"),
+        "delivered" => ("Open context", ""),
+        _ => ("Inspect delivery", "Open context"),
     };
     row(
         &format!("delivery:{}", delivery.id),
@@ -4094,17 +4350,19 @@ fn delivery_row(delivery: &OwnerDelivery) -> UiRow {
         ),
         &delivery.status,
         tone,
-        if delivery.status == "failed" {
-            "Inspect delivery"
-        } else {
-            ""
-        },
-        "Open context",
+        primary,
+        secondary,
     )
 }
 
 fn moderation_reply_row(reply: &ModerationReplyRow) -> UiRow {
-    let status = reply.moderation_status.as_deref().unwrap_or("needs review");
+    let raw_status = reply.moderation_status.as_deref().unwrap_or("needs review");
+    let status = humanize_status(raw_status);
+    let flags = if reply.moderation_flags.is_empty() {
+        String::new()
+    } else {
+        format!("Flags: {}. ", reply.moderation_flags.join(", "))
+    };
     row(
         &format!("moderation-reply:{}", reply.id),
         reply
@@ -4112,8 +4370,8 @@ fn moderation_reply_row(reply: &ModerationReplyRow) -> UiRow {
             .as_deref()
             .or(reply.actor_username.as_deref())
             .unwrap_or(&reply.actor_id),
-        status,
-        &reply.content,
+        &status,
+        &format!("{flags}{}", preview_markdown_safe(&reply.content)),
         if reply.moderation_flags.is_empty() {
             "Review"
         } else {
@@ -4174,6 +4432,32 @@ fn clean_text(value: &str) -> String {
     output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn preview_markdown_safe(value: &str) -> String {
+    const MAX_CHARS: usize = 220;
+    let clean = clean_text(value).replace("  ", " ").trim().to_string();
+    if clean.chars().count() > MAX_CHARS {
+        let clipped: String = clean.chars().take(MAX_CHARS).collect();
+        format!("{clipped}…")
+    } else {
+        clean
+    }
+}
+
+fn humanize_status(value: &str) -> String {
+    value
+        .split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn decode_html_entities(value: &str) -> String {
     value
         .replace("&amp;", "&")
@@ -4206,10 +4490,149 @@ fn resolve_external_url(controller: &DeskController, row_id: &str) -> Result<Str
 }
 
 fn extract_first_url(value: &str) -> Option<String> {
-    value
-        .split_whitespace()
-        .find(|part| part.starts_with("https://") || part.starts_with("http://"))
-        .map(|part| part.trim_end_matches(&[',', '.', ')', ']'][..]).to_string())
+    if let Some(url) = extract_url_from_href(value) {
+        return Some(url);
+    }
+    extract_url_from_markdown(value).or_else(|| extract_url_from_plain_text(value))
+}
+
+fn extract_url_from_href(value: &str) -> Option<String> {
+    let value_lower = value.to_ascii_lowercase();
+    let mut cursor = 0;
+    while let Some(found) = value_lower[cursor..].find("href") {
+        let href_pos = cursor + found;
+        let mut idx = href_pos + 4;
+        let bytes = value.as_bytes();
+        while idx < bytes.len() && value.as_bytes()[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        if idx >= bytes.len() || bytes[idx] != b'=' {
+            cursor = href_pos + 4;
+            continue;
+        }
+        idx += 1;
+        while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        if idx >= bytes.len() {
+            break;
+        }
+        let (start, end) = if bytes[idx] == b'"' || bytes[idx] == b'\'' {
+            let quote = bytes[idx];
+            let start = idx + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end] != quote {
+                end += 1;
+            }
+            if end >= bytes.len() {
+                break;
+            }
+            (start, end)
+        } else {
+            let start = idx;
+            let mut end = idx;
+            while end < bytes.len() && !bytes[end].is_ascii_whitespace() {
+                if bytes[end] == b'>' || bytes[end] == b'/' {
+                    break;
+                }
+                end += 1;
+            }
+            (start, end)
+        };
+        if let Some(url) = clean_url_candidate(&value[start..end]) {
+            return Some(url);
+        }
+        cursor = end + 1;
+    }
+    None
+}
+
+fn extract_url_from_markdown(value: &str) -> Option<String> {
+    let mut pos = 0;
+    let bytes = value.as_bytes();
+    while let Some(open_paren) = value[pos..].find('(') {
+        let start = pos + open_paren + 1;
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != b')' && !bytes[end].is_ascii_whitespace() {
+            end += 1;
+        }
+        if end > start && bytes[end.saturating_sub(1)] != b'(' {
+            let candidate = &value[start..end];
+            if let Some(url) = clean_url_candidate(candidate) {
+                return Some(url);
+            }
+        }
+        pos = end.saturating_add(1);
+        if pos > bytes.len() {
+            break;
+        }
+    }
+    None
+}
+
+fn extract_url_from_plain_text(value: &str) -> Option<String> {
+    for prefix in ["https://", "http://"] {
+        let mut pos = 0;
+        while let Some(found) = value[pos..].find(prefix) {
+            let start = pos + found;
+            let bytes = value.as_bytes();
+            let mut end = start + prefix.len();
+            while end < bytes.len() && is_url_text_byte(bytes[end]) {
+                end += 1;
+            }
+            if let Some(url) = clean_url_candidate(&value[start..end]) {
+                return Some(url);
+            }
+            pos = end + 1;
+        }
+    }
+    None
+}
+
+fn clean_url_candidate(value: &str) -> Option<String> {
+    let candidate = value
+        .trim()
+        .trim_start_matches(|ch| ch == '\'' || ch == '"')
+        .trim_end_matches(|ch| {
+            ch == '\'' || ch == '"' || ch == ',' || ch == '.' || ch == ')' || ch == ']' || ch == '>'
+        });
+    if candidate.starts_with("http://") || candidate.starts_with("https://") {
+        Some(candidate.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_url_text_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'a'..=b'z'
+            | b'A'..=b'Z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'~'
+            | b':'
+            | b'/'
+            | b'?'
+            | b'#'
+            | b'['
+            | b']'
+            | b'@'
+            | b'!'
+            | b'$'
+            | b'&'
+            | b'\''
+            | b'('
+            | b')'
+            | b'*'
+            | b'+'
+            | b','
+            | b';'
+            | b'='
+            | b'%'
+    )
 }
 
 fn has_openable_link(parts: [Option<&str>; 3]) -> bool {
@@ -4273,6 +4696,16 @@ fn visibility_label(visibility: &Visibility) -> &'static str {
     }
 }
 
+fn visibility_from_value(value: &str) -> Option<Visibility> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "public" => Some(Visibility::Public),
+        "unlisted" => Some(Visibility::Unlisted),
+        "direct" => Some(Visibility::Direct),
+        "followers" | "private" => Some(Visibility::Followers),
+        _ => None,
+    }
+}
+
 fn visibility_string_label(visibility: &str) -> &str {
     match visibility {
         "public" => "Public",
@@ -4304,6 +4737,16 @@ fn protocol_label(protocol: &ProtocolRoute) -> &'static str {
         ProtocolRoute::ActivityPub => "ActivityPub",
         ProtocolRoute::AtProto => "Bluesky",
         ProtocolRoute::Both => "Both",
+    }
+}
+
+fn protocol_from_value(value: &str) -> Option<ProtocolRoute> {
+    let normalized = value.trim().to_ascii_lowercase().replace(['-', '_'], "");
+    match normalized.as_str() {
+        "activitypub" => Some(ProtocolRoute::ActivityPub),
+        "atproto" | "bluesky" => Some(ProtocolRoute::AtProto),
+        "both" => Some(ProtocolRoute::Both),
+        _ => None,
     }
 }
 
@@ -5165,6 +5608,8 @@ mod tests {
                 | "Watch"
                 | "Stop watching"
                 | "Refresh"
+                | "Retry delivery"
+                | "Cancel delivery"
                 | "Approve reply"
                 | "Hide reply"
                 | "Reject reply"
@@ -5481,6 +5926,98 @@ mod tests {
     }
 
     #[test]
+    fn notification_row_provides_readable_preview() {
+        let row = notification_row(&OwnerNotification {
+            id: "n3".into(),
+            kind: "like".into(),
+            actor_id: "https://social.example/users/vera".into(),
+            actor_username: Some("vera".into()),
+            actor_display_name: Some("Vera".into()),
+            actor_avatar_url: None,
+            post_id: None,
+            activity_id: None,
+            content: Some(
+                "<p><a href=\"https://social.example/p/1\">Liked</a> your post.</p>".into(),
+            ),
+            read: serde_json::Value::Bool(false),
+            created_at: Some("2m".into()),
+            context_post_id: None,
+            context_post_content: None,
+            context_post_content_html: None,
+            context_post_visibility: None,
+            context_post_protocol: None,
+            context_post_published_at: None,
+        });
+        assert_eq!(row.detail, "Liked your post.");
+        assert_eq!(row.primary, "Mark read");
+        assert_eq!(row.secondary, "Open link");
+    }
+
+    #[test]
+    fn notification_row_from_html_exposes_link_action() {
+        let row = notification_row(&OwnerNotification {
+            id: "n4".into(),
+            kind: "favourite".into(),
+            actor_id: "https://social.example/users/leo".into(),
+            actor_username: Some("leo".into()),
+            actor_display_name: Some("Leo".into()),
+            actor_avatar_url: None,
+            post_id: None,
+            activity_id: None,
+            content: Some(
+                "<p><a href=\"https://social.example/posts/visible\">View thread</a> to compare.</p>"
+                    .into(),
+            ),
+            read: serde_json::Value::Bool(true),
+            created_at: Some("5m".into()),
+            context_post_id: None,
+            context_post_content: None,
+            context_post_content_html: None,
+            context_post_visibility: None,
+            context_post_protocol: None,
+            context_post_published_at: None,
+        });
+        assert_eq!(row.primary, "Open link");
+        assert_eq!(row.secondary, "");
+        assert_eq!(row.detail, "View thread to compare.");
+    }
+
+    #[test]
+    fn extract_first_url_handles_html_and_markdown() {
+        assert_eq!(
+            extract_first_url("<a href=\"https://social.example/post/1\">read</a>").as_deref(),
+            Some("https://social.example/post/1")
+        );
+        assert_eq!(
+            extract_first_url("[read](https://social.example/post/2)").as_deref(),
+            Some("https://social.example/post/2")
+        );
+    }
+
+    #[test]
+    fn moderation_reply_row_humanizes_status_and_flags() {
+        let row = moderation_reply_row(&ModerationReplyRow {
+            id: "m1".into(),
+            post_id: "p1".into(),
+            actor_id: "https://social.example/users/zeek".into(),
+            actor_username: Some("zeek".into()),
+            actor_display_name: Some("Zeek".into()),
+            actor_avatar_url: None,
+            content: "This reply has <script>alert(1)</script> concerns.".into(),
+            published_at: Some("now".into()),
+            created_at: Some("now".into()),
+            moderation_status: Some("needs_review".into()),
+            moderation_score: Some(0.5),
+            moderation_flags: vec!["violence".into(), "adult".into()],
+            moderation_checked_at: None,
+            hidden: serde_json::Value::Bool(false),
+        });
+        assert_eq!(row.subtitle.as_str(), "Needs Review");
+        assert_eq!(row.primary.as_str(), "Approve reply");
+        assert!(row.detail.starts_with("Flags: violence, adult"));
+    }
+
+    #[test]
     fn compose_requires_direct_recipients() {
         let compose = ComposeState {
             text: "secret".into(),
@@ -5573,6 +6110,17 @@ mod tests {
     }
 
     #[test]
+    fn settings_projection_exposes_owner_defaults() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("settings");
+        let projection = controller.projection();
+        assert_eq!(projection.settings_default_visibility, "followers");
+        assert_eq!(projection.settings_default_protocol, "activitypub");
+        assert!(projection.settings_require_authorized_fetch);
+        assert!(projection.settings_manually_approves_followers);
+    }
+
+    #[test]
     fn fixture_people_mode_has_expected_screen_order() {
         let mut controller = DeskController::fixture_for_tests();
         controller.select_mode("people");
@@ -5621,6 +6169,25 @@ mod tests {
         );
         assert_eq!(rows[4].id.as_str(), "moderation-reply:mod-reply-sensitive");
         assert_eq!(rows[5].id.as_str(), "delivery:delivery-failed");
+    }
+
+    #[test]
+    fn delivery_rows_only_show_status_appropriate_actions() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.delivery_rows();
+        let failed = rows
+            .iter()
+            .find(|row| row.id.as_str() == "delivery:delivery-failed")
+            .expect("failed delivery row");
+        assert_eq!(failed.primary.as_str(), "Retry delivery");
+        assert_eq!(failed.secondary.as_str(), "Cancel delivery");
+
+        let delivered = rows
+            .iter()
+            .find(|row| row.id.as_str() == "delivery:delivery-ok")
+            .expect("delivered delivery row");
+        assert_eq!(delivered.primary.as_str(), "Open context");
+        assert_eq!(delivered.secondary.as_str(), "");
     }
 
     #[test]

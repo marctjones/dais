@@ -33,26 +33,46 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     window.invoke_select_screen("compose".into());
     capture(&window, &output_dir, "home-compose-media")?;
+    window.invoke_select_screen("inbox".into());
+    capture(&window, &output_dir, "home-inbox-notifications")?;
+    window.invoke_select_screen("today".into());
+    capture(&window, &output_dir, "home-today")?;
 
     window.invoke_select_mode("people".into());
     window.invoke_select_screen("find".into());
     capture(&window, &output_dir, "people-find-search")?;
 
+    window.invoke_select_screen("relationship".into());
+    capture(&window, &output_dir, "people-relationship")?;
+    window.invoke_select_screen("friends".into());
+    capture(&window, &output_dir, "people-friends")?;
     window.invoke_select_screen("followers".into());
     capture(&window, &output_dir, "people-followers")?;
+    window.invoke_select_screen("following".into());
+    capture(&window, &output_dir, "people-following")?;
 
     window.invoke_select_screen("watches".into());
     capture(&window, &output_dir, "people-watches-sources")?;
 
     window.invoke_select_screen("audience".into());
     capture(&window, &output_dir, "people-audience-groups")?;
+    window.invoke_select_screen("blocks".into());
+    capture(&window, &output_dir, "people-blocks")?;
 
     window.invoke_select_mode("server".into());
+    window.invoke_select_screen("health".into());
+    capture(&window, &output_dir, "server-health")?;
+    window.invoke_select_screen("deliveries".into());
+    capture(&window, &output_dir, "server-deliveries")?;
+    window.invoke_select_screen("stats".into());
+    capture(&window, &output_dir, "server-stats")?;
     window.invoke_select_screen("identity".into());
     capture(&window, &output_dir, "server-identity")?;
 
     window.invoke_select_screen("moderation".into());
     capture(&window, &output_dir, "server-moderation")?;
+    window.invoke_select_screen("settings".into());
+    capture(&window, &output_dir, "server-settings")?;
 
     window.invoke_select_screen("accounts".into());
     capture(&window, &output_dir, "server-accounts")?;
