@@ -606,6 +606,108 @@ impl DeskController {
         }
     }
 
+    pub fn select_first_row(&mut self) {
+        let rows = self.rows_for_active_screen();
+        if let Some(first) = rows.first() {
+            self.selected_row = first.id.to_string();
+            self.populate_form_from_selected_row();
+        } else {
+            self.selected_row.clear();
+        }
+    }
+
+    pub fn select_last_row(&mut self) {
+        let rows = self.rows_for_active_screen();
+        if let Some(last) = rows.last() {
+            self.selected_row = last.id.to_string();
+            self.populate_form_from_selected_row();
+        } else {
+            self.selected_row.clear();
+        }
+    }
+
+    fn row_ids_for_active_screen(&self) -> Vec<String> {
+        self.rows_for_active_screen()
+            .into_iter()
+            .map(|row| row.id.to_string())
+            .collect()
+    }
+
+    pub fn move_row_selection(&mut self, delta: isize) {
+        let row_ids = self.row_ids_for_active_screen();
+        if row_ids.is_empty() {
+            self.selected_row.clear();
+            return;
+        }
+
+        let start_index = row_ids
+            .iter()
+            .position(|id| id == &self.selected_row)
+            .unwrap_or(0) as isize;
+        let last_index = row_ids.len() as isize - 1;
+        let mut target = start_index + delta;
+        if target < 0 {
+            target = 0;
+        }
+        if target > last_index {
+            target = last_index;
+        }
+        self.selected_row = row_ids[target as usize].to_string();
+        self.populate_form_from_selected_row();
+    }
+
+    pub fn move_row_selection_next(&mut self) {
+        self.move_row_selection(1);
+    }
+
+    pub fn move_row_selection_previous(&mut self) {
+        self.move_row_selection(-1);
+    }
+
+    pub fn set_row_match_from_prefix(&mut self, prefix: &str) {
+        let query = prefix.trim().to_lowercase();
+        if query.is_empty() {
+            return;
+        }
+        let match_row = self.rows_for_active_screen().into_iter().find(|row| {
+            row.title.to_lowercase().starts_with(&query)
+                || row.subtitle.to_lowercase().starts_with(&query)
+                || row.id.to_lowercase().starts_with(&query)
+        });
+
+        if let Some(row) = match_row {
+            self.selected_row = row.id.to_string();
+            self.populate_form_from_selected_row();
+        }
+    }
+
+    pub fn execute_selected_row_default_action(&mut self) {
+        let rows = self.rows_for_active_screen();
+        if rows.is_empty() {
+            return;
+        }
+        let selected = if self.selected_row.is_empty() {
+            rows.first().map(|row| row.id.to_string())
+        } else {
+            Some(self.selected_row.clone())
+        };
+        if selected.is_none() {
+            return;
+        }
+        let selected = selected.unwrap_or_default();
+        let row = rows.iter().find(|row| row.id.as_str() == selected.as_str());
+        if let Some(row) = row {
+            let action = if !row.primary.is_empty() {
+                row.primary.to_string()
+            } else {
+                row.secondary.to_string()
+            };
+            if !action.is_empty() {
+                self.row_action(&selected, action.as_str());
+            }
+        }
+    }
+
     fn populate_form_from_selected_row(&mut self) {
         if let Some(id) = self.selected_row.strip_prefix("audience:") {
             if let Some(list) = self
@@ -3364,7 +3466,7 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
     });
 
     let weak = window.as_weak();
-    let ctrl = controller;
+    let ctrl = controller.clone();
     window.on_compose_send(move || {
         if let Some(window) = weak.upgrade() {
             {
@@ -3377,6 +3479,60 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
                 );
                 controller.compose_send();
             }
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_move_selected_row_up(move || {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().move_row_selection_previous();
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_move_selected_row_down(move || {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().move_row_selection_next();
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_move_selected_row_home(move || {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().select_first_row();
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_move_selected_row_end(move || {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().select_last_row();
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_activate_selected_row(move || {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().execute_selected_row_default_action();
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_select_row_by_prefix(move |prefix| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().set_row_match_from_prefix(prefix.as_str());
             apply_controller_projection(&window, &ctrl);
         }
     });

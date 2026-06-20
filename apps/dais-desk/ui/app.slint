@@ -360,8 +360,110 @@ export component MainWindow inherits Window {
     callback compose-send();
     callback compose-set-visibility(string);
     callback compose-set-protocol(string);
+    callback move-selected-row-up();
+    callback move-selected-row-down();
+    callback move-selected-row-home();
+    callback move-selected-row-end();
+    callback activate-selected-row();
+    callback select-row-by-prefix(string);
 
-    HorizontalLayout {
+    forward-focus: command-key-handler;
+
+    command-key-handler := FocusScope {
+        focus-on-click: false;
+
+        KeyBinding {
+            keys: @keys(Control + "1");
+            activated => {
+                root.select-mode("home");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Meta + "1");
+            activated => {
+                root.select-mode("home");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + "2");
+            activated => {
+                root.select-mode("people");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Meta + "2");
+            activated => {
+                root.select-mode("people");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + "3");
+            activated => {
+                root.select-mode("server");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Meta + "3");
+            activated => {
+                root.select-mode("server");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(J);
+            activated => {
+                root.move-selected-row-down();
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(K);
+            activated => {
+                root.move-selected-row-up();
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(G);
+            activated => {
+                root.move-selected-row-home();
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Home);
+            activated => {
+                root.move-selected-row-home();
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(End);
+            activated => {
+                root.move-selected-row-end();
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Return);
+            activated => {
+                root.activate-selected-row();
+            }
+        }
+
+        key-pressed(event) => {
+            if (event.text != "") {
+                root.select-row-by-prefix(event.text);
+            }
+            reject
+        }
+
+        HorizontalLayout {
         spacing: 0px;
 
         Rectangle {
@@ -654,12 +756,12 @@ export component MainWindow inherits Window {
                             wrap: word-wrap;
                         }
 
-                        if root.active-screen == "find" : Rectangle {
-                            min-height: 354px;
-                            border-radius: 7px;
-                            border-width: 1px;
-                            border-color: #d9dee6;
-                            background: #ffffff;
+                                if root.active-screen == "find" : Rectangle {
+                                    min-height: 354px;
+                                    border-radius: 7px;
+                                    border-width: 1px;
+                                    border-color: #d9dee6;
+                                    background: #ffffff;
 
                             VerticalLayout {
                                 padding: 10px;
@@ -710,10 +812,10 @@ export component MainWindow inherits Window {
                             border-color: #d9dee6;
                             background: #ffffff;
 
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 7px;
-                                Text { text: "Media"; font-weight: 800; font-size: 13px; color: #172033; }
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 7px;
+                                    Text { text: "Media"; font-weight: 800; font-size: 13px; color: #172033; }
                                 LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; }
                                 HorizontalLayout {
                                     spacing: 6px;
@@ -749,11 +851,11 @@ export component MainWindow inherits Window {
                             border-color: #d9dee6;
                             background: #ffffff;
 
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 7px;
-                                Text { text: "Add source or Watch"; font-weight: 800; font-size: 13px; color: #172033; }
-                                HorizontalLayout {
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 7px;
+                                    Text { text: "Add source or Watch"; font-weight: 800; font-size: 13px; color: #172033; }
+                                    HorizontalLayout {
                                     spacing: 6px;
                                     LineEdit { text <=> root.source-type; placeholder-text: "rss | atom | api"; horizontal-stretch: 1; }
                                     LineEdit { text <=> root.source-cadence; placeholder-text: "minutes"; width: 70px; }
@@ -789,10 +891,10 @@ export component MainWindow inherits Window {
                             border-color: #d9dee6;
                             background: #ffffff;
 
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 7px;
-                                Text { text: "Audience group"; font-weight: 800; font-size: 13px; color: #172033; }
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 7px;
+                                    Text { text: "Audience group"; font-weight: 800; font-size: 13px; color: #172033; }
                                 LineEdit { text <=> root.audience-id; placeholder-text: "id, blank for new"; }
                                 LineEdit { text <=> root.audience-name; placeholder-text: "name"; }
                                 LineEdit { text <=> root.audience-description; placeholder-text: "description"; }
@@ -817,17 +919,17 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if root.active-screen == "identity" : Rectangle {
-                            min-height: 260px;
-                            border-radius: 7px;
-                            border-width: 1px;
-                            border-color: #d9dee6;
+                                if root.active-screen == "identity" : Rectangle {
+                                    min-height: 260px;
+                                    border-radius: 7px;
+                                    border-width: 1px;
+                                    border-color: #d9dee6;
                             background: #ffffff;
 
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 7px;
-                                Text { text: "Public identity"; font-weight: 800; font-size: 13px; color: #172033; }
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 7px;
+                                    Text { text: "Public identity"; font-weight: 800; font-size: 13px; color: #172033; }
                                 LineEdit { text <=> root.profile-actor-type; placeholder-text: "actor type"; }
                                 LineEdit { text <=> root.profile-display-name; placeholder-text: "display name"; }
                                 TextEdit { text <=> root.profile-summary; height: 66px; }
@@ -849,11 +951,11 @@ export component MainWindow inherits Window {
                             border-color: #d9dee6;
                             background: #ffffff;
 
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 7px;
-                                Text { text: "Moderation policy"; font-weight: 800; font-size: 13px; color: #172033; }
-                                HorizontalLayout {
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 7px;
+                                    Text { text: "Moderation policy"; font-weight: 800; font-size: 13px; color: #172033; }
+                                    HorizontalLayout {
                                     spacing: 6px;
                                     LineEdit { text <=> root.moderation-reply-policy; placeholder-text: "reply policy"; horizontal-stretch: 1; }
                                     LineEdit { text <=> root.moderation-ai-budget; placeholder-text: "AI budget"; width: 82px; }
@@ -877,17 +979,17 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if root.active-screen == "blocks" : Rectangle {
+                                if root.active-screen == "blocks" : Rectangle {
                             min-height: 174px;
                             border-radius: 7px;
                             border-width: 1px;
                             border-color: #d9dee6;
                             background: #ffffff;
 
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 7px;
-                                Text { text: "Allowlist host"; font-weight: 800; font-size: 13px; color: #172033; }
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 7px;
+                                    Text { text: "Allowlist host"; font-weight: 800; font-size: 13px; color: #172033; }
                                 LineEdit { text <=> root.moderation-allow-host; placeholder-text: "host"; }
                                 LineEdit { text <=> root.moderation-allow-note; placeholder-text: "note"; }
                                 HorizontalLayout {
@@ -905,10 +1007,10 @@ export component MainWindow inherits Window {
                             border-color: #d9dee6;
                             background: #ffffff;
 
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 8px;
-                                Text { text: "Account profile"; font-weight: 800; font-size: 13px; }
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 8px;
+                                    Text { text: "Account profile"; font-weight: 800; font-size: 13px; }
                                 LineEdit { text <=> root.account-label; placeholder-text: "Label"; }
                                 LineEdit { text <=> root.account-url; placeholder-text: "Instance URL"; }
                                 LineEdit { text <=> root.account-token; placeholder-text: "Owner token"; }
@@ -965,4 +1067,6 @@ export component MainWindow inherits Window {
             }
         }
     }
+}
+
 }
