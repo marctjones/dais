@@ -4970,6 +4970,86 @@ fn legacy_settings_path() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    fn is_supported_row_action(action: &str) -> bool {
+        matches!(
+            action,
+            "" | "Reply"
+                | "Favorite"
+                | "Boost"
+                | "Repost"
+                | "Delete"
+                | "Mark read"
+                | "Approve"
+                | "Reject"
+                | "Remove"
+                | "Follow"
+                | "Unfollow"
+                | "Cancel"
+                | "Unfriend"
+                | "Watch"
+                | "Stop watching"
+                | "Refresh"
+                | "Approve reply"
+                | "Hide reply"
+                | "Reject reply"
+                | "Block"
+                | "Unblock"
+                | "Open original"
+                | "Open link"
+                | "Open context"
+                | "Inspect delivery"
+                | "Revoke media"
+        )
+    }
+
+    fn assert_supported_row_actions(rows: &[UiRow]) {
+        for row in rows {
+            assert!(
+                is_supported_row_action(&row.primary),
+                "unexpected primary action '{}' on row {}",
+                row.primary,
+                row.id
+            );
+            assert!(
+                is_supported_row_action(&row.secondary),
+                "unexpected secondary action '{}' on row {}",
+                row.secondary,
+                row.id
+            );
+        }
+    }
+
+    #[test]
+    fn fixture_rows_only_include_supported_primary_secondary_actions() {
+        let mut controller = DeskController::fixture_for_tests();
+        for screen in &[
+            "today",
+            "inbox",
+            "compose",
+            "posts",
+            "saved",
+            "find",
+            "relationship",
+            "friends",
+            "followers",
+            "following",
+            "watches",
+            "audience",
+            "blocks",
+            "health",
+            "deliveries",
+            "moderation",
+            "identity",
+            "settings",
+            "stats",
+        ] {
+            controller.select_screen(screen);
+            assert_supported_row_actions(&controller.rows_for_active_screen());
+        }
+        controller.select_row("post:fixture-private-post");
+        assert_supported_row_actions(&controller.inspector_rows("post:fixture-private-post"));
+    }
+
     #[test]
     fn strips_markup_and_script_content() {
         let cleaned = clean_text("<p>Hello <b>friend</b><script>alert(1)</script></p>");
