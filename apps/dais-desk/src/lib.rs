@@ -809,7 +809,7 @@ impl DeskController {
                 "Unfollow" | "Cancel" | "Unfriend" => self.unfollow(row_id),
                 "Watch" => self.watch(row_id),
                 "Stop watching" => self.remove_source_or_watch(row_id),
-                "Refresh" => self.refresh_source_or_watch(row_id),
+                "Refresh" => self.refresh_row(row_id),
                 "Retry delivery" => self.retry_delivery(row_id),
                 "Cancel delivery" => self.cancel_delivery(row_id),
                 "Approve reply" => self.set_reply_status(row_id, "approved"),
@@ -832,7 +832,17 @@ impl DeskController {
                 "Inspect delivery" => {
                     self.active_mode = "server".to_string();
                     self.active_screen = "deliveries".to_string();
-                    self.selected_row = row_id.to_string();
+                    self.selected_row = if row_id.starts_with("delivery:") {
+                        row_id.to_string()
+                    } else {
+                        self.data
+                            .deliveries
+                            .iter()
+                            .find(|delivery| delivery.status == "failed")
+                            .or_else(|| self.data.deliveries.first())
+                            .map(|delivery| format!("delivery:{}", delivery.id))
+                            .unwrap_or_else(|| row_id.to_string())
+                    };
                     Ok("Opened delivery inspector.".to_string())
                 }
                 "Copy evidence" => {
@@ -2345,6 +2355,14 @@ impl DeskController {
         Ok(format!("Refresh checked {} source(s).", result.items.len()))
     }
 
+    fn refresh_row(&mut self, row_id: &str) -> Result<String, String> {
+        if row_id.starts_with("watch:") || row_id.starts_with("source:") {
+            return self.refresh_source_or_watch(row_id);
+        }
+        self.refresh();
+        Ok("Refreshed owner server state.".into())
+    }
+
     fn retry_delivery(&self, row_id: &str) -> Result<String, String> {
         let id = row_id
             .strip_prefix("delivery:")
@@ -2936,13 +2954,93 @@ impl DeskController {
     }
 
     fn health_rows(&self) -> Vec<UiRow> {
-        let mut rows: Vec<UiRow> = self
-            .data
-            .snapshot
-            .diagnostics
-            .iter()
-            .map(diagnostic_row)
-            .collect();
+        let stats = &self.data.stats;
+        let moderation = &self.data.snapshot.moderation;
+        let settings = &self.data.snapshot.settings;
+        let owner_api_ok = self.data.api_error.is_none() && settings.owner_token_present;
+        let privacy_ok = matches!(
+            settings.default_visibility,
+            Visibility::Followers | Visibility::Direct
+        ) && moderation.require_authorized_fetch
+            && moderation.manually_approves_followers;
+        let failed = stats.deliveries_failed;
+        let queued = stats.deliveries_queued + stats.deliveries_retry;
+        let review = stats.notifications_unread + moderation.reply_queue_count;
+        let mut rows = vec![
+            row(
+                "health:owner-api",
+                "Owner API",
+                if owner_api_ok {
+                    "Authenticated"
+                } else {
+                    "Needs token"
+                },
+                self.data
+                    .api_error
+                    .as_deref()
+                    .unwrap_or("Owner API token is present and the latest snapshot loaded."),
+                if owner_api_ok { "OK" } else { "Review" },
+                if owner_api_ok { "ok" } else { "warn" },
+                "Refresh",
+                "Copy evidence",
+            ),
+            row(
+                "health:privacy",
+                "Privacy posture",
+                &format!(
+                    "{} via {}",
+                    visibility_label(&settings.default_visibility),
+                    protocol_label(&settings.default_protocol)
+                ),
+                &format!(
+                    "Authorized fetch: {}. Manual follower approval: {}. Closed network: {}.",
+                    on_off(moderation.require_authorized_fetch),
+                    on_off(moderation.manually_approves_followers),
+                    on_off(moderation.closed_network)
+                ),
+                if privacy_ok { "Private" } else { "Review" },
+                if privacy_ok { "ok" } else { "warn" },
+                "",
+                "Copy evidence",
+            ),
+            row(
+                "health:queues",
+                "Attention queues",
+                &format!("{review} social review, {failed} failed delivery"),
+                &format!(
+                    "{} unread notifications, {} moderation replies, {} queued/retrying deliveries.",
+                    stats.notifications_unread, moderation.reply_queue_count, queued
+                ),
+                if failed > 0 || review > 0 {
+                    "Attention"
+                } else {
+                    "Clear"
+                },
+                if failed > 0 || review > 0 {
+                    "warn"
+                } else {
+                    "ok"
+                },
+                if failed > 0 { "Inspect delivery" } else { "" },
+                "Copy evidence",
+            ),
+            row(
+                "health:graph",
+                "Social graph",
+                "Owner-visible relationship counts",
+                &format!(
+                    "{} approved followers, {} pending, {} following, {} friends.",
+                    stats.followers_approved,
+                    stats.followers_pending,
+                    stats.following_total,
+                    self.data.snapshot.friends.len()
+                ),
+                "Private",
+                "ok",
+                "",
+                "Copy evidence",
+            ),
+        ];
         rows.push(row(
             "health:profile",
             &self.data.snapshot.profile.public_handle,
@@ -2954,8 +3052,9 @@ impl DeskController {
             "Identity",
             "info",
             "Open original",
-            "",
+            "Copy evidence",
         ));
+        rows.extend(self.data.snapshot.diagnostics.iter().map(diagnostic_row));
         rows
     }
 
@@ -4309,7 +4408,7 @@ fn diagnostic_row(diagnostic: &DiagnosticStatus) -> UiRow {
         if diagnostic.ok { "OK" } else { "Issue" },
         if diagnostic.ok { "ok" } else { "warn" },
         "",
-        "",
+        "Copy evidence",
     )
 }
 
@@ -4737,6 +4836,14 @@ fn protocol_label(protocol: &ProtocolRoute) -> &'static str {
         ProtocolRoute::ActivityPub => "ActivityPub",
         ProtocolRoute::AtProto => "Bluesky",
         ProtocolRoute::Both => "Both",
+    }
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value {
+        "on"
+    } else {
+        "off"
     }
 }
 
@@ -5619,6 +5726,7 @@ mod tests {
                 | "Open link"
                 | "Open context"
                 | "Inspect delivery"
+                | "Copy evidence"
                 | "Revoke media"
         )
     }
@@ -6169,6 +6277,30 @@ mod tests {
         );
         assert_eq!(rows[4].id.as_str(), "moderation-reply:mod-reply-sensitive");
         assert_eq!(rows[5].id.as_str(), "delivery:delivery-failed");
+    }
+
+    #[test]
+    fn health_rows_show_operator_summary_before_raw_diagnostics() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.health_rows();
+        assert_eq!(rows[0].id.as_str(), "health:owner-api");
+        assert_eq!(rows[1].id.as_str(), "health:privacy");
+        assert_eq!(rows[2].id.as_str(), "health:queues");
+        assert_eq!(rows[3].id.as_str(), "health:graph");
+        assert_eq!(rows[4].id.as_str(), "health:profile");
+        assert!(rows.iter().any(|row| row.id.starts_with("diagnostic:")));
+        assert_eq!(rows[0].primary.as_str(), "Refresh");
+        assert_eq!(rows[0].secondary.as_str(), "Copy evidence");
+        assert_eq!(rows[2].primary.as_str(), "Inspect delivery");
+    }
+
+    #[test]
+    fn health_delivery_action_opens_failed_delivery() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.row_action("health:queues", "Inspect delivery");
+        assert_eq!(controller.active_mode, "server");
+        assert_eq!(controller.active_screen, "deliveries");
+        assert_eq!(controller.selected_row, "delivery:delivery-failed");
     }
 
     #[test]
