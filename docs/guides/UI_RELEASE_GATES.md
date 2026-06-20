@@ -5,10 +5,18 @@ reading, discovery, moderation, settings, privacy warnings, or account switching
 
 ## Required Command
 
-Run the Dais Desk smoke gate from the repository root:
+Run the Dais Desk release gate from the repository root:
 
 ```bash
+./scripts/release-desk-v2.sh
+```
+
+The script executes:
+
+```text
 cargo test --manifest-path apps/dais-desk/Cargo.toml
+cargo build --manifest-path apps/dais-desk/Cargo.toml
+cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 The command runs Rust unit tests, Slint interaction tests, and the native visual
@@ -66,7 +74,7 @@ Every UI release issue should include:
 UI release gate evidence
 - Branch:
 - Commit:
-- Command: cargo test --manifest-path apps/dais-desk/Cargo.toml
+- Command: ./scripts/release-desk-v2.sh
 - Result:
 - Covered modes: Home, People, Server
 - Covered sections: Home, Followers, Accounts & Tokens, visual screenshots

@@ -45,10 +45,10 @@ Run the app locally:
 cargo run --manifest-path apps/dais-desk/Cargo.toml
 ```
 
-Run the required Dais Desk smoke gate:
+Run the required Dais Desk release gate:
 
 ```bash
-cargo test --manifest-path apps/dais-desk/Cargo.toml
+./scripts/release-desk-v2.sh
 ```
 
 This runs the Rust unit tests, Slint interaction tests, and the native visual
