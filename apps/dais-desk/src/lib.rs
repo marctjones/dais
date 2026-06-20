@@ -787,6 +787,8 @@ impl DeskController {
             self.switch_account_result(row_id.trim_start_matches("account:"))
         } else if action == "Delete" && row_id.starts_with("account:") {
             self.delete_account_result(row_id.trim_start_matches("account:"))
+        } else if action == "Validate token" && row_id.starts_with("account:") {
+            self.validate_account_token(row_id.trim_start_matches("account:"))
         } else if action == "Delete" && row_id.starts_with("audience:") {
             self.delete_audience(row_id.trim_start_matches("audience:"))
         } else if action == "Remove" && row_id.starts_with("audience:") {
@@ -1972,6 +1974,34 @@ impl DeskController {
         Ok("Deleted account profile.".into())
     }
 
+    fn validate_account_token(&self, account_id: &str) -> Result<String, String> {
+        let account = self
+            .settings
+            .accounts
+            .iter()
+            .find(|account| account.id == account_id)
+            .ok_or_else(|| "account not found".to_string())?;
+        let token = account
+            .owner_token
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "owner token is required for validation".to_string())?;
+        let client = OwnerApiClient::new(&account.instance_url, token);
+        let diagnostics = self.runtime.block_on(async move {
+            client
+                .diagnostics()
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        let failing = diagnostics.iter().filter(|item| !item.ok).count();
+        Ok(format!(
+            "Validated {}. {} diagnostic check(s), {} need attention.",
+            account.label,
+            diagnostics.len(),
+            failing
+        ))
+    }
+
     fn search_or_discover(&mut self, query: &str) -> Result<String, String> {
         if self
             .settings
@@ -3149,7 +3179,13 @@ impl DeskController {
                     } else {
                         "warn"
                     },
-                    if account.active { "" } else { "Switch" },
+                    if account.active && account.owner_token_present {
+                        "Validate token"
+                    } else if account.active {
+                        ""
+                    } else {
+                        "Switch"
+                    },
                     if can_delete { "Delete" } else { "" },
                 )
             })
@@ -5726,6 +5762,7 @@ mod tests {
                 | "Repost"
                 | "Delete"
                 | "Switch"
+                | "Validate token"
                 | "Mark read"
                 | "Approve"
                 | "Reject"
@@ -6483,7 +6520,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_supported_row_actions(&rows);
         let (active, inactive) = (rows[0].clone(), rows[1].clone());
-        assert_eq!(active.primary.as_str(), "");
+        assert_eq!(active.primary.as_str(), "Validate token");
         assert_eq!(active.chip.as_str(), "Active");
         assert_eq!(inactive.primary.as_str(), "Switch");
         assert_eq!(inactive.secondary.as_str(), "Delete");
@@ -6519,6 +6556,25 @@ mod tests {
         assert_eq!(
             controller.settings.active_account_id,
             Some("account-b".to_string())
+        );
+    }
+
+    #[test]
+    fn validating_account_token_requires_stored_token() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.settings.accounts = vec![StoredOwnerAccount {
+            id: "account-a".into(),
+            label: "Account A".into(),
+            instance_url: "https://a.example".into(),
+            owner_token: None,
+        }];
+        assert_eq!(
+            controller.validate_account_token("account-a").err(),
+            Some("owner token is required for validation".into())
+        );
+        assert_eq!(
+            controller.validate_account_token("missing").err(),
+            Some("account not found".into())
         );
     }
 
