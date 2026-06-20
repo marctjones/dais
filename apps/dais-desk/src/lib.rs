@@ -4439,11 +4439,16 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
         .as_deref()
         .or(post.actor_username.as_deref())
         .unwrap_or(&post.actor_id);
+    let detail = format!(
+        "{} {}",
+        visibility_explanation_str(&post.visibility),
+        preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content))
+    );
     row(
         &format!("timeline:{}", post.object_id),
         author,
         post.actor_username.as_deref().unwrap_or(&post.actor_id),
-        post.content_html.as_deref().unwrap_or(&post.content),
+        &detail,
         visibility_string_label(&post.visibility),
         visibility_tone(&post.visibility),
         "Reply",
@@ -4453,11 +4458,16 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
 
 fn post_row(post: &OwnerPost) -> UiRow {
     let title = post.title.as_deref().unwrap_or("My post");
+    let detail = format!(
+        "{} {}",
+        visibility_explanation_enum(&post.visibility),
+        preview_markdown_safe(&post.content)
+    );
     row(
         &format!("post:{}", post.id),
         title,
         visibility_label(&post.visibility),
-        &post.content,
+        &detail,
         visibility_label(&post.visibility),
         visibility_tone_enum(&post.visibility),
         "Reply",
@@ -4633,13 +4643,28 @@ fn reply_activity_row(post_id: &str, index: usize, reply: &serde_json::Value) ->
         ],
     )
     .unwrap_or_else(|| "reply".into());
+    let visibility = json_string_any(reply, &["visibility", "to_visibility", "audience"])
+        .unwrap_or_else(|| "unknown".into());
+    let (chip, tone, visibility_detail) = if visibility == "unknown" {
+        (
+            "Reply",
+            "info",
+            "Reply visibility was not included by the server.".to_string(),
+        )
+    } else {
+        (
+            visibility_string_label(&visibility),
+            visibility_tone(&visibility),
+            visibility_explanation_str(&visibility).to_string(),
+        )
+    };
     row(
         &format!("post-detail:{post_id}:reply:{index}"),
         &actor,
         &published,
-        &preview_markdown_safe(&content),
-        "Reply",
-        "info",
+        &format!("{visibility_detail} {}", preview_markdown_safe(&content)),
+        chip,
+        tone,
         "",
         "",
     )
@@ -4721,6 +4746,15 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         .or(notice.context_post_content.as_deref())
         .or(notice.content.as_deref())
         .unwrap_or("Open this notice to inspect details.");
+    let detail = format!(
+        "{} {}",
+        notice
+            .context_post_visibility
+            .as_deref()
+            .map(visibility_explanation_str)
+            .unwrap_or("Visibility is not included with this notification."),
+        preview_markdown_safe(source)
+    );
     let unread = !json_truthy(&notice.read);
     let has_context_post = notice.context_post_id.is_some() || notice.post_id.is_some();
     let is_conversational = matches!(notice.kind.as_str(), "mention" | "reply");
@@ -4761,7 +4795,7 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         &format!("notification:{}", notice.id),
         &title,
         subtitle.trim(),
-        &preview_markdown_safe(source),
+        &detail,
         if json_truthy(&notice.read) {
             "Read"
         } else {
@@ -5517,6 +5551,33 @@ fn visibility_label(visibility: &Visibility) -> &'static str {
         Visibility::Unlisted => "Unlisted",
         Visibility::Followers => "Followers",
         Visibility::Direct => "Direct",
+    }
+}
+
+fn visibility_explanation_enum(visibility: &Visibility) -> &'static str {
+    match visibility {
+        Visibility::Public => "Visibility: public; anyone may be able to read it.",
+        Visibility::Unlisted => {
+            "Visibility: unlisted; not promoted publicly, but may be visible outside friends."
+        }
+        Visibility::Followers => {
+            "Visibility: followers/friends; intended for approved followers, not anonymous public readers."
+        }
+        Visibility::Direct => "Visibility: direct/select; intended only for named recipients or a selected group.",
+    }
+}
+
+fn visibility_explanation_str(visibility: &str) -> &'static str {
+    match visibility.trim().to_ascii_lowercase().as_str() {
+        "public" => "Visibility: public; anyone may be able to read it.",
+        "unlisted" => {
+            "Visibility: unlisted; not promoted publicly, but may be visible outside friends."
+        }
+        "followers" | "private" => {
+            "Visibility: followers/friends; intended for approved followers, not anonymous public readers."
+        }
+        "direct" => "Visibility: direct/select; intended only for named recipients or a selected group.",
+        _ => "Visibility: unknown; the server did not provide a precise audience.",
     }
 }
 
@@ -6831,7 +6892,10 @@ mod tests {
             context_post_protocol: None,
             context_post_published_at: None,
         });
-        assert_eq!(row.detail, "Liked your post.");
+        assert!(row
+            .detail
+            .starts_with("Visibility is not included with this notification."));
+        assert!(row.detail.contains("Liked your post."));
         assert_eq!(row.primary, "Mark read");
         assert_eq!(row.secondary, "Open link");
     }
@@ -6862,7 +6926,88 @@ mod tests {
         });
         assert_eq!(row.primary, "Open link");
         assert_eq!(row.secondary, "");
-        assert_eq!(row.detail, "View thread to compare.");
+        assert!(row.detail.contains("View thread to compare."));
+    }
+
+    #[test]
+    fn social_rows_explain_post_visibility() {
+        let own = post_row(&OwnerPost {
+            id: "p-direct".into(),
+            title: Some("Direct note".into()),
+            content: "Private detail".into(),
+            visibility: Visibility::Direct,
+            protocol: ProtocolRoute::ActivityPub,
+            encrypted: false,
+            attachments: Vec::new(),
+            reply_count: 0,
+            like_count: 0,
+            boost_count: 0,
+            published_at: None,
+        });
+        assert_eq!(own.chip.as_str(), "Direct");
+        assert!(own.detail.contains("direct/select"));
+
+        let timeline = timeline_row(&OwnerTimelinePost {
+            id: "tl1".into(),
+            object_id: "obj1".into(),
+            actor_id: "https://example.social/users/alice".into(),
+            actor_username: Some("alice".into()),
+            actor_display_name: Some("Alice".into()),
+            actor_avatar_url: None,
+            content: "Unlisted note".into(),
+            content_html: None,
+            visibility: "unlisted".into(),
+            in_reply_to: None,
+            published_at: None,
+            protocol: Some("activitypub".into()),
+            reply_count: 0,
+            like_count: 0,
+            boost_count: 0,
+        });
+        assert_eq!(timeline.chip.as_str(), "Unlisted");
+        assert!(timeline.detail.contains("outside friends"));
+    }
+
+    #[test]
+    fn notification_context_explains_known_visibility() {
+        let row = notification_row(&OwnerNotification {
+            id: "n5".into(),
+            kind: "reply".into(),
+            actor_id: "https://social.example/users/vera".into(),
+            actor_username: Some("vera".into()),
+            actor_display_name: Some("Vera".into()),
+            actor_avatar_url: None,
+            post_id: Some("post-1".into()),
+            activity_id: None,
+            content: Some("Reply text".into()),
+            read: serde_json::Value::Bool(false),
+            created_at: Some("2m".into()),
+            context_post_id: Some("post-1".into()),
+            context_post_content: Some("Original context".into()),
+            context_post_content_html: None,
+            context_post_visibility: Some("followers".into()),
+            context_post_protocol: None,
+            context_post_published_at: None,
+        });
+        assert!(row.detail.contains("followers/friends"));
+        assert!(row.detail.contains("Original context"));
+    }
+
+    #[test]
+    fn thread_reply_rows_show_visibility_when_known() {
+        let row = reply_activity_row(
+            "post-1",
+            0,
+            &serde_json::json!({
+                "actor_display_name": "Reply Actor",
+                "content": "Reply content",
+                "published_at": "now",
+                "visibility": "public"
+            }),
+        );
+        assert_eq!(row.chip.as_str(), "Public");
+        assert_eq!(row.tone.as_str(), "warn");
+        assert!(row.detail.contains("anyone"));
     }
 
     #[test]
