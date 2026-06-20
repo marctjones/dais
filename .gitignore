@@ -59,7 +59,7 @@ Thumbs.db
 # Local development tools
 .idlergear/
 .claude/
+tmp/
 .codex/tmp/
-tmp/codex/
 .mcp.json
 .idlergear.retired/
