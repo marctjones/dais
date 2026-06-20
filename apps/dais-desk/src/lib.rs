@@ -417,6 +417,7 @@ pub struct UiProjection {
     pub profile_summary: String,
     pub profile_icon: String,
     pub profile_image: String,
+    pub profile_preview: String,
     pub audience_id: String,
     pub audience_name: String,
     pub audience_description: String,
@@ -461,6 +462,7 @@ pub struct DeskController {
     source_form: SourceFormState,
     watch_form: WatchFormState,
     profile_form: ProfileFormState,
+    profile_preview_fingerprint: Option<String>,
     audience_form: AudienceFormState,
     moderation_form: ModerationFormState,
     settings_form: SettingsFormState,
@@ -510,6 +512,7 @@ impl DeskController {
             source_form: SourceFormState::default(),
             watch_form: WatchFormState::default(),
             profile_form: ProfileFormState::default(),
+            profile_preview_fingerprint: None,
             audience_form: AudienceFormState::default(),
             moderation_form: ModerationFormState::default(),
             settings_form: SettingsFormState::default(),
@@ -546,6 +549,7 @@ impl DeskController {
             source_form: SourceFormState::default(),
             watch_form: WatchFormState::default(),
             profile_form: ProfileFormState::default(),
+            profile_preview_fingerprint: None,
             audience_form: AudienceFormState::default(),
             moderation_form: ModerationFormState::default(),
             settings_form: SettingsFormState::default(),
@@ -1135,13 +1139,7 @@ impl DeskController {
         icon: &str,
         image: &str,
     ) {
-        self.profile_form = ProfileFormState {
-            actor_type: actor_type.trim().to_string(),
-            display_name: display_name.trim().to_string(),
-            summary: summary.trim().to_string(),
-            icon: icon.trim().to_string(),
-            image: image.trim().to_string(),
-        };
+        self.set_profile_form(actor_type, display_name, summary, icon, image);
         match self.save_profile_inner() {
             Ok(message) => {
                 self.status_message = message;
@@ -1149,6 +1147,37 @@ impl DeskController {
             }
             Err(error) => self.status_message = format!("Profile save failed: {error}"),
         }
+    }
+
+    pub fn preview_profile_from_form(
+        &mut self,
+        actor_type: &str,
+        display_name: &str,
+        summary: &str,
+        icon: &str,
+        image: &str,
+    ) {
+        self.set_profile_form(actor_type, display_name, summary, icon, image);
+        self.profile_preview_fingerprint = Some(profile_form_fingerprint(&self.profile_form));
+        self.status_message =
+            "Reviewed public profile preview. Save profile will publish these exact values.".into();
+    }
+
+    fn set_profile_form(
+        &mut self,
+        actor_type: &str,
+        display_name: &str,
+        summary: &str,
+        icon: &str,
+        image: &str,
+    ) {
+        self.profile_form = ProfileFormState {
+            actor_type: actor_type.trim().to_string(),
+            display_name: display_name.trim().to_string(),
+            summary: summary.trim().to_string(),
+            icon: icon.trim().to_string(),
+            image: image.trim().to_string(),
+        };
     }
 
     pub fn save_audience_from_form(
@@ -1428,6 +1457,7 @@ impl DeskController {
             profile_summary: self.profile_form.summary.clone(),
             profile_icon: self.profile_form.icon.clone(),
             profile_image: self.profile_form.image.clone(),
+            profile_preview: profile_preview_text(&self.profile_form),
             audience_id: self.audience_form.id.clone(),
             audience_name: self.audience_form.name.clone(),
             audience_description: self.audience_form.description.clone(),
@@ -1671,6 +1701,12 @@ impl DeskController {
     }
 
     fn save_profile_inner(&self) -> Result<String, String> {
+        let current_fingerprint = profile_form_fingerprint(&self.profile_form);
+        if self.profile_preview_fingerprint.as_deref() != Some(current_fingerprint.as_str()) {
+            return Err(
+                "preview the public identity first; changed fields require a fresh preview".into(),
+            );
+        }
         if self
             .settings
             .owner_token
@@ -3872,6 +3908,21 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
 
     let weak = window.as_weak();
     let ctrl = controller.clone();
+    window.on_preview_profile(move |actor_type, display_name, summary, icon, image| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().preview_profile_from_form(
+                actor_type.as_str(),
+                display_name.as_str(),
+                summary.as_str(),
+                icon.as_str(),
+                image.as_str(),
+            );
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
     window.on_save_profile(move |actor_type, display_name, summary, icon, image| {
         if let Some(window) = weak.upgrade() {
             ctrl.borrow_mut().save_profile_from_form(
@@ -4222,6 +4273,7 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_profile_summary(s(&projection.profile_summary));
     window.set_profile_icon(s(&projection.profile_icon));
     window.set_profile_image(s(&projection.profile_image));
+    window.set_profile_preview(s(&projection.profile_preview));
     window.set_audience_id(s(&projection.audience_id));
     window.set_audience_name(s(&projection.audience_name));
     window.set_audience_description(s(&projection.audience_description));
@@ -4371,6 +4423,33 @@ fn draft_row(draft: &StoredDraft) -> UiRow {
         "Open draft",
         "Delete draft",
     )
+}
+
+fn profile_preview_text(profile: &ProfileFormState) -> String {
+    let display =
+        optional_trimmed(&profile.display_name).unwrap_or_else(|| "(no display name)".into());
+    let actor_type = optional_trimmed(&profile.actor_type).unwrap_or_else(|| "Person".into());
+    let summary = optional_trimmed(&profile.summary).unwrap_or_else(|| "(no summary)".into());
+    let icon = optional_trimmed(&profile.icon).unwrap_or_else(|| "no avatar URL".into());
+    let image = optional_trimmed(&profile.image).unwrap_or_else(|| "no header image URL".into());
+    format!(
+        "Public preview: {display} ({actor_type}). Summary: {}. Avatar: {icon}. Header: {image}.",
+        preview_markdown_safe(&summary)
+    )
+}
+
+fn profile_form_fingerprint(profile: &ProfileFormState) -> String {
+    let seed = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        profile.actor_type.trim(),
+        profile.display_name.trim(),
+        profile.summary.trim(),
+        profile.icon.trim(),
+        profile.image.trim()
+    );
+    let mut hasher = DefaultHasher::new();
+    seed.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
 }
 
 fn notification_row(notice: &OwnerNotification) -> UiRow {
@@ -6841,6 +6920,32 @@ mod tests {
         assert_eq!(projection.settings_default_protocol, "activitypub");
         assert!(projection.settings_require_authorized_fetch);
         assert!(projection.settings_manually_approves_followers);
+    }
+
+    #[test]
+    fn profile_save_requires_current_public_preview() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.set_profile_form("Person", "Dais Test", "Public summary", "", "");
+        assert_eq!(
+            controller.save_profile_inner().err(),
+            Some(
+                "preview the public identity first; changed fields require a fresh preview".into()
+            )
+        );
+
+        controller.preview_profile_from_form("Person", "Dais Test", "Public summary", "", "");
+        assert_eq!(
+            controller.save_profile_inner().as_deref(),
+            Ok("Preview profile saved. Add an owner token to update the server.")
+        );
+
+        controller.set_profile_form("Person", "Changed", "Public summary", "", "");
+        assert_eq!(
+            controller.save_profile_inner().err(),
+            Some(
+                "preview the public identity first; changed fields require a fresh preview".into()
+            )
+        );
     }
 
     #[test]
