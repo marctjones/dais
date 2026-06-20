@@ -1297,6 +1297,28 @@ impl DeskController {
         }
     }
 
+    pub fn choose_media_file(&mut self) {
+        match choose_media_file_path() {
+            Ok(Some(path)) => {
+                self.set_media_file_path(&path);
+                self.status_message = "Selected local media file.".into();
+            }
+            Ok(None) => {
+                self.status_message = "Media selection cancelled.".into();
+            }
+            Err(error) => {
+                self.status_message = format!("Choose media failed: {error}");
+            }
+        }
+    }
+
+    pub fn set_media_file_path(&mut self, path: &str) {
+        self.media_form.file_path = path.trim().to_string();
+        if self.media_form.media_type.trim().is_empty() {
+            self.media_form.media_type = media_type_for_path(Path::new(&self.media_form.file_path));
+        }
+    }
+
     pub fn revoke_media_from_form(&mut self, url: &str) {
         self.media_form.revoke_url = url.trim().to_string();
         match self.revoke_media_url(url.trim()) {
@@ -3963,6 +3985,15 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
 
     let weak = window.as_weak();
     let ctrl = controller.clone();
+    window.on_choose_media_file(move || {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().choose_media_file();
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
     window.on_upload_media(
         move |file_path, media_type, description, access, expires_seconds, authorized_fetch| {
             if let Some(window) = weak.upgrade() {
@@ -5101,6 +5132,34 @@ fn open_url(url: &str) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+fn choose_media_file_path() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(r#"POSIX path of (choose file with prompt "Choose media to upload")"#)
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("-128") || stderr.to_ascii_lowercase().contains("cancel") {
+                return Ok(None);
+            }
+            return Err(stderr.trim().if_empty("native file chooser failed"));
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("native media chooser is not implemented on this platform; paste a local file path instead".into())
+    }
 }
 
 fn object_id_from_row(row_id: &str) -> Option<&str> {
@@ -7196,5 +7255,17 @@ mod tests {
             "activitypub_object"
         );
         assert_eq!(infer_watch_type("https://example.com/feed.xml"), "rss");
+    }
+
+    #[test]
+    fn selecting_media_file_infers_type_without_overwriting_manual_type() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.set_media_file_path("/tmp/photo.png");
+        assert_eq!(controller.media_form.file_path, "/tmp/photo.png");
+        assert_eq!(controller.media_form.media_type, "image/png");
+
+        controller.media_form.media_type = "image/custom".into();
+        controller.set_media_file_path("/tmp/movie.mp4");
+        assert_eq!(controller.media_form.media_type, "image/custom");
     }
 }

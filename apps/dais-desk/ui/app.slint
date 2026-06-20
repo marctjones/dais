@@ -351,6 +351,7 @@ export component MainWindow inherits Window {
     callback block-domain(string, string);
     callback allow-host(string, string);
     callback disallow-host(string);
+    callback choose-media-file();
     callback upload-media(string, string, string, string, string, bool);
     callback revoke-media(string);
     callback save-account(string, string, string);
@@ -815,7 +816,16 @@ export component MainWindow inherits Window {
                                     padding: 10px;
                                     spacing: 7px;
                                     Text { text: "Media"; font-weight: 800; font-size: 13px; color: #172033; }
-                                LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; horizontal-stretch: 1; }
+                                    Button {
+                                        text: "Choose file";
+                                        clicked => {
+                                            root.choose-media-file();
+                                        }
+                                    }
+                                }
                                 HorizontalLayout {
                                     spacing: 6px;
                                     LineEdit { text <=> root.media-type; placeholder-text: "media type"; horizontal-stretch: 1; }
