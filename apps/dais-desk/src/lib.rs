@@ -4978,6 +4978,7 @@ mod tests {
                 | "Boost"
                 | "Repost"
                 | "Delete"
+                | "Switch"
                 | "Mark read"
                 | "Approve"
                 | "Reject"
@@ -5042,6 +5043,7 @@ mod tests {
             "identity",
             "settings",
             "stats",
+            "accounts",
         ] {
             controller.select_screen(screen);
             assert_supported_row_actions(&controller.rows_for_active_screen());
@@ -5400,6 +5402,110 @@ mod tests {
             .accounts
             .iter()
             .all(|account| !account.can_delete));
+    }
+
+    #[test]
+    fn account_rows_show_expected_actions_for_active_and_inactive_accounts() {
+        let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let settings_path = temp_dir.path().join("owner-settings.json");
+        controller.settings_path = settings_path;
+        controller.settings.accounts = vec![
+            StoredOwnerAccount {
+                id: "account-a".into(),
+                label: "Account A".into(),
+                instance_url: "https://a.example".into(),
+                owner_token: Some("token-a".into()),
+            },
+            StoredOwnerAccount {
+                id: "account-b".into(),
+                label: "Account B".into(),
+                instance_url: "https://b.example".into(),
+                owner_token: None,
+            },
+        ];
+        controller.settings.active_account_id = Some("account-a".into());
+        controller.settings.instance_url = "https://a.example".into();
+        controller.settings.owner_token = Some("token-a".into());
+        controller.select_screen("accounts");
+        let rows = controller.rows_for_active_screen();
+        assert_eq!(rows.len(), 2);
+        assert_supported_row_actions(&rows);
+        let (active, inactive) = (rows[0].clone(), rows[1].clone());
+        assert_eq!(active.primary.as_str(), "");
+        assert_eq!(active.chip.as_str(), "Active");
+        assert_eq!(inactive.primary.as_str(), "Switch");
+        assert_eq!(inactive.secondary.as_str(), "Delete");
+        assert_eq!(inactive.chip.as_str(), "Account");
+    }
+
+    #[test]
+    fn switching_account_forces_active_id() {
+        let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        controller.settings_path = temp_dir.path().join("owner-settings.json");
+        controller.settings.accounts = vec![
+            StoredOwnerAccount {
+                id: "account-a".into(),
+                label: "Account A".into(),
+                instance_url: "https://a.example".into(),
+                owner_token: Some("token-a".into()),
+            },
+            StoredOwnerAccount {
+                id: "account-b".into(),
+                label: "Account B".into(),
+                instance_url: "https://b.example".into(),
+                owner_token: None,
+            },
+        ];
+        controller.settings.active_account_id = Some("account-a".into());
+        assert_eq!(
+            controller
+                .switch_account_result("account-b")
+                .expect("switch"),
+            "Switched account. Reads, posts, follows, watches, and server commands use it now."
+        );
+        assert_eq!(
+            controller.settings.active_account_id,
+            Some("account-b".to_string())
+        );
+    }
+
+    #[test]
+    fn deleting_account_moves_active_to_first_remaining_and_blocks_last_account_deletion() {
+        let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        controller.settings_path = temp_dir.path().join("owner-settings.json");
+        controller.settings.accounts = vec![
+            StoredOwnerAccount {
+                id: "account-a".into(),
+                label: "Account A".into(),
+                instance_url: "https://a.example".into(),
+                owner_token: Some("token-a".into()),
+            },
+            StoredOwnerAccount {
+                id: "account-b".into(),
+                label: "Account B".into(),
+                instance_url: "https://b.example".into(),
+                owner_token: None,
+            },
+        ];
+        controller.settings.active_account_id = Some("account-b".into());
+        assert_eq!(
+            controller
+                .delete_account_result("account-b")
+                .expect("delete"),
+            "Deleted account profile."
+        );
+        assert_eq!(controller.settings.accounts.len(), 1);
+        assert_eq!(
+            controller.settings.active_account_id,
+            Some("account-a".to_string())
+        );
+        assert_eq!(
+            controller.delete_account_result("account-a").err(),
+            Some("at least one account profile is required".into())
+        );
     }
 
     #[test]
