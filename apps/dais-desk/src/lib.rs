@@ -711,6 +711,7 @@ impl DeskController {
                 | "Boost"
                 | "Repost"
                 | "Delete"
+                | "Switch"
                 | "Mark read"
                 | "Approve"
                 | "Reject"
@@ -5505,6 +5506,40 @@ mod tests {
         assert_eq!(
             controller.delete_account_result("account-a").err(),
             Some("at least one account profile is required".into())
+        );
+    }
+
+    #[test]
+    fn row_action_supports_switch_and_delete_for_account_rows() {
+        let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        controller.settings_path = temp_dir.path().join("owner-settings.json");
+        controller.settings.accounts = vec![
+            StoredOwnerAccount {
+                id: "account-a".into(),
+                label: "Account A".into(),
+                instance_url: "https://a.example".into(),
+                owner_token: Some("token-a".into()),
+            },
+            StoredOwnerAccount {
+                id: "account-b".into(),
+                label: "Account B".into(),
+                instance_url: "https://b.example".into(),
+                owner_token: None,
+            },
+        ];
+        controller.settings.active_account_id = Some("account-a".into());
+        controller.row_action("account:account-b", "Switch");
+        assert_eq!(
+            controller.settings.active_account_id,
+            Some("account-b".into())
+        );
+
+        controller.row_action("account:account-b", "Delete");
+        assert_eq!(controller.settings.accounts.len(), 1);
+        assert_eq!(
+            controller.settings.active_account_id,
+            Some("account-a".into())
         );
     }
 
