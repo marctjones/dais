@@ -4013,7 +4013,11 @@ fn decode_html_entities(value: &str) -> String {
 fn resolve_external_url(controller: &DeskController, row_id: &str) -> Result<String, String> {
     let source = controller
         .find_row(row_id)
-        .and_then(|row| extract_first_url(&row.detail))
+        .and_then(|row| {
+            extract_first_url(&row.detail)
+                .or_else(|| extract_first_url(&row.title))
+                .or_else(|| extract_first_url(&row.subtitle))
+        })
         .or_else(|| row_id.strip_prefix("url:").map(ToOwned::to_owned))
         .or_else(|| row_id.strip_prefix("media:").map(ToOwned::to_owned))
         .or_else(|| {
@@ -5132,6 +5136,24 @@ mod tests {
             created_at: None,
         });
         assert_eq!(row.primary.as_str(), "Open link");
+    }
+
+    #[test]
+    fn resolve_external_url_uses_row_title_when_detail_has_no_url() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.data.sources.items.push(SourceItem {
+            id: "source-item-title-only".into(),
+            title: "https://title-only.example/article".into(),
+            source_type: "rss".into(),
+            canonical_url: None,
+            excerpt: None,
+            rights_policy_json: "{}".into(),
+            read: false,
+        });
+        controller.select_screen("watches");
+        let row_id = "source-item:source-item-title-only";
+        let url = resolve_external_url(&controller, row_id).expect("row url");
+        assert_eq!(url, "https://title-only.example/article");
     }
 
     #[test]
