@@ -2339,7 +2339,7 @@ impl DeskController {
         persist_settings_to(&self.settings_path, self.settings.clone())
     }
 
-    fn rows_for_active_screen(&self) -> Vec<UiRow> {
+    fn rows_for_active_screen_for_projection(&self) -> Vec<UiRow> {
         match self.active_screen.as_str() {
             "today" => self.home_today_rows(),
             "inbox" => self.inbox_rows(),
@@ -2363,6 +2363,27 @@ impl DeskController {
             "stats" => self.stats_rows(),
             _ => self.home_today_rows(),
         }
+    }
+
+    fn rows_for_active_screen(&self) -> Vec<UiRow> {
+        let mut rows = self.rows_for_active_screen_for_projection();
+        let suppress_secondary = matches!(
+            self.active_screen.as_str(),
+            "today"
+                | "inbox"
+                | "find"
+                | "relationship"
+                | "friends"
+                | "followers"
+                | "following"
+                | "watches"
+                | "audience"
+                | "blocks"
+        );
+        if suppress_secondary {
+            rows.iter_mut().for_each(|row| row.secondary = s(""));
+        }
+        rows
     }
 
     fn mode_nav(&self, unread: usize, failed: usize) -> Vec<NavItem> {
@@ -2621,9 +2642,6 @@ impl DeskController {
     }
 
     fn relationship_rows(&self) -> Vec<UiRow> {
-        if let Some(actor) = &self.data.discovered_actor {
-            return vec![discovered_actor_row(actor)];
-        }
         let mut rows = Vec::new();
         rows.extend(self.data.snapshot.friends.iter().map(friend_row));
         rows.extend(self.data.snapshot.followers.iter().map(follower_row));
@@ -3046,7 +3064,7 @@ impl DeskController {
     }
 
     fn find_row(&self, row_id: &str) -> Option<UiRow> {
-        self.rows_for_active_screen()
+        self.rows_for_active_screen_for_projection()
             .into_iter()
             .find(|row| row.id.as_str() == row_id)
             .or_else(|| {
@@ -5552,6 +5570,110 @@ mod tests {
         assert!(projection
             .privacy_status
             .contains("Graph and watches are owner-only"));
+    }
+
+    #[test]
+    fn fixture_people_mode_has_expected_screen_order() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_mode("people");
+        let projection = controller.projection();
+        let screens: Vec<_> = projection
+            .screen_nav
+            .iter()
+            .map(|item| item.id.to_string())
+            .collect();
+        assert_eq!(
+            screens,
+            vec![
+                "find",
+                "relationship",
+                "friends",
+                "followers",
+                "following",
+                "watches",
+                "audience",
+                "blocks",
+            ]
+        );
+    }
+
+    #[test]
+    fn home_today_rows_are_attention_first() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.home_today_rows();
+        assert_eq!(rows[0].id.as_str(), "notification:notice-like-context");
+        assert_eq!(rows[1].id.as_str(), "notification:notice-reply");
+        assert_eq!(rows[2].id.as_str(), "dm:dm-fixture");
+        assert_eq!(rows[3].id.as_str(), "timeline:fixture-private-post");
+        assert_eq!(rows[4].id.as_str(), "post:fixture-private-post");
+    }
+
+    #[test]
+    fn inbox_rows_are_attention_first() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.inbox_rows();
+        assert_eq!(rows[0].id.as_str(), "notification:notice-like-context");
+        assert_eq!(rows[1].id.as_str(), "notification:notice-reply");
+        assert_eq!(rows[2].id.as_str(), "dm:dm-fixture");
+        assert_eq!(
+            rows[3].id.as_str(),
+            "follower:https://new.example/users/follower"
+        );
+        assert_eq!(rows[4].id.as_str(), "moderation-reply:mod-reply-sensitive");
+        assert_eq!(rows[5].id.as_str(), "delivery:delivery-failed");
+    }
+
+    #[test]
+    fn discovered_actor_isolated_to_find_screen() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.data.discovered_actor = Some(OwnerDiscoveredActor {
+            id: "https://discover.example/users/agent".into(),
+            actor_type: None,
+            inbox: "https://discover.example/inbox".into(),
+            shared_inbox: None,
+            preferred_username: Some("agent".into()),
+            name: Some("Discovered Agent".into()),
+            summary: Some("Public demo discovery row.".into()),
+            url: None,
+            icon_url: None,
+            handle: Some("@agent@discover.example".into()),
+            following_status: None,
+            target_public_post: None,
+            recent_public_posts: Vec::new(),
+        });
+        controller.select_screen("find");
+        let find_rows = controller.rows_for_active_screen();
+        assert!(find_rows
+            .iter()
+            .any(|row| row.id.as_str() == "actor:https://discover.example/users/agent"));
+
+        controller.select_screen("relationship");
+        let relationship_rows = controller.rows_for_active_screen();
+        assert!(!relationship_rows
+            .iter()
+            .any(|row| row.id.as_str() == "actor:https://discover.example/users/agent"));
+    }
+
+    #[test]
+    fn inspector_exposes_secondary_actions_when_list_suppresses_them() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.run_command("science");
+        controller.select_row("actor:https://mastodon.example/users/science");
+        let list_rows = controller.rows_for_active_screen();
+        let list_row = list_rows
+            .iter()
+            .find(|row| row.id.as_str() == "actor:https://mastodon.example/users/science")
+            .expect("follow target in list");
+        assert_eq!(list_row.secondary.as_str(), "");
+
+        let inspector_rows =
+            controller.inspector_rows("actor:https://mastodon.example/users/science");
+        let inspector_row = inspector_rows
+            .into_iter()
+            .find(|row| row.id.as_str() == "actor:https://mastodon.example/users/science")
+            .expect("selected row in inspector");
+        assert_eq!(inspector_row.primary.as_str(), "Follow");
+        assert_eq!(inspector_row.secondary.as_str(), "Watch");
     }
 
     #[test]

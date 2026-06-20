@@ -180,13 +180,6 @@ component RowCard inherits Rectangle {
                     root.action(root.entry.id, root.entry.primary);
                 }
             }
-            if root.entry.secondary != "" : Button {
-                height: 34px;
-                text: root.entry.secondary;
-                clicked => {
-                    root.action(root.entry.id, root.entry.secondary);
-                }
-            }
         }
     }
 }
