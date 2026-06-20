@@ -381,6 +381,7 @@ pub struct UiProjection {
     pub command_text: String,
     pub compose_text: String,
     pub compose_recipients: String,
+    pub compose_audience_list: String,
     pub compose_media_description: String,
     pub compose_encrypt: bool,
     pub compose_visibility: String,
@@ -1026,11 +1027,13 @@ impl DeskController {
         &mut self,
         text: &str,
         recipients: &str,
+        audience_list_id: &str,
         media_description: &str,
         encrypt: bool,
     ) {
         self.compose.text = text.to_string();
         self.compose.recipients = recipients.to_string();
+        self.compose.audience_list_id = optional_trimmed(audience_list_id);
         self.compose.media_description = media_description.to_string();
         self.compose.encrypt = encrypt;
     }
@@ -1415,6 +1418,7 @@ impl DeskController {
             command_text: self.command_text.clone(),
             compose_text: self.compose.text.clone(),
             compose_recipients: self.compose.recipients.clone(),
+            compose_audience_list: self.compose.audience_list_id.clone().unwrap_or_default(),
             compose_media_description: self.compose.media_description.clone(),
             compose_encrypt: self.compose.encrypt,
             compose_visibility: visibility_label(&self.compose.visibility).to_lowercase(),
@@ -4107,6 +4111,7 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
                 controller.update_compose_from_ui(
                     window.get_compose_text().as_str(),
                     window.get_compose_recipients().as_str(),
+                    window.get_compose_audience_list().as_str(),
                     window.get_compose_media_description().as_str(),
                     window.get_compose_encrypt(),
                 );
@@ -4125,6 +4130,7 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
                 controller.update_compose_from_ui(
                     window.get_compose_text().as_str(),
                     window.get_compose_recipients().as_str(),
+                    window.get_compose_audience_list().as_str(),
                     window.get_compose_media_description().as_str(),
                     window.get_compose_encrypt(),
                 );
@@ -4143,6 +4149,7 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
                 controller.update_compose_from_ui(
                     window.get_compose_text().as_str(),
                     window.get_compose_recipients().as_str(),
+                    window.get_compose_audience_list().as_str(),
                     window.get_compose_media_description().as_str(),
                     window.get_compose_encrypt(),
                 );
@@ -4237,6 +4244,7 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_command_text(s(&projection.command_text));
     window.set_compose_text(s(&projection.compose_text));
     window.set_compose_recipients(s(&projection.compose_recipients));
+    window.set_compose_audience_list(s(&projection.compose_audience_list));
     window.set_compose_media_description(s(&projection.compose_media_description));
     window.set_compose_encrypt(projection.compose_encrypt);
     window.set_compose_visibility(s(&projection.compose_visibility));
@@ -5352,8 +5360,9 @@ fn compose_warning(compose: &ComposeState) -> String {
     }
     if matches!(compose.visibility, Visibility::Direct)
         && split_list(&compose.recipients).is_empty()
+        && compose.audience_list_id.as_deref().unwrap_or("").is_empty()
     {
-        return "Direct posts require named recipients.".into();
+        return "Direct posts require named recipients or an audience group.".into();
     }
     if matches!(compose.visibility, Visibility::Public) {
         return "This will be public. Use Post Publicly only when that is intentional.".into();
@@ -5371,7 +5380,8 @@ fn compose_warning(compose: &ComposeState) -> String {
 fn compose_can_send(compose: &ComposeState) -> bool {
     !compose.text.trim().is_empty()
         && (!matches!(compose.visibility, Visibility::Direct)
-            || !split_list(&compose.recipients).is_empty())
+            || !split_list(&compose.recipients).is_empty()
+            || !compose.audience_list_id.as_deref().unwrap_or("").is_empty())
 }
 
 fn split_list(value: &str) -> Vec<String> {
@@ -6710,8 +6720,20 @@ mod tests {
         assert!(!compose_can_send(&compose));
         assert_eq!(
             compose_warning(&compose),
-            "Direct posts require named recipients."
+            "Direct posts require named recipients or an audience group."
         );
+    }
+
+    #[test]
+    fn compose_allows_direct_audience_group_without_manual_recipients() {
+        let compose = ComposeState {
+            text: "small group".into(),
+            visibility: Visibility::Direct,
+            audience_list_id: Some("close-friends".into()),
+            ..ComposeState::default()
+        };
+        assert!(compose_can_send(&compose));
+        assert_eq!(compose_warning(&compose), "Ready to send privately.");
     }
 
     #[test]

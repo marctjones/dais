@@ -270,6 +270,7 @@ export component MainWindow inherits Window {
     in-out property <string> command-text;
     in-out property <string> compose-text;
     in-out property <string> compose-recipients;
+    in-out property <string> compose-audience-list;
     in-out property <string> compose-media-description;
     in-out property <bool> compose-encrypt;
     in property <string> compose-visibility;
@@ -676,13 +677,18 @@ export component MainWindow inherits Window {
                                     spacing: 8px;
                                     LineEdit {
                                         text <=> root.compose-recipients;
-                                        placeholder-text: "Direct recipients or audience group members";
+                                        placeholder-text: "Direct recipients";
                                         horizontal-stretch: 1;
                                     }
                                     CheckBox {
                                         text: "Encrypt";
                                         checked <=> root.compose-encrypt;
                                     }
+                                }
+
+                                LineEdit {
+                                    text <=> root.compose-audience-list;
+                                    placeholder-text: "Audience group id, for example close-friends";
                                 }
 
                                 LineEdit {
@@ -699,7 +705,7 @@ export component MainWindow inherits Window {
 
                                 Button {
                                     text: root.compose-visibility == "public" ? "Post Publicly" : "Send";
-                                    enabled: root.compose-text != "" && (root.compose-visibility != "direct" || root.compose-recipients != "");
+                                    enabled: root.compose-text != "" && (root.compose-visibility != "direct" || root.compose-recipients != "" || root.compose-audience-list != "");
                                     clicked => {
                                         root.compose-send();
                                     }
