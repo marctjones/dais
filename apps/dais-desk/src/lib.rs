@@ -2394,9 +2394,7 @@ impl DeskController {
     }
 
     fn retry_delivery(&self, row_id: &str) -> Result<String, String> {
-        let id = row_id
-            .strip_prefix("delivery:")
-            .ok_or_else(|| "no delivery id".to_string())?;
+        let id = delivery_id_from_row(row_id).ok_or_else(|| "no delivery id".to_string())?;
         if self
             .settings
             .owner_token
@@ -2421,9 +2419,7 @@ impl DeskController {
     }
 
     fn cancel_delivery(&self, row_id: &str) -> Result<String, String> {
-        let id = row_id
-            .strip_prefix("delivery:")
-            .ok_or_else(|| "no delivery id".to_string())?;
+        let id = delivery_id_from_row(row_id).ok_or_else(|| "no delivery id".to_string())?;
         if self
             .settings
             .owner_token
@@ -3317,6 +3313,7 @@ impl DeskController {
             ));
         }
         rows.extend(self.post_detail_inspector_rows(selected_row));
+        rows.extend(self.delivery_inspector_rows(selected_row));
         rows.push(row(
             "inspector:privacy",
             "Visibility consequences",
@@ -3337,6 +3334,82 @@ impl DeskController {
             "",
             "",
         ));
+        rows
+    }
+
+    fn delivery_inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
+        let Some(delivery_id) = selected_row.strip_prefix("delivery:") else {
+            return Vec::new();
+        };
+        let Some(delivery) = self
+            .data
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.id == delivery_id)
+        else {
+            return Vec::new();
+        };
+        let (primary, secondary) = delivery_action_pair(delivery.status.as_str());
+        let mut rows = vec![row(
+            &format!("delivery-detail:{}", delivery.id),
+            "Delivery detail",
+            &format!(
+                "{} {}",
+                delivery.protocol,
+                delivery.activity_type.as_deref().unwrap_or("activity")
+            ),
+            &format!(
+                "Status: {}. Retry count: {}. Last attempt: {}. Created: {}.",
+                delivery.status,
+                delivery.retry_count.unwrap_or_default(),
+                delivery.last_attempt_at.as_deref().unwrap_or("never"),
+                delivery.created_at.as_deref().unwrap_or("unknown")
+            ),
+            &delivery.status,
+            delivery_tone(delivery.status.as_str()),
+            primary,
+            secondary,
+        )];
+        rows.push(row(
+            &format!("url:{}", delivery.target_url),
+            "Remote target",
+            delivery.target_type.as_deref().unwrap_or("recipient"),
+            &delivery.target_url,
+            "Target",
+            "info",
+            if delivery.target_url.starts_with("http://")
+                || delivery.target_url.starts_with("https://")
+            {
+                "Open link"
+            } else {
+                ""
+            },
+            "Copy evidence",
+        ));
+        if let Some(error) = delivery
+            .error_message
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            rows.push(row(
+                &format!("delivery-failure:{}", delivery.id),
+                "Failure explanation",
+                "Operator action",
+                &delivery_failure_explanation(error),
+                "Failure",
+                "warn",
+                if matches!(delivery.status.as_str(), "failed" | "retry") {
+                    "Retry delivery"
+                } else {
+                    ""
+                },
+                if delivery.status != "delivered" {
+                    "Cancel delivery"
+                } else {
+                    ""
+                },
+            ));
+        }
         rows
     }
 
@@ -4458,18 +4531,7 @@ fn delivery_attention_row(delivery: &OwnerDelivery) -> UiRow {
 }
 
 fn delivery_row(delivery: &OwnerDelivery) -> UiRow {
-    let tone = match delivery.status.as_str() {
-        "failed" => "danger",
-        "delivered" => "ok",
-        "retry" | "queued" => "warn",
-        _ => "info",
-    };
-    let (primary, secondary) = match delivery.status.as_str() {
-        "failed" | "retry" => ("Retry delivery", "Cancel delivery"),
-        "queued" => ("Cancel delivery", "Inspect delivery"),
-        "delivered" => ("Open context", ""),
-        _ => ("Inspect delivery", "Open context"),
-    };
+    let (primary, secondary) = delivery_action_pair(delivery.status.as_str());
     row(
         &format!("delivery:{}", delivery.id),
         &format!("{} delivery", delivery.protocol),
@@ -4484,10 +4546,47 @@ fn delivery_row(delivery: &OwnerDelivery) -> UiRow {
             delivery.error_message.as_deref().unwrap_or("")
         ),
         &delivery.status,
-        tone,
+        delivery_tone(delivery.status.as_str()),
         primary,
         secondary,
     )
+}
+
+fn delivery_action_pair(status: &str) -> (&'static str, &'static str) {
+    match status {
+        "failed" | "retry" => ("Retry delivery", "Cancel delivery"),
+        "queued" => ("Cancel delivery", "Inspect delivery"),
+        "delivered" => ("Open context", ""),
+        _ => ("Inspect delivery", "Open context"),
+    }
+}
+
+fn delivery_tone(status: &str) -> &'static str {
+    match status {
+        "failed" => "danger",
+        "delivered" => "ok",
+        "retry" | "queued" => "warn",
+        _ => "info",
+    }
+}
+
+fn delivery_failure_explanation(error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+    let likely = if lower.contains("timeout") || lower.contains("timed out") {
+        "The remote server did not answer in time. Retry is usually reasonable."
+    } else if lower.contains("401") || lower.contains("403") || lower.contains("authorized") {
+        "The remote server rejected access or signing. Check authorized-fetch and key configuration before retrying."
+    } else if lower.contains("404") || lower.contains("410") {
+        "The remote target may no longer exist. Retrying is unlikely to help unless the target URL changed."
+    } else if lower.contains("429") || lower.contains("rate") {
+        "The remote server is rate limiting delivery. Wait before retrying."
+    } else if lower.contains("5") || lower.contains("unavailable") || lower.contains("bad gateway")
+    {
+        "The remote server appears unhealthy. Retry later or inspect the remote status."
+    } else {
+        "Delivery failed before the remote server confirmed receipt. Retry if the target is still expected to receive this activity."
+    };
+    format!("{likely} Raw error: {}", clean_text(error))
 }
 
 fn moderation_reply_row(reply: &ModerationReplyRow) -> UiRow {
@@ -4636,6 +4735,16 @@ fn resolve_external_url(controller: &DeskController, row_id: &str) -> Result<Str
         })
         .or_else(|| row_id.strip_prefix("url:").map(ToOwned::to_owned))
         .or_else(|| row_id.strip_prefix("media:").map(ToOwned::to_owned))
+        .or_else(|| {
+            delivery_id_from_row(row_id).and_then(|id| {
+                controller
+                    .data
+                    .deliveries
+                    .iter()
+                    .find(|delivery| delivery.id == id)
+                    .map(|delivery| delivery.target_url.clone())
+            })
+        })
         .or_else(|| {
             matches!(row_id, "identity:profile" | "health:profile")
                 .then(|| controller.data.snapshot.profile.actor_url.clone())
@@ -4823,6 +4932,13 @@ fn object_id_from_row(row_id: &str) -> Option<&str> {
         .or_else(|| row_id.strip_prefix("timeline:"))
         .or_else(|| row_id.strip_prefix("post-detail:"))
         .or_else(|| row_id.strip_prefix("url:"))
+}
+
+fn delivery_id_from_row(row_id: &str) -> Option<&str> {
+    row_id
+        .strip_prefix("delivery:")
+        .or_else(|| row_id.strip_prefix("delivery-detail:"))
+        .or_else(|| row_id.strip_prefix("delivery-failure:"))
 }
 
 fn target_from_row(row_id: &str) -> Option<&str> {
@@ -6424,6 +6540,44 @@ mod tests {
             .expect("delivered delivery row");
         assert_eq!(delivered.primary.as_str(), "Open context");
         assert_eq!(delivered.secondary.as_str(), "");
+    }
+
+    #[test]
+    fn delivery_inspector_explains_failure_and_target() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.inspector_rows("delivery:delivery-failed");
+        assert_supported_row_actions(&rows);
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "delivery-detail:delivery-failed"));
+        let target = rows
+            .iter()
+            .find(|row| row.title.as_str() == "Remote target")
+            .expect("target row");
+        assert_eq!(target.primary.as_str(), "Open link");
+        assert_eq!(target.secondary.as_str(), "Copy evidence");
+        let failure = rows
+            .iter()
+            .find(|row| row.id.as_str() == "delivery-failure:delivery-failed")
+            .expect("failure row");
+        assert_eq!(failure.primary.as_str(), "Retry delivery");
+        assert_eq!(failure.secondary.as_str(), "Cancel delivery");
+        assert!(failure
+            .detail
+            .contains("Raw error: Remote host returned 502"));
+    }
+
+    #[test]
+    fn delivery_rows_resolve_external_target_url() {
+        let controller = DeskController::fixture_for_tests();
+        assert_eq!(
+            resolve_external_url(&controller, "delivery:delivery-failed").as_deref(),
+            Ok("https://remote.example/inbox")
+        );
+        assert_eq!(
+            resolve_external_url(&controller, "delivery-detail:delivery-failed").as_deref(),
+            Ok("https://remote.example/inbox")
+        );
     }
 
     #[test]
