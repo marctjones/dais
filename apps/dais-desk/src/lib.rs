@@ -387,6 +387,7 @@ pub struct UiProjection {
     pub compose_visibility: String,
     pub compose_protocol: String,
     pub compose_warning: String,
+    pub compose_audience_summary: String,
     pub compose_can_send: bool,
     pub account_label: String,
     pub account_url: String,
@@ -838,6 +839,8 @@ impl DeskController {
             self.disallow_host(row_id.trim_start_matches("allow:"))
         } else if action == "Revoke media" {
             self.revoke_media_from_row(row_id)
+        } else if action == "Use in compose" && row_id.starts_with("audience:") {
+            self.use_audience_in_compose(row_id.trim_start_matches("audience:"))
         } else if action == "Save draft" {
             self.save_current_draft_inner()
         } else if action == "Open draft" && row_id.starts_with("draft:") {
@@ -1425,6 +1428,7 @@ impl DeskController {
             compose_protocol: protocol_label(&self.compose.protocol).to_lowercase(),
             compose_can_send: compose_can_send(&self.compose),
             compose_warning,
+            compose_audience_summary: compose_audience_summary(&self.compose, &self.data.snapshot),
             account_label: self
                 .account_form_label
                 .clone()
@@ -2739,6 +2743,25 @@ impl DeskController {
         Ok("Deleted local draft.".into())
     }
 
+    fn use_audience_in_compose(&mut self, list_id: &str) -> Result<String, String> {
+        let list = self
+            .data
+            .snapshot
+            .audience_lists
+            .iter()
+            .find(|list| list.id == list_id)
+            .ok_or_else(|| "audience group not found".to_string())?;
+        self.compose.visibility = Visibility::Direct;
+        self.compose.protocol = ProtocolRoute::ActivityPub;
+        self.compose.audience_list_id = Some(list.id.clone());
+        self.active_mode = "home".into();
+        self.active_screen = "compose".into();
+        Ok(format!(
+            "Compose is targeting {} ({} member(s)). Review the visibility summary before sending.",
+            list.name, list.member_count
+        ))
+    }
+
     fn save_account_inner(
         &mut self,
         label: &str,
@@ -3007,12 +3030,22 @@ impl DeskController {
             "Save draft",
             "",
         )];
+        rows.push(row(
+            "compose:visibility-summary",
+            "Who can see this",
+            "Review before sending",
+            &compose_audience_summary(&self.compose, &self.data.snapshot),
+            visibility_label(&self.compose.visibility),
+            visibility_tone_enum(&self.compose.visibility),
+            "",
+            "",
+        ));
         if let Some(reply) = &self.compose.in_reply_to {
             rows.push(row(
                 &format!("post:{reply}"),
                 "Reply context",
-                "This reply will keep its own audience choice",
-                reply,
+                "This reply will use the audience above",
+                &reply_context_summary(reply, &self.data),
                 "Reply",
                 "info",
                 "Open context",
@@ -3654,6 +3687,40 @@ impl DeskController {
             "Reply",
             "Delete",
         )];
+        for (index, reply) in detail.replies.iter().take(6).enumerate() {
+            rows.push(reply_activity_row(&detail.post.id, index, reply));
+        }
+        if detail.replies.len() > 6 {
+            rows.push(row(
+                &format!("post-detail:{}:more-replies", detail.post.id),
+                "More replies",
+                "Thread continues",
+                &format!(
+                    "{} additional reply/replies are available from server detail.",
+                    detail.replies.len() - 6
+                ),
+                "Thread",
+                "info",
+                "",
+                "",
+            ));
+        }
+        if !detail.likes.is_empty() || !detail.boosts.is_empty() {
+            rows.push(row(
+                &format!("post-detail:{}:activity", detail.post.id),
+                "Post activity",
+                "Likes and boosts",
+                &format!(
+                    "{} like(s), {} boost(s). These are social signals, not replies.",
+                    detail.likes.len(),
+                    detail.boosts.len()
+                ),
+                "Activity",
+                "info",
+                "",
+                "",
+            ));
+        }
         for attachment in &detail.post.attachments {
             if let Some(url) = attachment_url(attachment) {
                 rows.push(row(
@@ -4250,6 +4317,7 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_compose_visibility(s(&projection.compose_visibility));
     window.set_compose_protocol(s(&projection.compose_protocol));
     window.set_compose_warning(s(&projection.compose_warning));
+    window.set_compose_audience_summary(s(&projection.compose_audience_summary));
     window.set_compose_can_send(projection.compose_can_send);
     window.set_account_label(s(&projection.account_label));
     window.set_account_url(s(&projection.account_url));
@@ -4431,6 +4499,166 @@ fn draft_row(draft: &StoredDraft) -> UiRow {
         "Open draft",
         "Delete draft",
     )
+}
+
+fn compose_audience_summary(compose: &ComposeState, snapshot: &OwnerSnapshotBundle) -> String {
+    let route = protocol_label(&compose.protocol);
+    let base = match compose.visibility {
+        Visibility::Public => {
+            "Visible to anyone who can read the public web, ActivityPub, or supported public protocol routes.".to_string()
+        }
+        Visibility::Unlisted => {
+            "Visible to addressed/federated audiences, but not promoted as a public timeline post.".to_string()
+        }
+        Visibility::Followers => {
+            "Visible to approved followers/friends on ActivityPub. It should not appear in anonymous public feeds.".to_string()
+        }
+        Visibility::Direct => {
+            if let Some(list_id) = compose.audience_list_id.as_deref().filter(|id| !id.is_empty())
+            {
+                if let Some(list) = snapshot.audience_lists.iter().find(|list| list.id == list_id)
+                {
+                    format!(
+                        "Visible only to audience group {} ({} member(s)): {}.",
+                        list.name,
+                        list.member_count,
+                        audience_members_preview(list)
+                    )
+                } else {
+                    format!(
+                        "Visible only to audience group id {list_id}, if that group exists on the server."
+                    )
+                }
+            } else {
+                let recipients = split_list(&compose.recipients);
+                if recipients.is_empty() {
+                    "Direct post has no recipients yet.".to_string()
+                } else {
+                    format!("Visible only to {} direct recipient(s).", recipients.len())
+                }
+            }
+        }
+    };
+    let mut parts = vec![base, format!("Route: {route}.")];
+    if compose.encrypt {
+        parts.push("Encryption requested.".into());
+    }
+    if !compose.attachments.is_empty() {
+        parts.push(format!(
+            "{} media attachment(s) will use their upload access policy.",
+            compose.attachments.len()
+        ));
+    }
+    parts.join(" ")
+}
+
+fn audience_members_preview(list: &OwnerAudienceList) -> String {
+    if list.member_actor_ids.is_empty() {
+        return "no members configured".into();
+    }
+    let preview = list
+        .member_actor_ids
+        .iter()
+        .take(3)
+        .map(|member| compact_actor(member))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if list.member_actor_ids.len() > 3 {
+        format!("{preview}, and {} more", list.member_actor_ids.len() - 3)
+    } else {
+        preview
+    }
+}
+
+fn reply_context_summary(object_id: &str, data: &DeskData) -> String {
+    if let Some(detail) = data
+        .post_detail
+        .as_ref()
+        .filter(|detail| detail.post.id == object_id)
+    {
+        return format!(
+            "{} {}",
+            detail.post.title.as_deref().unwrap_or("Selected post"),
+            preview_markdown_safe(
+                detail
+                    .content_html
+                    .as_deref()
+                    .unwrap_or(&detail.post.content)
+            )
+        );
+    }
+    data.snapshot
+        .home_timeline
+        .iter()
+        .find(|post| post.object_id == object_id)
+        .map(|post| preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content)))
+        .or_else(|| {
+            data.snapshot
+                .posts
+                .iter()
+                .find(|post| post.id == object_id)
+                .map(|post| preview_markdown_safe(&post.content))
+        })
+        .unwrap_or_else(|| format!("Replying to {object_id}. Open context for detail."))
+}
+
+fn reply_activity_row(post_id: &str, index: usize, reply: &serde_json::Value) -> UiRow {
+    let actor = json_string_any(
+        reply,
+        &[
+            "actor_display_name",
+            "actorDisplayName",
+            "display_name",
+            "displayName",
+            "actor_username",
+            "actorUsername",
+            "actor",
+            "attributedTo",
+        ],
+    )
+    .unwrap_or_else(|| "Reply".into());
+    let content = json_string_any(
+        reply,
+        &["content_html", "contentHtml", "content", "summary", "text"],
+    )
+    .unwrap_or_else(|| "Reply content is available in server detail.".into());
+    let published = json_string_any(
+        reply,
+        &[
+            "published_at",
+            "publishedAt",
+            "published",
+            "created_at",
+            "createdAt",
+        ],
+    )
+    .unwrap_or_else(|| "reply".into());
+    row(
+        &format!("post-detail:{post_id}:reply:{index}"),
+        &actor,
+        &published,
+        &preview_markdown_safe(&content),
+        "Reply",
+        "info",
+        "",
+        "",
+    )
+}
+
+fn json_string_any(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(json_string_value))
+}
+
+fn json_string_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        serde_json::Value::Object(map) => map
+            .get("name")
+            .or_else(|| map.get("id"))
+            .and_then(json_string_value),
+        _ => None,
+    }
 }
 
 fn profile_preview_text(profile: &ProfileFormState) -> String {
@@ -4794,7 +5022,7 @@ fn audience_row(list: &OwnerAudienceList) -> UiRow {
             .unwrap_or("Audience groups are owner-controlled sharing sets."),
         "Audience",
         "ok",
-        "",
+        "Use in compose",
         "Remove",
     )
 }
@@ -5419,6 +5647,12 @@ fn compact_url(url: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn compact_actor(actor: &str) -> String {
+    compact_url(actor)
+        .replace("/users/", "/@")
+        .replace("/profile/", "/@")
 }
 
 fn infer_watch_type(target: &str) -> &'static str {
@@ -6265,6 +6499,7 @@ mod tests {
                 | "Inspect delivery"
                 | "Copy evidence"
                 | "Revoke media"
+                | "Use in compose"
                 | "Save draft"
                 | "Open draft"
                 | "Delete draft"
@@ -7336,6 +7571,36 @@ mod tests {
     }
 
     #[test]
+    fn audience_group_row_can_target_compose() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.row_action("audience:close-friends", "Use in compose");
+        assert_eq!(controller.active_screen, "compose");
+        assert_eq!(controller.compose.visibility, Visibility::Direct);
+        assert_eq!(
+            controller.compose.audience_list_id.as_deref(),
+            Some("close-friends")
+        );
+        let projection = controller.projection();
+        assert!(projection
+            .compose_audience_summary
+            .contains("Close Friends"));
+        assert!(projection.compose_audience_summary.contains("1 member"));
+    }
+
+    #[test]
+    fn compose_context_rows_explain_visibility_and_reply_context() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.row_action("notification:notice-reply", "Reply");
+        let rows = controller.compose_context_rows();
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "compose:visibility-summary"
+                && row.detail.contains("approved followers")));
+        assert!(rows.iter().any(|row| row.title.as_str() == "Reply context"
+            && !row.detail.contains("fixture-private-post")));
+    }
+
+    #[test]
     fn selecting_post_loads_thread_detail_for_inspector() {
         let mut controller = DeskController::fixture_for_tests();
         controller.select_row("post:fixture-private-post");
@@ -7344,6 +7609,10 @@ mod tests {
             .inspector_rows
             .iter()
             .any(|row| row.title.as_str() == "Thread detail"));
+        assert!(projection
+            .inspector_rows
+            .iter()
+            .any(|row| row.id.as_str().contains(":reply:")));
     }
 
     #[test]

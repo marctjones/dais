@@ -276,6 +276,7 @@ export component MainWindow inherits Window {
     in property <string> compose-visibility;
     in property <string> compose-protocol;
     in property <string> compose-warning;
+    in property <string> compose-audience-summary;
     in property <bool> compose-can-send;
     in-out property <string> account-label;
     in-out property <string> account-url;
@@ -620,7 +621,7 @@ export component MainWindow inherits Window {
                         }
 
                         if root.active-screen == "compose" : Rectangle {
-                            height: 336px;
+                            height: 372px;
                             border-radius: 8px;
                             border-width: 1px;
                             border-color: #ccd6e3;
@@ -666,6 +667,13 @@ export component MainWindow inherits Window {
                                     color: #344055;
                                     font-size: 12px;
                                     font-weight: 700;
+                                }
+
+                                Text {
+                                    text: root.compose-audience-summary;
+                                    color: root.compose-visibility == "public" ? #7b1c1c : #27415f;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
                                 }
 
                                 TextEdit {
