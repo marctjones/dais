@@ -46,6 +46,16 @@ run_cmd() {
 run_cmd "Rust Desk UI release gate" cargo test --manifest-path apps/dais-desk/Cargo.toml
 run_cmd "Desk build verification" cargo build --manifest-path apps/dais-desk/Cargo.toml
 run_cmd "Live conformance smoke" cargo test --manifest-path conformance/Cargo.toml -- --nocapture
+run_cmd "Design alignment progress evidence" test -f docs/guides/DESIGN_ALIGNMENT_MATRIX.md
+run_cmd "Design coverage screenshots present" bash -c '
+  for shot in home home-compose-media home-inbox-notifications home-today people-find-search people-relationship people-friends people-followers people-following people-watches-sources people-audience-groups people-blocks server-health server-deliveries server-stats server-identity server-moderation server-accounts; do
+    path="apps/dais-desk/target/dais-desk-screenshots/${shot}.png"
+    if [ ! -f "${path}" ]; then
+      echo "Missing required screenshot: ${shot}.png"
+      exit 1
+    fi
+  done
+'
 
 {
   echo "## Artifacts"
@@ -53,7 +63,7 @@ run_cmd "Live conformance smoke" cargo test --manifest-path conformance/Cargo.to
   echo "- Report: \`${REPORT_FILE}\`"
   echo
   echo "- Desk screenshots:"
-  for screenshot in home home-compose-media people-find-search people-followers people-watches-sources people-audience-groups server-identity server-moderation server-accounts; do
+  for screenshot in home home-compose-media home-inbox-notifications home-today people-find-search people-relationship people-friends people-followers people-following people-watches-sources people-audience-groups people-blocks server-health server-deliveries server-stats server-identity server-moderation server-accounts; do
     path="${ROOT_DIR}/apps/dais-desk/target/dais-desk-screenshots/${screenshot}.png"
     if [ -f "${path}" ]; then
       echo "  - ✅ ${screenshot}.png"

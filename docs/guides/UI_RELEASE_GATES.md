@@ -33,10 +33,16 @@ The smoke gate must cover:
 - **Server** mode: settings, diagnostics, moderation, profile, and operator
   state.
 - Explicit sections: Home, Compose, Settings, Discovery, and Moderation.
+- Explicit screens: home, compose, inbox, people relationship/follows/watch, and
+  server health/deliveries/moderation/identity/accounts.
+
+Design-alignment coverage tracking lives in:
+
+- `docs/guides/DESIGN_ALIGNMENT_MATRIX.md`
 
 ## Accessibility Gates
 
-The smoke gate checks:
+The smoke gate checks and release script requirements:
 
 - Source-list navigation uses accessible controls rather than inert text.
 - Slint accessibility labels exist for the primary source-list controls and row
@@ -45,8 +51,10 @@ The smoke gate checks:
   Server, and Accounts & Tokens.
 - Core text colors meet contrast requirements.
 - Font sizing does not depend on viewport width.
-- Native screenshots for Home, People/Followers, and Server/Accounts are
-  nonblank and visually varied.
+- Native screenshots for Home, People/Followers, and Server/Accounts (plus the full
+  required matrix screens below) are nonblank and visually varied.
+- Release script enforces that all screens listed in
+  `docs/guides/DESIGN_ALIGNMENT_MATRIX.md` are present as artifacts.
 
 Future GUI changes that add new icon-only controls, dialogs, sheets, or custom
 interactive widgets should extend the smoke gate with targeted checks for those
@@ -81,6 +89,15 @@ UI release gate evidence
 - Accessibility notes:
 - Privacy notes:
 - Screenshots or video, if visual behavior changed:
+
+Required screenshot names at release time:
+
+```text
+home, home-compose-media, home-inbox-notifications, home-today,
+people-find-search, people-relationship, people-friends, people-followers, people-following,
+people-watches-sources, people-audience-groups, people-blocks,
+server-health, server-deliveries, server-stats, server-identity, server-moderation, server-accounts
+```
 ```
 
 If a gate is intentionally deferred, the release issue must name the missing
