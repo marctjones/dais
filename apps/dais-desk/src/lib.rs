@@ -4456,11 +4456,32 @@ fn delivery_row(delivery: &OwnerDelivery) -> UiRow {
 
 fn moderation_reply_row(reply: &ModerationReplyRow) -> UiRow {
     let raw_status = reply.moderation_status.as_deref().unwrap_or("needs review");
+    let normalized_status = raw_status.trim().to_ascii_lowercase().replace(' ', "_");
     let status = humanize_status(raw_status);
+    let hidden =
+        json_truthy(&reply.hidden) || matches!(normalized_status.as_str(), "hidden" | "rejected");
     let flags = if reply.moderation_flags.is_empty() {
         String::new()
     } else {
         format!("Flags: {}. ", reply.moderation_flags.join(", "))
+    };
+    let score = reply
+        .moderation_score
+        .map(|score| format!("Advisory score: {:.2}. ", score))
+        .unwrap_or_default();
+    let (primary, secondary) = moderation_reply_actions(&normalized_status, hidden);
+    let (chip, tone) = if hidden {
+        if normalized_status == "rejected" {
+            ("Rejected", "danger")
+        } else {
+            ("Hidden", "warn")
+        }
+    } else if normalized_status == "approved" {
+        ("Approved", "ok")
+    } else if reply.moderation_flags.is_empty() {
+        ("Review", "warn")
+    } else {
+        ("Flagged", "danger")
     };
     row(
         &format!("moderation-reply:{}", reply.id),
@@ -4470,20 +4491,21 @@ fn moderation_reply_row(reply: &ModerationReplyRow) -> UiRow {
             .or(reply.actor_username.as_deref())
             .unwrap_or(&reply.actor_id),
         &status,
-        &format!("{flags}{}", preview_markdown_safe(&reply.content)),
-        if reply.moderation_flags.is_empty() {
-            "Review"
-        } else {
-            "Flagged"
-        },
-        if reply.moderation_flags.is_empty() {
-            "warn"
-        } else {
-            "danger"
-        },
-        "Approve reply",
-        "Hide reply",
+        &format!("{flags}{score}{}", preview_markdown_safe(&reply.content)),
+        chip,
+        tone,
+        primary,
+        secondary,
     )
+}
+
+fn moderation_reply_actions(status: &str, hidden: bool) -> (&'static str, &'static str) {
+    match (status, hidden) {
+        ("approved", false) => ("Hide reply", "Reject reply"),
+        ("rejected", _) => ("Approve reply", ""),
+        ("hidden", _) | (_, true) => ("Approve reply", "Reject reply"),
+        _ => ("Approve reply", "Hide reply"),
+    }
 }
 
 fn clean_text(value: &str) -> String {
@@ -6122,7 +6144,52 @@ mod tests {
         });
         assert_eq!(row.subtitle.as_str(), "Needs Review");
         assert_eq!(row.primary.as_str(), "Approve reply");
+        assert_eq!(row.secondary.as_str(), "Hide reply");
         assert!(row.detail.starts_with("Flags: violence, adult"));
+        assert!(row.detail.contains("Advisory score: 0.50"));
+    }
+
+    #[test]
+    fn moderation_reply_actions_match_current_state() {
+        let base = ModerationReplyRow {
+            id: "m-state".into(),
+            post_id: "p1".into(),
+            actor_id: "https://social.example/users/zeek".into(),
+            actor_username: Some("zeek".into()),
+            actor_display_name: Some("Zeek".into()),
+            actor_avatar_url: None,
+            content: "Review me.".into(),
+            published_at: Some("now".into()),
+            created_at: Some("now".into()),
+            moderation_status: Some("approved".into()),
+            moderation_score: None,
+            moderation_flags: Vec::new(),
+            moderation_checked_at: None,
+            hidden: serde_json::Value::Bool(false),
+        };
+
+        let approved = moderation_reply_row(&base);
+        assert_eq!(approved.chip.as_str(), "Approved");
+        assert_eq!(approved.primary.as_str(), "Hide reply");
+        assert_eq!(approved.secondary.as_str(), "Reject reply");
+
+        let hidden = moderation_reply_row(&ModerationReplyRow {
+            moderation_status: Some("hidden".into()),
+            hidden: serde_json::Value::Bool(true),
+            ..base.clone()
+        });
+        assert_eq!(hidden.chip.as_str(), "Hidden");
+        assert_eq!(hidden.primary.as_str(), "Approve reply");
+        assert_eq!(hidden.secondary.as_str(), "Reject reply");
+
+        let rejected = moderation_reply_row(&ModerationReplyRow {
+            moderation_status: Some("rejected".into()),
+            hidden: serde_json::Value::Bool(true),
+            ..base
+        });
+        assert_eq!(rejected.chip.as_str(), "Rejected");
+        assert_eq!(rejected.primary.as_str(), "Approve reply");
+        assert_eq!(rejected.secondary.as_str(), "");
     }
 
     #[test]
