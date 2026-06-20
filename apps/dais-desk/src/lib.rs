@@ -3813,11 +3813,11 @@ fn source_item_row(item: &SourceItem) -> UiRow {
         .as_deref()
         .map(|url| format!("url:{url}"))
         .unwrap_or_else(|| format!("source-item:{}", item.id));
-    let open_link = item.canonical_url.as_deref().is_some()
-        || item
-            .excerpt
-            .as_deref()
-            .is_some_and(|excerpt| extract_first_url(excerpt).is_some());
+    let open_link = has_openable_link([
+        item.canonical_url.as_deref(),
+        item.excerpt.as_deref(),
+        Some(&item.title),
+    ]);
     row(
         &id,
         &item.title,
@@ -3839,11 +3839,11 @@ fn search_source_item_row(item: &dais_client_core::OwnerSearchSourceItem) -> UiR
         .as_deref()
         .map(|url| format!("url:{url}"))
         .unwrap_or_else(|| format!("source-item:{}", item.id));
-    let open_link = item.canonical_url.as_deref().is_some()
-        || item
-            .excerpt
-            .as_deref()
-            .is_some_and(|excerpt| extract_first_url(excerpt).is_some());
+    let open_link = has_openable_link([
+        item.canonical_url.as_deref(),
+        item.excerpt.as_deref(),
+        Some(&item.title),
+    ]);
     row(
         &id,
         &item.title,
@@ -4031,6 +4031,13 @@ fn extract_first_url(value: &str) -> Option<String> {
         .split_whitespace()
         .find(|part| part.starts_with("https://") || part.starts_with("http://"))
         .map(|part| part.trim_end_matches(&[',', '.', ')', ']'][..]).to_string())
+}
+
+fn has_openable_link(parts: [Option<&str>; 3]) -> bool {
+    parts
+        .into_iter()
+        .filter_map(|value| value)
+        .any(|value| extract_first_url(value).is_some())
 }
 
 fn open_url(url: &str) -> Result<(), String> {
@@ -5063,6 +5070,20 @@ mod tests {
     }
 
     #[test]
+    fn source_item_row_with_title_link_keeps_open_action() {
+        let row = source_item_row(&SourceItem {
+            id: "item-3".into(),
+            title: "https://example.org from title".into(),
+            source_type: "rss".into(),
+            canonical_url: None,
+            excerpt: None,
+            rights_policy_json: "{}".into(),
+            read: false,
+        });
+        assert_eq!(row.primary.as_str(), "Open link");
+    }
+
+    #[test]
     fn search_source_item_row_without_link_has_no_open_action() {
         let row = search_source_item_row(&dais_client_core::OwnerSearchSourceItem {
             id: "search-item-1".into(),
@@ -5087,6 +5108,23 @@ mod tests {
             source_type: "rss".into(),
             title: "Search item with url".into(),
             canonical_url: Some("https://example.org/search".into()),
+            excerpt: None,
+            published_at: None,
+            read: serde_json::json!(false),
+            rights_policy_json: "{}".into(),
+            created_at: None,
+        });
+        assert_eq!(row.primary.as_str(), "Open link");
+    }
+
+    #[test]
+    fn search_source_item_row_with_title_link_keeps_open_action() {
+        let row = search_source_item_row(&dais_client_core::OwnerSearchSourceItem {
+            id: "search-item-3".into(),
+            source_id: "source-id".into(),
+            source_type: "rss".into(),
+            title: "Check https://search.example/entry".into(),
+            canonical_url: None,
             excerpt: None,
             published_at: None,
             read: serde_json::json!(false),
