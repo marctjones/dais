@@ -14,10 +14,13 @@ use dais_client_core::{
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 slint::include_modules!();
 
@@ -41,6 +44,29 @@ pub struct StoredOwnerAccount {
     pub label: String,
     pub instance_url: String,
     pub owner_token: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct StoredDrafts {
+    #[serde(default)]
+    pub drafts: Vec<StoredDraft>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredDraft {
+    pub id: String,
+    pub account_id: String,
+    pub text: String,
+    pub visibility: Visibility,
+    pub protocol: ProtocolRoute,
+    pub encrypt: bool,
+    pub in_reply_to: Option<String>,
+    pub audience_list_id: Option<String>,
+    pub recipients: String,
+    pub media_description: String,
+    #[serde(default)]
+    pub attachments: Vec<String>,
+    pub updated_at: String,
 }
 
 impl Default for StoredOwnerSettings {
@@ -421,7 +447,9 @@ pub struct UiProjection {
 
 pub struct DeskController {
     settings_path: PathBuf,
+    drafts_path: PathBuf,
     settings: StoredOwnerSettings,
+    drafts: StoredDrafts,
     runtime: tokio::runtime::Runtime,
     data: DeskData,
     active_mode: String,
@@ -454,6 +482,8 @@ impl DeskController {
             .build()
             .map_err(|error| error.to_string())?;
         let settings = load_settings_from(&settings_path)?;
+        let drafts_path = drafts_path_for_settings(&settings_path);
+        let drafts = load_drafts_from(&drafts_path)?;
         let active = active_account(&settings).cloned();
         let (account_form_label, account_form_url, account_form_token) = active
             .map(|account| {
@@ -466,7 +496,9 @@ impl DeskController {
             .unwrap_or_default();
         let mut controller = Self {
             settings_path,
+            drafts_path,
             settings,
+            drafts,
             runtime,
             data: fixture_data(None),
             active_mode: "home".to_string(),
@@ -500,7 +532,9 @@ impl DeskController {
         let settings = StoredOwnerSettings::default();
         let mut controller = Self {
             settings_path: PathBuf::from("fixture-owner-settings.json"),
+            drafts_path: PathBuf::from("fixture-owner-drafts.json"),
             settings,
+            drafts: StoredDrafts::default(),
             runtime,
             data: fixture_data(None),
             active_mode: "home".to_string(),
@@ -639,6 +673,8 @@ impl DeskController {
             }
         } else if let Some(url) = row_id.strip_prefix("url:") {
             self.watch_form.target = url.to_string();
+        } else if row_id.starts_with("draft:") {
+            self.status_message = "Selected local draft. Open it to continue editing.".into();
         }
     }
 
@@ -797,6 +833,12 @@ impl DeskController {
             self.disallow_host(row_id.trim_start_matches("allow:"))
         } else if action == "Revoke media" {
             self.revoke_media_from_row(row_id)
+        } else if action == "Save draft" {
+            self.save_current_draft_inner()
+        } else if action == "Open draft" && row_id.starts_with("draft:") {
+            self.open_draft(row_id.trim_start_matches("draft:"))
+        } else if action == "Delete draft" && row_id.starts_with("draft:") {
+            self.delete_draft(row_id.trim_start_matches("draft:"))
         } else {
             match action {
                 "Reply" => self.prepare_reply(row_id),
@@ -915,6 +957,7 @@ impl DeskController {
                 | "Block"
                 | "Unblock"
                 | "Revoke media"
+                | "Delete draft"
         ) {
             self.refresh();
         }
@@ -997,10 +1040,19 @@ impl DeskController {
                 self.compose.recipients.clear();
                 self.compose.media_description.clear();
                 self.compose.in_reply_to = None;
+                self.compose.audience_list_id = None;
+                self.compose.attachments.clear();
                 self.active_screen = "today".into();
                 self.refresh();
             }
             Err(error) => self.status_message = format!("Post failed: {error}"),
+        }
+    }
+
+    pub fn save_current_draft(&mut self) {
+        match self.save_current_draft_inner() {
+            Ok(message) => self.status_message = message,
+            Err(error) => self.status_message = format!("Save draft failed: {error}"),
         }
     }
 
@@ -2538,6 +2590,93 @@ impl DeskController {
         ))
     }
 
+    fn active_account_id(&self) -> String {
+        active_account(&self.settings)
+            .map(|account| account.id.clone())
+            .unwrap_or_else(|| account_id_for(&self.settings.instance_url, &[]))
+    }
+
+    fn drafts_for_active_account(&self) -> Vec<StoredDraft> {
+        let account_id = self.active_account_id();
+        let mut drafts: Vec<StoredDraft> = self
+            .drafts
+            .drafts
+            .iter()
+            .filter(|draft| draft.account_id == account_id)
+            .cloned()
+            .collect();
+        drafts.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        drafts
+    }
+
+    fn save_current_draft_inner(&mut self) -> Result<String, String> {
+        if self.compose.text.trim().is_empty()
+            && self.compose.recipients.trim().is_empty()
+            && self.compose.media_description.trim().is_empty()
+            && self.compose.attachments.is_empty()
+        {
+            return Err("draft has no text, recipients, media description, or attachments".into());
+        }
+        let account_id = self.active_account_id();
+        let updated_at = unix_timestamp_label();
+        let id = draft_id_for(&account_id, &updated_at, &self.compose.text);
+        let draft = StoredDraft {
+            id: id.clone(),
+            account_id,
+            text: self.compose.text.trim().to_string(),
+            visibility: self.compose.visibility.clone(),
+            protocol: self.compose.protocol.clone(),
+            encrypt: self.compose.encrypt,
+            in_reply_to: self.compose.in_reply_to.clone(),
+            audience_list_id: self.compose.audience_list_id.clone(),
+            recipients: self.compose.recipients.trim().to_string(),
+            media_description: self.compose.media_description.trim().to_string(),
+            attachments: self.compose.attachments.clone(),
+            updated_at,
+        };
+        self.drafts.drafts.retain(|existing| existing.id != id);
+        self.drafts.drafts.push(draft);
+        persist_drafts_to(&self.drafts_path, self.drafts.clone())?;
+        Ok("Saved local draft for this account.".into())
+    }
+
+    fn open_draft(&mut self, draft_id: &str) -> Result<String, String> {
+        let draft = self
+            .drafts
+            .drafts
+            .iter()
+            .find(|draft| draft.id == draft_id && draft.account_id == self.active_account_id())
+            .cloned()
+            .ok_or_else(|| "draft not found for the active account".to_string())?;
+        self.compose = ComposeState {
+            text: draft.text,
+            visibility: draft.visibility,
+            protocol: draft.protocol,
+            encrypt: draft.encrypt,
+            in_reply_to: draft.in_reply_to,
+            audience_list_id: draft.audience_list_id,
+            recipients: draft.recipients,
+            media_description: draft.media_description,
+            attachments: draft.attachments,
+        };
+        self.active_mode = "home".into();
+        self.active_screen = "compose".into();
+        Ok("Opened local draft in Compose.".into())
+    }
+
+    fn delete_draft(&mut self, draft_id: &str) -> Result<String, String> {
+        let account_id = self.active_account_id();
+        let before = self.drafts.drafts.len();
+        self.drafts
+            .drafts
+            .retain(|draft| !(draft.id == draft_id && draft.account_id == account_id));
+        if self.drafts.drafts.len() == before {
+            return Err("draft not found for the active account".into());
+        }
+        persist_drafts_to(&self.drafts_path, self.drafts.clone())?;
+        Ok("Deleted local draft.".into())
+    }
+
     fn save_account_inner(
         &mut self,
         label: &str,
@@ -2686,7 +2825,7 @@ impl DeskController {
                 ("inbox", "Inbox", self.inbox_rows().len()),
                 ("compose", "Compose", 0),
                 ("posts", "My Posts", self.data.snapshot.posts.len()),
-                ("saved", "Saved & Drafts", 2),
+                ("saved", "Saved & Drafts", self.saved_rows().len()),
             ],
         };
         screens
@@ -2803,7 +2942,7 @@ impl DeskController {
             &compose_warning(&self.compose),
             visibility_label(&self.compose.visibility),
             "ok",
-            "",
+            "Save draft",
             "",
         )];
         if let Some(reply) = &self.compose.in_reply_to {
@@ -2826,28 +2965,34 @@ impl DeskController {
     }
 
     fn saved_rows(&self) -> Vec<UiRow> {
-        vec![
-            row(
-                "saved:owner-only",
-                "Saved posts",
-                "Owner-only bookmarks",
-                "Saved items are local to the owner and are not advertised to followers.",
-                "Owner-only",
-                "ok",
+        let mut rows = vec![row(
+            "saved:owner-only",
+            "Saved posts",
+            "Owner-only bookmarks",
+            "Server-backed saved posts are not implemented yet; local drafts below stay on this device.",
+            "Owner-only",
+            "ok",
+            "",
+            "",
+        )];
+        rows.extend(
+            self.drafts_for_active_account()
+                .into_iter()
+                .map(|draft| draft_row(&draft)),
+        );
+        if rows.len() == 1 {
+            rows.push(row(
+                "drafts:empty",
+                "No saved drafts",
+                "Compose can save unsent work locally",
+                "Drafts preserve text, audience, route, recipients, reply context, and attached media URLs.",
+                "Local",
+                "muted",
                 "",
                 "",
-            ),
-            row(
-                "draft:private",
-                "Drafts",
-                "Unsent posts",
-                "Drafts preserve the intended audience and route before reopening.",
-                "Draft",
-                "warn",
-                "",
-                "",
-            ),
-        ]
+            ));
+        }
+        rows
     }
 
     fn find_rows(&self) -> Vec<UiRow> {
@@ -4162,6 +4307,38 @@ fn post_row(post: &OwnerPost) -> UiRow {
         } else {
             "Favorite"
         },
+    )
+}
+
+fn draft_row(draft: &StoredDraft) -> UiRow {
+    let title = if draft.text.trim().is_empty() {
+        "Untitled draft".to_string()
+    } else {
+        preview_markdown_safe(&draft.text)
+    };
+    let mut details = vec![format!(
+        "{} via {}",
+        visibility_label(&draft.visibility),
+        protocol_label(&draft.protocol)
+    )];
+    if !draft.recipients.trim().is_empty() {
+        details.push(format!("Recipients: {}", draft.recipients));
+    }
+    if let Some(reply) = &draft.in_reply_to {
+        details.push(format!("Reply to: {reply}"));
+    }
+    if !draft.attachments.is_empty() {
+        details.push(format!("{} media attachment(s)", draft.attachments.len()));
+    }
+    row(
+        &format!("draft:{}", draft.id),
+        &title,
+        &format!("Updated {}", draft.updated_at),
+        &details.join(". "),
+        "Draft",
+        "warn",
+        "Open draft",
+        "Delete draft",
     )
 }
 
@@ -5681,6 +5858,29 @@ fn persist_settings_to(path: &PathBuf, settings: StoredOwnerSettings) -> Result<
     fs::write(path, json).map_err(|error| error.to_string())
 }
 
+fn drafts_path_for_settings(settings_path: &Path) -> PathBuf {
+    let mut path = settings_path.to_path_buf();
+    path.set_file_name("owner-drafts.json");
+    path
+}
+
+fn load_drafts_from(path: &PathBuf) -> Result<StoredDrafts, String> {
+    if !path.exists() {
+        return Ok(StoredDrafts::default());
+    }
+    let json = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let drafts: StoredDrafts = serde_json::from_str(&json).map_err(|error| error.to_string())?;
+    Ok(drafts)
+}
+
+fn persist_drafts_to(path: &PathBuf, drafts: StoredDrafts) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(&drafts).map_err(|error| error.to_string())?;
+    fs::write(path, json).map_err(|error| error.to_string())
+}
+
 fn normalize_settings(mut settings: StoredOwnerSettings) -> StoredOwnerSettings {
     settings.instance_url =
         normalize_instance_url(&settings.instance_url).unwrap_or_else(default_instance_url);
@@ -5809,6 +6009,20 @@ fn account_id_for(instance_url: &str, existing_ids: &[String]) -> String {
     candidate
 }
 
+fn draft_id_for(account_id: &str, updated_at: &str, text: &str) -> String {
+    let seed = format!("{account_id}:{updated_at}:{text}");
+    let mut hasher = DefaultHasher::new();
+    seed.hash(&mut hasher);
+    format!("draft-{:x}", hasher.finish())
+}
+
+fn unix_timestamp_label() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
 fn default_settings_path() -> PathBuf {
     if let Ok(path) = std::env::var("DAIS_DESK_SETTINGS") {
         return PathBuf::from(path);
@@ -5903,6 +6117,9 @@ mod tests {
                 | "Inspect delivery"
                 | "Copy evidence"
                 | "Revoke media"
+                | "Save draft"
+                | "Open draft"
+                | "Delete draft"
         )
     }
 
@@ -6357,6 +6574,125 @@ mod tests {
             compose_warning(&compose),
             "Direct posts require named recipients."
         );
+    }
+
+    #[test]
+    fn local_drafts_persist_and_restore_compose_state() {
+        let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        controller.drafts_path = temp_dir.path().join("owner-drafts.json");
+        controller.compose = ComposeState {
+            text: "Sensitive note for later".into(),
+            visibility: Visibility::Direct,
+            protocol: ProtocolRoute::ActivityPub,
+            encrypt: true,
+            in_reply_to: Some("post-123".into()),
+            audience_list_id: Some("close-friends".into()),
+            recipients: "https://friend.example/users/ada".into(),
+            media_description: "diagram alt text".into(),
+            attachments: vec!["https://social.dais.social/media/_private/token/file.png".into()],
+        };
+
+        controller.save_current_draft_inner().expect("save draft");
+        let draft_id = controller.drafts.drafts[0].id.clone();
+        let loaded = load_drafts_from(&controller.drafts_path).expect("loaded drafts");
+        assert_eq!(loaded.drafts.len(), 1);
+        assert_eq!(loaded.drafts[0].text, "Sensitive note for later");
+
+        controller.compose = ComposeState::default();
+        controller.open_draft(&draft_id).expect("open draft");
+        assert_eq!(controller.active_screen, "compose");
+        assert_eq!(controller.compose.text, "Sensitive note for later");
+        assert_eq!(controller.compose.visibility, Visibility::Direct);
+        assert!(controller.compose.encrypt);
+        assert_eq!(
+            controller.compose.recipients,
+            "https://friend.example/users/ada"
+        );
+        assert_eq!(controller.compose.attachments.len(), 1);
+    }
+
+    #[test]
+    fn saved_rows_show_only_active_account_drafts() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.settings.accounts = vec![
+            StoredOwnerAccount {
+                id: "account-a".into(),
+                label: "Account A".into(),
+                instance_url: "https://a.example".into(),
+                owner_token: None,
+            },
+            StoredOwnerAccount {
+                id: "account-b".into(),
+                label: "Account B".into(),
+                instance_url: "https://b.example".into(),
+                owner_token: None,
+            },
+        ];
+        controller.settings.active_account_id = Some("account-a".into());
+        controller.drafts.drafts = vec![
+            StoredDraft {
+                id: "draft-a".into(),
+                account_id: "account-a".into(),
+                text: "A draft".into(),
+                visibility: Visibility::Followers,
+                protocol: ProtocolRoute::ActivityPub,
+                encrypt: false,
+                in_reply_to: None,
+                audience_list_id: None,
+                recipients: String::new(),
+                media_description: String::new(),
+                attachments: Vec::new(),
+                updated_at: "2".into(),
+            },
+            StoredDraft {
+                id: "draft-b".into(),
+                account_id: "account-b".into(),
+                text: "B draft".into(),
+                visibility: Visibility::Public,
+                protocol: ProtocolRoute::Both,
+                encrypt: false,
+                in_reply_to: None,
+                audience_list_id: None,
+                recipients: String::new(),
+                media_description: String::new(),
+                attachments: Vec::new(),
+                updated_at: "1".into(),
+            },
+        ];
+        controller.select_screen("saved");
+        let rows = controller.rows_for_active_screen();
+        assert!(rows.iter().any(|row| row.id.as_str() == "draft:draft-a"));
+        assert!(!rows.iter().any(|row| row.id.as_str() == "draft:draft-b"));
+        assert_supported_row_actions(&rows);
+    }
+
+    #[test]
+    fn deleting_draft_updates_local_store() {
+        let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        controller.drafts_path = temp_dir.path().join("owner-drafts.json");
+        controller.drafts.drafts = vec![StoredDraft {
+            id: "draft-delete".into(),
+            account_id: controller.active_account_id(),
+            text: "Delete me".into(),
+            visibility: Visibility::Followers,
+            protocol: ProtocolRoute::ActivityPub,
+            encrypt: false,
+            in_reply_to: None,
+            audience_list_id: None,
+            recipients: String::new(),
+            media_description: String::new(),
+            attachments: Vec::new(),
+            updated_at: "1".into(),
+        }];
+
+        controller
+            .delete_draft("draft-delete")
+            .expect("delete draft");
+        assert!(controller.drafts.drafts.is_empty());
+        let loaded = load_drafts_from(&controller.drafts_path).expect("loaded drafts");
+        assert!(loaded.drafts.is_empty());
     }
 
     #[test]
