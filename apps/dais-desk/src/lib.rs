@@ -5048,6 +5048,12 @@ mod tests {
         ] {
             controller.select_screen(screen);
             assert_supported_row_actions(&controller.rows_for_active_screen());
+            if let Some(first_row) = controller.rows_for_active_screen().first() {
+                controller.select_row(first_row.id.as_str());
+                assert_supported_row_actions(&controller.inspector_rows(first_row.id.as_str()));
+            } else {
+                panic!("screen {screen} has no rows");
+            }
         }
         controller.select_row("post:fixture-private-post");
         assert_supported_row_actions(&controller.inspector_rows("post:fixture-private-post"));
