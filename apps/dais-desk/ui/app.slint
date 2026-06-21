@@ -133,6 +133,15 @@ component RowCard inherits Rectangle {
         root.open(root.entry.id);
     }
 
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 4px;
+        height: root.height;
+        border-radius: 3px;
+        background: root.entry.tone == "danger" ? #c23b3b : root.entry.tone == "warn" ? #c98a18 : root.entry.tone == "ok" ? #23814b : #7c8da3;
+    }
+
     VerticalLayout {
         padding: root.is-post ? 14px : 12px;
         spacing: root.is-post ? 9px : 8px;
@@ -220,7 +229,7 @@ component RowCard inherits Rectangle {
             }
             if root.is-post || root.is-notification : Button {
                 height: 34px;
-                text: "Details";
+                text: root.is-post ? "Audience" : "Details";
                 clicked => {
                     root.open(root.entry.id);
                 }

@@ -3037,13 +3037,14 @@ impl DeskController {
     }
 
     fn compose_context_rows(&self) -> Vec<UiRow> {
+        let indicator = compose_audience_indicator(&self.compose);
         let mut rows = vec![row(
             "compose:privacy",
             "Audience preview",
             "Private by default",
             &compose_warning(&self.compose),
-            visibility_label(&self.compose.visibility),
-            "ok",
+            &indicator.label,
+            indicator.tone,
             "Save draft",
             "",
         )];
@@ -3052,8 +3053,8 @@ impl DeskController {
             "Who can see this",
             "Review before sending",
             &compose_audience_summary(&self.compose, &self.data.snapshot),
-            visibility_label(&self.compose.visibility),
-            visibility_tone_enum(&self.compose.visibility),
+            &indicator.label,
+            indicator.tone,
             "",
             "",
         ));
@@ -4764,6 +4765,129 @@ fn account_row(account: OwnerAccountSummary, can_delete: bool) -> AccountRow {
     }
 }
 
+#[derive(Clone, Debug)]
+struct AudienceIndicator {
+    label: String,
+    tone: &'static str,
+    explanation: String,
+}
+
+fn audience_indicator_for_visibility(visibility: &Visibility) -> AudienceIndicator {
+    match visibility {
+        Visibility::Public => AudienceIndicator {
+            label: "Public web".into(),
+            tone: "warn",
+            explanation: "Anyone who can read public web or federated public routes may be able to read this.".into(),
+        },
+        Visibility::Unlisted => AudienceIndicator {
+            label: "Unlisted".into(),
+            tone: "info",
+            explanation: "Readable by link or addressed/federated audiences, but not promoted as a public timeline item.".into(),
+        },
+        Visibility::Followers => AudienceIndicator {
+            label: "Followers".into(),
+            tone: "ok",
+            explanation: "Intended for approved followers or friends; follower servers may receive delivered copies.".into(),
+        },
+        Visibility::Direct => AudienceIndicator {
+            label: "Direct".into(),
+            tone: "ok",
+            explanation: "Intended only for named recipients or a selected audience group.".into(),
+        },
+    }
+}
+
+fn audience_indicator_for_string(visibility: &str) -> AudienceIndicator {
+    match visibility.trim().to_ascii_lowercase().as_str() {
+        "public" => audience_indicator_for_visibility(&Visibility::Public),
+        "unlisted" => audience_indicator_for_visibility(&Visibility::Unlisted),
+        "followers" | "private" => audience_indicator_for_visibility(&Visibility::Followers),
+        "direct" => audience_indicator_for_visibility(&Visibility::Direct),
+        _ => AudienceIndicator {
+            label: "Unknown".into(),
+            tone: "info",
+            explanation: "The server did not include precise audience information.".into(),
+        },
+    }
+}
+
+fn compose_audience_indicator(compose: &ComposeState) -> AudienceIndicator {
+    audience_indicator_for_target(
+        &compose.visibility,
+        compose.encrypt,
+        split_list(&compose.recipients).len(),
+        compose
+            .audience_list_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty()),
+    )
+}
+
+fn draft_audience_indicator(draft: &StoredDraft) -> AudienceIndicator {
+    audience_indicator_for_target(
+        &draft.visibility,
+        draft.encrypt,
+        split_list(&draft.recipients).len(),
+        draft
+            .audience_list_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty()),
+    )
+}
+
+fn audience_indicator_for_target(
+    visibility: &Visibility,
+    encrypted: bool,
+    recipient_count: usize,
+    has_group: bool,
+) -> AudienceIndicator {
+    if encrypted && matches!(visibility, Visibility::Direct) {
+        return if recipient_count == 1 && !has_group {
+            AudienceIndicator {
+                label: "E2EE 1:1".into(),
+                tone: "ok",
+                explanation: "Encrypted direct post for one named recipient.".into(),
+            }
+        } else {
+            AudienceIndicator {
+                label: "E2EE group".into(),
+                tone: "ok",
+                explanation: if has_group {
+                    "Encrypted direct post for the selected audience group.".into()
+                } else {
+                    format!("Encrypted direct post for {recipient_count} named recipients.")
+                },
+            }
+        };
+    }
+    if matches!(visibility, Visibility::Direct) {
+        if has_group {
+            return AudienceIndicator {
+                label: "Group".into(),
+                tone: "ok",
+                explanation: "Direct post for a selected audience group.".into(),
+            };
+        }
+        if recipient_count == 1 {
+            return AudienceIndicator {
+                label: "1 person".into(),
+                tone: "ok",
+                explanation: "Direct post for one named recipient.".into(),
+            };
+        }
+        if recipient_count > 1 {
+            return AudienceIndicator {
+                label: format!("{recipient_count} people"),
+                tone: "ok",
+                explanation: format!(
+                    "Direct post for {recipient_count} individually named recipients."
+                ),
+            };
+        }
+    }
+    audience_indicator_for_visibility(visibility)
+}
+
 fn social_post_meta(
     visibility: &str,
     protocol: Option<&str>,
@@ -4834,6 +4958,7 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
         .as_deref()
         .or(post.actor_username.as_deref())
         .unwrap_or(&post.actor_id);
+    let indicator = audience_indicator_for_string(&post.visibility);
     let meta = social_post_meta(
         &post.visibility,
         post.protocol.as_deref(),
@@ -4850,8 +4975,8 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
         post.actor_username.as_deref().unwrap_or(&post.actor_id),
         &preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content)),
         &meta,
-        visibility_string_label(&post.visibility),
-        visibility_tone(&post.visibility),
+        &indicator.label,
+        indicator.tone,
         "Reply",
         "Favorite",
     )
@@ -4859,6 +4984,16 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
 
 fn post_row(post: &OwnerPost) -> UiRow {
     let title = post.title.as_deref().unwrap_or("My post");
+    let indicator = if post.encrypted {
+        AudienceIndicator {
+            label: "E2EE".into(),
+            tone: "ok",
+            explanation:
+                "Encrypted post. Exact recipient count is not included in this post summary.".into(),
+        }
+    } else {
+        audience_indicator_for_visibility(&post.visibility)
+    };
     let meta = social_post_meta(
         visibility_label(&post.visibility),
         Some(protocol_label(&post.protocol)),
@@ -4872,11 +5007,11 @@ fn post_row(post: &OwnerPost) -> UiRow {
         "post",
         &format!("post:{}", post.id),
         title,
-        visibility_explanation_enum(&post.visibility),
+        &indicator.explanation,
         &preview_markdown_safe(&post.content),
         &meta,
-        visibility_label(&post.visibility),
-        visibility_tone_enum(&post.visibility),
+        &indicator.label,
+        indicator.tone,
         "Reply",
         if matches!(post.visibility, Visibility::Public) {
             "Delete"
@@ -4892,9 +5027,10 @@ fn draft_row(draft: &StoredDraft) -> UiRow {
     } else {
         preview_markdown_safe(&draft.text)
     };
+    let indicator = draft_audience_indicator(draft);
     let mut details = vec![format!(
         "{} via {}",
-        visibility_label(&draft.visibility),
+        indicator.explanation,
         protocol_label(&draft.protocol)
     )];
     if !draft.recipients.trim().is_empty() {
@@ -4911,8 +5047,8 @@ fn draft_row(draft: &StoredDraft) -> UiRow {
         &title,
         &format!("Updated {}", draft.updated_at),
         &details.join(". "),
-        "Draft",
-        "warn",
+        &indicator.label,
+        indicator.tone,
         "Open draft",
         "Delete draft",
     )
@@ -4920,6 +5056,7 @@ fn draft_row(draft: &StoredDraft) -> UiRow {
 
 fn compose_audience_summary(compose: &ComposeState, snapshot: &OwnerSnapshotBundle) -> String {
     let route = protocol_label(&compose.protocol);
+    let indicator = compose_audience_indicator(compose);
     let base = match compose.visibility {
         Visibility::Public => {
             "Visible to anyone who can read the public web, ActivityPub, or supported public protocol routes.".to_string()
@@ -4956,7 +5093,11 @@ fn compose_audience_summary(compose: &ComposeState, snapshot: &OwnerSnapshotBund
             }
         }
     };
-    let mut parts = vec![base, format!("Route: {route}.")];
+    let mut parts = vec![
+        format!("Indicator: {}.", indicator.label),
+        base,
+        format!("Route: {route}."),
+    ];
     if compose.encrypt {
         parts.push("Encryption requested.".into());
     }
@@ -5105,9 +5246,17 @@ fn selected_visibility_inspector_rows(selected: &UiRow) -> Vec<UiRow> {
 }
 
 fn selected_visibility_context(row: &UiRow) -> Option<(&'static str, &'static str, &'static str)> {
-    match row.chip.to_ascii_lowercase().as_str() {
-        "public" => Some((
-            "Public",
+    let chip = row.chip.to_ascii_lowercase();
+    if chip.ends_with(" people") || chip == "1 person" {
+        return Some((
+            "Direct",
+            "Only named recipients or the selected audience group should be able to read this.",
+            "ok",
+        ));
+    }
+    match chip.as_str() {
+        "public" | "public web" => Some((
+            "Public web",
             "Anyone who can read the public web, public ActivityPub, or supported public protocol routes may be able to read this.",
             "warn",
         )),
@@ -5124,6 +5273,16 @@ fn selected_visibility_context(row: &UiRow) -> Option<(&'static str, &'static st
         "direct" => Some((
             "Direct",
             "Only named recipients or the selected audience group should be able to read this.",
+            "ok",
+        )),
+        "group" => Some((
+            "Audience group",
+            "Only the selected audience group should be able to read this.",
+            "ok",
+        )),
+        "e2ee" | "e2ee 1:1" | "e2ee group" => Some((
+            "Encrypted direct",
+            "Encrypted content is intended only for the selected recipient or recipient group.",
             "ok",
         )),
         _ => None,
@@ -6072,19 +6231,6 @@ fn visibility_label(visibility: &Visibility) -> &'static str {
     }
 }
 
-fn visibility_explanation_enum(visibility: &Visibility) -> &'static str {
-    match visibility {
-        Visibility::Public => "Visibility: public; anyone may be able to read it.",
-        Visibility::Unlisted => {
-            "Visibility: unlisted; not promoted publicly, but may be visible outside friends."
-        }
-        Visibility::Followers => {
-            "Visibility: followers/friends; intended for approved followers, not anonymous public readers."
-        }
-        Visibility::Direct => "Visibility: direct/select; intended only for named recipients or a selected group.",
-    }
-}
-
 fn visibility_explanation_str(visibility: &str) -> &'static str {
     match visibility.trim().to_ascii_lowercase().as_str() {
         "public" => "Visibility: public; anyone may be able to read it.",
@@ -6124,14 +6270,6 @@ fn visibility_tone(visibility: &str) -> &'static str {
         "public" => "warn",
         "direct" | "followers" | "private" => "ok",
         _ => "info",
-    }
-}
-
-fn visibility_tone_enum(visibility: &Visibility) -> &'static str {
-    match visibility {
-        Visibility::Public => "warn",
-        Visibility::Direct | Visibility::Followers => "ok",
-        Visibility::Unlisted => "info",
     }
 }
 
@@ -7624,7 +7762,7 @@ mod tests {
             published_at: None,
         });
         assert_eq!(own.chip.as_str(), "Direct");
-        assert!(own.subtitle.contains("direct/select"));
+        assert!(own.subtitle.contains("named recipients"));
 
         let timeline = timeline_row(&OwnerTimelinePost {
             id: "tl1".into(),
@@ -7645,6 +7783,32 @@ mod tests {
         });
         assert_eq!(timeline.chip.as_str(), "Unlisted");
         assert!(timeline.meta.contains("Unlisted"));
+    }
+
+    #[test]
+    fn audience_indicators_distinguish_public_followers_direct_groups_and_e2ee() {
+        let public = audience_indicator_for_visibility(&Visibility::Public);
+        assert_eq!(public.label, "Public web");
+        assert_eq!(public.tone, "warn");
+
+        let followers = audience_indicator_for_visibility(&Visibility::Followers);
+        assert_eq!(followers.label, "Followers");
+        assert_eq!(followers.tone, "ok");
+
+        let direct_one = audience_indicator_for_target(&Visibility::Direct, false, 1, false);
+        assert_eq!(direct_one.label, "1 person");
+
+        let direct_many = audience_indicator_for_target(&Visibility::Direct, false, 3, false);
+        assert_eq!(direct_many.label, "3 people");
+
+        let group = audience_indicator_for_target(&Visibility::Direct, false, 0, true);
+        assert_eq!(group.label, "Group");
+
+        let encrypted_one = audience_indicator_for_target(&Visibility::Direct, true, 1, false);
+        assert_eq!(encrypted_one.label, "E2EE 1:1");
+
+        let encrypted_group = audience_indicator_for_target(&Visibility::Direct, true, 0, true);
+        assert_eq!(encrypted_group.label, "E2EE group");
     }
 
     #[test]
