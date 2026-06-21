@@ -3540,7 +3540,8 @@ impl DeskController {
     fn inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
         let mut rows = Vec::new();
         if let Some(selected) = self.find_row(selected_row) {
-            rows.push(selected);
+            rows.push(selected.clone());
+            rows.extend(selected_visibility_inspector_rows(&selected));
         }
         rows.extend(self.external_link_inspector_rows(selected_row));
         rows.extend(self.notification_inspector_rows(selected_row));
@@ -4900,6 +4901,48 @@ fn notification_action_sentence(kind: &str) -> &'static str {
         "repost" | "boost" => "Someone boosted a post",
         "follow" => "Someone requested to follow you",
         _ => "A social notification arrived",
+    }
+}
+
+fn selected_visibility_inspector_rows(selected: &UiRow) -> Vec<UiRow> {
+    let Some((label, explanation, tone)) = selected_visibility_context(selected) else {
+        return Vec::new();
+    };
+    vec![row(
+        &format!("visibility:{}", selected.id),
+        "Who can see this",
+        label,
+        explanation,
+        label,
+        tone,
+        "",
+        "",
+    )]
+}
+
+fn selected_visibility_context(row: &UiRow) -> Option<(&'static str, &'static str, &'static str)> {
+    match row.chip.to_ascii_lowercase().as_str() {
+        "public" => Some((
+            "Public",
+            "Anyone who can read the public web, public ActivityPub, or supported public protocol routes may be able to read this.",
+            "warn",
+        )),
+        "unlisted" => Some((
+            "Unlisted",
+            "People with the link or addressed/federated audiences may be able to read this, but it is not promoted as a public timeline post.",
+            "info",
+        )),
+        "followers" | "private" => Some((
+            "Followers",
+            "Approved followers or friends are the intended audience. Remote follower servers may receive delivered copies.",
+            "ok",
+        )),
+        "direct" => Some((
+            "Direct",
+            "Only named recipients or the selected audience group should be able to read this.",
+            "ok",
+        )),
+        _ => None,
     }
 }
 
@@ -7346,6 +7389,19 @@ mod tests {
         });
         assert_eq!(timeline.chip.as_str(), "Unlisted");
         assert!(timeline.meta.contains("Unlisted"));
+    }
+
+    #[test]
+    fn selected_post_inspector_has_first_class_visibility_context() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.inspector_rows("post:fixture-private-post");
+        let visibility = rows
+            .iter()
+            .find(|row| row.id.as_str() == "visibility:post:fixture-private-post")
+            .expect("visibility context row");
+        assert_eq!(visibility.title.as_str(), "Who can see this");
+        assert_eq!(visibility.chip.as_str(), "Followers");
+        assert!(visibility.detail.contains("Approved followers"));
     }
 
     #[test]
