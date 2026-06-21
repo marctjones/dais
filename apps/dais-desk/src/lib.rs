@@ -3541,16 +3541,7 @@ impl DeskController {
     fn inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
         let mut rows = Vec::new();
         if let Some(selected) = self.find_row(selected_row) {
-            rows.push(row(
-                &selected.id,
-                &selected.title,
-                &selected.subtitle,
-                &selected.detail,
-                &selected.chip,
-                &selected.tone,
-                &selected.primary,
-                &selected.secondary,
-            ));
+            rows.push(selected);
         }
         rows.extend(self.post_detail_inspector_rows(selected_row));
         rows.extend(self.delivery_inspector_rows(selected_row));
@@ -4410,11 +4401,30 @@ fn row(
     primary: &str,
     secondary: &str,
 ) -> UiRow {
+    row_with_kind(
+        "generic", id, title, subtitle, detail, "", chip, tone, primary, secondary,
+    )
+}
+
+fn row_with_kind(
+    kind: &str,
+    id: &str,
+    title: &str,
+    subtitle: &str,
+    detail: &str,
+    meta: &str,
+    chip: &str,
+    tone: &str,
+    primary: &str,
+    secondary: &str,
+) -> UiRow {
     UiRow {
         id: s(id),
+        kind: s(kind),
         title: s(&clean_text(title)),
         subtitle: s(&clean_text(subtitle)),
         detail: s(&clean_text(detail)),
+        meta: s(&clean_text(meta)),
         chip: s(chip),
         tone: s(tone),
         primary: s(primary),
@@ -4433,22 +4443,68 @@ fn account_row(account: OwnerAccountSummary, can_delete: bool) -> AccountRow {
     }
 }
 
+fn social_post_meta(
+    visibility: &str,
+    protocol: Option<&str>,
+    published_at: Option<&str>,
+    in_reply_to: Option<&str>,
+    replies: u64,
+    likes: u64,
+    boosts: u64,
+) -> String {
+    let mut parts = vec![visibility_string_label(visibility).to_string()];
+    if let Some(protocol) = protocol.filter(|value| !value.trim().is_empty()) {
+        parts.push(protocol.to_string());
+    }
+    if in_reply_to.is_some() {
+        parts.push("reply".into());
+    }
+    if let Some(published_at) = published_at.filter(|value| !value.trim().is_empty()) {
+        parts.push(published_at.to_string());
+    }
+    let activity = [(replies, "reply"), (likes, "like"), (boosts, "boost")]
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, label)| {
+            let plural = if label == "reply" { "replies" } else { "s" };
+            if count == 1 {
+                format!("1 {label}")
+            } else if label == "reply" {
+                format!("{count} {plural}")
+            } else {
+                format!("{count} {label}{plural}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if !activity.is_empty() {
+        parts.push(activity);
+    }
+    parts.join(" · ")
+}
+
 fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
     let author = post
         .actor_display_name
         .as_deref()
         .or(post.actor_username.as_deref())
         .unwrap_or(&post.actor_id);
-    let detail = format!(
-        "{} {}",
-        visibility_explanation_str(&post.visibility),
-        preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content))
+    let meta = social_post_meta(
+        &post.visibility,
+        post.protocol.as_deref(),
+        post.published_at.as_deref(),
+        post.in_reply_to.as_deref(),
+        post.reply_count,
+        post.like_count,
+        post.boost_count,
     );
-    row(
+    row_with_kind(
+        "post",
         &format!("timeline:{}", post.object_id),
         author,
         post.actor_username.as_deref().unwrap_or(&post.actor_id),
-        &detail,
+        &preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content)),
+        &meta,
         visibility_string_label(&post.visibility),
         visibility_tone(&post.visibility),
         "Reply",
@@ -4458,16 +4514,22 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
 
 fn post_row(post: &OwnerPost) -> UiRow {
     let title = post.title.as_deref().unwrap_or("My post");
-    let detail = format!(
-        "{} {}",
-        visibility_explanation_enum(&post.visibility),
-        preview_markdown_safe(&post.content)
+    let meta = social_post_meta(
+        visibility_label(&post.visibility),
+        Some(protocol_label(&post.protocol)),
+        post.published_at.as_deref(),
+        None,
+        post.reply_count,
+        post.like_count,
+        post.boost_count,
     );
-    row(
+    row_with_kind(
+        "post",
         &format!("post:{}", post.id),
         title,
-        visibility_label(&post.visibility),
-        &detail,
+        visibility_explanation_enum(&post.visibility),
+        &preview_markdown_safe(&post.content),
+        &meta,
         visibility_label(&post.visibility),
         visibility_tone_enum(&post.visibility),
         "Reply",
@@ -4791,11 +4853,13 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         context,
         notice.created_at.as_deref().unwrap_or("notification")
     );
-    row(
+    row_with_kind(
+        "notification",
         &format!("notification:{}", notice.id),
         &title,
         subtitle.trim(),
         &detail,
+        if unread { "Needs review" } else { "Reviewed" },
         if json_truthy(&notice.read) {
             "Read"
         } else {
@@ -4833,14 +4897,22 @@ fn follower_row(follower: &OwnerFollower) -> UiRow {
         "rejected" => ("Approve", "", "danger"),
         _ => ("Approve", "Reject", "info"),
     };
-    row(
+    let title = format!("{} follows you", compact_actor(&follower.follower_actor_id));
+    let detail = match status.as_str() {
+        "pending" => "Review this request before the account can read follower-only posts.",
+        "approved" | "accepted" => {
+            "Approved follower. They can receive follower-only posts unless removed."
+        }
+        "rejected" => "Rejected follower. They cannot read follower-only posts through approval.",
+        _ => "Follower status is unusual; review before sharing private content.",
+    };
+    row_with_kind(
+        "relationship",
         &format!("follower:{}", follower.follower_actor_id),
-        &follower.follower_actor_id,
+        &title,
         "Can read private posts only if approved",
-        &format!(
-            "Status: {}. Inbox details are hidden unless diagnostics are opened.",
-            status_label
-        ),
+        detail,
+        "Inbox details hidden; open Diagnostics for raw delivery data.",
         &status_label,
         tone,
         primary,
@@ -4849,11 +4921,14 @@ fn follower_row(follower: &OwnerFollower) -> UiRow {
 }
 
 fn friend_row(friend: &OwnerFriend) -> UiRow {
-    row(
+    let actor = compact_actor(&friend.friend_actor_id);
+    row_with_kind(
+        "relationship",
         &format!("actor:{}", friend.friend_actor_id),
-        &friend.friend_actor_id,
+        &format!("You and {actor} are friends"),
         "Mutual private sharing",
         "Friend means both sides can participate in the private social graph. Manage group membership from Audience Groups.",
+        "Owner-only relationship",
         "Friend",
         "ok",
         "Unfriend",
@@ -4870,11 +4945,19 @@ fn following_row(following: &OwnerFollowing) -> UiRow {
         "failed" => ("Follow", "", "danger"),
         _ => ("Unfollow", "", "info"),
     };
-    row(
+    let actor = compact_actor(&following.target_actor_id);
+    let title = match status.as_str() {
+        "pending" => format!("Follow request pending for {actor}"),
+        "failed" => format!("Follow failed for {actor}"),
+        _ => format!("You follow {actor}"),
+    };
+    row_with_kind(
+        "relationship",
         &format!("following:{}", following.target_actor_id),
-        &following.target_actor_id,
+        &title,
         "Remote relationship may be visible to that server",
         &format!("Follow status: {}", status_label),
+        "Follow sends a relationship signal; use Watch for private public-post monitoring.",
         &status_label,
         tone,
         primary,
@@ -6693,8 +6776,87 @@ mod tests {
             following_since: Some("yesterday".into()),
             accepted_at: Some("today".into()),
         });
+        assert_eq!(row.kind.as_str(), "relationship");
+        assert!(row.title.contains("alice"));
         assert_eq!(row.primary.as_str(), "Unfriend");
         assert_eq!(row.secondary.as_str(), "Block");
+    }
+
+    #[test]
+    fn social_rows_are_typed_cards_with_readable_metadata() {
+        let timeline = timeline_row(&OwnerTimelinePost {
+            id: "timeline-1".into(),
+            object_id: "https://remote.example/posts/1".into(),
+            actor_id: "https://remote.example/users/ada".into(),
+            actor_username: Some("@ada@remote.example".into()),
+            actor_display_name: Some("Ada".into()),
+            actor_avatar_url: None,
+            content: "Hello from the wider fediverse".into(),
+            content_html: Some("<p>Hello from the <strong>wider</strong> fediverse</p>".into()),
+            visibility: "public".into(),
+            in_reply_to: None,
+            published_at: Some("today".into()),
+            protocol: Some("ActivityPub".into()),
+            reply_count: 2,
+            like_count: 1,
+            boost_count: 0,
+        });
+        assert_eq!(timeline.kind.as_str(), "post");
+        assert!(timeline.meta.contains("Public"));
+        assert!(timeline.meta.contains("ActivityPub"));
+        assert!(timeline.meta.contains("2 replies"));
+        assert!(timeline.detail.contains("Hello from the wider fediverse"));
+
+        let own = post_row(&OwnerPost {
+            id: "post-1".into(),
+            title: Some("Own post".into()),
+            content: "Private update".into(),
+            visibility: Visibility::Followers,
+            protocol: ProtocolRoute::ActivityPub,
+            encrypted: false,
+            attachments: vec![],
+            reply_count: 0,
+            like_count: 0,
+            boost_count: 0,
+            published_at: Some("today".into()),
+        });
+        assert_eq!(own.kind.as_str(), "post");
+        assert!(own.subtitle.contains("approved followers"));
+        assert!(own.meta.contains("Followers"));
+    }
+
+    #[test]
+    fn relationship_rows_are_human_readable_and_hide_inboxes() {
+        let pending = follower_row(&OwnerFollower {
+            id: "f1".into(),
+            actor_id: "https://dais.social/users/social".into(),
+            follower_actor_id: "https://social.example/users/bob".into(),
+            follower_inbox: "https://social.example/inbox".into(),
+            follower_shared_inbox: Some("https://social.example/shared".into()),
+            status: "pending".into(),
+            created_at: Some("yesterday".into()),
+            updated_at: Some("today".into()),
+        });
+        assert_eq!(pending.kind.as_str(), "relationship");
+        assert!(pending.title.contains("bob follows you"));
+        assert!(pending.detail.contains("Review this request"));
+        assert!(!pending.detail.contains("https://social.example/inbox"));
+        assert_eq!(pending.primary.as_str(), "Approve");
+        assert_eq!(pending.secondary.as_str(), "Reject");
+
+        let following = following_row(&OwnerFollowing {
+            id: "follow-1".into(),
+            actor_id: "https://dais.social/users/social".into(),
+            target_actor_id: "https://news.example/users/editor".into(),
+            target_inbox: "https://news.example/inbox".into(),
+            status: "accepted".into(),
+            created_at: Some("yesterday".into()),
+            accepted_at: Some("today".into()),
+        });
+        assert_eq!(following.kind.as_str(), "relationship");
+        assert!(following.title.contains("You follow"));
+        assert!(following.title.contains("editor"));
+        assert!(following.meta.contains("relationship signal"));
     }
 
     #[test]
@@ -6843,6 +7005,7 @@ mod tests {
             context_post_protocol: None,
             context_post_published_at: None,
         });
+        assert_eq!(reply.kind.as_str(), "notification");
         assert_eq!(reply.primary.as_str(), "Mark read");
         assert_eq!(reply.secondary.as_str(), "Reply");
 
@@ -6865,6 +7028,7 @@ mod tests {
             context_post_protocol: None,
             context_post_published_at: None,
         });
+        assert_eq!(read_like.kind.as_str(), "notification");
         assert_eq!(read_like.primary.as_str(), "Open context");
         assert_eq!(read_like.secondary.as_str(), "");
     }
@@ -6945,7 +7109,7 @@ mod tests {
             published_at: None,
         });
         assert_eq!(own.chip.as_str(), "Direct");
-        assert!(own.detail.contains("direct/select"));
+        assert!(own.subtitle.contains("direct/select"));
 
         let timeline = timeline_row(&OwnerTimelinePost {
             id: "tl1".into(),
@@ -6965,7 +7129,7 @@ mod tests {
             boost_count: 0,
         });
         assert_eq!(timeline.chip.as_str(), "Unlisted");
-        assert!(timeline.detail.contains("outside friends"));
+        assert!(timeline.meta.contains("Unlisted"));
     }
 
     #[test]

@@ -15,9 +15,11 @@ export struct NavItem {
 
 export struct UiRow {
     id: string,
+    kind: string,
     title: string,
     subtitle: string,
     detail: string,
+    meta: string,
     chip: string,
     tone: string,
     primary: string,
@@ -112,28 +114,49 @@ component SourceButton inherits Rectangle {
 component RowCard inherits Rectangle {
     in property <UiRow> entry;
     in property <bool> selected;
+    property <bool> is-post: entry.kind == "post";
+    property <bool> is-notification: entry.kind == "notification";
+    property <bool> is-relationship: entry.kind == "relationship";
     callback open(string);
     callback action(string, string);
 
-    height: 144px;
+    height: root.is-post ? 178px : root.is-notification ? 166px : root.is-relationship ? 132px : 144px;
     vertical-stretch: 0;
-    border-radius: 7px;
+    border-radius: root.is-post ? 8px : 7px;
     border-width: 1px;
-    border-color: selected ? #7aa5d8 : #d9dee6;
-    background: selected ? #eef6ff : #ffffff;
+    border-color: selected ? #5f94ca : root.is-post ? #d2dae6 : #d9dee6;
+    background: selected ? #eef6ff : root.is-notification && entry.tone == "warn" ? #fffaf0 : #ffffff;
     accessible-role: list-item;
     accessible-label: root.entry.title;
-    accessible-description: root.entry.subtitle + " " + root.entry.detail;
+    accessible-description: root.entry.subtitle + " " + root.entry.meta + " " + root.entry.detail;
     accessible-action-default => {
         root.open(root.entry.id);
     }
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 8px;
+        padding: root.is-post ? 14px : 12px;
+        spacing: root.is-post ? 9px : 8px;
 
         HorizontalLayout {
             spacing: 10px;
+
+            if root.is-post || root.is-relationship : Rectangle {
+                width: root.is-post ? 38px : 30px;
+                height: root.is-post ? 38px : 30px;
+                border-radius: root.is-post ? 19px : 15px;
+                background: root.is-relationship ? #eef9f1 : #e8edf5;
+                border-width: 1px;
+                border-color: root.is-relationship ? #b9dec4 : #cdd6e2;
+
+                Text {
+                    text: root.is-relationship ? "Rel" : "Post";
+                    color: root.is-relationship ? #145a32 : #27415f;
+                    font-size: root.is-post ? 11px : 10px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
 
             VerticalLayout {
                 spacing: 3px;
@@ -161,12 +184,20 @@ component RowCard inherits Rectangle {
             }
         }
 
+        if root.entry.meta != "" : Text {
+            text: root.entry.meta;
+            color: root.entry.tone == "warn" ? #7b4e08 : #536175;
+            font-size: 12px;
+            font-weight: root.is-post ? 700 : 500;
+            overflow: elide;
+        }
+
         Text {
             text: root.entry.detail;
             color: #27313f;
-            font-size: 13px;
+            font-size: root.is-post ? 14px : 13px;
             wrap: word-wrap;
-            max-height: 48px;
+            max-height: root.is-post ? 64px : 48px;
             overflow: elide;
         }
 
@@ -178,6 +209,20 @@ component RowCard inherits Rectangle {
                 text: root.entry.primary;
                 clicked => {
                     root.action(root.entry.id, root.entry.primary);
+                }
+            }
+            if root.entry.secondary != "" : Button {
+                height: 34px;
+                text: root.entry.secondary;
+                clicked => {
+                    root.action(root.entry.id, root.entry.secondary);
+                }
+            }
+            if root.is-post || root.is-notification : Button {
+                height: 34px;
+                text: "Details";
+                clicked => {
+                    root.open(root.entry.id);
                 }
             }
         }
