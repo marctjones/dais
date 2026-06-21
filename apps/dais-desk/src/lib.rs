@@ -2186,7 +2186,7 @@ impl DeskController {
             self.active_screen = "compose".to_string();
             return Ok("Direct reply prepared. Recipient and Direct visibility are visible before sending.".into());
         }
-        if let Some(id) = row_id.strip_prefix("notification:") {
+        if let Some(id) = notification_id_from_row(row_id) {
             let notice = self
                 .data
                 .notifications
@@ -2279,9 +2279,8 @@ impl DeskController {
     }
 
     fn mark_notification_read(&self, row_id: &str) -> Result<String, String> {
-        let id = row_id
-            .strip_prefix("notification:")
-            .ok_or_else(|| "no notification id".to_string())?;
+        let id =
+            notification_id_from_row(row_id).ok_or_else(|| "no notification id".to_string())?;
         if self
             .settings
             .owner_token
@@ -3543,6 +3542,7 @@ impl DeskController {
         if let Some(selected) = self.find_row(selected_row) {
             rows.push(selected);
         }
+        rows.extend(self.notification_inspector_rows(selected_row));
         rows.extend(self.post_detail_inspector_rows(selected_row));
         rows.extend(self.delivery_inspector_rows(selected_row));
         rows.push(row(
@@ -3636,6 +3636,100 @@ impl DeskController {
                 },
                 if delivery.status != "delivered" {
                     "Cancel delivery"
+                } else {
+                    ""
+                },
+            ));
+        }
+        rows
+    }
+
+    fn notification_inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
+        let Some(notification_id) = selected_row.strip_prefix("notification:") else {
+            return Vec::new();
+        };
+        let Some(notice) = self
+            .data
+            .notifications
+            .iter()
+            .find(|notice| notice.id == notification_id)
+        else {
+            return Vec::new();
+        };
+        let actor = notice
+            .actor_display_name
+            .as_deref()
+            .or(notice.actor_username.as_deref())
+            .unwrap_or(&notice.actor_id);
+        let mut rows = vec![row_with_kind(
+            "notification",
+            &format!("notification-detail:{}", notice.id),
+            "What happened",
+            actor,
+            &format!(
+                "{}. {}",
+                notification_action_sentence(notice.kind.as_str()),
+                if json_truthy(&notice.read) {
+                    "This notification is already marked read."
+                } else {
+                    "This notification is unread."
+                }
+            ),
+            notice.created_at.as_deref().unwrap_or("notification"),
+            if json_truthy(&notice.read) {
+                "Read"
+            } else {
+                "Unread"
+            },
+            if json_truthy(&notice.read) {
+                "info"
+            } else {
+                "warn"
+            },
+            if json_truthy(&notice.read) {
+                ""
+            } else {
+                "Mark read"
+            },
+            "",
+        )];
+        let context_source = notice
+            .context_post_content_html
+            .as_deref()
+            .or(notice.context_post_content.as_deref())
+            .or(notice.content.as_deref());
+        if let Some(context) = context_source {
+            rows.push(row_with_kind(
+                "post",
+                &format!("notification-context:{}", notice.id),
+                "Original context",
+                notice
+                    .context_post_published_at
+                    .as_deref()
+                    .unwrap_or("Related post"),
+                &preview_markdown_safe(context),
+                notice
+                    .context_post_visibility
+                    .as_deref()
+                    .map(visibility_explanation_str)
+                    .unwrap_or("The server did not include original-post visibility."),
+                notice
+                    .context_post_visibility
+                    .as_deref()
+                    .map(visibility_string_label)
+                    .unwrap_or("Context"),
+                notice
+                    .context_post_visibility
+                    .as_deref()
+                    .map(visibility_tone)
+                    .unwrap_or("info"),
+                if notice.context_post_id.is_some() || notice.post_id.is_some() {
+                    "Open context"
+                } else {
+                    ""
+                },
+                if matches!(notice.kind.as_str(), "reply" | "mention") {
+                    "Reply"
                 } else {
                     ""
                 },
@@ -3756,7 +3850,7 @@ impl DeskController {
         if row_id.starts_with("post:") || row_id.starts_with("timeline:") {
             return Some(row_id.to_string());
         }
-        if let Some(id) = row_id.strip_prefix("notification:") {
+        if let Some(id) = notification_id_from_row(row_id) {
             return self
                 .data
                 .notifications
@@ -4732,6 +4826,17 @@ fn reply_activity_row(post_id: &str, index: usize, reply: &serde_json::Value) ->
     )
 }
 
+fn notification_action_sentence(kind: &str) -> &'static str {
+    match kind {
+        "mention" => "Someone mentioned you",
+        "reply" => "Someone replied to a post",
+        "favourite" | "favorite" | "like" => "Someone liked a post",
+        "repost" | "boost" => "Someone boosted a post",
+        "follow" => "Someone requested to follow you",
+        _ => "A social notification arrived",
+    }
+}
+
 fn json_string_any(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| value.get(*key).and_then(json_string_value))
@@ -5600,6 +5705,13 @@ fn object_id_from_row(row_id: &str) -> Option<&str> {
         .or_else(|| row_id.strip_prefix("timeline:"))
         .or_else(|| row_id.strip_prefix("post-detail:"))
         .or_else(|| row_id.strip_prefix("url:"))
+}
+
+fn notification_id_from_row(row_id: &str) -> Option<&str> {
+    row_id
+        .strip_prefix("notification:")
+        .or_else(|| row_id.strip_prefix("notification-detail:"))
+        .or_else(|| row_id.strip_prefix("notification-context:"))
 }
 
 fn delivery_id_from_row(row_id: &str) -> Option<&str> {
@@ -7155,6 +7267,23 @@ mod tests {
         });
         assert!(row.detail.contains("followers/friends"));
         assert!(row.detail.contains("Original context"));
+    }
+
+    #[test]
+    fn notification_inspector_shows_original_context() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.inspector_rows("notification:notice-like-context");
+        assert!(rows.iter().any(|row| row.id.as_str()
+            == "notification-detail:notice-like-context"
+            && row.detail.contains("Someone liked a post")));
+        let context = rows
+            .iter()
+            .find(|row| row.id.as_str() == "notification-context:notice-like-context")
+            .expect("notification context row");
+        assert_eq!(context.kind.as_str(), "post");
+        assert!(context.detail.contains("private post with context"));
+        assert!(context.meta.contains("followers/friends"));
+        assert_eq!(context.primary.as_str(), "Open context");
     }
 
     #[test]
