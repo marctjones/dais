@@ -3628,6 +3628,7 @@ impl DeskController {
             rows.push(selected.clone());
             rows.extend(selected_visibility_inspector_rows(&selected));
         }
+        rows.extend(self.actor_profile_inspector_rows(selected_row));
         rows.extend(self.external_link_inspector_rows(selected_row));
         rows.extend(self.notification_inspector_rows(selected_row));
         rows.extend(self.post_detail_inspector_rows(selected_row));
@@ -3745,6 +3746,65 @@ impl DeskController {
             "Open link",
             "",
         )]
+    }
+
+    fn actor_profile_inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
+        let Some((actor_id, label, relationship)) = self.actor_context_for_row(selected_row) else {
+            return Vec::new();
+        };
+        if !actor_id.starts_with("http://") && !actor_id.starts_with("https://") {
+            return Vec::new();
+        }
+        vec![row(
+            &format!("url:{actor_id}"),
+            label,
+            &relationship,
+            "Open this actor profile, or Watch it to read public posts privately without sending a follow request.",
+            "Profile",
+            "info",
+            "Open original",
+            "Watch",
+        )]
+    }
+
+    fn actor_context_for_row(&self, selected_row: &str) -> Option<(String, &'static str, String)> {
+        if let Some(object_id) = object_id_from_row(selected_row) {
+            return self
+                .data
+                .snapshot
+                .home_timeline
+                .iter()
+                .find(|post| post.object_id == object_id)
+                .map(|post| {
+                    (
+                        post.actor_id.clone(),
+                        "Author profile",
+                        relationship_for_actor(&self.data.snapshot, &post.actor_id),
+                    )
+                });
+        }
+        if let Some(actor) = selected_row.strip_prefix("actor:") {
+            return Some((
+                actor.to_string(),
+                "Friend profile",
+                "Mutual private sharing".to_string(),
+            ));
+        }
+        if let Some(actor) = selected_row.strip_prefix("follower:") {
+            return Some((
+                actor.to_string(),
+                "Follower profile",
+                "They follow you; approval controls follower-only access.".to_string(),
+            ));
+        }
+        if let Some(actor) = selected_row.strip_prefix("following:") {
+            return Some((
+                actor.to_string(),
+                "Following profile",
+                "You follow this account; the remote server may know.".to_string(),
+            ));
+        }
+        None
     }
 
     fn external_url_for_selected_content(&self, selected_row: &str) -> Option<String> {
@@ -4742,6 +4802,30 @@ fn social_post_meta(
         parts.push(activity);
     }
     parts.join(" · ")
+}
+
+fn relationship_for_actor(snapshot: &OwnerSnapshotBundle, actor_id: &str) -> String {
+    if snapshot
+        .friends
+        .iter()
+        .any(|friend| friend.friend_actor_id == actor_id)
+    {
+        "Friend: mutual private sharing relationship.".into()
+    } else if snapshot
+        .following
+        .iter()
+        .any(|following| following.target_actor_id == actor_id)
+    {
+        "Following: you may have sent a remote relationship signal.".into()
+    } else if snapshot
+        .followers
+        .iter()
+        .any(|follower| follower.follower_actor_id == actor_id)
+    {
+        "Follower: approval controls follower-only access.".into()
+    } else {
+        "Public/discovered actor; use Watch for private public-post monitoring.".into()
+    }
 }
 
 fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
@@ -7248,6 +7332,46 @@ mod tests {
         assert!(following.title.contains("You follow"));
         assert!(following.title.contains("editor"));
         assert!(following.meta.contains("relationship signal"));
+    }
+
+    #[test]
+    fn selected_actor_rows_expose_profile_navigation() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller
+            .data
+            .snapshot
+            .home_timeline
+            .push(OwnerTimelinePost {
+                id: "timeline-actor".into(),
+                object_id: "https://remote.example/posts/actor".into(),
+                actor_id: "https://remote.example/users/ada".into(),
+                actor_username: Some("@ada@remote.example".into()),
+                actor_display_name: Some("Ada".into()),
+                actor_avatar_url: None,
+                content: "Public note".into(),
+                content_html: None,
+                visibility: "public".into(),
+                in_reply_to: None,
+                published_at: Some("today".into()),
+                protocol: Some("ActivityPub".into()),
+                reply_count: 0,
+                like_count: 0,
+                boost_count: 0,
+            });
+        let rows = controller.inspector_rows("timeline:https://remote.example/posts/actor");
+        let profile = rows
+            .iter()
+            .find(|row| row.id.as_str() == "url:https://remote.example/users/ada")
+            .expect("author profile row");
+        assert_eq!(profile.title.as_str(), "Author profile");
+        assert_eq!(profile.primary.as_str(), "Open original");
+        assert_eq!(profile.secondary.as_str(), "Watch");
+
+        let friend_rows = controller.inspector_rows("actor:https://friend.example/users/alice");
+        assert!(friend_rows
+            .iter()
+            .any(|row| row.title.as_str() == "Friend profile"
+                && row.primary.as_str() == "Open original"));
     }
 
     #[test]
