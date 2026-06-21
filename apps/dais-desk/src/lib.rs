@@ -3542,6 +3542,7 @@ impl DeskController {
         if let Some(selected) = self.find_row(selected_row) {
             rows.push(selected);
         }
+        rows.extend(self.external_link_inspector_rows(selected_row));
         rows.extend(self.notification_inspector_rows(selected_row));
         rows.extend(self.post_detail_inspector_rows(selected_row));
         rows.extend(self.delivery_inspector_rows(selected_row));
@@ -3642,6 +3643,71 @@ impl DeskController {
             ));
         }
         rows
+    }
+
+    fn external_link_inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
+        let Some(url) = self.external_url_for_selected_content(selected_row) else {
+            return Vec::new();
+        };
+        vec![row(
+            &format!("url:{url}"),
+            "External link",
+            &compact_url(&url),
+            "Open the linked web page in your default browser. The full URL is hidden from the main reading row to keep the timeline readable.",
+            "Link",
+            "info",
+            "Open link",
+            "",
+        )]
+    }
+
+    fn external_url_for_selected_content(&self, selected_row: &str) -> Option<String> {
+        let from_text =
+            |parts: Vec<Option<&str>>| parts.into_iter().flatten().find_map(extract_first_url);
+        if let Some(object_id) = object_id_from_row(selected_row) {
+            return self
+                .data
+                .snapshot
+                .home_timeline
+                .iter()
+                .find(|post| post.object_id == object_id)
+                .and_then(|post| from_text(vec![post.content_html.as_deref(), Some(&post.content)]))
+                .or_else(|| {
+                    self.data
+                        .snapshot
+                        .posts
+                        .iter()
+                        .find(|post| post.id == object_id)
+                        .and_then(|post| from_text(vec![Some(&post.content)]))
+                })
+                .or_else(|| {
+                    self.data
+                        .post_detail
+                        .as_ref()
+                        .filter(|detail| detail.post.id == object_id)
+                        .and_then(|detail| {
+                            from_text(vec![
+                                detail.content_html.as_deref(),
+                                Some(&detail.post.content),
+                            ])
+                        })
+                });
+        }
+        if let Some(notification_id) = notification_id_from_row(selected_row) {
+            return self
+                .data
+                .notifications
+                .iter()
+                .find(|notice| notice.id == notification_id)
+                .and_then(|notice| {
+                    from_text(vec![
+                        notice.context_post_content_html.as_deref(),
+                        notice.context_post_content.as_deref(),
+                        notice.content.as_deref(),
+                    ])
+                });
+        }
+        None
     }
 
     fn notification_inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
@@ -5417,11 +5483,8 @@ fn clean_text(value: &str) -> String {
                 } else if lower.starts_with("style") {
                     skipping = true;
                     skip_until = "</style>".to_string();
-                } else if lower.starts_with("br")
-                    || lower.starts_with("/p")
-                    || lower.starts_with("p")
-                {
-                    output.push(' ');
+                } else if is_html_boundary_tag(&lower) {
+                    append_text_boundary(&mut output);
                 }
                 in_tag = false;
                 tag.clear();
@@ -5430,7 +5493,40 @@ fn clean_text(value: &str) -> String {
             _ => output.push(ch),
         }
     }
-    output.split_whitespace().collect::<Vec<_>>().join(" ")
+    output
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|ch: char| ch == '|' || ch.is_whitespace())
+        .trim()
+        .to_string()
+}
+
+fn is_html_boundary_tag(tag: &str) -> bool {
+    let tag = tag.trim_start_matches('/');
+    tag.starts_with("br")
+        || tag.starts_with('p')
+        || tag.starts_with("div")
+        || tag.starts_with("blockquote")
+        || tag.starts_with("li")
+        || tag.starts_with("ul")
+        || tag.starts_with("ol")
+}
+
+fn append_text_boundary(output: &mut String) {
+    if output.trim().is_empty() {
+        return;
+    }
+    let trimmed = output.trim_end();
+    if trimmed.ends_with('.')
+        || trimmed.ends_with('!')
+        || trimmed.ends_with('?')
+        || trimmed.ends_with('|')
+    {
+        output.push(' ');
+    } else {
+        output.push_str(" | ");
+    }
 }
 
 fn preview_markdown_safe(value: &str) -> String {
@@ -6824,6 +6920,14 @@ mod tests {
     }
 
     #[test]
+    fn safe_text_preserves_readable_block_boundaries() {
+        let cleaned = clean_text(
+            "<p>First paragraph</p><blockquote>Quoted text</blockquote><ul><li>One</li><li>Two</li></ul>",
+        );
+        assert_eq!(cleaned, "First paragraph | Quoted text | One | Two");
+    }
+
+    #[test]
     fn hides_redundant_follower_actions() {
         let row = follower_row(&OwnerFollower {
             id: "1".into(),
@@ -7284,6 +7388,47 @@ mod tests {
         assert!(context.detail.contains("private post with context"));
         assert!(context.meta.contains("followers/friends"));
         assert_eq!(context.primary.as_str(), "Open context");
+        let link = rows
+            .iter()
+            .find(|row| row.id.as_str().starts_with("url:https://dais.social"))
+            .expect("external link row");
+        assert_eq!(link.title.as_str(), "External link");
+        assert_eq!(link.primary.as_str(), "Open link");
+    }
+
+    #[test]
+    fn post_inspector_exposes_external_links_without_timeline_clutter() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller
+            .data
+            .snapshot
+            .home_timeline
+            .push(OwnerTimelinePost {
+                id: "timeline-link".into(),
+                object_id: "https://remote.example/posts/link".into(),
+                actor_id: "https://remote.example/users/ada".into(),
+                actor_username: Some("@ada@remote.example".into()),
+                actor_display_name: Some("Ada".into()),
+                actor_avatar_url: None,
+                content: "Read the link".into(),
+                content_html: Some(
+                    "<p>Read <a href=\"https://example.org/article\">the article</a>.</p>".into(),
+                ),
+                visibility: "public".into(),
+                in_reply_to: None,
+                published_at: Some("today".into()),
+                protocol: Some("ActivityPub".into()),
+                reply_count: 0,
+                like_count: 0,
+                boost_count: 0,
+            });
+        let timeline = timeline_row(controller.data.snapshot.home_timeline.last().unwrap());
+        assert!(!timeline.detail.contains("https://example.org/article"));
+        let rows = controller.inspector_rows("timeline:https://remote.example/posts/link");
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "url:https://example.org/article"
+                && row.primary.as_str() == "Open link"));
     }
 
     #[test]
