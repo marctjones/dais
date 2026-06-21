@@ -870,6 +870,24 @@ impl DeskController {
                 "Block" => self.block(row_id),
                 "Unblock" => self.unblock(row_id),
                 "Open original" | "Open link" => self.open_external(row_id),
+                "Find people" => {
+                    self.active_mode = "people".to_string();
+                    self.active_screen = "find".to_string();
+                    self.selected_row = self.first_row_id();
+                    Ok(
+                        "Opened Find. Paste a handle, URL, feed, domain, or public search."
+                            .to_string(),
+                    )
+                }
+                "Add Watch" => {
+                    self.active_mode = "people".to_string();
+                    self.active_screen = "watches".to_string();
+                    self.selected_row = self.first_row_id();
+                    Ok(
+                        "Opened Watches & Sources. Add a public account watch or RSS/Atom source."
+                            .to_string(),
+                    )
+                }
                 "Open context" => {
                     if let Some(context_row) = self.context_row_for(row_id) {
                         self.selected_row = context_row.clone();
@@ -3124,29 +3142,69 @@ impl DeskController {
         rows.extend(self.data.snapshot.friends.iter().map(friend_row));
         rows.extend(self.data.snapshot.followers.iter().map(follower_row));
         rows.extend(self.data.snapshot.following.iter().map(following_row));
+        if rows.is_empty() {
+            rows.push(empty_state_row(
+                "relationship:empty",
+                "No relationships yet",
+                "Find people to follow, approve follower requests, or Watch public accounts privately.",
+                "Find people",
+            ));
+        }
         rows
     }
 
     fn friend_rows(&self) -> Vec<UiRow> {
-        self.data.snapshot.friends.iter().map(friend_row).collect()
+        let rows: Vec<UiRow> = self.data.snapshot.friends.iter().map(friend_row).collect();
+        if rows.is_empty() {
+            vec![empty_state_row(
+                "friends:empty",
+                "No friends yet",
+                "Friends appear after you approve someone as a follower and follow them back. Friend relationships are owner-only.",
+                "Find people",
+            )]
+        } else {
+            rows
+        }
     }
 
     fn follower_rows(&self) -> Vec<UiRow> {
-        self.data
+        let rows: Vec<UiRow> = self
+            .data
             .snapshot
             .followers
             .iter()
             .map(follower_row)
-            .collect()
+            .collect();
+        if rows.is_empty() {
+            vec![empty_state_row(
+                "followers:empty",
+                "No followers yet",
+                "Follow requests appear here for approval before anyone can read follower-only posts.",
+                "",
+            )]
+        } else {
+            rows
+        }
     }
 
     fn following_rows(&self) -> Vec<UiRow> {
-        self.data
+        let rows: Vec<UiRow> = self
+            .data
             .snapshot
             .following
             .iter()
             .map(following_row)
-            .collect()
+            .collect();
+        if rows.is_empty() {
+            vec![empty_state_row(
+                "following:empty",
+                "You are not following anyone yet",
+                "Use Find to follow an account. Use Watch when you only want to read public posts without sending a follow request.",
+                "Find people",
+            )]
+        } else {
+            rows
+        }
     }
 
     fn watch_rows(&self) -> Vec<UiRow> {
@@ -3166,16 +3224,35 @@ impl DeskController {
         );
         rows.extend(self.data.watches.items.iter().map(source_item_row));
         rows.extend(self.data.sources.items.iter().map(source_item_row));
+        if rows.is_empty() {
+            rows.push(empty_state_row(
+                "watches:empty",
+                "No watches or sources yet",
+                "Watch a public account or add an RSS/Atom source to read public posts without creating a remote relationship.",
+                "Add Watch",
+            ));
+        }
         rows
     }
 
     fn audience_rows(&self) -> Vec<UiRow> {
-        self.data
+        let rows: Vec<UiRow> = self
+            .data
             .snapshot
             .audience_lists
             .iter()
             .map(audience_row)
-            .collect()
+            .collect();
+        if rows.is_empty() {
+            vec![empty_state_row(
+                "audience:empty",
+                "No audience groups yet",
+                "Create a group for small, intentional sharing sets such as close friends or project collaborators.",
+                "",
+            )]
+        } else {
+            rows
+        }
     }
 
     fn block_rows(&self) -> Vec<UiRow> {
@@ -3215,6 +3292,14 @@ impl DeskController {
                 "",
             )
         }));
+        if rows.is_empty() {
+            rows.push(empty_state_row(
+                "blocks:empty",
+                "No blocks or allowed hosts",
+                "Blocks, mutes, and closed-network allowlist entries appear here when configured.",
+                "",
+            ));
+        }
         rows
     }
 
@@ -4591,6 +4676,21 @@ fn row_with_kind(
         primary: s(primary),
         secondary: s(secondary),
     }
+}
+
+fn empty_state_row(id: &str, title: &str, detail: &str, primary: &str) -> UiRow {
+    row_with_kind(
+        "empty",
+        id,
+        title,
+        "Nothing needs attention here",
+        detail,
+        "Next step",
+        "Empty",
+        "info",
+        primary,
+        "",
+    )
 }
 
 fn account_row(account: OwnerAccountSummary, can_delete: bool) -> AccountRow {
@@ -6891,6 +6991,8 @@ mod tests {
                 | "Open original"
                 | "Open link"
                 | "Open context"
+                | "Find people"
+                | "Add Watch"
                 | "Inspect delivery"
                 | "Copy evidence"
                 | "Revoke media"
@@ -6954,6 +7056,36 @@ mod tests {
         }
         controller.select_row("post:fixture-private-post");
         assert_supported_row_actions(&controller.inspector_rows("post:fixture-private-post"));
+    }
+
+    #[test]
+    fn empty_people_screens_show_next_step_guidance() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.data.snapshot.friends.clear();
+        controller.data.snapshot.followers.clear();
+        controller.data.snapshot.following.clear();
+        controller.data.watches.subscriptions.clear();
+        controller.data.sources.subscriptions.clear();
+        controller.data.watches.items.clear();
+        controller.data.sources.items.clear();
+        controller.data.snapshot.audience_lists.clear();
+        controller.data.snapshot.moderation.blocks.clear();
+        controller.data.snapshot.moderation.allowlist.clear();
+
+        controller.select_screen("relationship");
+        let relationships = controller.rows_for_active_screen();
+        assert_eq!(relationships[0].id.as_str(), "relationship:empty");
+        assert_eq!(relationships[0].primary.as_str(), "Find people");
+
+        controller.select_screen("watches");
+        let watches = controller.rows_for_active_screen();
+        assert_eq!(watches[0].id.as_str(), "watches:empty");
+        assert_eq!(watches[0].primary.as_str(), "Add Watch");
+
+        controller.select_screen("audience");
+        let audience = controller.rows_for_active_screen();
+        assert_eq!(audience[0].id.as_str(), "audience:empty");
+        assert!(audience[0].detail.contains("small, intentional sharing"));
     }
 
     #[test]
