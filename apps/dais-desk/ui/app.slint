@@ -238,12 +238,13 @@ component RowCard inherits Rectangle {
             }
             if root.entry.secondary != "" : Button {
                 height: 34px;
-                text: root.entry.secondary;
+                text: "More";
+                accessible-description: "Open more actions including " + root.entry.secondary;
                 clicked => {
-                    root.action(root.entry.id, root.entry.secondary);
+                    root.open(root.entry.id);
                 }
             }
-            if root.is-post || root.is-notification : Button {
+            if (root.is-post || root.is-notification) && root.entry.secondary == "" : Button {
                 height: 34px;
                 text: root.is-post ? "Audience" : "Details";
                 clicked => {
