@@ -3634,6 +3634,27 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 None => api_json(&serde_json::json!({ "error": "post not found" }), 404),
             }
         }
+        (worker::Method::Get, "/saved") => api_json(
+            &OwnerItems {
+                items: owner_saved_posts(&env, limit).await?,
+            },
+            200,
+        ),
+        (worker::Method::Post, "/saved") => {
+            let body = read_json(&mut req).await;
+            match owner_save_post(&env, &body).await {
+                Ok(saved) => api_json(&saved, 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Delete, _) if owner_path.starts_with("/saved/") => {
+            let id = decode_component(owner_path.trim_start_matches("/saved/"));
+            if id.trim().is_empty() {
+                return api_json(&serde_json::json!({ "error": "id is required" }), 400);
+            }
+            owner_unsave_post(&env, &id).await?;
+            api_json(&serde_json::json!({ "ok": true }), 200)
+        }
         (worker::Method::Delete, _) if owner_path.starts_with("/posts/") => {
             let post_id = decode_component(owner_path.trim_start_matches("/posts/"));
             match owner_delete_post(&env, &post_id).await? {
@@ -4486,6 +4507,7 @@ async fn owner_snapshot(env: &Env) -> Result<Map<String, Value>> {
     let profile = owner_profile(env).await?;
     let home_timeline = owner_home_timeline(env, 20, false).await?;
     let posts = owner_posts(env, 20).await?;
+    let saved_posts = owner_saved_posts(env, 20).await?;
     let followers = owner_followers(env, 100).await?;
     let friends = owner_friends(env, 100).await?;
     let following = owner_following(env, 100).await?;
@@ -4521,6 +4543,10 @@ async fn owner_snapshot(env: &Env) -> Result<Map<String, Value>> {
                 .map(Value::Object)
                 .collect(),
         ),
+    );
+    snapshot.insert(
+        "saved_posts".to_string(),
+        Value::Array(saved_posts.into_iter().map(Value::Object).collect()),
     );
     snapshot.insert(
         "followers".to_string(),
@@ -5550,6 +5576,128 @@ async fn owner_posts(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
     .all()
     .await?
     .results::<Map<String, Value>>()
+}
+
+async fn owner_saved_posts(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT s.id, s.post_id, s.object_id, s.canonical_url,
+               COALESCE(NULLIF(s.title, ''), p.name, tp.actor_display_name, 'Saved post') AS title,
+               COALESCE(NULLIF(s.excerpt, ''), p.content, tp.content) AS excerpt,
+               COALESCE(NULLIF(s.source, ''), 'owner') AS source,
+               s.saved_at
+        FROM saved_posts s
+        LEFT JOIN posts p ON p.id = s.post_id OR p.id = s.object_id
+        LEFT JOIN timeline_posts tp ON tp.object_id = s.object_id OR tp.object_id = s.canonical_url
+        ORDER BY s.saved_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_save_post(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let post_id = optional_trimmed_body(body, &["post_id", "postId"]);
+    let object_id = optional_trimmed_body(body, &["object_id", "objectId"]);
+    let canonical_url = optional_trimmed_body(body, &["canonical_url", "canonicalUrl", "url"]);
+    let title = optional_trimmed_body(body, &["title", "name"]);
+    let excerpt = optional_trimmed_body(body, &["excerpt", "content", "summary"]);
+    let source = optional_trimmed_body(body, &["source"]).unwrap_or_else(|| "owner".to_string());
+    let identity = post_id
+        .as_deref()
+        .or(object_id.as_deref())
+        .or(canonical_url.as_deref())
+        .ok_or_else(|| "post_id, object_id, or canonical_url is required".to_string())?;
+    let id = format!("saved-{}", stable_id(identity));
+    let raw_item = serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string());
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(&id);
+    let post_arg = post_id.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let object_arg = object_id
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let url_arg = canonical_url
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let title_arg = title.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let excerpt_arg = excerpt.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
+    let source_arg = D1Type::Text(&source);
+    let raw_arg = D1Type::Text(&raw_item);
+    db.prepare(
+        r#"
+        INSERT INTO saved_posts (
+            id, post_id, object_id, canonical_url, title, excerpt, source, raw_item, saved_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+            post_id = COALESCE(excluded.post_id, saved_posts.post_id),
+            object_id = COALESCE(excluded.object_id, saved_posts.object_id),
+            canonical_url = COALESCE(excluded.canonical_url, saved_posts.canonical_url),
+            title = COALESCE(excluded.title, saved_posts.title),
+            excerpt = COALESCE(excluded.excerpt, saved_posts.excerpt),
+            source = excluded.source,
+            raw_item = excluded.raw_item,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind_refs([
+        &id_arg,
+        &post_arg,
+        &object_arg,
+        &url_arg,
+        &title_arg,
+        &excerpt_arg,
+        &source_arg,
+        &raw_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    owner_saved_post_by_id(env, &id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "saved post was not found after save".to_string())
+}
+
+async fn owner_saved_post_by_id(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare(
+        r#"
+        SELECT id, post_id, object_id, canonical_url, title, excerpt, source, saved_at
+        FROM saved_posts
+        WHERE id = ?1
+        LIMIT 1
+        "#,
+    )
+    .bind_refs(&id_arg)?
+    .first::<Map<String, Value>>(None)
+    .await
+}
+
+async fn owner_unsave_post(env: &Env, id: &str) -> Result<()> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare(
+        r#"
+        DELETE FROM saved_posts
+        WHERE id = ?1 OR post_id = ?1 OR object_id = ?1 OR canonical_url = ?1
+        "#,
+    )
+    .bind_refs(&id_arg)?
+    .run()
+    .await?;
+    Ok(())
 }
 
 async fn owner_post_detail(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
@@ -10087,6 +10235,11 @@ fn string_like_field(body: &Value, key: &str) -> Option<String> {
 
 fn string_like_any(body: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| string_like_field(body, key))
+}
+
+fn optional_trimmed_body(body: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| body.get(*key).and_then(optional_body_string))
 }
 
 fn optional_body_string(value: &Value) -> Option<String> {

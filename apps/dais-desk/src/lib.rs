@@ -7,10 +7,11 @@ use dais_client_core::{
     OwnerE2eePeerDeviceRef, OwnerE2eePeerTrustRequest, OwnerFollowResult, OwnerFollower,
     OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerInteractionResult, OwnerMedia,
     OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
-    OwnerProfileUpdate, OwnerPublicSearchActor, OwnerPublicSearchPost, OwnerSearchQuery,
-    OwnerSearchResult, OwnerSection, OwnerSettings, OwnerSettingsUpdate, OwnerSourceAdd,
-    OwnerSourceAddResult, OwnerSourceRefreshResult, OwnerSources, OwnerStats, OwnerTimelinePost,
-    OwnerWatchAdd, ProtocolRoute, SourceItem, SourceSubscription, Visibility,
+    OwnerProfileUpdate, OwnerPublicSearchActor, OwnerPublicSearchPost, OwnerSavePost,
+    OwnerSavedPost, OwnerSearchQuery, OwnerSearchResult, OwnerSection, OwnerSettings,
+    OwnerSettingsUpdate, OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult,
+    OwnerSources, OwnerStats, OwnerTimelinePost, OwnerWatchAdd, ProtocolRoute, SourceItem,
+    SourceSubscription, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -121,6 +122,7 @@ pub struct OwnerSnapshotBundle {
     pub profile: OwnerProfile,
     pub home_timeline: Vec<OwnerTimelinePost>,
     pub posts: Vec<OwnerPost>,
+    pub saved_posts: Vec<OwnerSavedPost>,
     pub followers: Vec<OwnerFollower>,
     pub friends: Vec<OwnerFriend>,
     pub following: Vec<OwnerFollowing>,
@@ -138,6 +140,7 @@ impl From<dais_client_core::OwnerSnapshot> for OwnerSnapshotBundle {
             profile: snapshot.profile,
             home_timeline: snapshot.home_timeline,
             posts: snapshot.posts,
+            saved_posts: snapshot.saved_posts,
             followers: snapshot.followers,
             friends: snapshot.friends,
             following: snapshot.following,
@@ -856,6 +859,8 @@ impl DeskController {
             match action {
                 "Reply" => self.prepare_reply(row_id),
                 "Favorite" => self.interact(row_id, "favorite"),
+                "Save" => self.save_post(row_id),
+                "Unsave" => self.unsave_post(row_id),
                 "Boost" | "Repost" => self.interact(row_id, "boost"),
                 "Delete" => self.delete_post(row_id),
                 "Mark read" => self.mark_notification_read(row_id),
@@ -971,6 +976,8 @@ impl DeskController {
             "Favorite"
                 | "Boost"
                 | "Repost"
+                | "Save"
+                | "Unsave"
                 | "Delete"
                 | "Switch"
                 | "Mark read"
@@ -2758,6 +2765,146 @@ impl DeskController {
         Ok(format!("Opened {url} in the default browser."))
     }
 
+    fn save_post(&self, row_id: &str) -> Result<String, String> {
+        let save = self.save_post_request_from_row(row_id)?;
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview saved as an owner-only bookmark.".into());
+        }
+        let client = self.client()?;
+        self.runtime.block_on(async move {
+            client
+                .save_post(&save)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok("Saved as an owner-only bookmark.".into())
+    }
+
+    fn unsave_post(&self, row_id: &str) -> Result<String, String> {
+        let id = row_id
+            .strip_prefix("saved:")
+            .or_else(|| object_id_from_row(row_id))
+            .ok_or_else(|| "no saved post id".to_string())?;
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview bookmark removed.".into());
+        }
+        let client = self.client()?;
+        self.runtime.block_on(async move {
+            client
+                .unsave_post(id)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok("Removed owner-only bookmark.".into())
+    }
+
+    fn save_post_request_from_row(&self, row_id: &str) -> Result<OwnerSavePost, String> {
+        if let Some(id) = row_id.strip_prefix("post:") {
+            if let Some(post) = self.data.snapshot.posts.iter().find(|post| post.id == id) {
+                return Ok(OwnerSavePost {
+                    post_id: Some(post.id.clone()),
+                    object_id: None,
+                    canonical_url: None,
+                    title: post.title.clone(),
+                    excerpt: Some(preview_markdown_safe(&post.content)),
+                    source: Some("desk-post".into()),
+                });
+            }
+        }
+        if let Some(id) = row_id.strip_prefix("post-detail:") {
+            let id = id.split(':').next().unwrap_or(id);
+            if let Some(detail) = self
+                .data
+                .post_detail
+                .as_ref()
+                .filter(|detail| detail.post.id == id)
+            {
+                return Ok(OwnerSavePost {
+                    post_id: Some(detail.post.id.clone()),
+                    object_id: None,
+                    canonical_url: None,
+                    title: detail.post.title.clone(),
+                    excerpt: Some(preview_markdown_safe(
+                        detail
+                            .content_html
+                            .as_deref()
+                            .unwrap_or(&detail.post.content),
+                    )),
+                    source: Some("desk-thread".into()),
+                });
+            }
+        }
+        if let Some(object_id) = row_id.strip_prefix("timeline:") {
+            if let Some(post) = self
+                .data
+                .snapshot
+                .home_timeline
+                .iter()
+                .find(|post| post.object_id == object_id)
+            {
+                return Ok(OwnerSavePost {
+                    post_id: None,
+                    object_id: Some(post.object_id.clone()),
+                    canonical_url: http_url(object_id).map(ToOwned::to_owned),
+                    title: Some(
+                        post.actor_display_name
+                            .as_deref()
+                            .or(post.actor_username.as_deref())
+                            .unwrap_or(&post.actor_id)
+                            .to_string(),
+                    ),
+                    excerpt: Some(preview_markdown_safe(
+                        post.content_html.as_deref().unwrap_or(&post.content),
+                    )),
+                    source: Some("desk-timeline".into()),
+                });
+            }
+        }
+        if let Some(url) = row_id.strip_prefix("url:") {
+            let row = self.find_row(row_id);
+            return Ok(OwnerSavePost {
+                post_id: None,
+                object_id: None,
+                canonical_url: Some(url.to_string()),
+                title: row.as_ref().map(|row| row.title.to_string()),
+                excerpt: row.as_ref().map(|row| row.detail.to_string()),
+                source: Some("desk-url".into()),
+            });
+        }
+        if let Some(id) = row_id.strip_prefix("source-item:") {
+            if let Some(item) = self
+                .data
+                .sources
+                .items
+                .iter()
+                .chain(self.data.watches.items.iter())
+                .find(|item| item.id == id)
+            {
+                return Ok(OwnerSavePost {
+                    post_id: None,
+                    object_id: Some(item.id.clone()),
+                    canonical_url: item.canonical_url.clone(),
+                    title: Some(item.title.clone()),
+                    excerpt: item.excerpt.clone(),
+                    source: Some(format!("desk-{}", item.source_type)),
+                });
+            }
+        }
+        Err("this row cannot be saved yet".into())
+    }
+
     fn compose_send_inner(&mut self) -> Result<String, String> {
         if !compose_can_send(&self.compose) {
             return Err(compose_warning(&self.compose));
@@ -3255,28 +3402,25 @@ impl DeskController {
     }
 
     fn saved_rows(&self) -> Vec<UiRow> {
-        let mut rows = vec![row(
-            "saved:owner-only",
-            "Saved posts",
-            "Owner-only bookmarks",
-            "Server-backed saved posts are not implemented yet; local drafts below stay on this device.",
-            "Owner-only",
-            "ok",
-            "",
-            "",
-        )];
+        let mut rows: Vec<UiRow> = self
+            .data
+            .snapshot
+            .saved_posts
+            .iter()
+            .map(saved_post_row)
+            .collect();
         rows.extend(
             self.drafts_for_active_account()
                 .into_iter()
                 .map(|draft| draft_row(&draft)),
         );
-        if rows.len() == 1 {
+        if rows.is_empty() {
             rows.push(row(
-                "drafts:empty",
-                "No saved drafts",
-                "Compose can save unsent work locally",
-                "Drafts preserve text, audience, route, recipients, reply context, and attached media URLs.",
-                "Local",
+                "saved:empty",
+                "No saved posts or drafts",
+                "Owner-only reading list",
+                "Use Save from a post, thread, search result, or source item. Saved posts sync through the owner server; drafts stay local until sent.",
+                "Owner-only",
                 "muted",
                 "",
                 "",
@@ -3947,7 +4091,7 @@ impl DeskController {
             "Link",
             "info",
             "Open link",
-            "",
+            "Save",
         )]
     }
 
@@ -4217,7 +4361,7 @@ impl DeskController {
             "Thread",
             "info",
             "Reply",
-            "Delete",
+            "Save",
         )];
         for (index, reply) in detail.replies.iter().take(6).enumerate() {
             rows.push(reply_activity_row(&detail.post.id, index, reply));
@@ -4296,6 +4440,16 @@ impl DeskController {
     fn context_row_for(&self, row_id: &str) -> Option<String> {
         if row_id.starts_with("post:") || row_id.starts_with("timeline:") {
             return Some(row_id.to_string());
+        }
+        if let Some(id) = row_id.strip_prefix("saved:") {
+            return self
+                .data
+                .snapshot
+                .saved_posts
+                .iter()
+                .find(|saved| saved.id == id)
+                .and_then(|saved| saved.post_id.as_deref().or(saved.object_id.as_deref()))
+                .map(|post_id| format!("post:{post_id}"));
         }
         if let Some(id) = notification_id_from_row(row_id) {
             return self
@@ -5212,7 +5366,7 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
         &indicator.label,
         indicator.tone,
         "Reply",
-        "Favorite",
+        "Save",
     )
 }
 
@@ -5253,11 +5407,37 @@ fn post_row(post: &OwnerPost) -> UiRow {
         &indicator.label,
         indicator.tone,
         "Reply",
-        if matches!(post.visibility, Visibility::Public) {
-            "Delete"
+        "Save",
+    )
+}
+
+fn saved_post_row(saved: &OwnerSavedPost) -> UiRow {
+    let target = saved
+        .canonical_url
+        .as_deref()
+        .or(saved.object_id.as_deref())
+        .or(saved.post_id.as_deref())
+        .unwrap_or(&saved.id);
+    let id = format!("saved:{}", saved.id);
+    let title = saved.title.as_deref().unwrap_or("Saved post");
+    let subtitle = saved
+        .saved_at
+        .as_deref()
+        .map(|saved_at| format!("{} saved {}", saved.source, saved_at))
+        .unwrap_or_else(|| format!("{} saved item", saved.source));
+    row(
+        &id,
+        title,
+        &subtitle,
+        saved.excerpt.as_deref().unwrap_or("Owner-only saved item."),
+        "Owner-only",
+        "ok",
+        if target.starts_with("http://") || target.starts_with("https://") {
+            "Open link"
         } else {
-            "Favorite"
+            "Open context"
         },
+        "Unsave",
     )
 }
 
@@ -6004,7 +6184,7 @@ fn source_item_row(item: &SourceItem) -> UiRow {
         &context.chip,
         "info",
         if open_link { "Open link" } else { "" },
-        "",
+        "Save",
     )
 }
 
@@ -6037,7 +6217,7 @@ fn reading_source_item_row(item: &SourceItem, subtitle: &str, chip: &str) -> UiR
         chip,
         "info",
         if open_link { "Open link" } else { "" },
-        "",
+        "Save",
     )
 }
 
@@ -6068,7 +6248,7 @@ fn search_source_item_row(item: &dais_client_core::OwnerSearchSourceItem) -> UiR
         &context.chip,
         "info",
         if open_link { "Open link" } else { "" },
-        "",
+        "Save",
     )
 }
 
@@ -6530,6 +6710,17 @@ fn resolve_external_url(controller: &DeskController, row_id: &str) -> Result<Str
             })
         })
         .or_else(|| {
+            row_id.strip_prefix("saved:").and_then(|id| {
+                controller
+                    .data
+                    .snapshot
+                    .saved_posts
+                    .iter()
+                    .find(|saved| saved.id == id)
+                    .and_then(|saved| saved.canonical_url.clone())
+            })
+        })
+        .or_else(|| {
             matches!(row_id, "identity:profile" | "health:profile")
                 .then(|| controller.data.snapshot.profile.actor_url.clone())
         });
@@ -6537,6 +6728,13 @@ fn resolve_external_url(controller: &DeskController, row_id: &str) -> Result<Str
         .filter(|candidate| candidate.starts_with("http://") || candidate.starts_with("https://"))
         .ok_or_else(|| "no external URL on this item".to_string())?;
     Ok(normalized)
+}
+
+fn http_url(value: &str) -> Option<&str> {
+    value
+        .starts_with("http://")
+        .then_some(value)
+        .or_else(|| value.starts_with("https://").then_some(value))
 }
 
 fn extract_first_url(value: &str) -> Option<String> {
@@ -7482,6 +7680,16 @@ fn local_snapshot(
                 published_at: Some("today".into()),
             },
         ],
+        saved_posts: vec![OwnerSavedPost {
+            id: "saved-fixture-private-post".into(),
+            post_id: Some("fixture-private-post".into()),
+            object_id: Some("fixture-private-post".into()),
+            canonical_url: None,
+            title: Some("Private launch note".into()),
+            excerpt: Some("Owner-only bookmark synced by the server.".into()),
+            source: "desk-post".into(),
+            saved_at: Some("today".into()),
+        }],
         followers: vec![
             OwnerFollower {
                 id: "follower-pending".into(),
@@ -7868,6 +8076,8 @@ mod tests {
                 | "Favorite"
                 | "Boost"
                 | "Repost"
+                | "Save"
+                | "Unsave"
                 | "Delete"
                 | "Switch"
                 | "Validate token"
@@ -8953,6 +9163,53 @@ mod tests {
         assert!(rows.iter().any(|row| row.id.as_str() == "draft:draft-a"));
         assert!(!rows.iter().any(|row| row.id.as_str() == "draft:draft-b"));
         assert_supported_row_actions(&rows);
+    }
+
+    #[test]
+    fn saved_rows_show_server_backed_bookmarks() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("saved");
+        let rows = controller.rows_for_active_screen();
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "saved:saved-fixture-private-post"));
+        assert!(!rows
+            .iter()
+            .any(|row| row.detail.contains("not implemented yet")));
+        let saved = rows
+            .iter()
+            .find(|row| row.id.as_str() == "saved:saved-fixture-private-post")
+            .expect("saved row");
+        assert_eq!(saved.chip.as_str(), "Owner-only");
+        assert_eq!(saved.secondary.as_str(), "Unsave");
+        assert_supported_row_actions(&rows);
+    }
+
+    #[test]
+    fn timeline_rows_can_be_saved_as_owner_only_bookmarks() {
+        let mut controller = DeskController::fixture_for_tests();
+        let row = timeline_row(&controller.data.snapshot.home_timeline[0]);
+        assert_eq!(row.secondary.as_str(), "Save");
+        let save = controller
+            .save_post_request_from_row("timeline:fixture-private-post")
+            .expect("save request");
+        assert_eq!(save.object_id.as_deref(), Some("fixture-private-post"));
+        assert_eq!(save.source.as_deref(), Some("desk-timeline"));
+        assert!(save
+            .excerpt
+            .as_deref()
+            .unwrap_or_default()
+            .contains("private"));
+        controller
+            .load_post_detail("fixture-private-post")
+            .expect("detail");
+        let detail = controller.post_detail_inspector_rows("post:fixture-private-post");
+        assert!(detail.iter().any(|row| row.secondary.as_str() == "Save"));
+        let save = controller
+            .save_post_request_from_row("post-detail:fixture-private-post")
+            .expect("thread save request");
+        assert_eq!(save.post_id.as_deref(), Some("fixture-private-post"));
+        assert_eq!(save.source.as_deref(), Some("desk-thread"));
     }
 
     #[test]

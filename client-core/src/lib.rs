@@ -60,6 +60,20 @@ impl OwnerApiClient {
             .await
     }
 
+    pub async fn saved_posts(&self) -> ClientResult<Vec<OwnerSavedPost>> {
+        let response: OwnerItems<OwnerSavedPost> = self.get("/api/dais/owner/saved").await?;
+        Ok(response.items)
+    }
+
+    pub async fn save_post(&self, post: &OwnerSavePost) -> ClientResult<OwnerSavedPost> {
+        self.post("/api/dais/owner/saved", post).await
+    }
+
+    pub async fn unsave_post(&self, id: &str) -> ClientResult<OwnerActionResult> {
+        self.delete(&format!("/api/dais/owner/saved/{}", url_encode(id)))
+            .await
+    }
+
     pub async fn discover_actor(&self, target: &str) -> ClientResult<OwnerDiscoveredActor> {
         self.post("/api/dais/owner/discovery/actor", &FollowTarget { target })
             .await
@@ -208,8 +222,7 @@ impl OwnerApiClient {
         &self,
         peer: &OwnerE2eePeerDeviceRef,
     ) -> ClientResult<OwnerE2eePeerDevice> {
-        self.post("/api/dais/owner/e2ee/peers/revoke", peer)
-            .await
+        self.post("/api/dais/owner/e2ee/peers/revoke", peer).await
     }
 
     pub async fn search(&self, query: &str) -> ClientResult<OwnerSearchResult> {
@@ -614,6 +627,28 @@ pub struct OwnerPostDetail {
     pub likes: Vec<serde_json::Value>,
     #[serde(default)]
     pub boosts: Vec<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSavedPost {
+    pub id: String,
+    pub post_id: Option<String>,
+    pub object_id: Option<String>,
+    pub canonical_url: Option<String>,
+    pub title: Option<String>,
+    pub excerpt: Option<String>,
+    pub source: String,
+    pub saved_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerSavePost {
+    pub post_id: Option<String>,
+    pub object_id: Option<String>,
+    pub canonical_url: Option<String>,
+    pub title: Option<String>,
+    pub excerpt: Option<String>,
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1301,6 +1336,8 @@ pub struct OwnerSnapshot {
     pub profile: OwnerProfile,
     pub home_timeline: Vec<OwnerTimelinePost>,
     pub posts: Vec<OwnerPost>,
+    #[serde(default)]
+    pub saved_posts: Vec<OwnerSavedPost>,
     pub followers: Vec<OwnerFollower>,
     pub friends: Vec<OwnerFriend>,
     pub following: Vec<OwnerFollowing>,
@@ -1430,6 +1467,7 @@ mod tests {
             },
             home_timeline: Vec::new(),
             posts: Vec::new(),
+            saved_posts: Vec::new(),
             followers: Vec::new(),
             friends: Vec::new(),
             following: Vec::new(),
