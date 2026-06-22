@@ -49,6 +49,26 @@ pub fn requires_authorized_post_fetch(
         || content.contains(E2EE_FALLBACK_MARKER)
 }
 
+pub fn can_fetch_post(
+    visibility: &str,
+    encrypted_message: Option<&str>,
+    content: &str,
+    requester_is_approved_follower: bool,
+) -> bool {
+    if is_anonymous_public_post(visibility, encrypted_message, content) {
+        return true;
+    }
+    match read_policy_from_visibility(visibility) {
+        ReadPolicy::Public => false,
+        ReadPolicy::FollowersOnly => {
+            requester_is_approved_follower
+                && encrypted_message.is_none()
+                && !content.contains(E2EE_FALLBACK_MARKER)
+        }
+        ReadPolicy::Private => false,
+    }
+}
+
 pub async fn is_blocked_actor(db: &dyn DatabaseProvider, actor_url: &str) -> CoreResult<bool> {
     let actor_query = "SELECT COUNT(*) AS count FROM blocks WHERE actor_id = ?1";
     let actor_rows = db
@@ -163,8 +183,9 @@ fn blocked_domain_matches_actor(blocked_domain: &str, actor_url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        blocked_domain_matches_actor, is_anonymous_public_post, read_policy_from_visibility,
-        requires_authorized_fetch, requires_authorized_post_fetch, ReadPolicy,
+        blocked_domain_matches_actor, can_fetch_post, is_anonymous_public_post,
+        read_policy_from_visibility, requires_authorized_fetch, requires_authorized_post_fetch,
+        ReadPolicy,
     };
 
     #[test]
@@ -218,6 +239,22 @@ mod tests {
             "public",
             None,
             "End-to-end encrypted message"
+        ));
+    }
+
+    #[test]
+    fn post_fetch_policy_allows_only_intended_readers() {
+        assert!(can_fetch_post("public", None, "hello", false));
+        assert!(can_fetch_post("public", None, "hello", true));
+        assert!(!can_fetch_post("followers", None, "hello", false));
+        assert!(can_fetch_post("followers", None, "hello", true));
+        assert!(!can_fetch_post("direct", None, "hello", true));
+        assert!(!can_fetch_post("public", Some(r#"{"v":1}"#), "fallback", true));
+        assert!(!can_fetch_post(
+            "public",
+            None,
+            "End-to-end encrypted message",
+            true
         ));
     }
 
