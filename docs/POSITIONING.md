@@ -7,7 +7,9 @@ the public-broadcast emphasis in older `docs/archive/VISION.md`, and any "100% c
 
 This document states, once and coherently: **purpose → persona → protocols →
 privacy model → business model**, plus an honest status snapshot. Companion
-design doc: `docs/design/PRIVATE_MODE.md`. Work tracked under epic #70.
+design doc: `docs/design/PRIVATE_MODE.md`. Product research on mainstream social
+platform lessons lives in `docs/research/MAINSTREAM_SOCIAL_PLATFORM_LESSONS.md`.
+Work tracked under epic #70.
 
 ---
 
