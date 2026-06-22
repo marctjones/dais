@@ -635,6 +635,17 @@ async fn activitypub_actor(env: &Env, url: &worker::Url) -> Result<Response> {
                 serde_json::json!({ "type": "Image", "mediaType": media_type_for_filename(&image), "url": image }),
             );
         }
+        let devices = public_e2ee_devices(env, &actor_url).await?;
+        if !devices.is_empty() {
+            object.insert(
+                "daisE2ee".to_string(),
+                serde_json::json!({
+                    "v": 1,
+                    "protocol": "dais-mls-v1",
+                    "devices": devices,
+                }),
+            );
+        }
     }
     activity_json(&actor)
 }
@@ -3681,6 +3692,39 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Get, "/e2ee/devices") => api_json(
+            &OwnerItems {
+                items: owner_e2ee_devices(&env).await?,
+            },
+            200,
+        ),
+        (worker::Method::Post, "/e2ee/devices") => {
+            let body = read_json(&mut req).await;
+            match owner_upsert_e2ee_device(&env, &body).await {
+                Ok(device) => api_json(&device, 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Get, "/e2ee/peers") => api_json(
+            &OwnerItems {
+                items: owner_e2ee_peer_devices(&env).await?,
+            },
+            200,
+        ),
+        (worker::Method::Post, "/e2ee/peers/trust") => {
+            let body = read_json(&mut req).await;
+            match owner_trust_e2ee_peer_device(&env, &body).await {
+                Ok(device) => api_json(&device, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Post, "/e2ee/peers/revoke") => {
+            let body = read_json(&mut req).await;
+            match owner_revoke_e2ee_peer_device(&env, &body).await {
+                Ok(device) => api_json(&device, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, "/search") => api_json(
             &owner_search(
                 &env,
@@ -6430,6 +6474,315 @@ async fn owner_direct_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, 
     .all()
     .await?
     .results::<Map<String, Value>>()
+}
+
+async fn public_e2ee_devices(env: &Env, actor_id: &str) -> Result<Vec<Value>> {
+    let actor_arg = D1Type::Text(actor_id);
+    let rows = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT device_id, display_name, protocol, credential, key_package, fingerprint, updated_at
+            FROM e2ee_devices
+            WHERE actor_id = ?1 AND status = 'active'
+            ORDER BY updated_at DESC, device_id ASC
+            "#,
+        )
+        .bind_refs(&actor_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let mut device = Map::new();
+            insert_if_string(&mut device, "deviceId", row.get("device_id"));
+            insert_if_string(&mut device, "displayName", row.get("display_name"));
+            insert_if_string(&mut device, "protocol", row.get("protocol"));
+            insert_if_string(&mut device, "credential", row.get("credential"));
+            insert_if_string(&mut device, "keyPackage", row.get("key_package"));
+            insert_if_string(&mut device, "fingerprint", row.get("fingerprint"));
+            insert_if_string(&mut device, "updatedAt", row.get("updated_at"));
+            Value::Object(device)
+        })
+        .collect())
+}
+
+async fn owner_e2ee_devices(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let local_actor = owner_local_actor(env).await?;
+    let actor_arg = D1Type::Text(&local_actor.id);
+    env.d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, actor_id, device_id, display_name, protocol, credential, key_package,
+                   fingerprint, status, created_at, updated_at
+            FROM e2ee_devices
+            WHERE actor_id = ?1
+            ORDER BY updated_at DESC, device_id ASC
+            "#,
+        )
+        .bind_refs(&actor_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()
+}
+
+async fn owner_upsert_e2ee_device(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let device_id = normalize_e2ee_device_id(
+        &body_string_any(body, &["device_id", "deviceId"]).ok_or("deviceId is required")?,
+    )?;
+    let credential = required_e2ee_material(body, &["credential", "identityKey"], "credential")?;
+    let key_package = required_e2ee_material(body, &["key_package", "keyPackage"], "keyPackage")?;
+    let display_name = body_string_any(body, &["display_name", "displayName"]);
+    let protocol = normalize_e2ee_protocol(
+        body_string_any(body, &["protocol"])
+            .unwrap_or_else(|| "dais-mls-v1".to_string())
+            .as_str(),
+    )?;
+    let fingerprint = e2ee_device_fingerprint(&credential, &key_package);
+    let row_id = format!(
+        "e2ee-device-{}",
+        stable_id(&format!("{}\n{}", local_actor.id, device_id))
+    );
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(&row_id);
+    let actor_arg = D1Type::Text(&local_actor.id);
+    let device_arg = D1Type::Text(&device_id);
+    let display_arg = display_name
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let protocol_arg = D1Type::Text(&protocol);
+    let credential_arg = D1Type::Text(&credential);
+    let key_package_arg = D1Type::Text(&key_package);
+    let fingerprint_arg = D1Type::Text(&fingerprint);
+    db.prepare(
+        r#"
+        INSERT INTO e2ee_devices (
+            id, actor_id, device_id, display_name, protocol, credential, key_package,
+            fingerprint, status, created_at, updated_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', datetime('now'), datetime('now')
+        )
+        ON CONFLICT(actor_id, device_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            protocol = excluded.protocol,
+            credential = excluded.credential,
+            key_package = excluded.key_package,
+            fingerprint = excluded.fingerprint,
+            status = 'active',
+            updated_at = datetime('now')
+        "#,
+    )
+    .bind_refs(&[
+        id_arg,
+        actor_arg,
+        device_arg,
+        display_arg,
+        protocol_arg,
+        credential_arg,
+        key_package_arg,
+        fingerprint_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    owner_e2ee_device_by_actor_and_device(env, &local_actor.id, &device_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "device not found after upsert".to_string())
+}
+
+async fn owner_e2ee_peer_devices(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    env.d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, actor_id, device_id, display_name, protocol, credential, key_package,
+                   fingerprint, trust_state, first_seen_at, last_seen_at, trusted_at, revoked_at
+            FROM e2ee_peer_devices
+            ORDER BY last_seen_at DESC, actor_id ASC, device_id ASC
+            "#,
+        )
+        .all()
+        .await?
+        .results::<Map<String, Value>>()
+}
+
+async fn owner_trust_e2ee_peer_device(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    owner_upsert_peer_device_with_trust(env, body, "trusted").await
+}
+
+async fn owner_revoke_e2ee_peer_device(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let actor_id = public_https_url(
+        &body_string_any(body, &["actor_id", "actorId", "actor"]).ok_or("actorId is required")?,
+        "actorId",
+    )?;
+    let device_id = normalize_e2ee_device_id(
+        &body_string_any(body, &["device_id", "deviceId"]).ok_or("deviceId is required")?,
+    )?;
+    let actor_arg = D1Type::Text(&actor_id);
+    let device_arg = D1Type::Text(&device_id);
+    env.d1("DB")
+        .map_err(|error| error.to_string())?
+        .prepare(
+            r#"
+            UPDATE e2ee_peer_devices
+            SET trust_state = 'revoked', revoked_at = datetime('now'), last_seen_at = datetime('now')
+            WHERE actor_id = ?1 AND device_id = ?2
+            "#,
+        )
+        .bind_refs(&[actor_arg, device_arg])
+        .map_err(|error| error.to_string())?
+        .run()
+        .await
+        .map_err(|error| error.to_string())?;
+    owner_e2ee_peer_device_by_actor_and_device(env, &actor_id, &device_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "peer device not found".to_string())
+}
+
+async fn owner_upsert_peer_device_with_trust(
+    env: &Env,
+    body: &Value,
+    trust_state: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    let actor_id = public_https_url(
+        &body_string_any(body, &["actor_id", "actorId", "actor"]).ok_or("actorId is required")?,
+        "actorId",
+    )?;
+    let device_id = normalize_e2ee_device_id(
+        &body_string_any(body, &["device_id", "deviceId"]).ok_or("deviceId is required")?,
+    )?;
+    let credential = required_e2ee_material(body, &["credential", "identityKey"], "credential")?;
+    let key_package = required_e2ee_material(body, &["key_package", "keyPackage"], "keyPackage")?;
+    let display_name = body_string_any(body, &["display_name", "displayName"]);
+    let protocol = normalize_e2ee_protocol(
+        body_string_any(body, &["protocol"])
+            .unwrap_or_else(|| "dais-mls-v1".to_string())
+            .as_str(),
+    )?;
+    let fingerprint = body_string_any(body, &["fingerprint"])
+        .map(|value| normalize_e2ee_fingerprint(&value))
+        .transpose()?
+        .unwrap_or_else(|| e2ee_device_fingerprint(&credential, &key_package));
+    if fingerprint != e2ee_device_fingerprint(&credential, &key_package) {
+        return Err("fingerprint does not match credential and keyPackage".to_string());
+    }
+    let row_id = format!(
+        "e2ee-peer-{}",
+        stable_id(&format!("{}\n{}", actor_id, device_id))
+    );
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(&row_id);
+    let actor_arg = D1Type::Text(&actor_id);
+    let device_arg = D1Type::Text(&device_id);
+    let display_arg = display_name
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let protocol_arg = D1Type::Text(&protocol);
+    let credential_arg = D1Type::Text(&credential);
+    let key_package_arg = D1Type::Text(&key_package);
+    let fingerprint_arg = D1Type::Text(&fingerprint);
+    let trust_arg = D1Type::Text(trust_state);
+    db.prepare(
+        r#"
+        INSERT INTO e2ee_peer_devices (
+            id, actor_id, device_id, display_name, protocol, credential, key_package,
+            fingerprint, trust_state, first_seen_at, last_seen_at, trusted_at, revoked_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now'),
+            CASE WHEN ?9 = 'trusted' THEN datetime('now') ELSE NULL END, NULL
+        )
+        ON CONFLICT(actor_id, device_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            protocol = excluded.protocol,
+            credential = excluded.credential,
+            key_package = excluded.key_package,
+            fingerprint = excluded.fingerprint,
+            trust_state = excluded.trust_state,
+            last_seen_at = datetime('now'),
+            trusted_at = CASE WHEN excluded.trust_state = 'trusted' THEN datetime('now') ELSE trusted_at END,
+            revoked_at = CASE WHEN excluded.trust_state = 'revoked' THEN datetime('now') ELSE NULL END
+        "#,
+    )
+    .bind_refs(&[
+        id_arg,
+        actor_arg,
+        device_arg,
+        display_arg,
+        protocol_arg,
+        credential_arg,
+        key_package_arg,
+        fingerprint_arg,
+        trust_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    owner_e2ee_peer_device_by_actor_and_device(env, &actor_id, &device_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "peer device not found after upsert".to_string())
+}
+
+async fn owner_e2ee_device_by_actor_and_device(
+    env: &Env,
+    actor_id: &str,
+    device_id: &str,
+) -> Result<Option<Map<String, Value>>> {
+    let actor_arg = D1Type::Text(actor_id);
+    let device_arg = D1Type::Text(device_id);
+    env.d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, actor_id, device_id, display_name, protocol, credential, key_package,
+                   fingerprint, status, created_at, updated_at
+            FROM e2ee_devices
+            WHERE actor_id = ?1 AND device_id = ?2
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&[actor_arg, device_arg])?
+        .first::<Map<String, Value>>(None)
+        .await
+}
+
+async fn owner_e2ee_peer_device_by_actor_and_device(
+    env: &Env,
+    actor_id: &str,
+    device_id: &str,
+) -> Result<Option<Map<String, Value>>> {
+    let actor_arg = D1Type::Text(actor_id);
+    let device_arg = D1Type::Text(device_id);
+    env.d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, actor_id, device_id, display_name, protocol, credential, key_package,
+                   fingerprint, trust_state, first_seen_at, last_seen_at, trusted_at, revoked_at
+            FROM e2ee_peer_devices
+            WHERE actor_id = ?1 AND device_id = ?2
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&[actor_arg, device_arg])?
+        .first::<Map<String, Value>>(None)
+        .await
 }
 
 #[derive(Clone)]
@@ -10912,6 +11265,73 @@ fn public_https_url(value: &str, field: &str) -> std::result::Result<String, Str
     Ok(url.to_string())
 }
 
+fn normalize_e2ee_device_id(value: &str) -> std::result::Result<String, String> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err("deviceId is required".to_string());
+    }
+    if normalized.len() > 128 {
+        return Err("deviceId is too long".to_string());
+    }
+    if !normalized
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(
+            "deviceId may only contain letters, numbers, dot, colon, dash, and underscore"
+                .to_string(),
+        );
+    }
+    Ok(normalized.to_string())
+}
+
+fn normalize_e2ee_protocol(value: &str) -> std::result::Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "dais-mls-v1" | "mls" | "openmls" => Ok("dais-mls-v1".to_string()),
+        _ => Err("unsupported E2EE protocol".to_string()),
+    }
+}
+
+fn normalize_e2ee_fingerprint(value: &str) -> std::result::Result<String, String> {
+    let normalized = value
+        .trim()
+        .trim_start_matches("sha256:")
+        .replace([':', ' ', '-'], "")
+        .to_ascii_lowercase();
+    if normalized.len() != 64 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("fingerprint must be a SHA-256 hex digest".to_string());
+    }
+    Ok(normalized)
+}
+
+fn required_e2ee_material(
+    body: &Value,
+    keys: &[&str],
+    field: &str,
+) -> std::result::Result<String, String> {
+    let value = body_string_any(body, keys).ok_or_else(|| format!("{field} is required"))?;
+    if value.len() > 65536 {
+        return Err(format!("{field} is too large"));
+    }
+    Ok(value)
+}
+
+fn e2ee_device_fingerprint(credential: &str, key_package: &str) -> String {
+    let digest = Sha256::digest(format!("{credential}\n{key_package}").as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn insert_if_string(object: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
+    if let Some(value) = value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(key.to_string(), Value::String(value.to_string()));
+    }
+}
+
 fn host_not_allowed(host: &str) -> bool {
     host == "localhost"
         || host.ends_with(".local")
@@ -11654,8 +12074,9 @@ struct OwnerToken {
 mod tests {
     use super::{
         activitypub_watch_item, bluesky_actor_target, bluesky_appview_xrpc_url, bluesky_post_uri,
-        bluesky_watch_item, normalize_ai_categories, normalize_discovered_public_post,
-        owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
+        bluesky_watch_item, e2ee_device_fingerprint, normalize_ai_categories,
+        normalize_discovered_public_post, normalize_e2ee_device_id, normalize_e2ee_fingerprint,
+        normalize_e2ee_protocol, owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
         owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
         parse_lenient_json_body, parse_workers_ai_moderation, source_type_for_watch_kind,
         strip_json_fence, tootfinder_search_items, tootfinder_search_url, OwnerPublicSearchOptions,
@@ -11682,6 +12103,28 @@ mod tests {
             parsed.summary.as_deref(),
             Some("contains private medical and work details")
         );
+    }
+
+    #[test]
+    fn normalizes_e2ee_device_ids_and_protocols() {
+        assert_eq!(
+            normalize_e2ee_device_id(" laptop:2026 ").unwrap(),
+            "laptop:2026"
+        );
+        assert!(normalize_e2ee_device_id("bad device").is_err());
+        assert_eq!(normalize_e2ee_protocol("OpenMLS").unwrap(), "dais-mls-v1");
+        assert!(normalize_e2ee_protocol("legacy-rsa").is_err());
+    }
+
+    #[test]
+    fn computes_stable_e2ee_fingerprint() {
+        let fingerprint = e2ee_device_fingerprint("credential", "key-package");
+        assert_eq!(fingerprint.len(), 64);
+        assert_eq!(
+            normalize_e2ee_fingerprint(&format!("sha256:{fingerprint}")).unwrap(),
+            fingerprint
+        );
+        assert!(normalize_e2ee_fingerprint("not-a-digest").is_err());
     }
 
     #[test]
