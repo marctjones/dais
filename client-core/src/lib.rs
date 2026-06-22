@@ -185,6 +185,33 @@ impl OwnerApiClient {
         Ok(response.items)
     }
 
+    pub async fn e2ee_devices(&self) -> ClientResult<Vec<OwnerE2eeDevice>> {
+        let response: OwnerItems<OwnerE2eeDevice> =
+            self.get("/api/dais/owner/e2ee/devices").await?;
+        Ok(response.items)
+    }
+
+    pub async fn e2ee_peer_devices(&self) -> ClientResult<Vec<OwnerE2eePeerDevice>> {
+        let response: OwnerItems<OwnerE2eePeerDevice> =
+            self.get("/api/dais/owner/e2ee/peers").await?;
+        Ok(response.items)
+    }
+
+    pub async fn trust_e2ee_peer_device(
+        &self,
+        peer: &OwnerE2eePeerTrustRequest,
+    ) -> ClientResult<OwnerE2eePeerDevice> {
+        self.post("/api/dais/owner/e2ee/peers/trust", peer).await
+    }
+
+    pub async fn revoke_e2ee_peer_device(
+        &self,
+        peer: &OwnerE2eePeerDeviceRef,
+    ) -> ClientResult<OwnerE2eePeerDevice> {
+        self.post("/api/dais/owner/e2ee/peers/revoke", peer)
+            .await
+    }
+
     pub async fn search(&self, query: &str) -> ClientResult<OwnerSearchResult> {
         self.search_with_scope(query, "local").await
     }
@@ -824,6 +851,55 @@ pub struct OwnerDirectMessage {
     pub content: String,
     pub published_at: String,
     pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eeDevice {
+    pub id: String,
+    pub actor_id: String,
+    pub device_id: String,
+    pub display_name: Option<String>,
+    pub protocol: String,
+    pub credential: String,
+    pub key_package: String,
+    pub fingerprint: String,
+    pub status: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eePeerDevice {
+    pub id: String,
+    pub actor_id: String,
+    pub device_id: String,
+    pub display_name: Option<String>,
+    pub protocol: String,
+    pub credential: String,
+    pub key_package: String,
+    pub fingerprint: String,
+    pub trust_state: String,
+    pub first_seen_at: Option<String>,
+    pub last_seen_at: Option<String>,
+    pub trusted_at: Option<String>,
+    pub revoked_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eePeerTrustRequest {
+    pub actor_id: String,
+    pub device_id: String,
+    pub display_name: Option<String>,
+    pub protocol: String,
+    pub credential: String,
+    pub key_package: String,
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eePeerDeviceRef {
+    pub actor_id: String,
+    pub device_id: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

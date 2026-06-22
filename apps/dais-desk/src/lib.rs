@@ -3,7 +3,8 @@ use base64::Engine as _;
 use dais_client_core::{
     ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate, ModerationState,
     OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost, OwnerDeletedPost,
-    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerFollowResult, OwnerFollower,
+    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eePeerDevice,
+    OwnerE2eePeerDeviceRef, OwnerE2eePeerTrustRequest, OwnerFollowResult, OwnerFollower,
     OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerInteractionResult, OwnerMedia,
     OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
     OwnerProfileUpdate, OwnerPublicSearchActor, OwnerPublicSearchPost, OwnerSearchQuery,
@@ -104,6 +105,8 @@ pub struct DeskData {
     pub direct_messages: Vec<OwnerDirectMessage>,
     pub sources: OwnerSources,
     pub watches: OwnerSources,
+    pub e2ee_devices: Vec<OwnerE2eeDevice>,
+    pub e2ee_peer_devices: Vec<OwnerE2eePeerDevice>,
     pub moderation_replies: Vec<ModerationReplyRow>,
     pub stats: OwnerStats,
     pub search: OwnerSearchResult,
@@ -869,6 +872,8 @@ impl DeskController {
                 "Approve reply" => self.set_reply_status(row_id, "approved"),
                 "Hide reply" => self.set_reply_status(row_id, "hidden"),
                 "Reject reply" => self.set_reply_status(row_id, "rejected"),
+                "Trust key" => self.trust_e2ee_peer(row_id),
+                "Revoke trust" => self.revoke_e2ee_peer(row_id),
                 "Block" => self.block(row_id),
                 "Unblock" => self.unblock(row_id),
                 "Open original" | "Open link" => self.open_external(row_id),
@@ -1535,6 +1540,8 @@ impl DeskController {
                 subscriptions: Vec::new(),
                 items: Vec::new(),
             });
+            let e2ee_devices = client.e2ee_devices().await.unwrap_or_default();
+            let e2ee_peer_devices = client.e2ee_peer_devices().await.unwrap_or_default();
             let moderation_replies = client.moderation_replies().await.unwrap_or_default();
             let stats = client.stats().await.unwrap_or_default();
             Ok(DeskData {
@@ -1545,6 +1552,8 @@ impl DeskController {
                 direct_messages,
                 sources,
                 watches,
+                e2ee_devices,
+                e2ee_peer_devices,
                 moderation_replies,
                 stats,
                 search: OwnerSearchResult::default(),
@@ -2631,6 +2640,90 @@ impl DeskController {
         Ok(format!("Reply moderation status changed to {status}."))
     }
 
+    fn trust_e2ee_peer(&self, row_id: &str) -> Result<String, String> {
+        let id = row_id
+            .strip_prefix("e2ee-peer:")
+            .ok_or_else(|| "no peer device id".to_string())?;
+        let peer = self
+            .data
+            .e2ee_peer_devices
+            .iter()
+            .find(|peer| peer.id == id)
+            .ok_or_else(|| "peer device not found".to_string())?;
+        if peer.trust_state == "trusted" {
+            return Ok("Peer key is already trusted.".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview peer key trusted.".into());
+        }
+        let request = OwnerE2eePeerTrustRequest {
+            actor_id: peer.actor_id.clone(),
+            device_id: peer.device_id.clone(),
+            display_name: peer.display_name.clone(),
+            protocol: peer.protocol.clone(),
+            credential: peer.credential.clone(),
+            key_package: peer.key_package.clone(),
+            fingerprint: Some(peer.fingerprint.clone()),
+        };
+        let client = self.client()?;
+        let trusted = self.runtime.block_on(async move {
+            client
+                .trust_e2ee_peer_device(&request)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!(
+            "Trusted E2EE key {} for {}.",
+            short_fingerprint(&trusted.fingerprint),
+            compact_url(&trusted.actor_id)
+        ))
+    }
+
+    fn revoke_e2ee_peer(&self, row_id: &str) -> Result<String, String> {
+        let id = row_id
+            .strip_prefix("e2ee-peer:")
+            .ok_or_else(|| "no peer device id".to_string())?;
+        let peer = self
+            .data
+            .e2ee_peer_devices
+            .iter()
+            .find(|peer| peer.id == id)
+            .ok_or_else(|| "peer device not found".to_string())?;
+        if peer.trust_state == "revoked" {
+            return Ok("Peer key is already revoked.".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview peer key revoked.".into());
+        }
+        let request = OwnerE2eePeerDeviceRef {
+            actor_id: peer.actor_id.clone(),
+            device_id: peer.device_id.clone(),
+        };
+        let client = self.client()?;
+        let revoked = self.runtime.block_on(async move {
+            client
+                .revoke_e2ee_peer_device(&request)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(format!(
+            "Revoked E2EE trust for {}.",
+            compact_url(&revoked.actor_id)
+        ))
+    }
+
     fn block(&self, row_id: &str) -> Result<String, String> {
         let target = target_from_row(row_id).ok_or_else(|| "no block target".to_string())?;
         self.block_actor_value(target, "Blocked from Dais Desk")
@@ -2872,6 +2965,7 @@ impl DeskController {
             "health" => self.health_rows(),
             "deliveries" => self.delivery_rows(),
             "moderation" => self.moderation_rows(),
+            "security" => self.security_rows(),
             "identity" => self.identity_rows(),
             "accounts" => self.account_rows_as_ui(),
             "settings" => self.settings_rows(),
@@ -2948,6 +3042,11 @@ impl DeskController {
                     "Moderation",
                     self.data.moderation_replies.len(),
                 ),
+                (
+                    "security",
+                    "Security",
+                    self.data.e2ee_devices.len() + self.data.e2ee_peer_devices.len(),
+                ),
                 ("identity", "Identity", 0),
                 (
                     "accounts",
@@ -2991,6 +3090,7 @@ impl DeskController {
             "health" => "Health".into(),
             "deliveries" => "Deliveries".into(),
             "moderation" => "Moderation".into(),
+            "security" => "Security".into(),
             "identity" => "Identity".into(),
             "accounts" => "Accounts & Tokens".into(),
             "settings" => "Settings".into(),
@@ -3014,6 +3114,7 @@ impl DeskController {
             "watches" => "Private monitoring of public posts without follow approval.".into(),
             "deliveries" => "Where posts went and what needs operator action.".into(),
             "moderation" => "Review replies, warnings, blocks, and sensitivity policy.".into(),
+            "security" => "E2EE devices, peer keys, fingerprints, and trust decisions.".into(),
             "accounts" => "Multiple Dais instances and owner tokens.".into(),
             _ => "Private-by-default social work with operator controls nearby.".into(),
         }
@@ -3516,6 +3617,30 @@ impl DeskController {
                 .iter()
                 .map(moderation_reply_row),
         );
+        rows
+    }
+
+    fn security_rows(&self) -> Vec<UiRow> {
+        let mut rows = vec![row(
+            "security:summary",
+            "Encrypted messaging keys",
+            &format!(
+                "{} local device(s), {} peer device(s)",
+                self.data.e2ee_devices.len(),
+                self.data.e2ee_peer_devices.len()
+            ),
+            "Trusted peer devices can receive encrypted direct messages. Fingerprints should be checked before trust.",
+            "E2EE",
+            if self.data.e2ee_devices.is_empty() {
+                "warn"
+            } else {
+                "ok"
+            },
+            "",
+            "Copy evidence",
+        )];
+        rows.extend(self.data.e2ee_devices.iter().map(e2ee_device_row));
+        rows.extend(self.data.e2ee_peer_devices.iter().map(e2ee_peer_device_row));
         rows
     }
 
@@ -6010,6 +6135,64 @@ fn delivery_tone(status: &str) -> &'static str {
     }
 }
 
+fn e2ee_device_row(device: &OwnerE2eeDevice) -> UiRow {
+    row(
+        &format!("e2ee-device:{}", device.id),
+        device.display_name.as_deref().unwrap_or(&device.device_id),
+        "Local encrypted-message device",
+        &format!(
+            "{}. Fingerprint {}. Updated {}.",
+            device.protocol,
+            short_fingerprint(&device.fingerprint),
+            device.updated_at.as_deref().unwrap_or("unknown")
+        ),
+        if device.status == "active" {
+            "Active"
+        } else {
+            &device.status
+        },
+        if device.status == "active" {
+            "ok"
+        } else {
+            "warn"
+        },
+        "",
+        "Copy evidence",
+    )
+}
+
+fn e2ee_peer_device_row(peer: &OwnerE2eePeerDevice) -> UiRow {
+    let trusted = peer.trust_state == "trusted";
+    let revoked = peer.trust_state == "revoked";
+    row(
+        &format!("e2ee-peer:{}", peer.id),
+        peer.display_name.as_deref().unwrap_or(&peer.device_id),
+        &compact_url(&peer.actor_id),
+        &format!(
+            "{} peer key. Fingerprint {}. Last seen {}.",
+            peer.protocol,
+            short_fingerprint(&peer.fingerprint),
+            peer.last_seen_at.as_deref().unwrap_or("unknown")
+        ),
+        if trusted {
+            "Trusted"
+        } else if revoked {
+            "Revoked"
+        } else {
+            "Untrusted"
+        },
+        if trusted {
+            "ok"
+        } else if revoked {
+            "danger"
+        } else {
+            "warn"
+        },
+        if trusted { "" } else { "Trust key" },
+        if revoked { "" } else { "Revoke trust" },
+    )
+}
+
 fn delivery_failure_explanation(error: &str) -> String {
     let lower = error.to_ascii_lowercase();
     let likely = if lower.contains("timeout") || lower.contains("timed out") {
@@ -6458,9 +6641,8 @@ fn mode_for_screen(screen: &str) -> &str {
     match screen {
         "find" | "relationship" | "friends" | "followers" | "following" | "watches"
         | "audience" | "blocks" => "people",
-        "health" | "deliveries" | "moderation" | "identity" | "accounts" | "settings" | "stats" => {
-            "server"
-        }
+        "health" | "deliveries" | "moderation" | "security" | "identity" | "accounts"
+        | "settings" | "stats" => "server",
         _ => "home",
     }
 }
@@ -6606,6 +6788,21 @@ fn compact_url(url: &str) -> String {
         format!("{}...", &trimmed[..61])
     } else {
         trimmed.to_string()
+    }
+}
+
+fn short_fingerprint(value: &str) -> String {
+    let normalized: String = value
+        .chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    if normalized.len() >= 16 {
+        format!("{} {}", &normalized[..8], &normalized[8..16])
+    } else if normalized.is_empty() {
+        "unknown".into()
+    } else {
+        normalized
     }
 }
 
@@ -6890,6 +7087,56 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 read: false,
             }],
         },
+        e2ee_devices: vec![OwnerE2eeDevice {
+            id: "e2ee-device-local-laptop".into(),
+            actor_id: "https://social.dais.social/users/social".into(),
+            device_id: "macbook:2026".into(),
+            display_name: Some("MacBook".into()),
+            protocol: "dais-mls-v1".into(),
+            credential: "fixture-credential".into(),
+            key_package: "fixture-key-package".into(),
+            fingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .into(),
+            status: "active".into(),
+            created_at: Some("today".into()),
+            updated_at: Some("today".into()),
+        }],
+        e2ee_peer_devices: vec![
+            OwnerE2eePeerDevice {
+                id: "e2ee-peer-ada-phone".into(),
+                actor_id: "https://friend.example/users/ada".into(),
+                device_id: "phone:ada".into(),
+                display_name: Some("Ada phone".into()),
+                protocol: "dais-mls-v1".into(),
+                credential: "fixture-peer-credential".into(),
+                key_package: "fixture-peer-key-package".into(),
+                fingerprint:
+                    "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+                        .into(),
+                trust_state: "trusted".into(),
+                first_seen_at: Some("today".into()),
+                last_seen_at: Some("today".into()),
+                trusted_at: Some("today".into()),
+                revoked_at: None,
+            },
+            OwnerE2eePeerDevice {
+                id: "e2ee-peer-new-tablet".into(),
+                actor_id: "https://new.example/users/follower".into(),
+                device_id: "tablet:new".into(),
+                display_name: Some("New follower tablet".into()),
+                protocol: "dais-mls-v1".into(),
+                credential: "fixture-untrusted-credential".into(),
+                key_package: "fixture-untrusted-key-package".into(),
+                fingerprint:
+                    "9999999999999999888888888888888877777777777777776666666666666666"
+                        .into(),
+                trust_state: "untrusted".into(),
+                first_seen_at: Some("today".into()),
+                last_seen_at: Some("today".into()),
+                trusted_at: None,
+                revoked_at: None,
+            },
+        ],
         moderation_replies: vec![ModerationReplyRow {
             id: "mod-reply-sensitive".into(),
             post_id: "fixture-private-post".into(),
@@ -9033,6 +9280,39 @@ mod tests {
             controller.compose.recipients,
             "https://friend.example/users/ada"
         );
+    }
+
+    #[test]
+    fn security_screen_shows_e2ee_devices_and_stateful_actions() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("security");
+        let rows = controller.rows_for_active_screen();
+        assert!(rows.iter().any(|row| row.id.as_str() == "security:summary"));
+        assert!(rows.iter().any(
+            |row| row.id.as_str() == "e2ee-device:e2ee-device-local-laptop"
+                && row.chip.as_str() == "Active"
+        ));
+        let trusted = rows
+            .iter()
+            .find(|row| row.id.as_str() == "e2ee-peer:e2ee-peer-ada-phone")
+            .expect("trusted peer row");
+        assert_eq!(trusted.primary.as_str(), "");
+        assert_eq!(trusted.secondary.as_str(), "Revoke trust");
+        let untrusted = rows
+            .iter()
+            .find(|row| row.id.as_str() == "e2ee-peer:e2ee-peer-new-tablet")
+            .expect("untrusted peer row");
+        assert_eq!(untrusted.primary.as_str(), "Trust key");
+        assert_eq!(untrusted.secondary.as_str(), "Revoke trust");
+    }
+
+    #[test]
+    fn e2ee_peer_actions_use_selected_peer_material() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.row_action("e2ee-peer:e2ee-peer-new-tablet", "Trust key");
+        assert!(controller.status_message.contains("trusted"));
+        controller.row_action("e2ee-peer:e2ee-peer-ada-phone", "Revoke trust");
+        assert!(controller.status_message.contains("revoked"));
     }
 
     #[test]

@@ -74,6 +74,8 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     window.invoke_select_screen("moderation".into());
     capture(&window, &output_dir, "server-moderation")?;
+    window.invoke_select_screen("security".into());
+    capture(&window, &output_dir, "server-security")?;
     window.invoke_select_screen("settings".into());
     capture(&window, &output_dir, "server-settings")?;
 
