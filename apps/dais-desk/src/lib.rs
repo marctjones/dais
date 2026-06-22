@@ -3244,6 +3244,9 @@ impl DeskController {
                 "",
             ));
         }
+        for (index, attachment) in self.compose.attachments.iter().enumerate() {
+            rows.push(compose_media_attachment_row(index, attachment));
+        }
         rows
     }
 
@@ -6193,6 +6196,28 @@ fn e2ee_peer_device_row(peer: &OwnerE2eePeerDevice) -> UiRow {
     )
 }
 
+fn compose_media_attachment_row(index: usize, url: &str) -> UiRow {
+    let signed_private = media_attachment_requires_authorized_fetch(url);
+    let private = media_attachment_is_private(url);
+    let (chip, tone, subtitle) = if signed_private {
+        ("Auth media", "ok", "Private media with authorized fetch")
+    } else if private {
+        ("Private media", "ok", "Private media URL")
+    } else {
+        ("Public media", "warn", "Public media URL")
+    };
+    row(
+        &format!("media:{url}"),
+        &format!("Attached media {}", index + 1),
+        subtitle,
+        &compact_url(url),
+        chip,
+        tone,
+        "Open link",
+        "Revoke media",
+    )
+}
+
 fn delivery_failure_explanation(error: &str) -> String {
     let lower = error.to_ascii_lowercase();
     let likely = if lower.contains("timeout") || lower.contains("timed out") {
@@ -6734,6 +6759,22 @@ fn compose_warning(compose: &ComposeState) -> String {
     {
         return "Direct posts require named recipients or an audience group.".into();
     }
+    if compose.encrypt && !compose.attachments.is_empty() {
+        return "Encrypted media attachments are not implemented yet; remove media or turn off encryption.".into();
+    }
+    if !compose.attachments.is_empty() && !matches!(compose.protocol, ProtocolRoute::ActivityPub) {
+        return "Media attachments currently require ActivityPub routing.".into();
+    }
+    if matches!(
+        compose.visibility,
+        Visibility::Followers | Visibility::Direct
+    ) && compose
+        .attachments
+        .iter()
+        .any(|attachment| !media_attachment_is_private(attachment))
+    {
+        return "Private and direct posts require private media upload URLs.".into();
+    }
     if matches!(compose.visibility, Visibility::Public) {
         return "This will be public. Use Post Publicly only when that is intentional.".into();
     }
@@ -6752,6 +6793,16 @@ fn compose_can_send(compose: &ComposeState) -> bool {
         && (!matches!(compose.visibility, Visibility::Direct)
             || !split_list(&compose.recipients).is_empty()
             || !compose.audience_list_id.as_deref().unwrap_or("").is_empty())
+        && !(compose.encrypt && !compose.attachments.is_empty())
+        && (compose.attachments.is_empty()
+            || matches!(compose.protocol, ProtocolRoute::ActivityPub))
+        && (!matches!(
+            compose.visibility,
+            Visibility::Followers | Visibility::Direct
+        ) || compose
+            .attachments
+            .iter()
+            .all(|attachment| media_attachment_is_private(attachment)))
 }
 
 fn split_list(value: &str) -> Vec<String> {
@@ -6761,6 +6812,28 @@ fn split_list(value: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn media_attachment_is_private(url: &str) -> bool {
+    media_path(url).is_some_and(|path| {
+        path.starts_with("/media/_private/") || path.starts_with("/media/_private_signed/")
+    })
+}
+
+fn media_attachment_requires_authorized_fetch(url: &str) -> bool {
+    media_path(url).is_some_and(|path| path.starts_with("/media/_private_signed/"))
+}
+
+fn media_path(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+        let without_scheme = trimmed
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        let path_start = without_scheme.find('/')?;
+        return Some(without_scheme[path_start..].to_string());
+    }
+    trimmed.starts_with("/media/").then(|| trimmed.to_string())
 }
 
 fn looks_like_handle_or_url(value: &str) -> bool {
@@ -8592,6 +8665,69 @@ mod tests {
         };
         assert!(compose_can_send(&compose));
         assert_eq!(compose_warning(&compose), "Ready to send privately.");
+    }
+
+    #[test]
+    fn compose_blocks_public_media_on_private_posts() {
+        let compose = ComposeState {
+            text: "private photo".into(),
+            visibility: Visibility::Followers,
+            protocol: ProtocolRoute::ActivityPub,
+            attachments: vec!["https://social.dais.social/media/uploads/photo.png".into()],
+            ..ComposeState::default()
+        };
+        assert!(!compose_can_send(&compose));
+        assert_eq!(
+            compose_warning(&compose),
+            "Private and direct posts require private media upload URLs."
+        );
+    }
+
+    #[test]
+    fn compose_allows_private_media_on_private_posts() {
+        let compose = ComposeState {
+            text: "private photo".into(),
+            visibility: Visibility::Followers,
+            protocol: ProtocolRoute::ActivityPub,
+            attachments: vec!["https://social.dais.social/media/_private/token/photo.png".into()],
+            ..ComposeState::default()
+        };
+        assert!(compose_can_send(&compose));
+        assert_eq!(compose_warning(&compose), "Ready to send privately.");
+    }
+
+    #[test]
+    fn compose_blocks_encrypted_media_until_supported() {
+        let compose = ComposeState {
+            text: "encrypted photo".into(),
+            visibility: Visibility::Direct,
+            protocol: ProtocolRoute::ActivityPub,
+            encrypt: true,
+            recipients: "https://friend.example/users/ada".into(),
+            attachments: vec![
+                "https://social.dais.social/media/_private_signed/token/photo.png".into(),
+            ],
+            ..ComposeState::default()
+        };
+        assert!(!compose_can_send(&compose));
+        assert_eq!(
+            compose_warning(&compose),
+            "Encrypted media attachments are not implemented yet; remove media or turn off encryption."
+        );
+    }
+
+    #[test]
+    fn compose_context_rows_show_media_access() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.compose.text = "photo".into();
+        controller.compose.attachments = vec![
+            "https://social.dais.social/media/_private_signed/token/photo.png".into(),
+            "https://social.dais.social/media/uploads/public.png".into(),
+        ];
+        controller.select_screen("compose");
+        let rows = controller.compose_context_rows();
+        assert!(rows.iter().any(|row| row.chip.as_str() == "Auth media"));
+        assert!(rows.iter().any(|row| row.chip.as_str() == "Public media"));
     }
 
     #[test]
