@@ -93,7 +93,7 @@ UI release gate evidence
 Required screenshot names at release time:
 
 ```text
-home, home-compose-media, home-inbox-notifications, home-today,
+home, home-compose-media, home-inbox-notifications, home-reading, home-today,
 people-find-search, people-relationship, people-friends, people-followers, people-following,
 people-watches-sources, people-audience-groups, people-blocks,
 server-health, server-deliveries, server-stats, server-identity, server-moderation, server-accounts

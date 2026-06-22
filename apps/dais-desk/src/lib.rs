@@ -2822,6 +2822,7 @@ impl DeskController {
     fn rows_for_active_screen_for_projection(&self) -> Vec<UiRow> {
         match self.active_screen.as_str() {
             "today" => self.home_today_rows(),
+            "reading" => self.reading_rows(),
             "inbox" => self.inbox_rows(),
             "compose" => self.compose_context_rows(),
             "posts" => self.post_rows(),
@@ -2924,6 +2925,7 @@ impl DeskController {
             ],
             _ => &[
                 ("today", "Today", self.home_today_rows().len()),
+                ("reading", "Reading", self.reading_rows().len()),
                 ("inbox", "Inbox", self.inbox_rows().len()),
                 ("compose", "Compose", 0),
                 ("posts", "My Posts", self.data.snapshot.posts.len()),
@@ -2939,6 +2941,7 @@ impl DeskController {
     fn title_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
             "today" => "Today".into(),
+            "reading" => "Reading".into(),
             "inbox" => "Inbox".into(),
             "compose" => "Compose".into(),
             "posts" => "My Posts".into(),
@@ -2965,6 +2968,9 @@ impl DeskController {
     fn subtitle_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
             "today" => "Read, reply, and handle the day without protocol clutter.".into(),
+            "reading" => {
+                "Posts from followed accounts, private watches, and reading sources.".into()
+            }
             "inbox" => {
                 "Notifications, DMs, requests, delivery failures, and moderation attention.".into()
             }
@@ -3000,6 +3006,39 @@ impl DeskController {
         }
         for delivery in self.data.deliveries.iter().filter(|d| d.status == "failed") {
             rows.push(delivery_attention_row(delivery));
+        }
+        rows
+    }
+
+    fn reading_rows(&self) -> Vec<UiRow> {
+        let mut rows: Vec<UiRow> = self
+            .data
+            .snapshot
+            .home_timeline
+            .iter()
+            .map(reading_timeline_row)
+            .collect();
+        rows.extend(
+            self.data
+                .watches
+                .items
+                .iter()
+                .map(|item| reading_source_item_row(item, "Watched public post", "Watch")),
+        );
+        rows.extend(
+            self.data
+                .sources
+                .items
+                .iter()
+                .map(|item| reading_source_item_row(item, "Source post", "Source")),
+        );
+        if rows.is_empty() {
+            rows.push(empty_state_row(
+                "reading:empty",
+                "No reading stream yet",
+                "Follow an account, add a private Watch, or add an RSS/Atom source to populate this stream.",
+                "Find people",
+            ));
         }
         rows
     }
@@ -3906,16 +3945,48 @@ impl DeskController {
             },
             "",
         )];
+        if matches!(notice.kind.as_str(), "reply" | "mention") {
+            if let Some(reply) = notice.content.as_deref() {
+                rows.push(row_with_kind(
+                    "post",
+                    &format!("notification-reply:{}", notice.id),
+                    if notice.kind == "mention" {
+                        "Mention text"
+                    } else {
+                        "Reply text"
+                    },
+                    actor,
+                    &preview_markdown_safe(reply),
+                    "This is the new content from the other account.",
+                    "Reply",
+                    "info",
+                    if notice.context_post_id.is_some() || notice.post_id.is_some() {
+                        "Reply"
+                    } else {
+                        ""
+                    },
+                    "",
+                ));
+            }
+        }
         let context_source = notice
             .context_post_content_html
             .as_deref()
             .or(notice.context_post_content.as_deref())
-            .or(notice.content.as_deref());
+            .or_else(|| {
+                (!matches!(notice.kind.as_str(), "reply" | "mention"))
+                    .then_some(notice.content.as_deref())
+                    .flatten()
+            });
         if let Some(context) = context_source {
             rows.push(row_with_kind(
                 "post",
                 &format!("notification-context:{}", notice.id),
-                "Original context",
+                if matches!(notice.kind.as_str(), "reply" | "mention") {
+                    "Original post"
+                } else {
+                    "Original context"
+                },
                 notice
                     .context_post_published_at
                     .as_deref()
@@ -4982,6 +5053,12 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
     )
 }
 
+fn reading_timeline_row(post: &OwnerTimelinePost) -> UiRow {
+    let mut row = timeline_row(post);
+    row.subtitle = s(&format!("Following · {}", row.subtitle));
+    row
+}
+
 fn post_row(post: &OwnerPost) -> UiRow {
     let title = post.title.as_deref().unwrap_or("My post");
     let indicator = if post.encrypted {
@@ -5359,21 +5436,7 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
             "notice"
         }
     );
-    let source = notice
-        .context_post_content_html
-        .as_deref()
-        .or(notice.context_post_content.as_deref())
-        .or(notice.content.as_deref())
-        .unwrap_or("Open this notice to inspect details.");
-    let detail = format!(
-        "{} {}",
-        notice
-            .context_post_visibility
-            .as_deref()
-            .map(visibility_explanation_str)
-            .unwrap_or("Visibility is not included with this notification."),
-        preview_markdown_safe(source)
-    );
+    let detail = notification_preview_detail(notice);
     let unread = !json_truthy(&notice.read);
     let has_context_post = notice.context_post_id.is_some() || notice.post_id.is_some();
     let is_conversational = matches!(notice.kind.as_str(), "mention" | "reply");
@@ -5430,6 +5493,38 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         primary,
         secondary,
     )
+}
+
+fn notification_preview_detail(notice: &OwnerNotification) -> String {
+    let visibility = notice
+        .context_post_visibility
+        .as_deref()
+        .map(visibility_explanation_str)
+        .unwrap_or("Visibility is not included with this notification.");
+    let reply_text = notice.content.as_deref().map(preview_markdown_safe);
+    let context_text = notice
+        .context_post_content_html
+        .as_deref()
+        .or(notice.context_post_content.as_deref())
+        .map(preview_markdown_safe);
+
+    if matches!(notice.kind.as_str(), "reply" | "mention") {
+        return match (reply_text, context_text) {
+            (Some(reply), Some(context)) => {
+                format!("{visibility} Reply: {reply} Original post: {context}")
+            }
+            (Some(reply), None) => format!("{visibility} Reply: {reply}"),
+            (None, Some(context)) => format!("{visibility} Original post: {context}"),
+            (None, None) => {
+                format!("{visibility} Open this notice to inspect reply details.")
+            }
+        };
+    }
+
+    let source = context_text
+        .or(reply_text)
+        .unwrap_or_else(|| "Open this notice to inspect details.".to_string());
+    format!("{visibility} {source}")
 }
 
 fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
@@ -5654,6 +5749,34 @@ fn source_item_row(item: &SourceItem) -> UiRow {
             .or(item.canonical_url.as_deref())
             .unwrap_or("Source item"),
         "Source item",
+        "info",
+        if open_link { "Open link" } else { "" },
+        "",
+    )
+}
+
+fn reading_source_item_row(item: &SourceItem, subtitle: &str, chip: &str) -> UiRow {
+    let id = item
+        .canonical_url
+        .as_deref()
+        .map(|url| format!("url:{url}"))
+        .unwrap_or_else(|| format!("source-item:{}", item.id));
+    let open_link = has_openable_link([
+        item.canonical_url.as_deref(),
+        item.excerpt.as_deref(),
+        Some(&item.title),
+    ]);
+    row_with_kind(
+        "post",
+        &id,
+        &item.title,
+        subtitle,
+        item.excerpt
+            .as_deref()
+            .or(item.canonical_url.as_deref())
+            .unwrap_or("Public reading item"),
+        &format!("{} · owner-only reader", item.source_type),
+        chip,
         "info",
         if open_link { "Open link" } else { "" },
         "",
@@ -6635,7 +6758,17 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 created_at: Some("today".into()),
                 updated_at: Some("today".into()),
             }],
-            items: Vec::new(),
+            items: vec![SourceItem {
+                id: "watch-item-nobel".into(),
+                title: "Nobel Prize public update".into(),
+                source_type: "activitypub".into(),
+                canonical_url: Some("https://social.example/users/nobel/posts/1".into()),
+                excerpt: Some(
+                    "A watched public account posted a research prize announcement.".into(),
+                ),
+                rights_policy_json: "{\"excerpt_only\":true,\"private_reader_only\":true}".into(),
+                read: false,
+            }],
         },
         moderation_replies: vec![ModerationReplyRow {
             id: "mod-reply-sensitive".into(),
@@ -7846,7 +7979,26 @@ mod tests {
             context_post_published_at: None,
         });
         assert!(row.detail.contains("followers/friends"));
-        assert!(row.detail.contains("Original context"));
+        assert!(row.detail.contains("Reply: Reply text"));
+        assert!(row.detail.contains("Original post: Original context"));
+    }
+
+    #[test]
+    fn reply_notification_inspector_shows_reply_and_original_post() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.inspector_rows("notification:notice-reply");
+        let reply = rows
+            .iter()
+            .find(|row| row.id.as_str() == "notification-reply:notice-reply")
+            .expect("reply row");
+        assert_eq!(reply.title.as_str(), "Reply text");
+        assert!(reply.detail.contains("Can we keep this to close friends?"));
+        let original = rows
+            .iter()
+            .find(|row| row.id.as_str() == "notification-context:notice-reply")
+            .expect("original post row");
+        assert_eq!(original.title.as_str(), "Original post");
+        assert!(original.detail.contains("Original close-friends post"));
     }
 
     #[test]
@@ -8298,6 +8450,26 @@ mod tests {
         assert_eq!(rows[2].id.as_str(), "dm:dm-fixture");
         assert_eq!(rows[3].id.as_str(), "timeline:fixture-private-post");
         assert_eq!(rows[4].id.as_str(), "post:fixture-private-post");
+    }
+
+    #[test]
+    fn reading_rows_include_followed_watched_and_source_posts() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.reading_rows();
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "timeline:fixture-private-post"
+                && row.subtitle.contains("Following")));
+        assert!(rows
+            .iter()
+            .any(|row| row.title.as_str() == "Nobel Prize public update"
+                && row.subtitle.as_str() == "Watched public post"
+                && row.chip.as_str() == "Watch"));
+        assert!(rows
+            .iter()
+            .any(|row| row.title.as_str() == "Science source item"
+                && row.subtitle.as_str() == "Source post"
+                && row.chip.as_str() == "Source"));
     }
 
     #[test]

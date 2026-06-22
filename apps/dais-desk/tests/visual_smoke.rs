@@ -34,7 +34,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     window.invoke_select_screen("compose".into());
     capture(&window, &output_dir, "home-compose-media")?;
     window.invoke_select_screen("inbox".into());
+    window.invoke_select_row("notification:notice-reply".into());
     capture(&window, &output_dir, "home-inbox-notifications")?;
+    window.invoke_select_screen("reading".into());
+    capture(&window, &output_dir, "home-reading")?;
     window.invoke_select_screen("today".into());
     capture(&window, &output_dir, "home-today")?;
 

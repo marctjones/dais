@@ -130,6 +130,7 @@ component RowCard inherits Rectangle {
     property <bool> is-post: entry.kind == "post";
     property <bool> is-notification: entry.kind == "notification";
     property <bool> is-relationship: entry.kind == "relationship";
+    property <bool> is-reading-source: entry.chip == "Watch" || entry.chip == "Source";
     callback open(string);
     callback action(string, string);
 
@@ -246,7 +247,7 @@ component RowCard inherits Rectangle {
             }
             if (root.is-post || root.is-notification) && root.entry.secondary == "" : Button {
                 height: 34px;
-                text: root.is-post ? "Audience" : "Details";
+                text: root.is-post && !root.is-reading-source ? "Audience" : "Details";
                 clicked => {
                     root.open(root.entry.id);
                 }
@@ -259,7 +260,7 @@ component InspectorRow inherits Rectangle {
     in property <UiRow> entry;
     callback action(string, string);
 
-    min-height: 72px;
+    height: root.entry.primary != "" || root.entry.secondary != "" ? 118px : 96px;
     vertical-stretch: 0;
     border-radius: 6px;
     background: #f8fafc;
@@ -294,6 +295,8 @@ component InspectorRow inherits Rectangle {
             font-size: 12px;
             color: #445064;
             wrap: word-wrap;
+            max-height: 42px;
+            overflow: elide;
         }
 
         HorizontalLayout {
