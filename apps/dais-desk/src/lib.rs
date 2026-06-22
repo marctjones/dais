@@ -843,6 +843,8 @@ impl DeskController {
             self.use_audience_in_compose(row_id.trim_start_matches("audience:"))
         } else if action == "Save draft" {
             self.save_current_draft_inner()
+        } else if action == "Use bundle" && row_id.starts_with("bundle:") {
+            self.use_starter_bundle(row_id.trim_start_matches("bundle:"))
         } else if action == "Open draft" && row_id.starts_with("draft:") {
             self.open_draft(row_id.trim_start_matches("draft:"))
         } else if action == "Delete draft" && row_id.starts_with("draft:") {
@@ -1723,6 +1725,38 @@ impl DeskController {
         Ok(format!(
             "Added private {} watch for {}.",
             result.source.source_type, result.source.url
+        ))
+    }
+
+    fn use_starter_bundle(&mut self, bundle_id: &str) -> Result<String, String> {
+        let bundle = starter_bundle_rows()
+            .into_iter()
+            .find(|bundle| bundle.id.as_str() == format!("bundle:{bundle_id}"))
+            .ok_or_else(|| "starter bundle not found".to_string())?;
+        self.active_mode = "people".to_string();
+        self.active_screen = "watches".to_string();
+        self.source_form = SourceFormState {
+            source_type: "rss".into(),
+            url: bundle
+                .detail
+                .split_whitespace()
+                .find(|part| part.starts_with("https://"))
+                .unwrap_or("https://www.npr.org/rss/rss.php?id=1007")
+                .trim_end_matches('.')
+                .to_string(),
+            title: bundle.title.as_str().to_string(),
+            cadence_minutes: "120".into(),
+        };
+        self.watch_form = WatchFormState {
+            watch_type: "activitypub_actor".into(),
+            target: bundle.subtitle.as_str().to_string(),
+            title: bundle.title.as_str().to_string(),
+            cadence_minutes: "120".into(),
+        };
+        self.selected_row = self.first_row_id();
+        Ok(format!(
+            "Opened Watches & Sources with {} starter bundle values ready to review.",
+            bundle.title
         ))
     }
 
@@ -3162,6 +3196,7 @@ impl DeskController {
                 .iter()
                 .map(search_source_item_row),
         );
+        rows.extend(starter_bundle_rows());
         if rows.is_empty() {
             rows.push(row(
                 "find:empty",
@@ -5649,6 +5684,16 @@ fn discovered_actor_row(actor: &OwnerDiscoveredActor) -> UiRow {
 }
 
 fn public_actor_row(actor: &OwnerPublicSearchActor) -> UiRow {
+    let trust = actor_trust_signal(
+        actor.handle.as_deref(),
+        actor.url.as_deref(),
+        Some(actor.id.as_str()),
+    );
+    let summary = actor
+        .summary
+        .as_deref()
+        .unwrap_or("Public search actor result. Choose Follow or Watch deliberately.");
+    let detail = format!("{} Trust signal: {}.", summary, trust.1);
     row(
         &format!(
             "actor:{}",
@@ -5660,12 +5705,9 @@ fn public_actor_row(actor: &OwnerPublicSearchActor) -> UiRow {
             .or(actor.handle.as_deref())
             .unwrap_or(&actor.id),
         &format!("{} via {}", actor.network, actor.provider),
-        actor
-            .summary
-            .as_deref()
-            .unwrap_or("Public search actor result. Choose Follow or Watch deliberately."),
-        "Public result",
-        "info",
+        &detail,
+        trust.0,
+        trust.2,
         if actor.actions.iter().any(|a| a == "follow") {
             "Follow"
         } else {
@@ -5677,6 +5719,84 @@ fn public_actor_row(actor: &OwnerPublicSearchActor) -> UiRow {
             ""
         },
     )
+}
+
+fn starter_bundle_rows() -> Vec<UiRow> {
+    vec![
+        row_with_kind(
+            "generic",
+            "bundle:science-news",
+            "Science and public-interest news starter pack",
+            "@science@mastodon.example",
+            "Review a private ActivityPub Watch plus an RSS source: https://www.npr.org/rss/rss.php?id=1007. Nothing is followed or watched until you confirm.",
+            "Starter pack: 1 watch, 1 source",
+            "Bundle",
+            "info",
+            "Use bundle",
+            "",
+        ),
+        row_with_kind(
+            "generic",
+            "bundle:research-institutes",
+            "Research institutes starter pack",
+            "@research@mastodon.example",
+            "Review public research accounts and institution feeds as private Watches/sources before adding them.",
+            "Starter pack: watches and feeds",
+            "Bundle",
+            "info",
+            "Use bundle",
+            "",
+        ),
+    ]
+}
+
+fn actor_trust_signal(
+    handle: Option<&str>,
+    url: Option<&str>,
+    actor_id: Option<&str>,
+) -> (&'static str, &'static str, &'static str) {
+    let handle_domain = handle.and_then(handle_domain);
+    let url_domain = url.and_then(url_host);
+    let actor_domain = actor_id.and_then(url_host);
+    let domain_matches = handle_domain.is_some_and(|handle_domain| {
+        url_domain.is_some_and(|url_domain| same_domain(handle_domain, url_domain))
+            || actor_domain.is_some_and(|actor_domain| same_domain(handle_domain, actor_domain))
+    });
+    if domain_matches {
+        (
+            "Domain match",
+            "the account handle matches its public profile or actor domain",
+            "ok",
+        )
+    } else {
+        (
+            "Unverified",
+            "the result came from a public index; verify the profile before trusting it",
+            "warn",
+        )
+    }
+}
+
+fn handle_domain(handle: &str) -> Option<&str> {
+    handle
+        .trim()
+        .trim_start_matches('@')
+        .rsplit_once('@')
+        .map(|(_, domain)| domain.trim())
+        .filter(|domain| !domain.is_empty())
+}
+
+fn url_host(url: &str) -> Option<&str> {
+    url.trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .filter(|host| !host.is_empty())
+}
+
+fn same_domain(left: &str, right: &str) -> bool {
+    left.trim().trim_start_matches("www.") == right.trim().trim_start_matches("www.")
 }
 
 fn public_post_row(post: &OwnerPublicSearchPost) -> UiRow {
@@ -7348,6 +7468,7 @@ mod tests {
                 | "Open context"
                 | "Find people"
                 | "Add Watch"
+                | "Use bundle"
                 | "Inspect delivery"
                 | "Copy evidence"
                 | "Revoke media"
@@ -7510,6 +7631,50 @@ mod tests {
         assert_eq!(pending.primary.as_str(), "Cancel");
         assert_eq!(pending.chip.as_str(), "pending");
         assert_eq!(pending.secondary.as_str(), "Watch");
+    }
+
+    #[test]
+    fn public_actor_rows_show_domain_trust_signal() {
+        let row = public_actor_row(&OwnerPublicSearchActor {
+            provider: "public-index".into(),
+            network: "ActivityPub".into(),
+            id: "https://nasa.gov/users/news".into(),
+            handle: Some("@news@nasa.gov".into()),
+            display_name: Some("NASA News".into()),
+            summary: Some("Official public updates.".into()),
+            url: Some("https://nasa.gov/social/news".into()),
+            avatar_url: None,
+            watch_type: Some("activitypub".into()),
+            watch_target: Some("https://nasa.gov/users/news".into()),
+            follow_target: Some("https://nasa.gov/users/news".into()),
+            actions: vec!["follow".into(), "watch".into()],
+        });
+        assert_eq!(row.chip.as_str(), "Domain match");
+        assert_eq!(row.tone.as_str(), "ok");
+        assert!(row.detail.contains("Trust signal"));
+    }
+
+    #[test]
+    fn starter_bundle_prefills_private_watch_and_source_review() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("find");
+        let rows = controller.find_rows();
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "bundle:science-news"
+                && row.primary.as_str() == "Use bundle"));
+
+        controller.row_action("bundle:science-news", "Use bundle");
+        assert_eq!(controller.active_mode, "people");
+        assert_eq!(controller.active_screen, "watches");
+        assert_eq!(controller.watch_form.target, "@science@mastodon.example");
+        assert_eq!(
+            controller.source_form.url,
+            "https://www.npr.org/rss/rss.php?id=1007"
+        );
+        assert!(controller
+            .status_message
+            .contains("starter bundle values ready to review"));
     }
 
     #[test]
