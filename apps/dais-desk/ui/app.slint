@@ -38,12 +38,19 @@ export struct AccountRow {
 component Chip inherits Rectangle {
     in property <string> label;
     in property <string> tone;
+    callback activate();
     border-radius: 6px;
     border-width: 1px;
     border-color: tone == "danger" ? #c23b3b : tone == "warn" ? #a76f14 : tone == "ok" ? #1f7a45 : #b8c0ca;
     background: tone == "danger" ? #fff0f0 : tone == "warn" ? #fff6df : tone == "ok" ? #eef9f1 : #f4f6f8;
     min-height: 24px;
     horizontal-stretch: 0;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: "Open visibility and audience details";
+    accessible-action-default => {
+        root.activate();
+    }
 
     Text {
         text: root.label;
@@ -54,6 +61,12 @@ component Chip inherits Rectangle {
         x: 10px;
         width: root.width - 20px;
         height: root.height;
+    }
+
+    TouchArea {
+        clicked => {
+            root.activate();
+        }
     }
 }
 
@@ -190,6 +203,9 @@ component RowCard inherits Rectangle {
             if root.entry.chip != "" : Chip {
                 label: root.entry.chip;
                 tone: root.entry.tone;
+                activate => {
+                    root.open(root.entry.id);
+                }
             }
         }
 
