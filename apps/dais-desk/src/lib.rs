@@ -5988,15 +5988,20 @@ fn source_item_row(item: &SourceItem) -> UiRow {
         item.excerpt.as_deref(),
         Some(&item.title),
     ]);
-    row(
-        &id,
-        &item.title,
-        &item.source_type,
+    let context = source_policy_summary(&item.rights_policy_json);
+    let detail = source_item_detail(
         item.excerpt
             .as_deref()
             .or(item.canonical_url.as_deref())
             .unwrap_or("Source item"),
-        "Source item",
+        &context,
+    );
+    row(
+        &id,
+        &item.title,
+        &item.source_type,
+        &detail,
+        &context.chip,
         "info",
         if open_link { "Open link" } else { "" },
         "",
@@ -6014,16 +6019,21 @@ fn reading_source_item_row(item: &SourceItem, subtitle: &str, chip: &str) -> UiR
         item.excerpt.as_deref(),
         Some(&item.title),
     ]);
+    let context = source_policy_summary(&item.rights_policy_json);
+    let detail = source_item_detail(
+        item.excerpt
+            .as_deref()
+            .or(item.canonical_url.as_deref())
+            .unwrap_or("Public reading item"),
+        &context,
+    );
     row_with_kind(
         "post",
         &id,
         &item.title,
         subtitle,
-        item.excerpt
-            .as_deref()
-            .or(item.canonical_url.as_deref())
-            .unwrap_or("Public reading item"),
-        &format!("{} · owner-only reader", item.source_type),
+        &detail,
+        &format!("{} · {}", item.source_type, context.meta),
         chip,
         "info",
         if open_link { "Open link" } else { "" },
@@ -6042,19 +6052,115 @@ fn search_source_item_row(item: &dais_client_core::OwnerSearchSourceItem) -> UiR
         item.excerpt.as_deref(),
         Some(&item.title),
     ]);
-    row(
-        &id,
-        &item.title,
-        &item.source_type,
+    let context = source_policy_summary(&item.rights_policy_json);
+    let detail = source_item_detail(
         item.excerpt
             .as_deref()
             .or(item.canonical_url.as_deref())
             .unwrap_or("Search source item"),
-        "Source item",
+        &context,
+    );
+    row(
+        &id,
+        &item.title,
+        &item.source_type,
+        &detail,
+        &context.chip,
         "info",
         if open_link { "Open link" } else { "" },
         "",
     )
+}
+
+struct SourcePolicySummary {
+    chip: String,
+    meta: String,
+    detail: String,
+}
+
+fn source_policy_summary(policy_json: &str) -> SourcePolicySummary {
+    let policy = serde_json::from_str::<serde_json::Value>(policy_json).unwrap_or_default();
+    let private_reader = json_bool_field(&policy, "private_reader_only")
+        || json_bool_field(&policy, "privateReaderOnly");
+    let excerpt_only =
+        json_bool_field(&policy, "excerpt_only") || json_bool_field(&policy, "excerptOnly");
+    let link_required =
+        json_bool_field(&policy, "link_required") || json_bool_field(&policy, "linkRequired");
+    let attribution_required = json_bool_field(&policy, "attribution_required")
+        || json_bool_field(&policy, "attributionRequired");
+    let image_allowed = json_bool_field_opt(&policy, "image_allowed")
+        .or_else(|| json_bool_field_opt(&policy, "imageAllowed"));
+    let no_remote_relationship = json_bool_field(&policy, "no_remote_relationship")
+        || json_bool_field(&policy, "noRemoteRelationship");
+
+    let mut facts = Vec::new();
+    if private_reader {
+        facts.push("private reader");
+    }
+    if excerpt_only {
+        facts.push("excerpt only");
+    }
+    if link_required {
+        facts.push("link required");
+    }
+    if attribution_required {
+        facts.push("attribution required");
+    }
+    if image_allowed == Some(false) {
+        facts.push("no image reuse");
+    }
+    if no_remote_relationship {
+        facts.push("no remote relationship");
+    }
+
+    let chip = if private_reader {
+        "Private reader"
+    } else if excerpt_only {
+        "Excerpt"
+    } else {
+        "Source item"
+    };
+    let meta = if facts.is_empty() {
+        "source provenance".to_string()
+    } else {
+        facts.join(", ")
+    };
+    let detail = if facts.is_empty() {
+        "No special source-use policy was supplied.".to_string()
+    } else {
+        format!("Source policy: {}.", facts.join(", "))
+    };
+    SourcePolicySummary {
+        chip: chip.to_string(),
+        meta,
+        detail,
+    }
+}
+
+fn source_item_detail(excerpt: &str, policy: &SourcePolicySummary) -> String {
+    let excerpt = clean_text(excerpt);
+    if excerpt.is_empty() {
+        policy.detail.clone()
+    } else {
+        format!("{excerpt} {}", policy.detail)
+    }
+}
+
+fn json_bool_field(value: &serde_json::Value, key: &str) -> bool {
+    json_bool_field_opt(value, key).unwrap_or(false)
+}
+
+fn json_bool_field_opt(value: &serde_json::Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(|value| {
+        value
+            .as_bool()
+            .or_else(|| value.as_i64().map(|number| number != 0))
+            .or_else(|| {
+                value
+                    .as_str()
+                    .map(|text| matches!(text, "true" | "1" | "yes"))
+            })
+    })
 }
 
 fn audience_row(list: &OwnerAudienceList) -> UiRow {
@@ -8170,6 +8276,34 @@ mod tests {
             read: false,
         });
         assert_eq!(row.primary.as_str(), "Open link");
+    }
+
+    #[test]
+    fn source_item_rows_explain_provenance_policy() {
+        let row = source_item_row(&SourceItem {
+            id: "item-policy".into(),
+            title: "Policy item".into(),
+            source_type: "rss".into(),
+            canonical_url: Some("https://example.org/policy".into()),
+            excerpt: Some("Policy excerpt.".into()),
+            rights_policy_json: serde_json::json!({
+                "private_reader_only": true,
+                "excerpt_only": true,
+                "link_required": true,
+                "attribution_required": true,
+                "image_allowed": false,
+                "no_remote_relationship": true
+            })
+            .to_string(),
+            read: false,
+        });
+        assert_eq!(row.chip.as_str(), "Private reader");
+        assert!(row.detail.contains("private reader"));
+        assert!(row.detail.contains("excerpt only"));
+        assert!(row.detail.contains("link required"));
+        assert!(row.detail.contains("attribution required"));
+        assert!(row.detail.contains("no image reuse"));
+        assert!(row.detail.contains("no remote relationship"));
     }
 
     #[test]
