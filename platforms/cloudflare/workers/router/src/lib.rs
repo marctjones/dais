@@ -521,7 +521,7 @@ async fn handle_activitypub_public(
             {
                 activitypub_actor(&env, url).await
             } else {
-                activitypub_actor_html(&env).await
+                activitypub_actor_html(&env, url).await
             }
         }
         (worker::Method::Get, "/users/social/outbox") => activitypub_outbox(&env, url).await,
@@ -650,21 +650,52 @@ async fn activitypub_actor(env: &Env, url: &worker::Url) -> Result<Response> {
     activity_json(&actor)
 }
 
-async fn activitypub_actor_html(env: &Env) -> Result<Response> {
+async fn activitypub_actor_html(env: &Env, url: &worker::Url) -> Result<Response> {
     let profile = owner_profile(env).await?;
+    let posts = mastodon_status_rows(env, "posts", 20, url).await?;
+    text_response(
+        &activitypub_actor_profile_html(&profile, &posts),
+        "text/html; charset=utf-8",
+    )
+}
+
+fn activitypub_actor_profile_html(profile: &OwnerProfile, posts: &[Map<String, Value>]) -> String {
     let display_name = profile
         .display_name
         .clone()
         .unwrap_or_else(|| profile.username.clone());
     let summary = profile.summary.clone().unwrap_or_default();
-    text_response(
-        &format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title></head><body><h1>{}</h1><p>{}</p></body></html>",
-            escape_html(&display_name),
-            escape_html(&display_name),
-            summary,
-        ),
-        "text/html; charset=utf-8",
+    let posts_html = if posts.is_empty() {
+        "<p>No public posts yet.</p>".to_string()
+    } else {
+        posts
+            .iter()
+            .map(activitypub_actor_post_html)
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.5;color:#111827}}a{{color:#0f766e}}article{{border-top:1px solid #d1d5db;padding:18px 0}}time{{color:#6b7280;font-size:.9rem}}.summary{{color:#374151}}</style></head><body><header><h1>{}</h1><p class=\"summary\">{}</p><p><a rel=\"alternate\" type=\"application/activity+json\" href=\"/users/social/outbox\">ActivityPub outbox</a></p></header><main><h2>Public posts</h2>{}</main></body></html>",
+        escape_html(&display_name),
+        escape_html(&display_name),
+        escape_html(&summary),
+        posts_html,
+    )
+}
+
+fn activitypub_actor_post_html(row: &Map<String, Value>) -> String {
+    let id = string_field(Some(row), "id").unwrap_or_default();
+    let published = string_field(Some(row), "published_at").unwrap_or_default();
+    let permalink = if id.starts_with("http://") || id.starts_with("https://") {
+        id
+    } else {
+        format!("/users/social/posts/{}", escape_html(&id))
+    };
+    format!(
+        "<article><time>{}</time><div>{}</div><p><a href=\"{}\">Permalink</a></p></article>",
+        escape_html(&published),
+        mastodon_status_content(row),
+        escape_html(&permalink),
     )
 }
 
@@ -12226,16 +12257,52 @@ struct OwnerToken {
 #[cfg(test)]
 mod tests {
     use super::{
-        activitypub_watch_item, bluesky_actor_target, bluesky_appview_xrpc_url, bluesky_post_uri,
-        bluesky_watch_item, e2ee_device_fingerprint, normalize_ai_categories,
-        normalize_discovered_public_post, normalize_e2ee_device_id, normalize_e2ee_fingerprint,
-        normalize_e2ee_protocol, owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
-        owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
-        parse_lenient_json_body, parse_workers_ai_moderation, source_type_for_watch_kind,
-        strip_json_fence, tootfinder_search_items, tootfinder_search_url, OwnerPublicSearchOptions,
+        activitypub_actor_profile_html, activitypub_watch_item, bluesky_actor_target,
+        bluesky_appview_xrpc_url, bluesky_post_uri, bluesky_watch_item, e2ee_device_fingerprint,
+        normalize_ai_categories, normalize_discovered_public_post, normalize_e2ee_device_id,
+        normalize_e2ee_fingerprint, normalize_e2ee_protocol, owner_normalize_bluesky_post,
+        owner_normalize_tootfinder_status, owner_public_post_row_from_discovered,
+        owner_public_search_mastodon_query_params, parse_lenient_json_body,
+        parse_workers_ai_moderation, source_type_for_watch_kind, strip_json_fence,
+        tootfinder_search_items, tootfinder_search_url, OwnerProfile, OwnerPublicSearchOptions,
         OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
     };
     use serde_json::{Map, Value};
+
+    #[test]
+    fn actor_html_profile_includes_public_posts() {
+        let profile = OwnerProfile {
+            id: "https://social.dais.social/users/social".to_string(),
+            username: "social".to_string(),
+            actor_type: "Organization".to_string(),
+            display_name: Some("dais".to_string()),
+            summary: Some("<private-by-default>".to_string()),
+            icon: None,
+            image: None,
+            avatar_url: None,
+            header_url: None,
+            public_handle: "@social@dais.social".to_string(),
+            actor_url: "https://social.dais.social/users/social".to_string(),
+        };
+        let mut post = Map::new();
+        post.insert(
+            "id".to_string(),
+            Value::String("https://social.dais.social/users/social/posts/1".to_string()),
+        );
+        post.insert(
+            "content_html".to_string(),
+            Value::String("<p>Visible public update</p>".to_string()),
+        );
+        post.insert(
+            "published_at".to_string(),
+            Value::String("2026-06-24T12:00:00Z".to_string()),
+        );
+        let html = activitypub_actor_profile_html(&profile, &[post]);
+        assert!(html.contains("Public posts"));
+        assert!(html.contains("Visible public update"));
+        assert!(html.contains("&lt;private-by-default&gt;"));
+        assert!(html.contains("/users/social/outbox"));
+    }
 
     #[test]
     fn parses_workers_ai_json_reply() {
