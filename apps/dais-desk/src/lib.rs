@@ -3,10 +3,10 @@ use base64::Engine as _;
 use dais_client_core::{
     ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate, ModerationState,
     OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost, OwnerDeletedPost,
-    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eePeerDevice,
-    OwnerE2eePeerDeviceRef, OwnerE2eePeerTrustRequest, OwnerFollowResult, OwnerFollower,
-    OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerInteractionResult, OwnerMedia,
-    OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
+    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eeMessage,
+    OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef, OwnerE2eePeerTrustRequest, OwnerFollowResult,
+    OwnerFollower, OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerInteractionResult,
+    OwnerMedia, OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
     OwnerProfileUpdate, OwnerPublicSearchActor, OwnerPublicSearchPost, OwnerSavePost,
     OwnerSavedPost, OwnerSearchQuery, OwnerSearchResult, OwnerSection, OwnerSettings,
     OwnerSettingsUpdate, OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult,
@@ -104,6 +104,7 @@ pub struct DeskData {
     pub notifications: Vec<OwnerNotification>,
     pub deliveries: Vec<OwnerDelivery>,
     pub direct_messages: Vec<OwnerDirectMessage>,
+    pub e2ee_messages: Vec<OwnerE2eeMessage>,
     pub sources: OwnerSources,
     pub watches: OwnerSources,
     pub e2ee_devices: Vec<OwnerE2eeDevice>,
@@ -1539,6 +1540,7 @@ impl DeskController {
             let notifications = client.notifications().await.unwrap_or_default();
             let deliveries = client.deliveries().await.unwrap_or_default();
             let direct_messages = client.direct_messages().await.unwrap_or_default();
+            let e2ee_messages = client.e2ee_messages().await.unwrap_or_default();
             let sources = client.sources().await.unwrap_or_else(|_| OwnerSources {
                 subscriptions: Vec::new(),
                 items: Vec::new(),
@@ -1557,6 +1559,7 @@ impl DeskController {
                 notifications,
                 deliveries,
                 direct_messages,
+                e2ee_messages,
                 sources,
                 watches,
                 e2ee_devices,
@@ -3286,6 +3289,9 @@ impl DeskController {
         for post in &self.data.snapshot.posts {
             rows.push(post_row(post));
         }
+        for message in &self.data.e2ee_messages {
+            rows.push(e2ee_message_row(message));
+        }
         for delivery in self.data.deliveries.iter().filter(|d| d.status == "failed") {
             rows.push(delivery_attention_row(delivery));
         }
@@ -3354,6 +3360,7 @@ impl DeskController {
                 .filter(|d| d.status == "failed")
                 .map(delivery_attention_row),
         );
+        rows.extend(self.data.e2ee_messages.iter().map(e2ee_message_row));
         rows
     }
 
@@ -5883,6 +5890,67 @@ fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
     )
 }
 
+fn e2ee_message_row(message: &OwnerE2eeMessage) -> UiRow {
+    let peer = message
+        .recipient_actor_id
+        .as_deref()
+        .unwrap_or(message.sender_actor_id.as_str());
+    let delivery_summary = if message.delivery_statuses.is_empty() {
+        "Stored locally; no delivery row has been queued yet.".to_string()
+    } else {
+        let failed = message
+            .delivery_statuses
+            .iter()
+            .filter(|delivery| delivery.status == "failed")
+            .count();
+        let delivered = message
+            .delivery_statuses
+            .iter()
+            .filter(|delivery| delivery.status == "delivered")
+            .count();
+        let queued = message
+            .delivery_statuses
+            .iter()
+            .filter(|delivery| delivery.status == "queued")
+            .count();
+        format!("Delivery: {delivered} delivered, {queued} queued, {failed} failed")
+    };
+    let tone = if message
+        .delivery_statuses
+        .iter()
+        .any(|delivery| delivery.status == "failed")
+    {
+        "danger"
+    } else if message
+        .delivery_statuses
+        .iter()
+        .any(|delivery| delivery.status == "queued")
+    {
+        "warn"
+    } else {
+        "ok"
+    };
+    let detail = message
+        .fallback_content
+        .as_deref()
+        .unwrap_or("Encrypted payload is available only to trusted recipient devices.");
+    row_with_kind(
+        "message",
+        &format!("e2ee-message:{}", message.id),
+        &format!("Encrypted DM with {}", compact_actor(peer)),
+        message
+            .created_at
+            .as_deref()
+            .unwrap_or("Encrypted direct message"),
+        detail,
+        &delivery_summary,
+        "E2EE",
+        tone,
+        "",
+        "",
+    )
+}
+
 fn follower_row(follower: &OwnerFollower) -> UiRow {
     let status = follower.status.to_ascii_lowercase();
     let status_label = status.clone();
@@ -7406,6 +7474,38 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
             sender_id: "https://friend.example/users/ada".into(),
             content: "This should stay direct.".into(),
             published_at: "today".into(),
+            created_at: Some("today".into()),
+        }],
+        e2ee_messages: vec![OwnerE2eeMessage {
+            id: "https://social.dais.social/users/social/e2ee/messages/fixture".into(),
+            conversation_id: "e2ee-conversation-ada".into(),
+            sender_actor_id: "https://social.dais.social/users/social".into(),
+            sender_device_id: "macbook".into(),
+            recipient_actor_id: Some("https://friend.example/users/ada".into()),
+            encrypted_message: serde_json::json!({
+                "v": 1,
+                "alg": "AES-256-GCM",
+                "keyWrap": "RSA-OAEP-256",
+                "iv": "MDEyMzQ1Njc4OWFi",
+                "ciphertext": "Y2lwaGVydGV4dA==",
+                "recipients": [{ "keyId": "ada-phone", "wrappedKey": "d3JhcHBlZA==" }]
+            }),
+            fallback_content: Some("Encrypted message. Open in dais to decrypt.".into()),
+            delivery_ids: vec!["delivery-e2ee-queued".into()],
+            delivery_statuses: vec![OwnerDelivery {
+                id: "delivery-e2ee-queued".into(),
+                post_id: "https://social.dais.social/users/social/e2ee/messages/fixture".into(),
+                target_type: Some("inbox".into()),
+                target_url: "https://friend.example/inbox".into(),
+                protocol: "activitypub".into(),
+                status: "queued".into(),
+                retry_count: Some(0),
+                last_attempt_at: None,
+                error_message: None,
+                activity_type: Some("Create".into()),
+                created_at: Some("today".into()),
+                delivered_at: None,
+            }],
             created_at: Some("today".into()),
         }],
         sources: OwnerSources {
@@ -9424,6 +9524,21 @@ mod tests {
         );
         assert_eq!(rows[4].id.as_str(), "moderation-reply:mod-reply-sensitive");
         assert_eq!(rows[5].id.as_str(), "delivery:delivery-failed");
+    }
+
+    #[test]
+    fn encrypted_dm_rows_show_context_and_delivery_state() {
+        let controller = DeskController::fixture_for_tests();
+        for rows in [controller.home_today_rows(), controller.inbox_rows()] {
+            let row = rows
+                .iter()
+                .find(|row| row.id.starts_with("e2ee-message:"))
+                .expect("encrypted DM row");
+            assert_eq!(row.chip.as_str(), "E2EE");
+            assert_eq!(row.tone.as_str(), "warn");
+            assert!(row.title.contains("ada"));
+            assert!(row.meta.contains("queued"));
+        }
     }
 
     #[test]

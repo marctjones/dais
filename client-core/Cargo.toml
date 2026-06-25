@@ -6,9 +6,14 @@ license = "MIT"
 description = "Shared owner-client models and workflow state for dais CLI, TUI, Dais Desk, and future mobile clients"
 
 [dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rsa = { version = "0.9", features = ["sha2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 
 [dev-dependencies]
 serde_json = "1"

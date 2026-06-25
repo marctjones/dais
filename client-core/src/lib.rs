@@ -1,3 +1,5 @@
+pub mod e2ee;
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -197,6 +199,19 @@ impl OwnerApiClient {
         let response: OwnerItems<OwnerDirectMessage> =
             self.get("/api/dais/owner/direct-messages").await?;
         Ok(response.items)
+    }
+
+    pub async fn e2ee_messages(&self) -> ClientResult<Vec<OwnerE2eeMessage>> {
+        let response: OwnerItems<OwnerE2eeMessage> =
+            self.get("/api/dais/owner/e2ee/messages").await?;
+        Ok(response.items)
+    }
+
+    pub async fn send_e2ee_message(
+        &self,
+        message: &OwnerE2eeMessageSend,
+    ) -> ClientResult<OwnerE2eeMessageSendResult> {
+        self.post("/api/dais/owner/e2ee/messages", message).await
     }
 
     pub async fn e2ee_devices(&self) -> ClientResult<Vec<OwnerE2eeDevice>> {
@@ -886,6 +901,37 @@ pub struct OwnerDirectMessage {
     pub content: String,
     pub published_at: String,
     pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eeMessage {
+    pub id: String,
+    pub conversation_id: String,
+    pub sender_actor_id: String,
+    pub sender_device_id: String,
+    pub recipient_actor_id: Option<String>,
+    pub encrypted_message: serde_json::Value,
+    pub fallback_content: Option<String>,
+    #[serde(default)]
+    pub delivery_ids: Vec<String>,
+    #[serde(default)]
+    pub delivery_statuses: Vec<OwnerDelivery>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eeMessageSend {
+    pub recipient_actor_id: String,
+    pub sender_device_id: String,
+    pub encrypted_message: serde_json::Value,
+    pub fallback_content: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eeMessageSendResult {
+    pub ok: bool,
+    pub message: OwnerE2eeMessage,
+    pub delivery_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

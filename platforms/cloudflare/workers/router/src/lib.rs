@@ -3744,6 +3744,19 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Get, "/e2ee/messages") => api_json(
+            &OwnerItems {
+                items: owner_e2ee_messages(&env, limit).await?,
+            },
+            200,
+        ),
+        (worker::Method::Post, "/e2ee/messages") => {
+            let body = read_json(&mut req).await;
+            match owner_send_e2ee_message(&env, &body).await {
+                Ok(message) => api_json(&message, 201),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, "/e2ee/devices") => api_json(
             &OwnerItems {
                 items: owner_e2ee_devices(&env).await?,
@@ -6573,6 +6586,24 @@ async fn owner_delivery_by_id(env: &Env, id: &str) -> Result<Option<Map<String, 
     .await
 }
 
+async fn owner_delivery_rows_for_post(env: &Env, post_id: &str) -> Result<Vec<Map<String, Value>>> {
+    let post_arg = D1Type::Text(post_id);
+    env.d1("DB")?
+        .prepare(
+            r#"
+            SELECT id, post_id, target_type, target_url, protocol, status, retry_count,
+                   last_attempt_at, error_message, activity_type, created_at, delivered_at
+            FROM deliveries
+            WHERE post_id = ?1
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind_refs(&post_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()
+}
+
 async fn owner_update_delivery_status(
     env: &Env,
     id: &str,
@@ -6653,6 +6684,300 @@ async fn owner_direct_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, 
     .all()
     .await?
     .results::<Map<String, Value>>()
+}
+
+async fn owner_e2ee_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let local_actor = owner_local_actor(env).await?;
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT m.id, m.conversation_id, m.sender_actor_id, m.sender_device_id,
+                   m.ciphertext, m.aad, m.created_at, c.participants
+            FROM e2ee_messages m
+            JOIN e2ee_conversations c ON c.id = m.conversation_id
+            ORDER BY m.created_at DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(owner_e2ee_message_row(env, &local_actor.id, row).await?);
+    }
+    Ok(items)
+}
+
+async fn owner_send_e2ee_message(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let recipient_actor_id = public_https_url(
+        &body_string_any(
+            body,
+            &["recipient_actor_id", "recipientActorId", "recipient"],
+        )
+        .ok_or("recipientActorId is required")?,
+        "recipientActorId",
+    )?;
+    if recipient_actor_id == local_actor.id {
+        return Err("recipientActorId must be a remote actor".to_string());
+    }
+    let sender_device_id = normalize_e2ee_device_id(
+        &body_string_any(body, &["sender_device_id", "senderDeviceId"])
+            .ok_or("senderDeviceId is required")?,
+    )?;
+    let encrypted_message = body
+        .get("encrypted_message")
+        .or_else(|| body.get("encryptedMessage"))
+        .cloned()
+        .ok_or("encryptedMessage is required")?;
+    validate_encrypted_message_envelope(&encrypted_message)?;
+    let fallback_content = body_string_any(body, &["fallback_content", "fallbackContent"])
+        .unwrap_or_else(|| "Encrypted message. Open in a dais client to decrypt.".to_string());
+    if fallback_content.len() > 512 {
+        return Err("fallbackContent is too long".to_string());
+    }
+
+    let local_device =
+        owner_e2ee_device_by_actor_and_device(env, &local_actor.id, &sender_device_id)
+            .await
+            .map_err(|error| error.to_string())?;
+    match local_device
+        .as_ref()
+        .and_then(|row| string_field(Some(row), "status"))
+        .as_deref()
+    {
+        Some("active") => {}
+        _ => return Err("senderDeviceId is not an active local E2EE device".to_string()),
+    }
+
+    let recipient_device_id = body_string_any(body, &["recipient_device_id", "recipientDeviceId"]);
+    owner_require_trusted_e2ee_peer(env, &recipient_actor_id, recipient_device_id.as_deref())
+        .await?;
+    let inbox = owner_e2ee_inbox_for_actor(env, &recipient_actor_id).await?;
+
+    let mut participants = vec![local_actor.id.clone(), recipient_actor_id.clone()];
+    participants.sort();
+    let participants_json =
+        serde_json::to_string(&participants).map_err(|error| error.to_string())?;
+    let conversation_id = format!("e2ee-conversation-{}", stable_id(&participants.join("\n")));
+    let now = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let message_id = format!(
+        "{}/e2ee/messages/{}-{}",
+        local_actor.id,
+        timestamp_for_local_id(&now),
+        stable_id(&serde_json::to_string(&encrypted_message).unwrap_or_default())
+    );
+    let aad = serde_json::json!({
+        "recipientActorId": recipient_actor_id,
+        "fallbackContent": fallback_content,
+    });
+    let aad_json = serde_json::to_string(&aad).map_err(|error| error.to_string())?;
+    let ciphertext_json =
+        serde_json::to_string(&encrypted_message).map_err(|error| error.to_string())?;
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let conversation_arg = D1Type::Text(&conversation_id);
+    let participants_arg = D1Type::Text(&participants_json);
+    db.prepare(
+        r#"
+        INSERT INTO e2ee_conversations (id, protocol, participants, created_at, updated_at)
+        VALUES (?1, 'dais-mls-v1', ?2, datetime('now'), datetime('now'))
+        ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now')
+        "#,
+    )
+    .bind_refs(&[conversation_arg, participants_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let id_arg = D1Type::Text(&message_id);
+    let conversation_arg = D1Type::Text(&conversation_id);
+    let sender_actor_arg = D1Type::Text(&local_actor.id);
+    let sender_device_arg = D1Type::Text(&sender_device_id);
+    let ciphertext_arg = D1Type::Text(&ciphertext_json);
+    let aad_arg = D1Type::Text(&aad_json);
+    db.prepare(
+        r#"
+        INSERT INTO e2ee_messages (
+            id, conversation_id, sender_actor_id, sender_device_id, ciphertext, aad, created_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, datetime('now')
+        )
+        "#,
+    )
+    .bind_refs(&[
+        id_arg,
+        conversation_arg,
+        sender_actor_arg,
+        sender_device_arg,
+        ciphertext_arg,
+        aad_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let activity = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!("{message_id}#create"),
+        "type": "Create",
+        "actor": local_actor.id,
+        "published": now,
+        "to": [recipient_actor_id],
+        "object": {
+            "id": message_id,
+            "type": "Note",
+            "attributedTo": local_actor.id,
+            "to": [recipient_actor_id],
+            "published": now,
+            "content": fallback_content,
+            "encryptedMessage": encrypted_message,
+        }
+    });
+    let delivery_ids = insert_delivery_rows(
+        env,
+        &message_id,
+        vec![inbox],
+        "Create",
+        Some(activity.to_string()),
+    )
+    .await?;
+    let mut message = owner_e2ee_message_by_id(env, &local_actor.id, &message_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "message not found after insert".to_string())?;
+    message.insert(
+        "delivery_ids".to_string(),
+        Value::Array(
+            delivery_ids
+                .iter()
+                .map(|id| Value::String(id.clone()))
+                .collect(),
+        ),
+    );
+    let mut result = Map::new();
+    result.insert("ok".to_string(), Value::Bool(true));
+    result.insert("message".to_string(), Value::Object(message));
+    result.insert(
+        "delivery_ids".to_string(),
+        Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
+    );
+    Ok(result)
+}
+
+async fn owner_e2ee_message_by_id(
+    env: &Env,
+    local_actor_id: &str,
+    message_id: &str,
+) -> Result<Option<Map<String, Value>>> {
+    let message_arg = D1Type::Text(message_id);
+    let row = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT m.id, m.conversation_id, m.sender_actor_id, m.sender_device_id,
+                   m.ciphertext, m.aad, m.created_at, c.participants
+            FROM e2ee_messages m
+            JOIN e2ee_conversations c ON c.id = m.conversation_id
+            WHERE m.id = ?1
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&message_arg)?
+        .first::<Map<String, Value>>(None)
+        .await?;
+    match row {
+        Some(row) => Ok(Some(
+            owner_e2ee_message_row(env, local_actor_id, row).await?,
+        )),
+        None => Ok(None),
+    }
+}
+
+async fn owner_e2ee_message_row(
+    env: &Env,
+    local_actor_id: &str,
+    row: Map<String, Value>,
+) -> Result<Map<String, Value>> {
+    let message_id = string_field(Some(&row), "id").unwrap_or_default();
+    let aad = string_field(Some(&row), "aad")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let encrypted_message = string_field(Some(&row), "ciphertext")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or(Value::Null);
+    let participants = string_vec_json_field(Some(&row), "participants");
+    let recipient_actor_id = aad
+        .get("recipientActorId")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            participants
+                .iter()
+                .find(|actor_id| actor_id.as_str() != local_actor_id)
+                .cloned()
+        });
+    let fallback_content = aad
+        .get("fallbackContent")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let delivery_statuses = owner_delivery_rows_for_post(env, &message_id).await?;
+    let mut item = Map::new();
+    item.insert("id".to_string(), string_value_or_default(&row, "id"));
+    item.insert(
+        "conversation_id".to_string(),
+        string_value_or_default(&row, "conversation_id"),
+    );
+    item.insert(
+        "sender_actor_id".to_string(),
+        string_value_or_default(&row, "sender_actor_id"),
+    );
+    item.insert(
+        "sender_device_id".to_string(),
+        string_value_or_default(&row, "sender_device_id"),
+    );
+    item.insert(
+        "recipient_actor_id".to_string(),
+        recipient_actor_id.map(Value::String).unwrap_or(Value::Null),
+    );
+    item.insert("encrypted_message".to_string(), encrypted_message);
+    item.insert(
+        "fallback_content".to_string(),
+        fallback_content.map(Value::String).unwrap_or(Value::Null),
+    );
+    item.insert(
+        "delivery_ids".to_string(),
+        Value::Array(
+            delivery_statuses
+                .iter()
+                .filter_map(|delivery| string_field(Some(delivery), "id"))
+                .map(Value::String)
+                .collect(),
+        ),
+    );
+    item.insert(
+        "delivery_statuses".to_string(),
+        Value::Array(delivery_statuses.into_iter().map(Value::Object).collect()),
+    );
+    item.insert(
+        "created_at".to_string(),
+        row_value_or_null(&row, "created_at"),
+    );
+    Ok(item)
 }
 
 async fn public_e2ee_devices(env: &Env, actor_id: &str) -> Result<Vec<Value>> {
@@ -6962,6 +7287,83 @@ async fn owner_e2ee_peer_device_by_actor_and_device(
         .bind_refs(&[actor_arg, device_arg])?
         .first::<Map<String, Value>>(None)
         .await
+}
+
+async fn owner_require_trusted_e2ee_peer(
+    env: &Env,
+    actor_id: &str,
+    device_id: Option<&str>,
+) -> std::result::Result<(), String> {
+    if let Some(device_id) = device_id {
+        let device_id = normalize_e2ee_device_id(device_id)?;
+        let Some(peer) = owner_e2ee_peer_device_by_actor_and_device(env, actor_id, &device_id)
+            .await
+            .map_err(|error| error.to_string())?
+        else {
+            return Err("recipientDeviceId is not known".to_string());
+        };
+        if string_field(Some(&peer), "trust_state").as_deref() == Some("trusted") {
+            return Ok(());
+        }
+        return Err("recipientDeviceId is not trusted".to_string());
+    }
+
+    let actor_arg = D1Type::Text(actor_id);
+    let trusted = env
+        .d1("DB")
+        .map_err(|error| error.to_string())?
+        .prepare(
+            r#"
+            SELECT id
+            FROM e2ee_peer_devices
+            WHERE actor_id = ?1 AND trust_state = 'trusted'
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&actor_arg)
+        .map_err(|error| error.to_string())?
+        .first::<Map<String, Value>>(None)
+        .await
+        .map_err(|error| error.to_string())?;
+    trusted
+        .map(|_| ())
+        .ok_or_else(|| "recipient has no trusted E2EE device".to_string())
+}
+
+async fn owner_e2ee_inbox_for_actor(
+    env: &Env,
+    actor_id: &str,
+) -> std::result::Result<String, String> {
+    let actor_arg = D1Type::Text(actor_id);
+    let row = env
+        .d1("DB")
+        .map_err(|error| error.to_string())?
+        .prepare(
+            r#"
+            SELECT inbox FROM (
+                SELECT follower_inbox AS inbox, 0 AS rank
+                FROM followers
+                WHERE follower_actor_id = ?1 AND status = 'approved'
+                UNION ALL
+                SELECT target_inbox AS inbox, 1 AS rank
+                FROM following
+                WHERE target_actor_id = ?1 AND status IN ('accepted', 'pending')
+            )
+            WHERE inbox IS NOT NULL AND inbox <> ''
+            ORDER BY rank ASC
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&actor_arg)
+        .map_err(|error| error.to_string())?
+        .first::<Map<String, Value>>(None)
+        .await
+        .map_err(|error| error.to_string())?;
+    row.as_ref()
+        .and_then(|row| string_field(Some(row), "inbox"))
+        .ok_or_else(|| {
+            "recipient inbox is not known; follow or discover the actor first".to_string()
+        })
 }
 
 #[derive(Clone)]
@@ -11501,6 +11903,78 @@ fn required_e2ee_material(
     Ok(value)
 }
 
+fn validate_encrypted_message_envelope(value: &Value) -> std::result::Result<(), String> {
+    let envelope = value
+        .as_object()
+        .ok_or_else(|| "encryptedMessage must be an object".to_string())?;
+    match envelope.get("v").and_then(Value::as_u64) {
+        Some(1) => {}
+        Some(version) => return Err(format!("unsupported encryptedMessage version {version}")),
+        None => return Err("encryptedMessage.v is required".to_string()),
+    }
+    match envelope.get("alg").and_then(Value::as_str) {
+        Some("AES-256-GCM") => {}
+        Some(_) => return Err("encryptedMessage.alg must be AES-256-GCM".to_string()),
+        None => return Err("encryptedMessage.alg is required".to_string()),
+    }
+    match envelope.get("keyWrap").and_then(Value::as_str) {
+        Some("RSA-OAEP-256") | Some("RSA-OAEP-SHA256") => {}
+        Some(_) => {
+            return Err(
+                "encryptedMessage.keyWrap must be RSA-OAEP-256 or RSA-OAEP-SHA256".to_string(),
+            )
+        }
+        None => return Err("encryptedMessage.keyWrap is required".to_string()),
+    }
+    let iv = required_encrypted_base64(envelope, "iv")?;
+    if iv.len() != 12 {
+        return Err("encryptedMessage.iv must decode to 12 bytes".to_string());
+    }
+    if required_encrypted_base64(envelope, "ciphertext")?.is_empty() {
+        return Err("encryptedMessage.ciphertext must not be empty".to_string());
+    }
+    let recipients = envelope
+        .get("recipients")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "encryptedMessage.recipients must be an array".to_string())?;
+    if recipients.is_empty() {
+        return Err("encryptedMessage must include at least one recipient".to_string());
+    }
+    for recipient in recipients {
+        let recipient = recipient
+            .as_object()
+            .ok_or_else(|| "encryptedMessage recipient must be an object".to_string())?;
+        let key_id = recipient
+            .get("keyId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "encryptedMessage recipient keyId is required".to_string())?;
+        if key_id.len() > 512 {
+            return Err("encryptedMessage recipient keyId is too long".to_string());
+        }
+        if required_encrypted_base64(recipient, "wrappedKey")?.is_empty() {
+            return Err("encryptedMessage recipient wrappedKey must not be empty".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn required_encrypted_base64(
+    object: &Map<String, Value>,
+    key: &str,
+) -> std::result::Result<Vec<u8>, String> {
+    let value = object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("encryptedMessage.{key} is required"))?;
+    BASE64
+        .decode(value.as_bytes())
+        .map_err(|_| format!("encryptedMessage.{key} must be valid base64"))
+}
+
 fn e2ee_device_fingerprint(credential: &str, key_package: &str) -> String {
     let digest = Sha256::digest(format!("{credential}\n{key_package}").as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -12264,8 +12738,9 @@ mod tests {
         owner_normalize_tootfinder_status, owner_public_post_row_from_discovered,
         owner_public_search_mastodon_query_params, parse_lenient_json_body,
         parse_workers_ai_moderation, source_type_for_watch_kind, strip_json_fence,
-        tootfinder_search_items, tootfinder_search_url, OwnerProfile, OwnerPublicSearchOptions,
-        OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
+        tootfinder_search_items, tootfinder_search_url, validate_encrypted_message_envelope,
+        OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider,
+        OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
     };
     use serde_json::{Map, Value};
 
@@ -12345,6 +12820,55 @@ mod tests {
             fingerprint
         );
         assert!(normalize_e2ee_fingerprint("not-a-digest").is_err());
+    }
+
+    #[test]
+    fn validates_encrypted_message_envelope() {
+        let envelope = serde_json::json!({
+            "v": 1,
+            "alg": "AES-256-GCM",
+            "keyWrap": "RSA-OAEP-256",
+            "iv": "MDEyMzQ1Njc4OWFi",
+            "ciphertext": "Y2lwaGVydGV4dA==",
+            "recipients": [{
+                "keyId": "peer-device",
+                "wrappedKey": "d3JhcHBlZA=="
+            }]
+        });
+        assert!(validate_encrypted_message_envelope(&envelope).is_ok());
+    }
+
+    #[test]
+    fn rejects_bad_encrypted_message_envelope() {
+        let bad_version = serde_json::json!({
+            "v": 2,
+            "alg": "AES-256-GCM",
+            "keyWrap": "RSA-OAEP-256",
+            "iv": "MDEyMzQ1Njc4OWFi",
+            "ciphertext": "Y2lwaGVydGV4dA==",
+            "recipients": [{ "keyId": "peer-device", "wrappedKey": "d3JhcHBlZA==" }]
+        });
+        assert!(validate_encrypted_message_envelope(&bad_version).is_err());
+
+        let bad_wrapped_key = serde_json::json!({
+            "v": 1,
+            "alg": "AES-256-GCM",
+            "keyWrap": "RSA-OAEP-SHA256",
+            "iv": "MDEyMzQ1Njc4OWFi",
+            "ciphertext": "Y2lwaGVydGV4dA==",
+            "recipients": [{ "keyId": "peer-device", "wrappedKey": "not base64!" }]
+        });
+        assert!(validate_encrypted_message_envelope(&bad_wrapped_key).is_err());
+
+        let no_recipients = serde_json::json!({
+            "v": 1,
+            "alg": "AES-256-GCM",
+            "keyWrap": "RSA-OAEP-256",
+            "iv": "MDEyMzQ1Njc4OWFi",
+            "ciphertext": "Y2lwaGVydGV4dA==",
+            "recipients": []
+        });
+        assert!(validate_encrypted_message_envelope(&no_recipients).is_err());
     }
 
     #[test]
