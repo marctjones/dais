@@ -259,6 +259,18 @@ impl Default for WatchFormState {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SourceBundle {
+    pub id: String,
+    pub title: String,
+    pub watch_target: String,
+    pub source_url: String,
+    pub source_type: String,
+    pub cadence_minutes: String,
+    pub description: String,
+    pub custom: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ProfileFormState {
     pub actor_type: String,
@@ -470,6 +482,7 @@ pub struct DeskController {
     search_form: SearchFormState,
     source_form: SourceFormState,
     watch_form: WatchFormState,
+    custom_bundles: Vec<SourceBundle>,
     profile_form: ProfileFormState,
     profile_preview_fingerprint: Option<String>,
     audience_form: AudienceFormState,
@@ -520,6 +533,7 @@ impl DeskController {
             search_form: SearchFormState::default(),
             source_form: SourceFormState::default(),
             watch_form: WatchFormState::default(),
+            custom_bundles: Vec::new(),
             profile_form: ProfileFormState::default(),
             profile_preview_fingerprint: None,
             audience_form: AudienceFormState::default(),
@@ -557,6 +571,7 @@ impl DeskController {
             search_form: SearchFormState::default(),
             source_form: SourceFormState::default(),
             watch_form: WatchFormState::default(),
+            custom_bundles: Vec::new(),
             profile_form: ProfileFormState::default(),
             profile_preview_fingerprint: None,
             audience_form: AudienceFormState::default(),
@@ -851,7 +866,9 @@ impl DeskController {
         } else if action == "Save draft" {
             self.save_current_draft_inner()
         } else if action == "Use bundle" && row_id.starts_with("bundle:") {
-            self.use_starter_bundle(row_id.trim_start_matches("bundle:"))
+            self.use_source_bundle(row_id.trim_start_matches("bundle:"))
+        } else if action == "Delete bundle" && row_id.starts_with("bundle:custom:") {
+            self.delete_custom_source_bundle(row_id.trim_start_matches("bundle:custom:"))
         } else if action == "Open draft" && row_id.starts_with("draft:") {
             self.open_draft(row_id.trim_start_matches("draft:"))
         } else if action == "Delete draft" && row_id.starts_with("draft:") {
@@ -1762,34 +1779,87 @@ impl DeskController {
         ))
     }
 
-    fn use_starter_bundle(&mut self, bundle_id: &str) -> Result<String, String> {
-        let bundle = starter_bundle_rows()
+    pub fn save_custom_source_bundle(
+        &mut self,
+        id: &str,
+        title: &str,
+        watch_target: &str,
+        source_url: &str,
+        source_type: &str,
+        cadence_minutes: &str,
+        description: &str,
+    ) -> Result<String, String> {
+        let id = id.trim();
+        let title = title.trim();
+        if id.is_empty() {
+            return Err("bundle id is required".into());
+        }
+        if title.is_empty() {
+            return Err("bundle title is required".into());
+        }
+        if watch_target.trim().is_empty() && source_url.trim().is_empty() {
+            return Err("bundle needs at least one watch target or source URL".into());
+        }
+        let bundle = SourceBundle {
+            id: format!("custom:{id}"),
+            title: title.to_string(),
+            watch_target: watch_target.trim().to_string(),
+            source_url: source_url.trim().to_string(),
+            source_type: source_type.trim().if_empty("rss"),
+            cadence_minutes: cadence_minutes.trim().if_empty("120"),
+            description: description
+                .trim()
+                .if_empty("Review this custom source bundle before adding anything."),
+            custom: true,
+        };
+        if let Some(existing) = self
+            .custom_bundles
+            .iter_mut()
+            .find(|existing| existing.id == bundle.id)
+        {
+            *existing = bundle;
+            Ok(format!("Updated source bundle {title}."))
+        } else {
+            self.custom_bundles.push(bundle);
+            Ok(format!("Created source bundle {title}."))
+        }
+    }
+
+    pub fn delete_custom_source_bundle(&mut self, bundle_id: &str) -> Result<String, String> {
+        let full_id = format!("custom:{}", bundle_id.trim());
+        let before = self.custom_bundles.len();
+        self.custom_bundles
+            .retain(|bundle| bundle.id.as_str() != full_id);
+        if self.custom_bundles.len() == before {
+            Err("custom source bundle not found".into())
+        } else {
+            Ok("Deleted custom source bundle.".into())
+        }
+    }
+
+    fn use_source_bundle(&mut self, bundle_id: &str) -> Result<String, String> {
+        let bundle = self
+            .source_bundle_rows()
             .into_iter()
-            .find(|bundle| bundle.id.as_str() == format!("bundle:{bundle_id}"))
-            .ok_or_else(|| "starter bundle not found".to_string())?;
+            .find(|bundle| bundle.id.as_str() == bundle_id)
+            .ok_or_else(|| "source bundle not found".to_string())?;
         self.active_mode = "people".to_string();
         self.active_screen = "watches".to_string();
         self.source_form = SourceFormState {
-            source_type: "rss".into(),
-            url: bundle
-                .detail
-                .split_whitespace()
-                .find(|part| part.starts_with("https://"))
-                .unwrap_or("https://www.npr.org/rss/rss.php?id=1007")
-                .trim_end_matches('.')
-                .to_string(),
-            title: bundle.title.as_str().to_string(),
-            cadence_minutes: "120".into(),
+            source_type: bundle.source_type.clone(),
+            url: bundle.source_url.clone(),
+            title: bundle.title.clone(),
+            cadence_minutes: bundle.cadence_minutes.clone(),
         };
         self.watch_form = WatchFormState {
             watch_type: "activitypub_actor".into(),
-            target: bundle.subtitle.as_str().to_string(),
-            title: bundle.title.as_str().to_string(),
-            cadence_minutes: "120".into(),
+            target: bundle.watch_target.clone(),
+            title: bundle.title.clone(),
+            cadence_minutes: bundle.cadence_minutes.clone(),
         };
         self.selected_row = self.first_row_id();
         Ok(format!(
-            "Opened Watches & Sources with {} starter bundle values ready to review.",
+            "Opened Watches & Sources with {} source bundle values ready to review.",
             bundle.title
         ))
     }
@@ -3466,7 +3536,7 @@ impl DeskController {
                 .iter()
                 .map(search_source_item_row),
         );
-        rows.extend(starter_bundle_rows());
+        rows.extend(self.source_bundle_rows().into_iter().map(source_bundle_row));
         if rows.is_empty() {
             rows.push(row(
                 "find:empty",
@@ -3480,6 +3550,12 @@ impl DeskController {
             ));
         }
         rows
+    }
+
+    fn source_bundle_rows(&self) -> Vec<SourceBundle> {
+        let mut bundles = starter_bundles();
+        bundles.extend(self.custom_bundles.iter().cloned());
+        bundles
     }
 
     fn relationship_rows(&self) -> Vec<UiRow> {
@@ -6154,33 +6230,59 @@ fn public_actor_row(actor: &OwnerPublicSearchActor) -> UiRow {
     )
 }
 
-fn starter_bundle_rows() -> Vec<UiRow> {
+fn starter_bundles() -> Vec<SourceBundle> {
     vec![
-        row_with_kind(
-            "generic",
-            "bundle:science-news",
-            "Science and public-interest news starter pack",
-            "@science@mastodon.example",
-            "Review a private ActivityPub Watch plus an RSS source: https://www.npr.org/rss/rss.php?id=1007. Nothing is followed or watched until you confirm.",
-            "Starter pack: 1 watch, 1 source",
-            "Bundle",
-            "info",
-            "Use bundle",
-            "",
-        ),
-        row_with_kind(
-            "generic",
-            "bundle:research-institutes",
-            "Research institutes starter pack",
-            "@research@mastodon.example",
-            "Review public research accounts and institution feeds as private Watches/sources before adding them.",
-            "Starter pack: watches and feeds",
-            "Bundle",
-            "info",
-            "Use bundle",
-            "",
-        ),
+        SourceBundle {
+            id: "science-news".into(),
+            title: "Science and public-interest news starter pack".into(),
+            watch_target: "@science@mastodon.example".into(),
+            source_url: "https://www.npr.org/rss/rss.php?id=1007".into(),
+            source_type: "rss".into(),
+            cadence_minutes: "120".into(),
+            description: "Review a private ActivityPub Watch plus an RSS source. Nothing is followed or watched until you confirm.".into(),
+            custom: false,
+        },
+        SourceBundle {
+            id: "research-institutes".into(),
+            title: "Research institutes starter pack".into(),
+            watch_target: "@research@mastodon.example".into(),
+            source_url: "https://www.nature.com/nature.rss".into(),
+            source_type: "rss".into(),
+            cadence_minutes: "120".into(),
+            description: "Review public research accounts and institution feeds as private Watches/sources before adding them.".into(),
+            custom: false,
+        },
     ]
+}
+
+fn source_bundle_row(bundle: SourceBundle) -> UiRow {
+    let mut detail = bundle.description.clone();
+    if !bundle.watch_target.is_empty() {
+        detail.push_str(&format!(" Watch: {}.", bundle.watch_target));
+    }
+    if !bundle.source_url.is_empty() {
+        detail.push_str(&format!(" Source: {}.", bundle.source_url));
+    }
+    row_with_kind(
+        "generic",
+        &format!("bundle:{}", bundle.id),
+        &bundle.title,
+        if bundle.custom {
+            "Custom source bundle"
+        } else {
+            "Starter source bundle"
+        },
+        &detail,
+        if bundle.custom {
+            "Custom bundle"
+        } else {
+            "Starter pack"
+        },
+        "Bundle",
+        "info",
+        "Use bundle",
+        if bundle.custom { "Delete bundle" } else { "" },
+    )
 }
 
 fn actor_trust_signal(
@@ -8350,6 +8452,7 @@ mod tests {
                 | "Find people"
                 | "Add Watch"
                 | "Use bundle"
+                | "Delete bundle"
                 | "Inspect delivery"
                 | "Copy evidence"
                 | "Revoke media"
@@ -8673,7 +8776,76 @@ mod tests {
         );
         assert!(controller
             .status_message
-            .contains("starter bundle values ready to review"));
+            .contains("source bundle values ready to review"));
+        assert!(controller.data.watches.subscriptions.iter().all(|source| {
+            source.url != "https://www.npr.org/rss/rss.php?id=1007"
+                && source.url != "@science@mastodon.example"
+        }));
+    }
+
+    #[test]
+    fn custom_source_bundles_can_be_created_updated_reviewed_and_deleted() {
+        let mut controller = DeskController::fixture_for_tests();
+        let created = controller
+            .save_custom_source_bundle(
+                "local-news",
+                "Local news",
+                "@local@example.test",
+                "https://example.test/feed.xml",
+                "rss",
+                "45",
+                "Local public-interest sources.",
+            )
+            .expect("create bundle");
+        assert!(created.contains("Created source bundle"));
+
+        let rows = controller.find_rows();
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "bundle:custom:local-news"
+                && row.primary.as_str() == "Use bundle"
+                && row.secondary.as_str() == "Delete bundle"
+                && row.detail.contains("@local@example.test")
+                && row.detail.contains("https://example.test/feed.xml")));
+
+        controller.row_action("bundle:custom:local-news", "Use bundle");
+        assert_eq!(controller.active_screen, "watches");
+        assert_eq!(controller.watch_form.target, "@local@example.test");
+        assert_eq!(controller.source_form.url, "https://example.test/feed.xml");
+        assert_eq!(controller.source_form.cadence_minutes, "45");
+        assert!(controller
+            .status_message
+            .contains("source bundle values ready to review"));
+
+        let updated = controller
+            .save_custom_source_bundle(
+                "local-news",
+                "Local news updated",
+                "@local-updated@example.test",
+                "https://example.test/updated.xml",
+                "atom",
+                "90",
+                "Updated local source bundle.",
+            )
+            .expect("update bundle");
+        assert!(updated.contains("Updated source bundle"));
+        controller.row_action("bundle:custom:local-news", "Use bundle");
+        assert_eq!(controller.watch_form.target, "@local-updated@example.test");
+        assert_eq!(controller.source_form.source_type, "atom");
+        assert_eq!(
+            controller.source_form.url,
+            "https://example.test/updated.xml"
+        );
+        assert_eq!(controller.source_form.cadence_minutes, "90");
+
+        controller.row_action("bundle:custom:local-news", "Delete bundle");
+        assert!(controller
+            .status_message
+            .contains("Deleted custom source bundle"));
+        assert!(!controller
+            .find_rows()
+            .iter()
+            .any(|row| row.id.as_str() == "bundle:custom:local-news"));
     }
 
     #[test]
