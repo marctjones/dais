@@ -52,6 +52,8 @@ pub struct StoredOwnerAccount {
 pub struct StoredDrafts {
     #[serde(default)]
     pub drafts: Vec<StoredDraft>,
+    #[serde(default)]
+    pub source_bundles: Vec<SourceBundle>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -259,7 +261,7 @@ impl Default for WatchFormState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceBundle {
     pub id: String,
     pub title: String,
@@ -268,6 +270,7 @@ pub struct SourceBundle {
     pub source_type: String,
     pub cadence_minutes: String,
     pub description: String,
+    #[serde(default)]
     pub custom: bool,
 }
 
@@ -508,6 +511,7 @@ impl DeskController {
         let settings = load_settings_from(&settings_path)?;
         let drafts_path = drafts_path_for_settings(&settings_path);
         let drafts = load_drafts_from(&drafts_path)?;
+        let custom_bundles = drafts.source_bundles.clone();
         let active = active_account(&settings).cloned();
         let (account_form_label, account_form_url, account_form_token) = active
             .map(|account| {
@@ -533,7 +537,7 @@ impl DeskController {
             search_form: SearchFormState::default(),
             source_form: SourceFormState::default(),
             watch_form: WatchFormState::default(),
-            custom_bundles: Vec::new(),
+            custom_bundles,
             profile_form: ProfileFormState::default(),
             profile_preview_fingerprint: None,
             audience_form: AudienceFormState::default(),
@@ -1818,9 +1822,13 @@ impl DeskController {
             .find(|existing| existing.id == bundle.id)
         {
             *existing = bundle;
+            self.drafts.source_bundles = self.custom_bundles.clone();
+            persist_drafts_to(&self.drafts_path, self.drafts.clone())?;
             Ok(format!("Updated source bundle {title}."))
         } else {
             self.custom_bundles.push(bundle);
+            self.drafts.source_bundles = self.custom_bundles.clone();
+            persist_drafts_to(&self.drafts_path, self.drafts.clone())?;
             Ok(format!("Created source bundle {title}."))
         }
     }
@@ -1833,6 +1841,8 @@ impl DeskController {
         if self.custom_bundles.len() == before {
             Err("custom source bundle not found".into())
         } else {
+            self.drafts.source_bundles = self.custom_bundles.clone();
+            persist_drafts_to(&self.drafts_path, self.drafts.clone())?;
             Ok("Deleted custom source bundle.".into())
         }
     }
@@ -8786,6 +8796,8 @@ mod tests {
     #[test]
     fn custom_source_bundles_can_be_created_updated_reviewed_and_deleted() {
         let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        controller.drafts_path = temp_dir.path().join("owner-drafts.json");
         let created = controller
             .save_custom_source_bundle(
                 "local-news",
@@ -8846,6 +8858,41 @@ mod tests {
             .find_rows()
             .iter()
             .any(|row| row.id.as_str() == "bundle:custom:local-news"));
+    }
+
+    #[test]
+    fn custom_source_bundles_persist_in_local_desk_sidecar() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let settings_path = temp_dir.path().join("owner-settings.json");
+        persist_settings_to(&settings_path, StoredOwnerSettings::default()).expect("settings");
+
+        let mut controller = DeskController::new(settings_path.clone()).expect("controller");
+        controller
+            .save_custom_source_bundle(
+                "field-notes",
+                "Field notes",
+                "@field@example.test",
+                "https://example.test/field.atom",
+                "atom",
+                "30",
+                "Field reporting sources.",
+            )
+            .expect("save bundle");
+
+        let loaded = load_drafts_from(&controller.drafts_path).expect("loaded sidecar");
+        assert_eq!(loaded.source_bundles.len(), 1);
+        assert_eq!(loaded.source_bundles[0].id, "custom:field-notes");
+        assert_eq!(loaded.source_bundles[0].source_type, "atom");
+
+        let mut reloaded = DeskController::new(settings_path).expect("reloaded controller");
+        reloaded.row_action("bundle:custom:field-notes", "Use bundle");
+        assert_eq!(reloaded.active_screen, "watches");
+        assert_eq!(reloaded.watch_form.target, "@field@example.test");
+        assert_eq!(reloaded.source_form.url, "https://example.test/field.atom");
+
+        reloaded.row_action("bundle:custom:field-notes", "Delete bundle");
+        let loaded = load_drafts_from(&reloaded.drafts_path).expect("reloaded sidecar");
+        assert!(loaded.source_bundles.is_empty());
     }
 
     #[test]
