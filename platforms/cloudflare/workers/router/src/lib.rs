@@ -47,6 +47,7 @@ const DEFAULT_ACTIVITYPUB_SEARCH_SERVERS: &[&str] =
 const MAX_ACTIVITYPUB_SEARCH_SERVERS: usize = 5;
 const BLUESKY_APPVIEW_BASE_URL: &str = "https://api.bsky.app";
 const TOOTFINDER_SEARCH_BASE_URL: &str = "https://www.tootfinder.ch/rest/api/search";
+const LOCAL_ACTOR_URL: &str = "https://social.dais.social/users/social";
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -1581,14 +1582,15 @@ async fn handle_media(req: Request, env: Env, url: &worker::Url) -> Result<Respo
         return Response::error("HTTP Signature required", 401);
     }
 
-    let Some(object) = env
-        .bucket("MEDIA_BUCKET")?
-        .get(key.clone())
-        .execute()
-        .await?
-    else {
+    let bucket = env.bucket("MEDIA_BUCKET")?;
+    let Some(object) = bucket.get(key.clone()).execute().await? else {
         return Response::error("Not found", 404);
     };
+    let custom_metadata = object.custom_metadata()?;
+    if media_metadata_is_expired(&custom_metadata, js_sys::Date::now()) {
+        bucket.delete(key).await?;
+        return Response::error("Not found", 404);
+    }
     let bytes = match object.body() {
         Some(body) => body.bytes().await?,
         None => Vec::new(),
@@ -4163,6 +4165,7 @@ async fn owner_upload_media(
 
     let safe_name = safe_media_filename(&filename)?;
     let timestamp = current_media_timestamp();
+    let created_at = current_media_created_at();
     let token = random_token()?;
     let public_name = format!(
         "{}-{}-{}",
@@ -4179,17 +4182,22 @@ async fn owner_upload_media(
         format!("uploads/{public_name}")
     };
 
-    let mut custom_metadata = HashMap::new();
     let description = body.get("description").and_then(optional_body_string);
-    if let Some(description) = description.as_deref() {
-        custom_metadata.insert("description".to_string(), description.to_string());
-    }
-    if let Some(expires_at) = expires_at.as_deref() {
-        custom_metadata.insert("expires_at".to_string(), expires_at.to_string());
-    }
-    if require_authorized_fetch {
-        custom_metadata.insert("authorized_fetch".to_string(), "required".to_string());
-    }
+    let custom_metadata = media_custom_metadata(MediaMetadataInput {
+        owner: LOCAL_ACTOR_URL,
+        access: &access,
+        media_type: &media_type,
+        bytes: &bytes,
+        created_at: &created_at,
+        description: description.as_deref(),
+        expires_at: expires_at.as_deref(),
+        require_authorized_fetch,
+    });
+    let media_size = bytes.len() as u64;
+    let media_hash = custom_metadata
+        .get("sha256")
+        .cloned()
+        .unwrap_or_else(String::new);
 
     let mut http_metadata = worker::HttpMetadata::default();
     http_metadata.content_type = Some(media_type.clone());
@@ -4240,6 +4248,13 @@ async fn owner_upload_media(
     response.insert("url".to_string(), Value::String(url));
     response.insert("media_type".to_string(), Value::String(media_type));
     response.insert("access".to_string(), Value::String(access));
+    response.insert(
+        "owner".to_string(),
+        Value::String(LOCAL_ACTOR_URL.to_string()),
+    );
+    response.insert("size".to_string(), Value::from(media_size));
+    response.insert("hash".to_string(), Value::String(media_hash));
+    response.insert("created_at".to_string(), Value::String(created_at));
     response.insert(
         "authorized_fetch".to_string(),
         Value::Bool(require_authorized_fetch),
@@ -11574,6 +11589,52 @@ fn private_media_expires_at(value: Option<&Value>) -> std::result::Result<Option
         .as_string())
 }
 
+struct MediaMetadataInput<'a> {
+    owner: &'a str,
+    access: &'a str,
+    media_type: &'a str,
+    bytes: &'a [u8],
+    created_at: &'a str,
+    description: Option<&'a str>,
+    expires_at: Option<&'a str>,
+    require_authorized_fetch: bool,
+}
+
+fn media_custom_metadata(input: MediaMetadataInput<'_>) -> HashMap<String, String> {
+    let mut custom_metadata = HashMap::new();
+    custom_metadata.insert("owner".to_string(), input.owner.to_string());
+    custom_metadata.insert("visibility".to_string(), input.access.to_string());
+    custom_metadata.insert("media_type".to_string(), input.media_type.to_string());
+    custom_metadata.insert("size".to_string(), input.bytes.len().to_string());
+    custom_metadata.insert("sha256".to_string(), sha256_hex(input.bytes));
+    custom_metadata.insert("created_at".to_string(), input.created_at.to_string());
+    if let Some(description) = input.description {
+        custom_metadata.insert("description".to_string(), description.to_string());
+    }
+    if let Some(expires_at) = input.expires_at {
+        custom_metadata.insert("expires_at".to_string(), expires_at.to_string());
+    }
+    if input.require_authorized_fetch {
+        custom_metadata.insert("authorized_fetch".to_string(), "required".to_string());
+    }
+    custom_metadata
+}
+
+fn media_metadata_is_expired(metadata: &HashMap<String, String>, now_ms: f64) -> bool {
+    let Some(expires_at) = metadata.get("expires_at").map(String::as_str) else {
+        return false;
+    };
+    let expires_ms = js_sys::Date::parse(expires_at);
+    expires_ms.is_finite() && expires_ms <= now_ms
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn js_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
@@ -11593,6 +11654,13 @@ fn current_media_timestamp() -> String {
         .filter(|ch| !matches!(ch, '-' | ':' | 'T' | 'Z' | '.'))
         .take(14)
         .collect()
+}
+
+fn current_media_created_at() -> String {
+    js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default()
 }
 
 fn random_token() -> std::result::Result<String, String> {
@@ -12738,12 +12806,13 @@ mod tests {
     use super::{
         activitypub_actor_profile_html, activitypub_watch_item, bluesky_actor_target,
         bluesky_appview_xrpc_url, bluesky_post_uri, bluesky_watch_item, e2ee_device_fingerprint,
-        normalize_ai_categories, normalize_discovered_public_post, normalize_e2ee_device_id,
-        normalize_e2ee_fingerprint, normalize_e2ee_protocol, owner_normalize_bluesky_post,
-        owner_normalize_tootfinder_status, owner_public_post_row_from_discovered,
-        owner_public_search_mastodon_query_params, parse_lenient_json_body,
-        parse_workers_ai_moderation, source_type_for_watch_kind, strip_json_fence,
-        tootfinder_search_items, tootfinder_search_url, validate_encrypted_message_envelope,
+        media_custom_metadata, normalize_ai_categories, normalize_discovered_public_post,
+        normalize_e2ee_device_id, normalize_e2ee_fingerprint, normalize_e2ee_protocol,
+        owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
+        owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
+        parse_lenient_json_body, parse_workers_ai_moderation, sha256_hex,
+        source_type_for_watch_kind, strip_json_fence, tootfinder_search_items,
+        tootfinder_search_url, validate_encrypted_message_envelope, MediaMetadataInput,
         OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider,
         OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
     };
@@ -12825,6 +12894,56 @@ mod tests {
             fingerprint
         );
         assert!(normalize_e2ee_fingerprint("not-a-digest").is_err());
+    }
+
+    #[test]
+    fn media_metadata_records_storage_and_retention_fields() {
+        let bytes = b"private media";
+        let metadata = media_custom_metadata(MediaMetadataInput {
+            owner: "https://social.dais.social/users/social",
+            access: "private",
+            media_type: "image/png",
+            bytes,
+            created_at: "2026-06-26T08:00:00.000Z",
+            description: Some("alt text"),
+            expires_at: Some("2026-06-27T08:00:00.000Z"),
+            require_authorized_fetch: true,
+        });
+
+        assert_eq!(
+            metadata.get("owner").map(String::as_str),
+            Some("https://social.dais.social/users/social")
+        );
+        assert_eq!(
+            metadata.get("visibility").map(String::as_str),
+            Some("private")
+        );
+        assert_eq!(
+            metadata.get("media_type").map(String::as_str),
+            Some("image/png")
+        );
+        assert_eq!(metadata.get("size").map(String::as_str), Some("13"));
+        let expected_hash = sha256_hex(bytes);
+        assert_eq!(
+            metadata.get("sha256").map(String::as_str),
+            Some(expected_hash.as_str())
+        );
+        assert_eq!(
+            metadata.get("created_at").map(String::as_str),
+            Some("2026-06-26T08:00:00.000Z")
+        );
+        assert_eq!(
+            metadata.get("description").map(String::as_str),
+            Some("alt text")
+        );
+        assert_eq!(
+            metadata.get("expires_at").map(String::as_str),
+            Some("2026-06-27T08:00:00.000Z")
+        );
+        assert_eq!(
+            metadata.get("authorized_fetch").map(String::as_str),
+            Some("required")
+        );
     }
 
     #[test]

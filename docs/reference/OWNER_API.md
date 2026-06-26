@@ -29,7 +29,7 @@ Implemented endpoints:
 | `POST` | `/profile` | Update display name, actor type, summary, avatar/icon URL, and header image URL. |
 | `GET` | `/posts` | Recent local owner posts, including private and encrypted metadata. |
 | `POST` | `/posts` | Create a private-by-default ActivityPub owner post, with optional direct recipients, reply target, encryption flag, and ActivityStreams attachments. |
-| `POST` | `/media` | Upload public or private media and return attachment JSON for post creation. Private uploads may include `expires_in_seconds`, up to 30 days. |
+| `POST` | `/media` | Upload public or private media and return attachment JSON for post creation. Private uploads may include `expires_in_seconds`, up to 30 days. R2 objects store content type, byte size, owner, visibility, SHA-256 hash, creation timestamp, and optional retention metadata. |
 | `POST` | `/media/revoke` | Delete a previously uploaded media URL. |
 | `GET` | `/timeline/home` | Signed-in home timeline from accepted follows. |
 | `GET` | `/followers` | Local follower rows. |
@@ -111,8 +111,9 @@ Known gaps:
   watch-refresh`, and `dais owner watch-remove`. It can opt into public search
   with `dais owner search --scope public <term>` and can confirm a sensitive
   public search with `--confirm-public-sensitive`.
-- Private media capability URLs can expire automatically, but recipient-bound
-  authorized-fetch media access remains future hardening.
+- Private media can use bearer-style capability URLs or signed authorized-fetch
+  URLs. Expired private media returns `404` and is deleted opportunistically on
+  fetch; immediate removal uses `/media/revoke`.
 - Profile updates currently cover the fields reflected in ActivityPub actor
   JSON, the HTML profile page, and Mastodon account reads. Custom profile
   fields and per-field visibility controls remain future work.
