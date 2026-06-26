@@ -418,6 +418,7 @@ export component MainWindow inherits Window {
     callback run-filtered-search(string, string, string, string, string, string, string, string, string, string, string, string, string, string, bool);
     callback add-source(string, string, string, string);
     callback add-watch(string, string, string, string);
+    callback save-source-bundle(string, string, string, string, string, string);
     callback preview-profile(string, string, string, string, string);
     callback save-profile(string, string, string, string, string);
     callback save-audience(string, string, string, string, string);
@@ -977,6 +978,12 @@ export component MainWindow inherits Window {
                                     text: "Add Watch";
                                     clicked => {
                                         root.add-watch(root.watch-type, root.watch-target, root.watch-title, root.watch-cadence);
+                                    }
+                                }
+                                Button {
+                                    text: "Save bundle";
+                                    clicked => {
+                                        root.save-source-bundle(root.source-type, root.source-url, root.source-title, root.source-cadence, root.watch-target, root.watch-title);
                                     }
                                 }
                             }

@@ -1833,6 +1833,40 @@ impl DeskController {
         }
     }
 
+    pub fn save_source_bundle_from_forms(
+        &mut self,
+        source_type: &str,
+        source_url: &str,
+        source_title: &str,
+        source_cadence: &str,
+        watch_target: &str,
+        watch_title: &str,
+    ) {
+        let fallback_title = watch_title.trim().if_empty("Custom source bundle");
+        let title = source_title.trim().if_empty(&fallback_title);
+        let id = source_bundle_id_for(&title, source_url, watch_target);
+        let description = format!("Custom bundle saved from Desk Watches for {title}.");
+        match self.save_custom_source_bundle(
+            &id,
+            &title,
+            watch_target,
+            source_url,
+            source_type,
+            source_cadence,
+            &description,
+        ) {
+            Ok(message) => {
+                self.active_mode = "people".to_string();
+                self.active_screen = "find".to_string();
+                self.selected_row = format!("bundle:custom:{id}");
+                self.status_message = message;
+            }
+            Err(error) => {
+                self.status_message = format!("Save bundle failed: {error}");
+            }
+        }
+    }
+
     pub fn delete_custom_source_bundle(&mut self, bundle_id: &str) -> Result<String, String> {
         let full_id = format!("custom:{}", bundle_id.trim());
         let before = self.custom_bundles.len();
@@ -4783,6 +4817,24 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
             apply_controller_projection(&window, &ctrl);
         }
     });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_save_source_bundle(
+        move |source_type, source_url, source_title, source_cadence, watch_target, watch_title| {
+            if let Some(window) = weak.upgrade() {
+                ctrl.borrow_mut().save_source_bundle_from_forms(
+                    source_type.as_str(),
+                    source_url.as_str(),
+                    source_title.as_str(),
+                    source_cadence.as_str(),
+                    watch_target.as_str(),
+                    watch_title.as_str(),
+                );
+                apply_controller_projection(&window, &ctrl);
+            }
+        },
+    );
 
     let weak = window.as_weak();
     let ctrl = controller.clone();
@@ -8359,6 +8411,30 @@ fn draft_id_for(account_id: &str, updated_at: &str, text: &str) -> String {
     format!("draft-{:x}", hasher.finish())
 }
 
+fn source_bundle_id_for(title: &str, source_url: &str, watch_target: &str) -> String {
+    let fallback_seed = source_url.trim().if_empty(watch_target.trim());
+    let seed = title
+        .trim()
+        .if_empty(&fallback_seed)
+        .if_empty("source-bundle");
+    let mut slug = String::new();
+    for character in seed.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "source-bundle".to_string()
+    } else {
+        slug.chars().take(64).collect()
+    }
+}
+
 fn unix_timestamp_label() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -8893,6 +8969,42 @@ mod tests {
         reloaded.row_action("bundle:custom:field-notes", "Delete bundle");
         let loaded = load_drafts_from(&reloaded.drafts_path).expect("reloaded sidecar");
         assert!(loaded.source_bundles.is_empty());
+    }
+
+    #[test]
+    fn source_bundle_form_save_creates_visible_custom_bundle() {
+        let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        controller.drafts_path = temp_dir.path().join("owner-drafts.json");
+        controller.select_mode("people");
+        controller.select_screen("watches");
+
+        controller.save_source_bundle_from_forms(
+            "rss",
+            "https://example.test/local.xml",
+            "Local civic sources",
+            "30",
+            "@local@example.test",
+            "Local watch",
+        );
+
+        assert_eq!(controller.active_mode, "people");
+        assert_eq!(controller.active_screen, "find");
+        assert_eq!(controller.selected_row, "bundle:custom:local-civic-sources");
+        assert!(controller.status_message.contains("Created source bundle"));
+        let rows = controller.find_rows();
+        assert!(rows.iter().any(|row| {
+            row.id.as_str() == "bundle:custom:local-civic-sources"
+                && row.primary.as_str() == "Use bundle"
+                && row.secondary.as_str() == "Delete bundle"
+                && row.detail.contains("@local@example.test")
+                && row.detail.contains("https://example.test/local.xml")
+        }));
+
+        let loaded = load_drafts_from(&controller.drafts_path).expect("loaded sidecar");
+        assert_eq!(loaded.source_bundles.len(), 1);
+        assert_eq!(loaded.source_bundles[0].id, "custom:local-civic-sources");
+        assert_eq!(loaded.source_bundles[0].cadence_minutes, "30");
     }
 
     #[test]
