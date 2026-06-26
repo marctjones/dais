@@ -4,7 +4,7 @@ use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey, Verif
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 /// Refactored PDS (Personal Data Server) worker for AT Protocol
 ///
 /// This worker implements the AT Protocol endpoints for Bluesky compatibility.
@@ -213,6 +213,7 @@ async fn handle_upload_blob(mut req: Request, ctx: RouteContext<()>) -> Result<R
     if !owner_bearer_matches(&req, &ctx.env)? {
         return Response::error("Unauthorized", 401);
     }
+    let identity = identity(&ctx.env);
     let content_type = req
         .headers()
         .get("Content-Type")?
@@ -241,9 +242,14 @@ async fn handle_upload_blob(mut req: Request, ctx: RouteContext<()>) -> Result<R
     ));
     let ext = extension_for_media_type(&content_type);
     let key = format!("uploads/atproto/{cid}.{ext}");
+    let mut http_metadata = worker::HttpMetadata::default();
+    http_metadata.content_type = Some(content_type.clone());
+    let custom_metadata = atproto_blob_metadata(&identity.did, &cid, &content_type, &bytes);
     ctx.env
         .bucket("MEDIA_BUCKET")?
         .put(key, bytes)
+        .http_metadata(http_metadata)
+        .custom_metadata(custom_metadata)
         .execute()
         .await?;
     json_response(serde_json::json!({
@@ -293,9 +299,7 @@ async fn handle_get_repo(req: Request, ctx: RouteContext<()>) -> Result<Response
     response
         .headers_mut()
         .set("Content-Type", "application/vnd.ipld.car")?;
-    response
-        .headers_mut()
-        .set("Cache-Control", "no-store")?;
+    response.headers_mut().set("Cache-Control", "no-store")?;
     Ok(response)
 }
 
@@ -570,7 +574,13 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
     let cid = stable_cid(&record_json);
     let content_html = format!("<p>{}</p>", html_escape(text).replace('\n', "<br>"));
-    let media_attachments = atproto_media_attachments(&body.record)?;
+    let media_attachments = match atproto_media_attachments(&body.record) {
+        Ok(attachments) => attachments,
+        Err(error) => return Response::error(format!("Invalid image embed: {error}"), 400),
+    };
+    if let Err(error) = validate_atproto_media_blobs(&ctx.env, &media_attachments).await {
+        return Response::error(format!("Invalid image blob: {error}"), 400);
+    }
     let media_attachments_json = if media_attachments.is_empty() {
         String::new()
     } else {
@@ -1910,9 +1920,12 @@ fn subject_record_value(
         },
         "createdAt": string_field(row, "created_at")
     });
-    let cid = repo_record_block(repo_path_from_at_uri(&uri).unwrap_or_default(), value.clone())
-        .map(|block| block.cid.to_string())
-        .unwrap_or_else(|_| stable_cid(&format!("{}:{}", collection, subject_uri)));
+    let cid = repo_record_block(
+        repo_path_from_at_uri(&uri).unwrap_or_default(),
+        value.clone(),
+    )
+    .map(|block| block.cid.to_string())
+    .unwrap_or_else(|_| stable_cid(&format!("{}:{}", collection, subject_uri)));
     serde_json::json!({
         "uri": uri,
         "cid": cid,
@@ -1981,9 +1994,12 @@ fn follow_record_value(identity: &Identity, row: &serde_json::Map<String, Value>
         "subject": subject,
         "createdAt": string_field(row, "created_at")
     });
-    let cid = repo_record_block(repo_path_from_at_uri(&uri).unwrap_or_default(), value.clone())
-        .map(|block| block.cid.to_string())
-        .unwrap_or_else(|_| stable_cid(&format!("app.bsky.graph.follow:{subject}")));
+    let cid = repo_record_block(
+        repo_path_from_at_uri(&uri).unwrap_or_default(),
+        value.clone(),
+    )
+    .map(|block| block.cid.to_string())
+    .unwrap_or_else(|_| stable_cid(&format!("app.bsky.graph.follow:{subject}")));
     serde_json::json!({
         "uri": uri,
         "cid": cid,
@@ -2005,9 +2021,12 @@ async fn profile_record_response(env: &Env, identity: &Identity) -> Result<Value
 fn record_response(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
     let uri = at_uri(identity, &row);
     let value = record_value(row);
-    let cid = repo_record_block(repo_path_from_at_uri(&uri).unwrap_or_default(), value.clone())
-        .map(|block| block.cid.to_string())
-        .unwrap_or_else(|_| stable_cid(&uri));
+    let cid = repo_record_block(
+        repo_path_from_at_uri(&uri).unwrap_or_default(),
+        value.clone(),
+    )
+    .map(|block| block.cid.to_string())
+    .unwrap_or_else(|_| stable_cid(&uri));
     serde_json::json!({
         "uri": uri,
         "cid": cid,
@@ -2015,7 +2034,12 @@ fn record_response(identity: &Identity, row: serde_json::Map<String, Value>) -> 
     })
 }
 
-async fn create_record_response(env: &Env, identity: &Identity, uri: &str, record: &Value) -> Result<Response> {
+async fn create_record_response(
+    env: &Env,
+    identity: &Identity,
+    uri: &str,
+    record: &Value,
+) -> Result<Response> {
     let block = repo_record_block(repo_path_from_at_uri(uri)?, record.clone())?;
     let snapshot = repo_snapshot(env, identity).await?;
     json_response(serde_json::json!({
@@ -2041,9 +2065,12 @@ async fn delete_record_response(env: &Env, identity: &Identity, _rkey: &str) -> 
 fn post_view(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
     let uri = at_uri(identity, &row);
     let record = record_value(row.clone());
-    let cid = repo_record_block(repo_path_from_at_uri(&uri).unwrap_or_default(), record.clone())
-        .map(|block| block.cid.to_string())
-        .unwrap_or_else(|_| stable_cid(&uri));
+    let cid = repo_record_block(
+        repo_path_from_at_uri(&uri).unwrap_or_default(),
+        record.clone(),
+    )
+    .map(|block| block.cid.to_string())
+    .unwrap_or_else(|_| stable_cid(&uri));
     serde_json::json!({
         "uri": uri,
         "cid": cid,
@@ -2545,23 +2572,36 @@ fn map_ipld(entries: impl IntoIterator<Item = (impl Into<String>, Ipld)>) -> Ipl
 }
 
 fn profile_record_ipld(value: &Value) -> Result<Ipld> {
-    let mut entries = vec![("$type".to_string(), Ipld::String("app.bsky.actor.profile".to_string()))];
+    let mut entries = vec![(
+        "$type".to_string(),
+        Ipld::String("app.bsky.actor.profile".to_string()),
+    )];
     if let Some(display_name) = value.get("displayName").and_then(Value::as_str) {
-        entries.push(("displayName".to_string(), Ipld::String(display_name.to_string())));
+        entries.push((
+            "displayName".to_string(),
+            Ipld::String(display_name.to_string()),
+        ));
     }
     if let Some(description) = value.get("description").and_then(Value::as_str) {
-        entries.push(("description".to_string(), Ipld::String(description.to_string())));
+        entries.push((
+            "description".to_string(),
+            Ipld::String(description.to_string()),
+        ));
     }
     Ok(map_ipld(entries))
 }
 
 fn post_record_ipld(value: &Value) -> Result<Ipld> {
     let mut entries = vec![
-        ("$type".to_string(), Ipld::String("app.bsky.feed.post".to_string())),
+        (
+            "$type".to_string(),
+            Ipld::String("app.bsky.feed.post".to_string()),
+        ),
         (
             "text".to_string(),
             Ipld::String(
-                value.get("text")
+                value
+                    .get("text")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
@@ -2570,7 +2610,8 @@ fn post_record_ipld(value: &Value) -> Result<Ipld> {
         (
             "createdAt".to_string(),
             Ipld::String(
-                value.get("createdAt")
+                value
+                    .get("createdAt")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
@@ -2633,12 +2674,7 @@ fn reply_ref_ipld(value: &serde_json::Map<String, Value>) -> Result<Ipld> {
 fn strong_ref_ipld(value: &serde_json::Map<String, Value>) -> Result<Ipld> {
     let uri = value.get("uri").and_then(Value::as_str).unwrap_or_default();
     Ok(map_ipld([
-        (
-            "uri",
-            Ipld::String(
-                uri.to_string(),
-            ),
-        ),
+        ("uri", Ipld::String(uri.to_string())),
         (
             "cid",
             cid_link_or_fallback(
@@ -2663,17 +2699,25 @@ fn embed_ipld(value: &serde_json::Map<String, Value>) -> Result<Ipld> {
         .iter()
         .map(|image| {
             let Some(image) = image.as_object() else {
-                return Err(worker::Error::RustError("embed image must be an object".to_string()));
+                return Err(worker::Error::RustError(
+                    "embed image must be an object".to_string(),
+                ));
             };
             let blob = image
                 .get("image")
                 .and_then(Value::as_object)
-                .ok_or_else(|| worker::Error::RustError("embed image blob is required".to_string()))?;
+                .ok_or_else(|| {
+                    worker::Error::RustError("embed image blob is required".to_string())
+                })?;
             Ok(map_ipld([
                 (
                     "alt",
                     Ipld::String(
-                        image.get("alt").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        image
+                            .get("alt")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
                     ),
                 ),
                 (
@@ -2703,7 +2747,10 @@ fn embed_ipld(value: &serde_json::Map<String, Value>) -> Result<Ipld> {
                         (
                             "size",
                             Ipld::Integer(
-                                blob.get("size").and_then(Value::as_u64).unwrap_or_default().into(),
+                                blob.get("size")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or_default()
+                                    .into(),
                             ),
                         ),
                     ]),
@@ -2731,14 +2778,14 @@ fn subject_record_ipld(value: &Value, record_type: &str) -> Result<Ipld> {
         (
             "subject",
             map_ipld([
-                (
-                    "uri",
-                    Ipld::String(subject_uri.to_string()),
-                ),
+                ("uri", Ipld::String(subject_uri.to_string())),
                 (
                     "cid",
                     cid_link_or_fallback(
-                        subject.get("cid").and_then(Value::as_str).unwrap_or_default(),
+                        subject
+                            .get("cid")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
                         subject_uri,
                     )?,
                 ),
@@ -2747,7 +2794,8 @@ fn subject_record_ipld(value: &Value, record_type: &str) -> Result<Ipld> {
         (
             "createdAt",
             Ipld::String(
-                value.get("createdAt")
+                value
+                    .get("createdAt")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
@@ -2762,7 +2810,8 @@ fn follow_record_ipld(value: &Value) -> Result<Ipld> {
         (
             "subject",
             Ipld::String(
-                value.get("subject")
+                value
+                    .get("subject")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
@@ -2771,7 +2820,8 @@ fn follow_record_ipld(value: &Value) -> Result<Ipld> {
         (
             "createdAt",
             Ipld::String(
-                value.get("createdAt")
+                value
+                    .get("createdAt")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
@@ -2861,7 +2911,10 @@ fn mst_node_block(
         entry.insert("p".to_string(), Ipld::Integer((prefix_len as i64).into()));
         entry.insert("k".to_string(), Ipld::Bytes(key[prefix_len..].to_vec()));
         entry.insert("v".to_string(), Ipld::Link(record.cid));
-        if let Some(range) = entry_ranges.get(index + 1).filter(|range| !range.is_empty()) {
+        if let Some(range) = entry_ranges
+            .get(index + 1)
+            .filter(|range| !range.is_empty())
+        {
             let (child_cid, blocks) = mst_subtree(records, range.clone(), level + 1)?;
             entry.insert("t".to_string(), Ipld::Link(child_cid));
             ordered_blocks.push(record.clone().into());
@@ -2872,10 +2925,7 @@ fn mst_node_block(
         node_entries.push(Ipld::Map(entry));
     }
     let mut node = BTreeMap::new();
-    node.insert(
-        "l".to_string(),
-        left.map(Ipld::Link).unwrap_or(Ipld::Null),
-    );
+    node.insert("l".to_string(), left.map(Ipld::Link).unwrap_or(Ipld::Null));
     node.insert("e".to_string(), Ipld::List(node_entries));
     let bytes = dag_cbor_bytes(&Ipld::Map(node))?;
     let cid = dag_cbor_cid(&bytes);
@@ -2898,11 +2948,16 @@ fn mst_subtree(
     let local_positions: Vec<usize> = slice
         .iter()
         .enumerate()
-        .filter_map(|(index, record)| (repo_key_depth(record.path.as_bytes()) == level).then_some(index))
+        .filter_map(|(index, record)| {
+            (repo_key_depth(record.path.as_bytes()) == level).then_some(index)
+        })
         .collect();
     if local_positions.is_empty() {
         let (child_cid, child_blocks) = mst_subtree(records, range, level + 1)?;
-        let bytes = dag_cbor_bytes(&map_ipld([("l", Ipld::Link(child_cid)), ("e", Ipld::List(vec![]))]))?;
+        let bytes = dag_cbor_bytes(&map_ipld([
+            ("l", Ipld::Link(child_cid)),
+            ("e", Ipld::List(vec![])),
+        ]))?;
         let cid = dag_cbor_cid(&bytes);
         let mut blocks = vec![CarBlock { cid, bytes }];
         blocks.extend(child_blocks);
@@ -2978,13 +3033,17 @@ async fn repo_snapshot(env: &Env, identity: &Identity) -> Result<RepoSnapshot> {
     let mut records = Vec::new();
     records.push(RepoRecord {
         path: "app.bsky.actor.profile/self".to_string(),
-        value: profile_record_response(env, identity).await?
+        value: profile_record_response(env, identity)
+            .await?
             .get("value")
             .cloned()
             .unwrap_or(Value::Null),
     });
 
-    let mut page = Page { limit: 100, offset: 0 };
+    let mut page = Page {
+        limit: 100,
+        offset: 0,
+    };
     loop {
         let rows = public_posts(env, page).await?;
         let done = rows.len() <= page.limit as usize;
@@ -3005,12 +3064,18 @@ async fn repo_snapshot(env: &Env, identity: &Identity) -> Result<RepoSnapshot> {
         ("app.bsky.feed.like", "like"),
         ("app.bsky.feed.repost", "boost"),
     ] {
-        let mut page = Page { limit: 100, offset: 0 };
+        let mut page = Page {
+            limit: 100,
+            offset: 0,
+        };
         loop {
             let values = subject_records(env, identity, collection, interaction_type, page).await?;
             let done = values.len() <= page.limit as usize;
             for record in values.into_iter().take(page.limit as usize) {
-                let uri = record.get("uri").and_then(Value::as_str).unwrap_or_default();
+                let uri = record
+                    .get("uri")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 records.push(RepoRecord {
                     path: repo_path_from_at_uri(uri)?,
                     value: record.get("value").cloned().unwrap_or(Value::Null),
@@ -3023,12 +3088,18 @@ async fn repo_snapshot(env: &Env, identity: &Identity) -> Result<RepoSnapshot> {
         }
     }
 
-    let mut page = Page { limit: 100, offset: 0 };
+    let mut page = Page {
+        limit: 100,
+        offset: 0,
+    };
     loop {
         let values = follow_records(env, identity, page).await?;
         let done = values.len() <= page.limit as usize;
         for record in values.into_iter().take(page.limit as usize) {
-            let uri = record.get("uri").and_then(Value::as_str).unwrap_or_default();
+            let uri = record
+                .get("uri")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             records.push(RepoRecord {
                 path: repo_path_from_at_uri(uri)?,
                 value: record.get("value").cloned().unwrap_or(Value::Null),
@@ -3147,7 +3218,9 @@ fn repo_path_from_at_uri(uri: &str) -> Result<String> {
     let collection = parts.next().unwrap_or_default();
     let rkey = parts.next().unwrap_or_default();
     if collection.is_empty() || rkey.is_empty() {
-        return Err(worker::Error::RustError(format!("invalid at-uri path: {uri}")));
+        return Err(worker::Error::RustError(format!(
+            "invalid at-uri path: {uri}"
+        )));
     }
     Ok(format!("{collection}/{rkey}"))
 }
@@ -3163,7 +3236,10 @@ impl From<RepoRecordBlock> for CarBlock {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_car, mst_subtree, repo_key_depth, repo_record_block, stable_cid};
+    use super::{
+        atproto_media_attachments, encode_car, mst_subtree, r2_key_from_media_url, repo_key_depth,
+        repo_record_block, stable_cid,
+    };
     use serde_json::json;
 
     #[test]
@@ -3177,6 +3253,78 @@ mod tests {
     #[test]
     fn stable_cid_changes_with_input() {
         assert_ne!(stable_cid("dais-a"), stable_cid("dais-b"));
+    }
+
+    #[test]
+    fn atproto_image_embed_converts_to_public_media_attachment() {
+        let record = json!({
+            "$type": "app.bsky.feed.post",
+            "text": "image",
+            "embed": {
+                "$type": "app.bsky.embed.images",
+                "images": [{
+                    "alt": "diagram",
+                    "image": {
+                        "$type": "blob",
+                        "ref": { "$link": "bafybeidaisimage" },
+                        "mimeType": "image/png",
+                        "size": 123
+                    }
+                }]
+            }
+        });
+
+        let attachments = atproto_media_attachments(&record).expect("valid attachments");
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].attachment_type, "Image");
+        assert_eq!(attachments[0].cid, "bafybeidaisimage");
+        assert_eq!(attachments[0].media_type, "image/png");
+        assert_eq!(attachments[0].size, 123);
+        assert_eq!(attachments[0].name, "diagram");
+        assert_eq!(
+            attachments[0].url,
+            "https://social.dais.social/media/uploads/atproto/bafybeidaisimage.png"
+        );
+    }
+
+    #[test]
+    fn atproto_image_embed_rejects_non_image_blob() {
+        let record = json!({
+            "$type": "app.bsky.feed.post",
+            "text": "bad image",
+            "embed": {
+                "$type": "app.bsky.embed.images",
+                "images": [{
+                    "alt": "not an image",
+                    "image": {
+                        "$type": "blob",
+                        "ref": { "$link": "bafybeidaisfile" },
+                        "mimeType": "application/pdf",
+                        "size": 123
+                    }
+                }]
+            }
+        });
+
+        assert!(atproto_media_attachments(&record).is_err());
+    }
+
+    #[test]
+    fn r2_key_from_media_url_accepts_only_local_public_uploads() {
+        assert_eq!(
+            r2_key_from_media_url(
+                "https://social.dais.social/media/uploads/atproto/bafybeidaisimage.png"
+            )
+            .as_deref(),
+            Some("uploads/atproto/bafybeidaisimage.png")
+        );
+        assert!(r2_key_from_media_url(
+            "https://social.dais.social/media/uploads/_private_signed/image.png"
+        )
+        .is_none());
+        assert!(
+            r2_key_from_media_url("https://example.com/media/uploads/atproto/image.png").is_none()
+        );
     }
 
     #[test]
@@ -3297,6 +3445,54 @@ fn atproto_media_attachments(record: &Value) -> Result<Vec<MediaAttachment>> {
     Ok(attachments)
 }
 
+async fn validate_atproto_media_blobs(env: &Env, attachments: &[MediaAttachment]) -> Result<()> {
+    let bucket = env.bucket("MEDIA_BUCKET")?;
+    for attachment in attachments {
+        let Some(key) = r2_key_from_media_url(&attachment.url) else {
+            return Err(worker::Error::RustError(
+                "image blob URL must point at local public media".to_string(),
+            ));
+        };
+        let Some(object) = bucket.get(key).execute().await? else {
+            return Err(worker::Error::RustError(
+                "image blob must be uploaded before creating a post".to_string(),
+            ));
+        };
+        let metadata = object.custom_metadata()?;
+        if metadata.get("cid").map(String::as_str) != Some(attachment.cid.as_str()) {
+            return Err(worker::Error::RustError(
+                "image blob metadata does not match record CID".to_string(),
+            ));
+        }
+        if let Some(media_type) = metadata.get("media_type") {
+            if media_type != &attachment.media_type {
+                return Err(worker::Error::RustError(
+                    "image blob metadata does not match record mime type".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn atproto_blob_metadata(
+    owner: &str,
+    cid: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> HashMap<String, String> {
+    let mut custom_metadata = HashMap::new();
+    custom_metadata.insert("owner".to_string(), owner.to_string());
+    custom_metadata.insert("visibility".to_string(), "public".to_string());
+    custom_metadata.insert("protocol".to_string(), "atproto".to_string());
+    custom_metadata.insert("cid".to_string(), cid.to_string());
+    custom_metadata.insert("media_type".to_string(), content_type.to_string());
+    custom_metadata.insert("size".to_string(), bytes.len().to_string());
+    custom_metadata.insert("sha256".to_string(), sha256_hex(bytes));
+    custom_metadata.insert("created_at".to_string(), current_iso_timestamp());
+    custom_metadata
+}
+
 fn r2_key_from_media_url(url: &str) -> Option<String> {
     let parsed = Url::parse(url).ok()?;
     if parsed.scheme() != "https" || parsed.host_str()? != "social.dais.social" {
@@ -3316,6 +3512,20 @@ fn media_attachment_cid(attachment: &MediaAttachment) -> String {
     } else {
         attachment.cid.clone()
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn current_iso_timestamp() -> String {
+    js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default()
 }
 
 fn extension_for_media_type(media_type: &str) -> &'static str {
