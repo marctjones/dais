@@ -786,7 +786,7 @@ export component MainWindow inherits Window {
 
                                 Button {
                                     text: root.compose-visibility == "public" ? "Post Publicly" : "Send";
-                                    enabled: root.compose-text != "" && (root.compose-visibility != "direct" || root.compose-recipients != "" || root.compose-audience-list != "");
+                                    enabled: root.compose-can-send;
                                     clicked => {
                                         root.compose-send();
                                     }

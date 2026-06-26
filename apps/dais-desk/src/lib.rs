@@ -9202,6 +9202,34 @@ mod tests {
     }
 
     #[test]
+    fn compose_projection_disables_send_for_media_failures() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.compose = ComposeState {
+            text: "private photo".into(),
+            visibility: Visibility::Followers,
+            protocol: ProtocolRoute::ActivityPub,
+            attachments: vec!["https://social.dais.social/media/uploads/photo.png".into()],
+            ..ComposeState::default()
+        };
+
+        let projection = controller.projection();
+        assert!(!projection.compose_can_send);
+        assert_eq!(
+            projection.compose_warning,
+            "Private and direct posts require private media upload URLs."
+        );
+    }
+
+    #[test]
+    fn compose_send_button_uses_controller_gate() {
+        let slint = include_str!("../ui/app.slint");
+        assert!(
+            slint.contains("enabled: root.compose-can-send;"),
+            "Compose Send button must use the controller gate so media, encryption, protocol, and direct-recipient failures disable the UI action"
+        );
+    }
+
+    #[test]
     fn compose_allows_private_media_on_private_posts() {
         let compose = ComposeState {
             text: "private photo".into(),
