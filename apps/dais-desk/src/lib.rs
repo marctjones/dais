@@ -8925,6 +8925,10 @@ mod tests {
         assert!(row.detail.contains("attribution required"));
         assert!(row.detail.contains("no image reuse"));
         assert!(row.detail.contains("no remote relationship"));
+        assert_eq!(row.primary.as_str(), "Open link");
+        assert_eq!(row.secondary.as_str(), "Save");
+        assert_ne!(row.primary.as_str(), "Boost");
+        assert_ne!(row.secondary.as_str(), "Repost");
     }
 
     #[test]
