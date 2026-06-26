@@ -265,6 +265,8 @@ impl Default for WatchFormState {
 pub struct SourceBundle {
     pub id: String,
     pub title: String,
+    #[serde(default)]
+    pub follow_target: String,
     pub watch_target: String,
     pub source_url: String,
     pub source_type: String,
@@ -436,6 +438,7 @@ pub struct UiProjection {
     pub watch_target: String,
     pub watch_title: String,
     pub watch_cadence: String,
+    pub bundle_follow_target: String,
     pub profile_actor_type: String,
     pub profile_display_name: String,
     pub profile_summary: String,
@@ -485,6 +488,7 @@ pub struct DeskController {
     search_form: SearchFormState,
     source_form: SourceFormState,
     watch_form: WatchFormState,
+    bundle_follow_target: String,
     custom_bundles: Vec<SourceBundle>,
     profile_form: ProfileFormState,
     profile_preview_fingerprint: Option<String>,
@@ -537,6 +541,7 @@ impl DeskController {
             search_form: SearchFormState::default(),
             source_form: SourceFormState::default(),
             watch_form: WatchFormState::default(),
+            bundle_follow_target: String::new(),
             custom_bundles,
             profile_form: ProfileFormState::default(),
             profile_preview_fingerprint: None,
@@ -575,6 +580,7 @@ impl DeskController {
             search_form: SearchFormState::default(),
             source_form: SourceFormState::default(),
             watch_form: WatchFormState::default(),
+            bundle_follow_target: String::new(),
             custom_bundles: Vec::new(),
             profile_form: ProfileFormState::default(),
             profile_preview_fingerprint: None,
@@ -1529,6 +1535,7 @@ impl DeskController {
             watch_target: self.watch_form.target.clone(),
             watch_title: self.watch_form.title.clone(),
             watch_cadence: self.watch_form.cadence_minutes.clone(),
+            bundle_follow_target: self.bundle_follow_target.clone(),
             profile_actor_type: self.profile_form.actor_type.clone(),
             profile_display_name: self.profile_form.display_name.clone(),
             profile_summary: self.profile_form.summary.clone(),
@@ -1793,6 +1800,29 @@ impl DeskController {
         cadence_minutes: &str,
         description: &str,
     ) -> Result<String, String> {
+        self.save_custom_source_bundle_with_follow(
+            id,
+            title,
+            "",
+            watch_target,
+            source_url,
+            source_type,
+            cadence_minutes,
+            description,
+        )
+    }
+
+    pub fn save_custom_source_bundle_with_follow(
+        &mut self,
+        id: &str,
+        title: &str,
+        follow_target: &str,
+        watch_target: &str,
+        source_url: &str,
+        source_type: &str,
+        cadence_minutes: &str,
+        description: &str,
+    ) -> Result<String, String> {
         let id = id.trim();
         let title = title.trim();
         if id.is_empty() {
@@ -1801,12 +1831,18 @@ impl DeskController {
         if title.is_empty() {
             return Err("bundle title is required".into());
         }
-        if watch_target.trim().is_empty() && source_url.trim().is_empty() {
-            return Err("bundle needs at least one watch target or source URL".into());
+        if follow_target.trim().is_empty()
+            && watch_target.trim().is_empty()
+            && source_url.trim().is_empty()
+        {
+            return Err(
+                "bundle needs at least one follow target, watch target, or source URL".into(),
+            );
         }
         let bundle = SourceBundle {
             id: format!("custom:{id}"),
             title: title.to_string(),
+            follow_target: follow_target.trim().to_string(),
             watch_target: watch_target.trim().to_string(),
             source_url: source_url.trim().to_string(),
             source_type: source_type.trim().if_empty("rss"),
@@ -1841,14 +1877,16 @@ impl DeskController {
         source_cadence: &str,
         watch_target: &str,
         watch_title: &str,
+        follow_target: &str,
     ) {
         let fallback_title = watch_title.trim().if_empty("Custom source bundle");
         let title = source_title.trim().if_empty(&fallback_title);
         let id = source_bundle_id_for(&title, source_url, watch_target);
         let description = format!("Custom bundle saved from Desk Watches for {title}.");
-        match self.save_custom_source_bundle(
+        match self.save_custom_source_bundle_with_follow(
             &id,
             &title,
+            follow_target,
             watch_target,
             source_url,
             source_type,
@@ -1895,13 +1933,18 @@ impl DeskController {
             title: bundle.title.clone(),
             cadence_minutes: bundle.cadence_minutes.clone(),
         };
+        self.bundle_follow_target = bundle.follow_target.clone();
         self.watch_form = WatchFormState {
             watch_type: "activitypub_actor".into(),
             target: bundle.watch_target.clone(),
             title: bundle.title.clone(),
             cadence_minutes: bundle.cadence_minutes.clone(),
         };
-        self.selected_row = self.first_row_id();
+        self.selected_row = if bundle.follow_target.is_empty() {
+            self.first_row_id()
+        } else {
+            format!("actor:{}", bundle.follow_target)
+        };
         Ok(format!(
             "Opened Watches & Sources with {} source bundle values ready to review.",
             bundle.title
@@ -3673,13 +3716,20 @@ impl DeskController {
     }
 
     fn watch_rows(&self) -> Vec<UiRow> {
-        let mut rows: Vec<UiRow> = self
-            .data
-            .watches
-            .subscriptions
-            .iter()
-            .map(watch_subscription_row)
-            .collect();
+        let mut rows = Vec::new();
+        if !self.bundle_follow_target.trim().is_empty() {
+            rows.push(source_bundle_follow_row(
+                &self.bundle_follow_target,
+                &self.watch_form.title,
+            ));
+        }
+        rows.extend(
+            self.data
+                .watches
+                .subscriptions
+                .iter()
+                .map(watch_subscription_row),
+        );
         rows.extend(
             self.data
                 .sources
@@ -4821,7 +4871,13 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
     let weak = window.as_weak();
     let ctrl = controller.clone();
     window.on_save_source_bundle(
-        move |source_type, source_url, source_title, source_cadence, watch_target, watch_title| {
+        move |source_type,
+              source_url,
+              source_title,
+              source_cadence,
+              watch_target,
+              watch_title,
+              follow_target| {
             if let Some(window) = weak.upgrade() {
                 ctrl.borrow_mut().save_source_bundle_from_forms(
                     source_type.as_str(),
@@ -4830,6 +4886,7 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
                     source_cadence.as_str(),
                     watch_target.as_str(),
                     watch_title.as_str(),
+                    follow_target.as_str(),
                 );
                 apply_controller_projection(&window, &ctrl);
             }
@@ -5203,6 +5260,7 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_watch_target(s(&projection.watch_target));
     window.set_watch_title(s(&projection.watch_title));
     window.set_watch_cadence(s(&projection.watch_cadence));
+    window.set_bundle_follow_target(s(&projection.bundle_follow_target));
     window.set_profile_actor_type(s(&projection.profile_actor_type));
     window.set_profile_display_name(s(&projection.profile_display_name));
     window.set_profile_summary(s(&projection.profile_summary));
@@ -6297,6 +6355,7 @@ fn starter_bundles() -> Vec<SourceBundle> {
         SourceBundle {
             id: "science-news".into(),
             title: "Science and public-interest news starter pack".into(),
+            follow_target: "https://mastodon.example/users/science".into(),
             watch_target: "@science@mastodon.example".into(),
             source_url: "https://www.npr.org/rss/rss.php?id=1007".into(),
             source_type: "rss".into(),
@@ -6307,6 +6366,7 @@ fn starter_bundles() -> Vec<SourceBundle> {
         SourceBundle {
             id: "research-institutes".into(),
             title: "Research institutes starter pack".into(),
+            follow_target: "https://mastodon.example/users/research".into(),
             watch_target: "@research@mastodon.example".into(),
             source_url: "https://www.nature.com/nature.rss".into(),
             source_type: "rss".into(),
@@ -6319,6 +6379,9 @@ fn starter_bundles() -> Vec<SourceBundle> {
 
 fn source_bundle_row(bundle: SourceBundle) -> UiRow {
     let mut detail = bundle.description.clone();
+    if !bundle.follow_target.is_empty() {
+        detail.push_str(&format!(" Follow target: {}.", bundle.follow_target));
+    }
     if !bundle.watch_target.is_empty() {
         detail.push_str(&format!(" Watch: {}.", bundle.watch_target));
     }
@@ -6344,6 +6407,19 @@ fn source_bundle_row(bundle: SourceBundle) -> UiRow {
         "info",
         "Use bundle",
         if bundle.custom { "Delete bundle" } else { "" },
+    )
+}
+
+fn source_bundle_follow_row(follow_target: &str, title: &str) -> UiRow {
+    row(
+        &format!("actor:{}", follow_target.trim()),
+        &title.trim().if_empty("Follow target to review"),
+        &compact_actor(follow_target),
+        "Source bundle follow target. Review Follow or Watch deliberately; applying the bundle never sends a hidden follow request.",
+        "Review",
+        "info",
+        "Follow",
+        "Watch",
     )
 }
 
@@ -8857,9 +8933,24 @@ mod tests {
         assert_eq!(controller.active_screen, "watches");
         assert_eq!(controller.watch_form.target, "@science@mastodon.example");
         assert_eq!(
+            controller.bundle_follow_target,
+            "https://mastodon.example/users/science"
+        );
+        assert_eq!(
             controller.source_form.url,
             "https://www.npr.org/rss/rss.php?id=1007"
         );
+        assert_eq!(
+            controller.selected_row,
+            "actor:https://mastodon.example/users/science"
+        );
+        let inspector = controller.inspector_rows(&controller.selected_row);
+        let follow_row = inspector
+            .iter()
+            .find(|row| row.id.as_str() == "actor:https://mastodon.example/users/science")
+            .expect("follow review row");
+        assert_eq!(follow_row.primary.as_str(), "Follow");
+        assert_eq!(follow_row.secondary.as_str(), "Watch");
         assert!(controller
             .status_message
             .contains("source bundle values ready to review"));
@@ -8986,6 +9077,7 @@ mod tests {
             "30",
             "@local@example.test",
             "Local watch",
+            "https://example.test/users/local",
         );
 
         assert_eq!(controller.active_mode, "people");
@@ -8997,13 +9089,31 @@ mod tests {
             row.id.as_str() == "bundle:custom:local-civic-sources"
                 && row.primary.as_str() == "Use bundle"
                 && row.secondary.as_str() == "Delete bundle"
+                && row.detail.contains("https://example.test/users/local")
                 && row.detail.contains("@local@example.test")
                 && row.detail.contains("https://example.test/local.xml")
         }));
 
+        controller.row_action("bundle:custom:local-civic-sources", "Use bundle");
+        assert_eq!(
+            controller.selected_row,
+            "actor:https://example.test/users/local"
+        );
+        let follow_rows = controller.inspector_rows(&controller.selected_row);
+        let follow_row = follow_rows
+            .iter()
+            .find(|row| row.id.as_str() == "actor:https://example.test/users/local")
+            .expect("follow review row");
+        assert_eq!(follow_row.primary.as_str(), "Follow");
+        assert_eq!(follow_row.secondary.as_str(), "Watch");
+
         let loaded = load_drafts_from(&controller.drafts_path).expect("loaded sidecar");
         assert_eq!(loaded.source_bundles.len(), 1);
         assert_eq!(loaded.source_bundles[0].id, "custom:local-civic-sources");
+        assert_eq!(
+            loaded.source_bundles[0].follow_target,
+            "https://example.test/users/local"
+        );
         assert_eq!(loaded.source_bundles[0].cadence_minutes, "30");
     }
 

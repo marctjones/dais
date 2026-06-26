@@ -376,6 +376,7 @@ export component MainWindow inherits Window {
     in-out property <string> watch-target;
     in-out property <string> watch-title;
     in-out property <string> watch-cadence;
+    in-out property <string> bundle-follow-target;
     in-out property <string> profile-actor-type;
     in-out property <string> profile-display-name;
     in-out property <string> profile-summary;
@@ -418,7 +419,7 @@ export component MainWindow inherits Window {
     callback run-filtered-search(string, string, string, string, string, string, string, string, string, string, string, string, string, string, bool);
     callback add-source(string, string, string, string);
     callback add-watch(string, string, string, string);
-    callback save-source-bundle(string, string, string, string, string, string);
+    callback save-source-bundle(string, string, string, string, string, string, string);
     callback preview-profile(string, string, string, string, string);
     callback save-profile(string, string, string, string, string);
     callback save-audience(string, string, string, string, string);
@@ -974,6 +975,7 @@ export component MainWindow inherits Window {
                                 }
                                 LineEdit { text <=> root.watch-target; placeholder-text: "Watch target"; }
                                 LineEdit { text <=> root.watch-title; placeholder-text: "Watch title"; }
+                                LineEdit { text <=> root.bundle-follow-target; placeholder-text: "Follow target to review"; }
                                 Button {
                                     text: "Add Watch";
                                     clicked => {
@@ -983,7 +985,7 @@ export component MainWindow inherits Window {
                                 Button {
                                     text: "Save bundle";
                                     clicked => {
-                                        root.save-source-bundle(root.source-type, root.source-url, root.source-title, root.source-cadence, root.watch-target, root.watch-title);
+                                        root.save-source-bundle(root.source-type, root.source-url, root.source-title, root.source-cadence, root.watch-target, root.watch-title, root.bundle-follow-target);
                                     }
                                 }
                             }
