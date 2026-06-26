@@ -3872,7 +3872,7 @@ impl DeskController {
                 "settings:audience",
                 "Default audience",
                 visibility_label(&self.data.snapshot.settings.default_visibility),
-                "Every compose surface shows this before protocol route so public sharing is deliberate.",
+                "New posts start here. Followers and friends means approved people, not anonymous public readers.",
                 "Privacy",
                 "ok",
                 "",
@@ -3882,8 +3882,18 @@ impl DeskController {
                 "settings:route",
                 "Default route",
                 protocol_label(&self.data.snapshot.settings.default_protocol),
-                "Bluesky and public routes are shown explicitly before send.",
+                "Public routes are opt-in at send time; private and direct posts stay off public-only networks.",
                 "Route",
+                "info",
+                "",
+                "",
+            ),
+            row(
+                "settings:privacy-help",
+                "Privacy model",
+                "Consequences",
+                "Friend means mutual private sharing, Watch reads public posts privately, and E2EE protects message contents when both sides support it.",
+                "Help",
                 "info",
                 "",
                 "",
@@ -3893,9 +3903,9 @@ impl DeskController {
                 "Authorized fetch",
                 "Private mode",
                 if self.data.snapshot.moderation.require_authorized_fetch {
-                    "Read endpoints should require authorized fetch for private/followers content."
+                    "Private reads require signed requests from approved followers before content is returned."
                 } else {
-                    "Authorized fetch is not enforced according to owner snapshot."
+                    "Private read protection is not enforced according to the owner snapshot."
                 },
                 if self.data.snapshot.moderation.require_authorized_fetch {
                     "On"
@@ -9609,6 +9619,37 @@ mod tests {
         assert_eq!(projection.settings_default_protocol, "activitypub");
         assert!(projection.settings_require_authorized_fetch);
         assert!(projection.settings_manually_approves_followers);
+    }
+
+    #[test]
+    fn settings_rows_explain_privacy_consequences_in_user_language() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("settings");
+        let rows = controller.rows_for_active_screen();
+
+        let audience = rows
+            .iter()
+            .find(|row| row.id.as_str() == "settings:audience")
+            .expect("audience settings row");
+        assert!(audience.detail.contains("approved people"));
+        assert!(audience.detail.contains("anonymous public readers"));
+
+        let route = rows
+            .iter()
+            .find(|row| row.id.as_str() == "settings:route")
+            .expect("route settings row");
+        assert!(route.detail.contains("Public routes are opt-in"));
+        assert!(route
+            .detail
+            .contains("private and direct posts stay off public-only networks"));
+
+        let help = rows
+            .iter()
+            .find(|row| row.id.as_str() == "settings:privacy-help")
+            .expect("privacy help row");
+        assert!(help.detail.contains("Friend means mutual private sharing"));
+        assert!(help.detail.contains("Watch reads public posts privately"));
+        assert!(help.detail.contains("E2EE protects message contents"));
     }
 
     #[test]
