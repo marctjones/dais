@@ -26,6 +26,8 @@ struct FakeDbState {
     replies: HashMap<String, Row>,
     conversations: HashMap<String, Row>,
     direct_messages: HashMap<String, Row>,
+    e2ee_conversations: HashMap<String, Row>,
+    e2ee_messages: HashMap<String, Row>,
     participants: HashSet<(String, String)>,
     notifications: Vec<Row>,
     closed_network: bool,
@@ -154,6 +156,15 @@ impl FakeDb {
             .lock()
             .unwrap()
             .direct_messages
+            .get(message_id)
+            .cloned()
+    }
+
+    fn e2ee_message(&self, message_id: &str) -> Option<Row> {
+        self.state
+            .lock()
+            .unwrap()
+            .e2ee_messages
             .get(message_id)
             .cloned()
     }
@@ -412,6 +423,33 @@ impl DatabaseProvider for FakeDb {
             insert_row_value(&mut row, "content", params.get(3));
             insert_row_value(&mut row, "published_at", params.get(4));
             state.direct_messages.insert(message_id.to_string(), row);
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("INSERT INTO e2ee_conversations") {
+            let conversation_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            let mut row = Row::new();
+            insert_row_value(&mut row, "id", params.first());
+            insert_row_value(&mut row, "participants", params.get(1));
+            insert_row_value(&mut row, "created_at", params.get(2));
+            insert_row_value(&mut row, "updated_at", params.get(2));
+            state
+                .e2ee_conversations
+                .insert(conversation_id.to_string(), row);
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("INSERT OR IGNORE INTO e2ee_messages") {
+            let message_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            let mut row = Row::new();
+            insert_row_value(&mut row, "id", params.first());
+            insert_row_value(&mut row, "conversation_id", params.get(1));
+            insert_row_value(&mut row, "sender_actor_id", params.get(2));
+            insert_row_value(&mut row, "sender_device_id", params.get(3));
+            insert_row_value(&mut row, "ciphertext", params.get(4));
+            insert_row_value(&mut row, "aad", params.get(5));
+            insert_row_value(&mut row, "created_at", params.get(6));
+            state.e2ee_messages.insert(message_id.to_string(), row);
             return Ok(Vec::new());
         }
 
@@ -1148,6 +1186,99 @@ async fn inbox_direct_message_uses_conversation_schema() {
     assert!(conversation
         .get_string("participants")
         .expect("participants json should be stored")
+        .contains(local_actor));
+}
+
+#[tokio::test]
+async fn inbox_encrypted_direct_message_persists_e2ee_envelope() {
+    let db = FakeDb::default();
+    let http = FakeHttp {
+        actor_json: json!({
+            "preferredUsername": "alice",
+            "name": "Alice",
+            "icon": { "url": "https://remote.example/avatar.png" }
+        })
+        .to_string(),
+    };
+
+    let local_actor = "https://social.dais.social/users/social";
+    let remote_actor = "https://remote.example/users/alice";
+    let message_id = "https://remote.example/users/alice/e2ee/messages/1";
+    let encrypted_message = json!({
+        "v": 1,
+        "alg": "AES-256-GCM",
+        "keyWrap": "RSA-OAEP-256",
+        "iv": "MTIzNDU2Nzg5MDEy",
+        "ciphertext": "Y2lwaGVydGV4dA==",
+        "recipients": [
+            {
+                "keyId": "https://social.dais.social/users/social#main-key",
+                "wrappedKey": "d3JhcHBlZA=="
+            }
+        ]
+    });
+    let activity = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Create".to_string(),
+        id: "https://remote.example/activities/e2ee-1".to_string(),
+        actor: remote_actor.to_string(),
+        object: Some(json!({
+            "type": "Note",
+            "id": message_id,
+            "attributedTo": remote_actor,
+            "to": [local_actor],
+            "published": "2026-06-10T12:00:00Z",
+            "content": "Encrypted message. Open in a dais client to decrypt.",
+            "daisE2ee": {
+                "v": 1,
+                "protocol": "dais-mls-v1",
+                "senderDeviceId": "alice-phone"
+            },
+            "encryptedMessage": encrypted_message
+        })),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T12:00:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::process_inbox_activity(&db, &http, activity, local_actor, "", None)
+        .await
+        .expect("encrypted direct message should ingest");
+
+    let fallback = db
+        .direct_message(message_id)
+        .expect("fallback direct message row should be stored");
+    assert_eq!(
+        fallback.get_string("content").as_deref(),
+        Some("Encrypted message. Open in a dais client to decrypt.")
+    );
+
+    let encrypted = db
+        .e2ee_message(message_id)
+        .expect("E2EE message row should be stored");
+    assert_eq!(
+        encrypted.get_string("sender_actor_id").as_deref(),
+        Some(remote_actor)
+    );
+    assert_eq!(
+        encrypted.get_string("sender_device_id").as_deref(),
+        Some("alice-phone")
+    );
+    assert!(
+        encrypted
+            .get_string("ciphertext")
+            .expect("ciphertext JSON should be stored")
+            .contains("\"encryptedMessage\"")
+            || encrypted
+                .get_string("ciphertext")
+                .expect("ciphertext JSON should be stored")
+                .contains("\"AES-256-GCM\"")
+    );
+    assert!(encrypted
+        .get_string("aad")
+        .expect("aad JSON should be stored")
         .contains(local_actor));
 }
 

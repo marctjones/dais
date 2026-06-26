@@ -31,6 +31,11 @@ check_contains \
   "Skeptical Engineering"
 
 check_contains \
+  "skpt E2EE device discovery" \
+  "https://social.skpt.cl/users/social?format=json" \
+  "skpt-test-device"
+
+check_contains \
   "skpt apex WebFinger" \
   "https://skpt.cl/.well-known/webfinger?resource=acct:social@skpt.cl" \
   "https://social.skpt.cl/users/social"
@@ -44,6 +49,18 @@ check_status \
   "skpt owner API requires bearer" \
   "401" \
   "https://social.skpt.cl/api/dais/owner/profile"
+
+inbox_status="$(
+  curl -sS -o /dev/null -w "%{http_code}" --max-time 20 \
+    -H "Content-Type: application/activity+json" \
+    -d '{"@context":"https://www.w3.org/ns/activitystreams","id":"https://example.invalid/activities/test","type":"Create","actor":"https://example.invalid/users/alice","to":["https://social.skpt.cl/users/social"],"object":{"id":"https://example.invalid/users/alice/messages/test","type":"Note","to":["https://social.skpt.cl/users/social"],"content":"unsigned encrypted fallback","encryptedMessage":{"v":1,"alg":"AES-256-GCM","keyWrap":"RSA-OAEP-256","iv":"MTIzNDU2Nzg5MDEy","ciphertext":"Y2lwaGVydGV4dA==","recipients":[{"keyId":"https://social.skpt.cl/users/social#main-key","wrappedKey":"d3JhcHBlZA=="}]}}}' \
+    "https://social.skpt.cl/users/social/inbox"
+)"
+if [ "$inbox_status" != "401" ]; then
+  echo "FAIL skpt unsigned encrypted inbox rejection: expected HTTP 401, got $inbox_status" >&2
+  exit 1
+fi
+echo "OK   skpt unsigned encrypted inbox rejection"
 
 if [ -f "$OWNER_TOKEN_FILE" ]; then
   owner_status="$(

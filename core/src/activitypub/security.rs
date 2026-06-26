@@ -249,7 +249,12 @@ mod tests {
         assert!(!can_fetch_post("followers", None, "hello", false));
         assert!(can_fetch_post("followers", None, "hello", true));
         assert!(!can_fetch_post("direct", None, "hello", true));
-        assert!(!can_fetch_post("public", Some(r#"{"v":1}"#), "fallback", true));
+        assert!(!can_fetch_post(
+            "public",
+            Some(r#"{"v":1}"#),
+            "fallback",
+            true
+        ));
         assert!(!can_fetch_post(
             "public",
             None,

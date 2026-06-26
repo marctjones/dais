@@ -654,6 +654,21 @@ async fn handle_direct_message(
     )
     .await?;
 
+    if let Some(encrypted_message) = object.get("encryptedMessage") {
+        persist_e2ee_direct_message(
+            db,
+            activity,
+            object,
+            our_actor_url,
+            dm_id,
+            &participants,
+            published_at,
+            content,
+            encrypted_message,
+        )
+        .await?;
+    }
+
     // Create notification
     create_notification(
         db,
@@ -671,6 +686,72 @@ async fn handle_direct_message(
     Ok(())
 }
 
+async fn persist_e2ee_direct_message(
+    db: &dyn DatabaseProvider,
+    activity: &Activity,
+    object: &Value,
+    our_actor_url: &str,
+    message_id: &str,
+    participants: &[String],
+    published_at: &str,
+    fallback_content: &str,
+    encrypted_message: &Value,
+) -> CoreResult<()> {
+    let conversation_id = e2ee_conversation_id_for(participants);
+    let participants_json = serde_json::to_string(participants)
+        .map_err(|error| CoreError::Internal(error.to_string()))?;
+    let sender_device_id = object
+        .get("daisE2ee")
+        .and_then(|value| value.get("senderDeviceId"))
+        .and_then(Value::as_str)
+        .or_else(|| object.get("senderDeviceId").and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("unknown");
+    let encrypted_json = serde_json::to_string(encrypted_message)
+        .map_err(|error| CoreError::Internal(error.to_string()))?;
+    let aad = serde_json::json!({
+        "recipientActorId": our_actor_url,
+        "fallbackContent": fallback_content,
+        "activityId": activity.id,
+    });
+    let aad_json =
+        serde_json::to_string(&aad).map_err(|error| CoreError::Internal(error.to_string()))?;
+
+    db.execute(
+        r#"
+        INSERT INTO e2ee_conversations (id, protocol, participants, created_at, updated_at)
+        VALUES (?1, 'dais-mls-v1', ?2, ?3, ?3)
+        ON CONFLICT(id) DO UPDATE SET updated_at = ?3
+        "#,
+        &[
+            Value::String(conversation_id.clone()),
+            Value::String(participants_json),
+            Value::String(published_at.to_string()),
+        ],
+    )
+    .await?;
+
+    db.execute(
+        r#"
+        INSERT OR IGNORE INTO e2ee_messages (
+            id, conversation_id, sender_actor_id, sender_device_id, ciphertext, aad, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "#,
+        &[
+            Value::String(message_id.to_string()),
+            Value::String(conversation_id),
+            Value::String(activity.actor.clone()),
+            Value::String(sender_device_id.to_string()),
+            Value::String(encrypted_json),
+            Value::String(aad_json),
+            Value::String(published_at.to_string()),
+        ],
+    )
+    .await?;
+
+    Ok(())
+}
+
 fn sorted_participants(actor: &str, local_actor: &str) -> Vec<String> {
     let mut participants = vec![actor.to_string(), local_actor.to_string()];
     participants.sort();
@@ -679,13 +760,21 @@ fn sorted_participants(actor: &str, local_actor: &str) -> Vec<String> {
 }
 
 fn conversation_id_for(participants: &[String]) -> String {
+    hashed_conversation_id("ap-dm-", participants)
+}
+
+fn e2ee_conversation_id_for(participants: &[String]) -> String {
+    hashed_conversation_id("e2ee-conversation-", participants)
+}
+
+fn hashed_conversation_id(prefix: &str, participants: &[String]) -> String {
     let mut hasher = Sha256::new();
     for participant in participants {
         hasher.update(participant.as_bytes());
         hasher.update([0]);
     }
     let digest = hasher.finalize();
-    let mut id = String::from("ap-dm-");
+    let mut id = String::from(prefix);
     for byte in digest {
         let _ = write!(&mut id, "{byte:02x}");
     }

@@ -3841,6 +3841,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Post, "/e2ee/peers/discover") => {
+            let body = read_json(&mut req).await;
+            match owner_discover_e2ee_peer_devices(&env, &body).await {
+                Ok(result) => api_json(&result, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Post, "/e2ee/peers/trust") => {
             let body = read_json(&mut req).await;
             match owner_trust_e2ee_peer_device(&env, &body).await {
@@ -6920,6 +6927,11 @@ async fn owner_send_e2ee_message(
             "to": [recipient_actor_id],
             "published": now,
             "content": fallback_content,
+            "daisE2ee": {
+                "v": 1,
+                "protocol": "dais-mls-v1",
+                "senderDeviceId": sender_device_id,
+            },
             "encryptedMessage": encrypted_message,
         }
     });
@@ -7192,6 +7204,99 @@ async fn owner_e2ee_peer_devices(env: &Env) -> Result<Vec<Map<String, Value>>> {
         .all()
         .await?
         .results::<Map<String, Value>>()
+}
+
+async fn owner_discover_e2ee_peer_devices(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let target = body_string_any(body, &["actor_id", "actorId", "actor", "target"])
+        .ok_or("actorId is required")?;
+    let actor_url = activitypub_actor_url_for_target(&target).await?;
+    let actor = match fetch_activitypub_json(&actor_url, "actor").await {
+        Ok(actor) => actor,
+        Err(unsigned_error)
+            if should_retry_signed_fetch(&unsigned_error) && local_actor.can_sign() =>
+        {
+            fetch_activitypub_json_signed(&actor_url, "actor", &local_actor)
+                .await
+                .map_err(|signed_error| {
+                    format!("{unsigned_error}; signed retry failed: {signed_error}")
+                })?
+        }
+        Err(error) => return Err(error),
+    };
+    let actor_id = actor
+        .get("id")
+        .and_then(optional_body_string)
+        .unwrap_or(actor_url);
+    public_https_url(&actor_id, "actorId")?;
+    let devices = actor
+        .get("daisE2ee")
+        .and_then(|value| value.get("devices"))
+        .and_then(Value::as_array)
+        .ok_or("actor does not publish daisE2ee.devices")?;
+    if devices.is_empty() {
+        return Err("actor publishes no E2EE devices".to_string());
+    }
+
+    let mut rows = Vec::new();
+    for device in devices {
+        let Some(device) = device.as_object() else {
+            return Err("daisE2ee device must be an object".to_string());
+        };
+        let mut peer = Map::new();
+        peer.insert("actorId".to_string(), Value::String(actor_id.clone()));
+        copy_e2ee_device_field(device, &mut peer, "deviceId", "deviceId")?;
+        copy_e2ee_device_field(device, &mut peer, "credential", "credential")?;
+        copy_e2ee_device_field(device, &mut peer, "keyPackage", "keyPackage")?;
+        copy_optional_e2ee_device_field(device, &mut peer, "displayName", "displayName");
+        copy_optional_e2ee_device_field(device, &mut peer, "protocol", "protocol");
+        copy_optional_e2ee_device_field(device, &mut peer, "fingerprint", "fingerprint");
+        let row =
+            owner_upsert_peer_device_with_trust(env, &Value::Object(peer), "untrusted").await?;
+        rows.push(Value::Object(row));
+    }
+
+    let mut result = Map::new();
+    result.insert("actor_id".to_string(), Value::String(actor_id));
+    result.insert("items".to_string(), Value::Array(rows));
+    Ok(result)
+}
+
+fn copy_e2ee_device_field(
+    source: &Map<String, Value>,
+    target: &mut Map<String, Value>,
+    source_key: &str,
+    target_key: &str,
+) -> std::result::Result<(), String> {
+    let value = source
+        .get(source_key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("daisE2ee device missing {source_key}"))?;
+    target.insert(target_key.to_string(), Value::String(value.to_string()));
+    Ok(())
+}
+
+fn copy_optional_e2ee_device_field(
+    source: &Map<String, Value>,
+    target: &mut Map<String, Value>,
+    source_key: &str,
+    target_key: &str,
+) {
+    if let Some(value) = source
+        .get(source_key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        target.insert(target_key.to_string(), Value::String(value.to_string()));
+    }
 }
 
 async fn owner_trust_e2ee_peer_device(

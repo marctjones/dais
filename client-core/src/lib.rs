@@ -226,6 +226,13 @@ impl OwnerApiClient {
         Ok(response.items)
     }
 
+    pub async fn discover_e2ee_peer_devices(
+        &self,
+        peer: &OwnerE2eePeerDiscoverRequest,
+    ) -> ClientResult<OwnerE2eePeerDiscoverResult> {
+        self.post("/api/dais/owner/e2ee/peers/discover", peer).await
+    }
+
     pub async fn trust_e2ee_peer_device(
         &self,
         peer: &OwnerE2eePeerTrustRequest,
@@ -964,6 +971,18 @@ pub struct OwnerE2eePeerDevice {
     pub last_seen_at: Option<String>,
     pub trusted_at: Option<String>,
     pub revoked_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eePeerDiscoverRequest {
+    pub actor_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eePeerDiscoverResult {
+    pub actor_id: String,
+    #[serde(default)]
+    pub items: Vec<OwnerE2eePeerDevice>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
