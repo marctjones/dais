@@ -3237,8 +3237,8 @@ impl From<RepoRecordBlock> for CarBlock {
 #[cfg(test)]
 mod tests {
     use super::{
-        atproto_media_attachments, encode_car, mst_subtree, r2_key_from_media_url, repo_key_depth,
-        repo_record_block, stable_cid,
+        atproto_media_attachments, encode_car, follow_record_value, mst_subtree,
+        r2_key_from_media_url, repo_key_depth, repo_record_block, stable_cid, Identity,
     };
     use serde_json::json;
 
@@ -3325,6 +3325,41 @@ mod tests {
         assert!(
             r2_key_from_media_url("https://example.com/media/uploads/atproto/image.png").is_none()
         );
+    }
+
+    #[test]
+    fn follow_record_value_is_lexicon_shaped_public_graph_state() {
+        let identity = Identity {
+            did: "did:web:social.dais.social".into(),
+            handle: "social.dais.social".into(),
+            pds_hostname: "pds.dais.social".into(),
+        };
+        let mut row = serde_json::Map::new();
+        row.insert(
+            "id".into(),
+            json!("at://did:web:social.dais.social/app.bsky.graph.follow/follow1"),
+        );
+        row.insert("target_actor_id".into(), json!("did:plc:alicebsky"));
+        row.insert("created_at".into(), json!("2026-06-26T09:00:00.000Z"));
+
+        let record = follow_record_value(&identity, &row);
+        assert_eq!(
+            record.get("uri").and_then(serde_json::Value::as_str),
+            Some("at://did:web:social.dais.social/app.bsky.graph.follow/follow1")
+        );
+        let value = record.get("value").expect("record value");
+        assert_eq!(
+            value.get("$type").and_then(serde_json::Value::as_str),
+            Some("app.bsky.graph.follow")
+        );
+        assert_eq!(
+            value.get("subject").and_then(serde_json::Value::as_str),
+            Some("did:plc:alicebsky")
+        );
+        assert!(record
+            .get("cid")
+            .and_then(serde_json::Value::as_str)
+            .is_some());
     }
 
     #[test]

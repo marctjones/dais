@@ -4152,11 +4152,14 @@ impl DeskController {
             ));
         }
         if let Some(actor) = selected_row.strip_prefix("following:") {
-            return Some((
-                actor.to_string(),
-                "Following profile",
-                "You follow this account; the remote server may know.".to_string(),
-            ));
+            let relationship = if is_atproto_actor_id(actor) {
+                "Bluesky public follow; does not grant private ActivityPub friend access."
+                    .to_string()
+            } else {
+                "ActivityPub follow; may become a private friend only when mutual and approved."
+                    .to_string()
+            };
+            return Some((actor.to_string(), "Following profile", relationship));
         }
         None
     }
@@ -5335,7 +5338,11 @@ fn relationship_for_actor(snapshot: &OwnerSnapshotBundle, actor_id: &str) -> Str
         .iter()
         .any(|following| following.target_actor_id == actor_id)
     {
-        "Following: you may have sent a remote relationship signal.".into()
+        if is_atproto_actor_id(actor_id) {
+            "Bluesky public follow: public graph only; not a private ActivityPub friend.".into()
+        } else {
+            "ActivityPub following: remote relationship signal; may become a private friend if mutual.".into()
+        }
     } else if snapshot
         .followers
         .iter()
@@ -6014,18 +6021,43 @@ fn following_row(following: &OwnerFollowing) -> UiRow {
         "failed" => format!("Follow failed for {actor}"),
         _ => format!("You follow {actor}"),
     };
+    let (subtitle, detail, meta) = if is_atproto_actor_id(&following.target_actor_id) {
+        (
+            "Bluesky public follow",
+            format!(
+                "Follow status: {status_label}. Bluesky follows are public graph records and do not grant follower-only ActivityPub access."
+            ),
+            "Public graph only; use Friend for mutual private sharing.",
+        )
+    } else {
+        (
+            "ActivityPub follow",
+            format!(
+                "Follow status: {status_label}. ActivityPub follows can become private friends when mutual and approved."
+            ),
+            "Follow sends a relationship signal; use Watch for private public-post monitoring.",
+        )
+    };
     row_with_kind(
         "relationship",
         &format!("following:{}", following.target_actor_id),
         &title,
-        "Remote relationship may be visible to that server",
-        &format!("Follow status: {}", status_label),
-        "Follow sends a relationship signal; use Watch for private public-post monitoring.",
+        subtitle,
+        &detail,
+        meta,
         &status_label,
         tone,
         primary,
         secondary,
     )
+}
+
+fn is_atproto_actor_id(actor_id: &str) -> bool {
+    let value = actor_id.trim().to_ascii_lowercase();
+    value.starts_with("did:")
+        || value.starts_with("at://")
+        || value.ends_with(".bsky.social")
+        || value.contains("bsky.app/profile/")
 }
 
 fn discovered_actor_row(actor: &OwnerDiscoveredActor) -> UiRow {
@@ -8578,6 +8610,54 @@ mod tests {
         assert!(following.title.contains("You follow"));
         assert!(following.title.contains("editor"));
         assert!(following.meta.contains("relationship signal"));
+    }
+
+    #[test]
+    fn bluesky_follow_rows_explain_public_graph_limits() {
+        let row = following_row(&OwnerFollowing {
+            id: "follow-bsky".into(),
+            actor_id: "did:web:social.dais.social".into(),
+            target_actor_id: "did:plc:alicebsky".into(),
+            target_inbox: "".into(),
+            status: "accepted".into(),
+            created_at: Some("today".into()),
+            accepted_at: Some("today".into()),
+        });
+
+        assert_eq!(row.kind.as_str(), "relationship");
+        assert_eq!(row.subtitle.as_str(), "Bluesky public follow");
+        assert!(row.detail.contains("public graph records"));
+        assert!(row
+            .detail
+            .contains("do not grant follower-only ActivityPub access"));
+        assert!(row.meta.contains("Public graph only"));
+        assert_eq!(row.primary.as_str(), "Unfollow");
+    }
+
+    #[test]
+    fn relationship_classifier_keeps_bluesky_follow_separate_from_friend() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.data.snapshot.following.push(OwnerFollowing {
+            id: "follow-bsky".into(),
+            actor_id: "did:web:social.dais.social".into(),
+            target_actor_id: "did:plc:alicebsky".into(),
+            target_inbox: "".into(),
+            status: "accepted".into(),
+            created_at: Some("today".into()),
+            accepted_at: Some("today".into()),
+        });
+
+        let relationship = relationship_for_actor(&controller.data.snapshot, "did:plc:alicebsky");
+        assert!(relationship.contains("Bluesky public follow"));
+        assert!(relationship.contains("not a private ActivityPub friend"));
+
+        let context = controller
+            .actor_context_for_row("following:did:plc:alicebsky")
+            .expect("following row context");
+        assert_eq!(context.1, "Following profile");
+        assert!(context
+            .2
+            .contains("does not grant private ActivityPub friend access"));
     }
 
     #[test]
