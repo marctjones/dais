@@ -12,6 +12,9 @@ Live instance: `@social@dais.social`
 - Production web: `https://dais.social`
 - ActivityPub/Mastodon-compatible origin: `https://social.dais.social`
 - AT Protocol PDS origin: `https://pds.dais.social`
+- Independent test instance: `@social@skpt.cl`
+- Independent test ActivityPub origin: `https://social.skpt.cl`
+- Independent test AT Protocol PDS origin: `https://pds.skpt.cl`
 - Rust core: `core/`
 - Cloudflare Workers: `platforms/cloudflare/workers/`
 - Cloudflare bindings: `platforms/cloudflare/bindings/`
@@ -160,6 +163,7 @@ Use the repository deploy script:
 ```bash
 scripts/deploy.sh build
 scripts/deploy.sh deploy --env production --yes
+scripts/deploy.sh deploy --env skpt --yes
 ```
 
 Deploy individual workers when needed:

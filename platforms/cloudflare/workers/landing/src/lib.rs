@@ -234,7 +234,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
     <main>
         <section class="instance">
             <h2>The live dais project instance</h2>
-            <p>This is the project account for dais by <a href="https://skpt.cl">Skeptical Engineering</a>, not a personal account. Skeptical Engineering will later have its own dais presence at <code>@social@skpt.cl</code>; this instance remains the live project/demo presence for dais itself.</p>
+            <p>This is the project account for dais by <a href="https://skpt.cl">Skeptical Engineering</a>, not a personal account. The separate Skeptical Engineering test instance now runs independently at <a href="https://social.skpt.cl/users/social"><code>@social@skpt.cl</code></a>; this instance remains the live project/demo presence for dais itself.</p>
             <p><strong>ActivityPub handle:</strong> <code>@{username}@{domain}</code></p>
             <p><strong>ActivityPub profile:</strong> <a href="{actor_url}">{actor_url}</a></p>
             <p><strong>ActivityPub origin:</strong> <a href="https://{activitypub_domain}">https://{activitypub_domain}</a></p>
@@ -288,7 +288,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <div class="tile">
                     <span class="status partial">experimental</span>
                     <h3>E2EE</h3>
-                    <p>The encryptedMessage envelope, CLI encrypt/decrypt helpers, and Mastodon fallback modes exist. MLS-based decentralized DMs are still prototype work.</p>
+                    <p>The encryptedMessage envelope, CLI encrypt/decrypt helpers, and Mastodon fallback modes exist. A separate skpt.cl deployment is being used as the cross-instance testbed; MLS-based decentralized DMs are still prototype work.</p>
                 </div>
                 <div class="tile">
                     <span class="status partial">in progress</span>
@@ -302,6 +302,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
             <h2>Use it or follow along</h2>
             <ul>
                 <li><a href="https://skpt.cl/projects/dais/">dais on Skeptical Engineering</a></li>
+                <li><a href="https://social.skpt.cl/users/social">Independent skpt.cl dais instance</a></li>
                 <li><a href="https://github.com/marctjones/dais">Current public source repository and issues</a></li>
                 <li><a href="https://github.com/marctjones/dais/blob/client/rust-greenfield/README.md">README and setup notes</a></li>
                 <li><a href="https://github.com/marctjones/dais/blob/client/rust-greenfield/docs/POSITIONING.md">Positioning and product vision</a></li>

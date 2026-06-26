@@ -27,6 +27,21 @@ database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 [env.production.ai]
 binding = "AI"
 
+[env.skpt]
+name = "inbox-skpt"
+
+[env.skpt.vars]
+DOMAIN = "skpt.cl"
+ACTIVITYPUB_DOMAIN = "social.skpt.cl"
+
+[[env.skpt.d1_databases]]
+binding = "DB"
+database_name = "dais-skpt"
+database_id = "39490363-8871-4c24-b28e-4873e6a25a0a"
+
+[env.skpt.ai]
+binding = "AI"
+
 # D1 database for storing activities and followers
 [[d1_databases]]
 binding = "DB"

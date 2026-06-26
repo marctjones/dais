@@ -15,11 +15,11 @@
 #   tail              Stream live logs for a worker (requires --only)
 #
 # Options:
-#   -e, --env ENV     Target environment: dev (default) | production
+#   -e, --env ENV     Target environment: dev (default) | production | skpt
 #   -w, --only NAME   Act on a single worker (e.g. --only actor)
 #   -n, --dry-run     Deploy as a dry run (build + validate, no upload)
 #   -k, --keep-going  Continue after a worker fails (default: stop on first error)
-#   -y, --yes         Skip the confirmation prompt for production
+#   -y, --yes         Skip the confirmation prompt for production/skpt deploys
 #   -h, --help        Show this help
 #
 # Examples:
@@ -81,8 +81,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$ENVIRONMENT" in
-  dev|production) ;;
-  *) err "Invalid --env '$ENVIRONMENT' (expected: dev | production)"; exit 2 ;;
+  dev|production|skpt) ;;
+  *) err "Invalid --env '$ENVIRONMENT' (expected: dev | production | skpt)"; exit 2 ;;
 esac
 
 # Resolve the worker list (single or all), validating --only.
@@ -94,7 +94,7 @@ else
   TARGETS=("${WORKERS[@]}")
 fi
 
-env_flag() { [ "$ENVIRONMENT" = "production" ] && printf -- "--env production" || printf ""; }
+env_flag() { [ "$ENVIRONMENT" != "dev" ] && printf -- "--env %s" "$ENVIRONMENT" || printf ""; }
 
 require_wrangler() {
   if ! command -v "$WRANGLER" >/dev/null 2>&1 && [ ! -x "$WRANGLER" ]; then
@@ -106,18 +106,18 @@ require_wrangler() {
   fi
 }
 
-confirm_production() {
-  [ "$ENVIRONMENT" = "production" ] || return 0
+confirm_remote_deploy() {
+  [ "$ENVIRONMENT" = "dev" ] && return 0
   [ "$ACTION" = "build" ] && return 0
   [ "$DRY_RUN" = "true" ] && return 0
   [ "$ASSUME_YES" = "true" ] && return 0
-  warn "About to deploy to PRODUCTION: ${TARGETS[*]}"
+  warn "About to deploy to $ENVIRONMENT: ${TARGETS[*]}"
   read -r -p "Type 'yes' to continue: " reply
   [ "$reply" = "yes" ] || { err "Aborted."; exit 1; }
 }
 
 check_delivery_queue_consumer() {
-  [ "$ENVIRONMENT" = "production" ] || return 0
+  [ "$ENVIRONMENT" != "dev" ] || return 0
   [ "$ACTION" = "deploy" ] || return 0
   [ "$DRY_RUN" = "true" ] && return 0
 
@@ -128,12 +128,15 @@ check_delivery_queue_consumer() {
   [ "$needs_delivery_queue" = "true" ] || return 0
 
   local consumers
-  consumers="$("$WRANGLER" queues consumer list delivery-queue 2>/dev/null || true)"
-  if printf "%s\n" "$consumers" | grep -q "delivery-queue[[:space:]]"; then
-    err "delivery-queue has a stale consumer attached to script 'delivery-queue'."
+  local queue_name="delivery-queue"
+  [ "$ENVIRONMENT" = "skpt" ] && queue_name="delivery-queue-skpt"
+
+  consumers="$("$WRANGLER" queues consumer list "$queue_name" 2>/dev/null || true)"
+  if printf "%s\n" "$consumers" | grep -q "${queue_name}[[:space:]]"; then
+    err "$queue_name has a stale consumer attached to script '$queue_name'."
     err "Remove it before production deploy:"
-    err "  wrangler queues consumer remove delivery-queue delivery-queue"
-    err "Then redeploy delivery-queue-production."
+    err "  wrangler queues consumer remove $queue_name $queue_name"
+    err "Then redeploy delivery-queue-$ENVIRONMENT."
     exit 1
   fi
 }
@@ -167,7 +170,7 @@ run_one() {
 
 do_deploy() {
   require_wrangler
-  confirm_production
+  confirm_remote_deploy
   check_delivery_queue_consumer
   local failed=() deployed=()
   for w in "${TARGETS[@]}"; do

@@ -38,3 +38,20 @@ bucket_name = "dais-media"
 [[env.production.r2_buckets]]
 binding = "MEDIA_BUCKET"
 bucket_name = "dais-media"
+
+[env.skpt]
+name = "outbox-skpt"
+
+[env.skpt.vars]
+DOMAIN = "skpt.cl"
+ACTIVITYPUB_DOMAIN = "social.skpt.cl"
+THEME = "cat-light"
+
+[[env.skpt.d1_databases]]
+binding = "DB"
+database_name = "dais-skpt"
+database_id = "39490363-8871-4c24-b28e-4873e6a25a0a"
+
+[[env.skpt.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media-skpt"

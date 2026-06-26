@@ -28,6 +28,18 @@ binding = "DB"
 database_name = "dais-social"
 database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
+[env.skpt]
+name = "webfinger-skpt"
+
+[env.skpt.vars]
+DOMAIN = "skpt.cl"
+ACTIVITYPUB_DOMAIN = "social.skpt.cl"
+
+[[env.skpt.d1_databases]]
+binding = "DB"
+database_name = "dais-skpt"
+database_id = "39490363-8871-4c24-b28e-4873e6a25a0a"
+
 # D1 database for actor lookups
 [[d1_databases]]
 binding = "DB"

@@ -47,7 +47,6 @@ const DEFAULT_ACTIVITYPUB_SEARCH_SERVERS: &[&str] =
 const MAX_ACTIVITYPUB_SEARCH_SERVERS: usize = 5;
 const BLUESKY_APPVIEW_BASE_URL: &str = "https://api.bsky.app";
 const TOOTFINDER_SEARCH_BASE_URL: &str = "https://www.tootfinder.ch/rest/api/search";
-const LOCAL_ACTOR_URL: &str = "https://social.dais.social/users/social";
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -57,8 +56,8 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let path = url.path();
     let host = url.host_str().unwrap_or_default();
 
-    if host == "social.dais.social" && path == "/" {
-        let target = url.join("/users/social")?;
+    if host == activitypub_domain(&env) && path == "/" {
+        let target = url.join(&format!("/users/{}", local_username(&env)))?;
         return Response::redirect(target);
     }
 
@@ -75,9 +74,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 
     if path == "/.well-known/webfinger" && req.method() == worker::Method::Get {
-        return activitypub_webfinger(&url);
+        return activitypub_webfinger(&env, &url);
     }
-    if activitypub_public_path(path) {
+    if activitypub_public_path(&env, path) {
         return handle_activitypub_public(req, env, &url).await;
     }
 
@@ -110,6 +109,42 @@ async fn scheduled(_event: ScheduledEvent, env: Env, ctx: ScheduleContext) {
     ctx.wait_until(async move {
         let _ = refresh_due_sources(&env).await;
     });
+}
+
+fn env_string(env: &Env, name: &str, fallback: &str) -> String {
+    env.var(name)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| fallback.to_string())
+}
+
+fn local_username(env: &Env) -> String {
+    env_string(env, "USERNAME", "social")
+}
+
+fn handle_domain(env: &Env) -> String {
+    env_string(env, "DOMAIN", "dais.social")
+}
+
+fn activitypub_domain(env: &Env) -> String {
+    env.var("ACTIVITYPUB_DOMAIN")
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| format!("social.{}", handle_domain(env)))
+}
+
+fn local_actor_url(env: &Env) -> String {
+    format!(
+        "https://{}/users/{}",
+        activitypub_domain(env),
+        local_username(env)
+    )
+}
+
+fn local_actor_url_for_request(env: &Env, url: &worker::Url) -> String {
+    format!("{}/users/{}", origin(url), local_username(env))
+}
+
+fn activitypub_user_prefix(env: &Env) -> String {
+    format!("/users/{}", local_username(env))
 }
 
 async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> Result<Response> {
@@ -500,14 +535,15 @@ async fn nodeinfo_document(env: &Env) -> Result<Value> {
     }))
 }
 
-fn activitypub_public_path(path: &str) -> bool {
-    path == "/users/social"
-        || path == "/users/social/outbox"
-        || path == "/users/social/followers"
-        || path == "/users/social/following"
-        || path == "/users/social/followers_synchronization"
-        || path == "/users/social/inbox"
-        || path.starts_with("/users/social/posts/")
+fn activitypub_public_path(env: &Env, path: &str) -> bool {
+    let prefix = activitypub_user_prefix(env);
+    path == prefix
+        || path == format!("{prefix}/outbox")
+        || path == format!("{prefix}/followers")
+        || path == format!("{prefix}/following")
+        || path == format!("{prefix}/followers_synchronization")
+        || path == format!("{prefix}/inbox")
+        || path.starts_with(&format!("{prefix}/posts/"))
 }
 
 async fn handle_activitypub_public(
@@ -516,8 +552,16 @@ async fn handle_activitypub_public(
     url: &worker::Url,
 ) -> Result<Response> {
     let path = url.path();
-    match (req.method(), path) {
-        (worker::Method::Get, "/users/social") => {
+    let prefix = activitypub_user_prefix(&env);
+    let outbox_path = format!("{prefix}/outbox");
+    let followers_path = format!("{prefix}/followers");
+    let following_path = format!("{prefix}/following");
+    let followers_sync_path = format!("{prefix}/followers_synchronization");
+    let inbox_path = format!("{prefix}/inbox");
+    let posts_prefix = format!("{prefix}/posts/");
+
+    match req.method() {
+        worker::Method::Get if path == prefix => {
             if query_param(url, "format").as_deref() == Some("json") || accepts_activity_json(&req)
             {
                 activitypub_actor(&env, url).await
@@ -525,36 +569,37 @@ async fn handle_activitypub_public(
                 activitypub_actor_html(&env, url).await
             }
         }
-        (worker::Method::Get, "/users/social/outbox") => activitypub_outbox(&env, url).await,
-        (worker::Method::Get, "/users/social/followers")
-        | (worker::Method::Get, "/users/social/following") => {
-            activitypub_graph_collection(&env, url, path.trim_start_matches("/users/social/")).await
+        worker::Method::Get if path == outbox_path => activitypub_outbox(&env, url).await,
+        worker::Method::Get if path == followers_path || path == following_path => {
+            activitypub_graph_collection(&env, url, path.trim_start_matches(&format!("{prefix}/")))
+                .await
         }
-        (worker::Method::Get, "/users/social/followers_synchronization") => {
+        worker::Method::Get if path == followers_sync_path => {
             activitypub_followers_synchronization(&env, url, &req).await
         }
-        (worker::Method::Options, "/users/social/inbox") => activitypub_inbox_options(),
-        (worker::Method::Post, "/users/social/inbox") => {
-            activitypub_inbox_post(&env, &mut req).await
-        }
-        (worker::Method::Get, _) if path.starts_with("/users/social/posts/") => {
+        worker::Method::Options if path == inbox_path => activitypub_inbox_options(),
+        worker::Method::Post if path == inbox_path => activitypub_inbox_post(&env, &mut req).await,
+        worker::Method::Get if path.starts_with(&posts_prefix) => {
             activitypub_post(&env, url, &req).await
         }
         _ => Response::error("Not found", 404),
     }
 }
 
-fn activitypub_webfinger(url: &worker::Url) -> Result<Response> {
+fn activitypub_webfinger(env: &Env, url: &worker::Url) -> Result<Response> {
     let resource = query_param(url, "resource").unwrap_or_default();
     let normalized = resource.trim().to_ascii_lowercase();
-    if !matches!(
-        normalized.as_str(),
-        "acct:social@dais.social" | "acct:social@social.dais.social"
-    ) && !normalized.starts_with("acct:social@router-rust-candidate.")
+    let username = local_username(env);
+    let accepted_apex = format!("acct:{}@{}", username, handle_domain(env)).to_ascii_lowercase();
+    let accepted_activitypub =
+        format!("acct:{}@{}", username, activitypub_domain(env)).to_ascii_lowercase();
+    if normalized != accepted_apex
+        && normalized != accepted_activitypub
+        && !normalized.starts_with(&format!("acct:{username}@router-rust-candidate."))
     {
         return Response::error("Resource not found", 404);
     }
-    let actor_url = format!("{}/users/social", origin(url));
+    let actor_url = local_actor_url_for_request(env, url);
     jrd_json(
         &serde_json::json!({
             "subject": resource,
@@ -607,7 +652,7 @@ async fn activitypub_actor(env: &Env, url: &worker::Url) -> Result<Response> {
         "preferredUsername": username,
         "name": display_name,
         "summary": summary,
-        "url": format!("{origin}/@social"),
+        "url": format!("{origin}/@{username}"),
         "inbox": format!("{actor_url}/inbox"),
         "outbox": format!("{actor_url}/outbox"),
         "followers": format!("{actor_url}/followers"),
@@ -681,10 +726,11 @@ fn activitypub_actor_profile_html(profile: &OwnerProfile, posts: &[Map<String, V
             .join("")
     };
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.5;color:#111827}}a{{color:#0f766e}}article{{border-top:1px solid #d1d5db;padding:18px 0}}time{{color:#6b7280;font-size:.9rem}}.summary{{color:#374151}}</style></head><body><header><h1>{}</h1><p class=\"summary\">{}</p><p><a rel=\"alternate\" type=\"application/activity+json\" href=\"/users/social/outbox\">ActivityPub outbox</a></p></header><main><h2>Public posts</h2>{}</main></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.5;color:#111827}}a{{color:#0f766e}}article{{border-top:1px solid #d1d5db;padding:18px 0}}time{{color:#6b7280;font-size:.9rem}}.summary{{color:#374151}}</style></head><body><header><h1>{}</h1><p class=\"summary\">{}</p><p><a rel=\"alternate\" type=\"application/activity+json\" href=\"/users/{}/outbox\">ActivityPub outbox</a></p></header><main><h2>Public posts</h2>{}</main></body></html>",
         escape_html(&display_name),
         escape_html(&display_name),
         escape_html(&summary),
+        escape_html(&profile.username),
         posts_html,
     )
 }
@@ -707,7 +753,7 @@ fn activitypub_actor_post_html(row: &Map<String, Value>) -> String {
 
 async fn activitypub_outbox(env: &Env, url: &worker::Url) -> Result<Response> {
     let origin = origin(url);
-    let actor_url = format!("{origin}/users/social");
+    let actor_url = local_actor_url_for_request(env, url);
     let rows = mastodon_status_rows(env, "posts", 20, url).await?;
     let total = public_status_count(env).await?;
     let ordered_items = rows
@@ -741,7 +787,7 @@ async fn activitypub_outbox(env: &Env, url: &worker::Url) -> Result<Response> {
 
 async fn activitypub_post(env: &Env, url: &worker::Url, req: &Request) -> Result<Response> {
     let origin = origin(url);
-    let id = format!("https://social.dais.social{}", url.path());
+    let id = format!("{origin}{}", url.path());
     let row = match mastodon_status_row(env, &id).await? {
         Some(row) => row,
         None => {
@@ -1059,7 +1105,7 @@ fn display_local_url(origin: &str, value: &str) -> String {
         .ok()
         .and_then(|url| {
             let path = url.path();
-            (url.host_str() == Some("social.dais.social") && path.starts_with("/users/social/"))
+            (is_known_activitypub_host(url.host_str()) && path.starts_with("/users/social/"))
                 .then(|| format!("{origin}{path}"))
         })
         .unwrap_or_else(|| value.to_string())
@@ -1506,9 +1552,10 @@ fn jrd_json<T: Serialize>(value: &T, status: u16) -> Result<Response> {
 }
 
 async fn mastodon_instance(env: &Env, v2: bool) -> Result<Value> {
+    let activitypub_domain = activitypub_domain(env);
     let mut instance = serde_json::json!({
-        "uri": "social.dais.social",
-        "domain": "social.dais.social",
+        "uri": activitypub_domain.clone(),
+        "domain": activitypub_domain.clone(),
         "title": "dais",
         "short_description": "Private-by-default single-user social server",
         "description": "dais speaks ActivityPub and AT Protocol with private-by-default posting.",
@@ -1517,7 +1564,7 @@ async fn mastodon_instance(env: &Env, v2: bool) -> Result<Value> {
         "registrations": false,
         "approval_required": true,
         "invites_enabled": false,
-        "urls": { "streaming_api": "wss://social.dais.social" },
+        "urls": { "streaming_api": format!("wss://{}", activitypub_domain) },
         "stats": {
             "user_count": 1,
             "status_count": public_status_count(env).await?,
@@ -1575,7 +1622,7 @@ async fn handle_media(req: Request, env: Env, url: &worker::Url) -> Result<Respo
         if !signed_approved_follower(&env, &req).await? {
             return Response::error("Signed media fetch requires an approved follower", 403);
         }
-        if !private_media_attached_post(&env, path).await? {
+        if !private_media_attached_post(&env, &origin(&url), path).await? {
             return Response::error("Not found", 404);
         }
     } else if path.starts_with("/media/_private/") {
@@ -1620,8 +1667,12 @@ fn media_r2_key_from_path(path: &str) -> Option<String> {
         .filter(|key| !key.trim().is_empty() && !key.contains(".."))
 }
 
-async fn private_media_attached_post(env: &Env, media_path: &str) -> Result<bool> {
-    let media_url = format!("https://social.dais.social{media_path}");
+async fn private_media_attached_post(
+    env: &Env,
+    request_origin: &str,
+    media_path: &str,
+) -> Result<bool> {
+    let media_url = format!("{request_origin}{media_path}");
     let rows = env
         .d1("DB")?
         .prepare(
@@ -1730,6 +1781,7 @@ async fn mastodon_preferences(env: &Env) -> Result<Value> {
 
 async fn mastodon_account(env: &Env) -> Result<Value> {
     let db = env.d1("DB")?;
+    let actor_origin = format!("https://{}", activitypub_domain(env));
     let actor = db
         .prepare(
             "SELECT id, username, display_name, summary, avatar_url, header_url, created_at FROM actors WHERE username = 'social' LIMIT 1",
@@ -1746,7 +1798,7 @@ async fn mastodon_account(env: &Env) -> Result<Value> {
         .await?;
     let username = string_field(actor.as_ref(), "username").unwrap_or_else(|| "social".to_string());
     let actor_id = string_field(actor.as_ref(), "id")
-        .unwrap_or_else(|| format!("https://social.dais.social/users/{username}"));
+        .unwrap_or_else(|| format!("{actor_origin}/users/{username}"));
     let display_name =
         string_field(actor.as_ref(), "display_name").unwrap_or_else(|| username.clone());
     let summary = string_field(actor.as_ref(), "summary").unwrap_or_default();
@@ -1766,7 +1818,7 @@ async fn mastodon_account(env: &Env) -> Result<Value> {
         "group": false,
         "created_at": created_at,
         "note": summary,
-        "url": format!("https://social.dais.social/users/{username}"),
+        "url": format!("{actor_origin}/users/{username}"),
         "avatar": avatar,
         "avatar_static": avatar,
         "header": header,
@@ -2369,7 +2421,7 @@ fn mastodon_media_attachment_from_upload(
 }
 
 async fn mastodon_media_attachment_for_id(env: &Env, id: &str) -> Result<Option<Value>> {
-    let Some(key) = mastodon_media_r2_key(id) else {
+    let Some(key) = mastodon_media_r2_key(env, id) else {
         return Ok(None);
     };
     let bucket = env.bucket("MEDIA_BUCKET")?;
@@ -2386,6 +2438,7 @@ async fn mastodon_media_attachment_for_id(env: &Env, id: &str) -> Result<Option<
         .cloned()
         .unwrap_or_else(|| decode_component(key.rsplit('/').next().unwrap_or("media")));
     Ok(Some(mastodon_media_attachment_for_key(
+        env,
         &key,
         &media_type,
         &description,
@@ -2397,7 +2450,7 @@ async fn mastodon_update_media_attachment(
     id: &str,
     description: Option<String>,
 ) -> Result<Option<Value>> {
-    let Some(key) = mastodon_media_r2_key(id) else {
+    let Some(key) = mastodon_media_r2_key(env, id) else {
         return Ok(None);
     };
     let bucket = env.bucket("MEDIA_BUCKET")?;
@@ -2430,8 +2483,13 @@ async fn mastodon_update_media_attachment(
     mastodon_media_attachment_for_id(env, id).await
 }
 
-fn mastodon_media_attachment_for_key(key: &str, media_type: &str, description: &str) -> Value {
-    let url = format!("https://social.dais.social/media/{key}");
+fn mastodon_media_attachment_for_key(
+    env: &Env,
+    key: &str,
+    media_type: &str,
+    description: &str,
+) -> Value {
+    let url = format!("https://{}/media/{key}", activitypub_domain(env));
     serde_json::json!({
         "id": url,
         "type": mastodon_media_attachment_type(media_type),
@@ -2456,9 +2514,9 @@ fn mastodon_media_attachment_type(media_type: &str) -> &'static str {
     }
 }
 
-fn mastodon_media_r2_key(id: &str) -> Option<String> {
+fn mastodon_media_r2_key(env: &Env, id: &str) -> Option<String> {
     let parsed = worker::Url::parse(id).ok()?;
-    if parsed.host_str()? != "social.dais.social" {
+    if parsed.host_str()? != activitypub_domain(env) {
         return None;
     }
     let rest = parsed.path().strip_prefix("/media/uploads/")?;
@@ -4013,8 +4071,7 @@ async fn owner_profile(env: &Env) -> Result<OwnerProfile> {
         .first::<Map<String, Value>>(None)
         .await?;
     let username = string_field(row.as_ref(), "username").unwrap_or_else(|| "social".to_string());
-    let actor_url = string_field(row.as_ref(), "id")
-        .unwrap_or_else(|| "https://social.dais.social/users/social".to_string());
+    let actor_url = string_field(row.as_ref(), "id").unwrap_or_else(|| local_actor_url(env));
     let actor_type =
         string_field(row.as_ref(), "actor_type").unwrap_or_else(|| "Person".to_string());
     let handle_domain = env
@@ -4183,8 +4240,9 @@ async fn owner_upload_media(
     };
 
     let description = body.get("description").and_then(optional_body_string);
+    let actor_url = local_actor_url(env);
     let custom_metadata = media_custom_metadata(MediaMetadataInput {
-        owner: LOCAL_ACTOR_URL,
+        owner: &actor_url,
         access: &access,
         media_type: &media_type,
         bytes: &bytes,
@@ -4216,7 +4274,8 @@ async fn owner_upload_media(
 
     let url = if access == "private" {
         format!(
-            "https://social.dais.social/media/{}/{}/{}",
+            "https://{}/media/{}/{}/{}",
+            activitypub_domain(env),
             if require_authorized_fetch {
                 "_private_signed"
             } else {
@@ -4226,7 +4285,7 @@ async fn owner_upload_media(
             safe_name
         )
     } else {
-        format!("https://social.dais.social/media/{key}")
+        format!("https://{}/media/{key}", activitypub_domain(env))
     };
     let mut attachment = Map::new();
     attachment.insert(
@@ -4248,10 +4307,7 @@ async fn owner_upload_media(
     response.insert("url".to_string(), Value::String(url));
     response.insert("media_type".to_string(), Value::String(media_type));
     response.insert("access".to_string(), Value::String(access));
-    response.insert(
-        "owner".to_string(),
-        Value::String(LOCAL_ACTOR_URL.to_string()),
-    );
+    response.insert("owner".to_string(), Value::String(actor_url));
     response.insert("size".to_string(), Value::from(media_size));
     response.insert("hash".to_string(), Value::String(media_hash));
     response.insert("created_at".to_string(), Value::String(created_at));
@@ -5896,8 +5952,7 @@ async fn owner_create_post(
         .first::<Map<String, Value>>(None)
         .await
         .map_err(|error| error.to_string())?;
-    let actor_id = string_field(actor.as_ref(), "id")
-        .unwrap_or_else(|| "https://social.dais.social/users/social".to_string());
+    let actor_id = string_field(actor.as_ref(), "id").unwrap_or_else(|| local_actor_url(env));
     let audience_list_id = audience_list_id.and_then(|value| {
         let trimmed = value.trim().to_string();
         if trimmed.is_empty() {
@@ -10586,8 +10641,7 @@ async fn owner_local_actor(env: &Env) -> Result<LocalActor> {
         .or_else(|| string_field(row.as_ref(), "private_key"))
         .unwrap_or_default();
     Ok(LocalActor {
-        id: string_field(row.as_ref(), "id")
-            .unwrap_or_else(|| "https://social.dais.social/users/social".to_string()),
+        id: string_field(row.as_ref(), "id").unwrap_or_else(|| local_actor_url(env)),
         private_key,
     })
 }
@@ -10729,7 +10783,7 @@ fn optional_url_field(
 
 fn media_r2_key_from_url(value: &str) -> Option<String> {
     let parsed = worker::Url::parse(value).ok()?;
-    if parsed.host_str()? != "social.dais.social" {
+    if !is_known_activitypub_host(parsed.host_str()) {
         return None;
     }
     let path = parsed.path();
@@ -11434,7 +11488,7 @@ fn is_private_media_attachment(value: &Value) -> bool {
         .and_then(Value::as_str)
         .and_then(|url| worker::Url::parse(url).ok())
         .map(|url| {
-            url.host_str() == Some("social.dais.social")
+            is_known_activitypub_host(url.host_str())
                 && (url.path().starts_with("/media/_private/")
                     || url.path().starts_with("/media/_private_signed/"))
         })
@@ -11445,7 +11499,7 @@ fn is_local_object_url(value: &str) -> bool {
     worker::Url::parse(value)
         .ok()
         .map(|url| {
-            url.host_str() == Some("social.dais.social") && url.path().starts_with("/users/social/")
+            is_known_activitypub_host(url.host_str()) && url.path().starts_with("/users/social/")
         })
         .unwrap_or(false)
 }
@@ -11455,10 +11509,20 @@ fn canonical_mastodon_status_id(value: &str) -> String {
         .ok()
         .and_then(|url| {
             let path = url.path();
-            (path.starts_with("/users/social/posts/") && !path.ends_with('/'))
-                .then(|| format!("https://social.dais.social{path}"))
+            (path.starts_with("/users/social/posts/") && !path.ends_with('/')).then(|| {
+                format!(
+                    "{}://{}{}",
+                    url.scheme(),
+                    url.host_str().unwrap_or_default(),
+                    path
+                )
+            })
         })
         .unwrap_or_else(|| value.to_string())
+}
+
+fn is_known_activitypub_host(host: Option<&str>) -> bool {
+    matches!(host, Some("social.dais.social") | Some("social.skpt.cl"))
 }
 
 fn timestamp_for_local_id(iso: &str) -> String {
@@ -12211,12 +12275,7 @@ fn require_owner_bearer(
     required_scopes: &[&str],
 ) -> Result<Option<Response>> {
     let tokens = owner_bearer_tokens(env);
-    if tokens.is_empty()
-        && env
-            .var("ENVIRONMENT")
-            .map(|value| value.to_string() == "production")
-            .unwrap_or(false)
-    {
+    if tokens.is_empty() && remote_environment(env) {
         return Ok(Some(api_json(
             &serde_json::json!({ "error": "OWNER_API_TOKEN is not configured" }),
             503,
@@ -12243,15 +12302,16 @@ fn require_owner_bearer(
 
 fn require_mastodon_bearer(req: &Request, env: &Env) -> Result<Option<Response>> {
     let configured = env
-        .var("OWNER_API_TOKEN")
-        .or_else(|_| env.var("DAIS_OWNER_TOKEN"))
+        .secret("OWNER_API_TOKEN")
         .map(|value| value.to_string())
+        .or_else(|_| {
+            env.secret("DAIS_OWNER_TOKEN")
+                .map(|value| value.to_string())
+        })
+        .or_else(|_| env.var("OWNER_API_TOKEN").map(|value| value.to_string()))
+        .or_else(|_| env.var("DAIS_OWNER_TOKEN").map(|value| value.to_string()))
         .unwrap_or_default();
-    let is_production = env
-        .var("ENVIRONMENT")
-        .map(|value| value.to_string() == "production")
-        .unwrap_or(false);
-    if configured.is_empty() && is_production {
+    if configured.is_empty() && remote_environment(env) {
         return Ok(Some(api_json(
             &serde_json::json!({ "error": "OWNER_API_TOKEN is not configured" }),
             503,
@@ -12278,15 +12338,16 @@ fn require_mastodon_bearer(req: &Request, env: &Env) -> Result<Option<Response>>
 fn owner_bearer_tokens(env: &Env) -> Vec<OwnerToken> {
     let mut tokens = Vec::new();
     let configured = env
-        .var("OWNER_API_TOKEN")
-        .or_else(|_| env.var("DAIS_OWNER_TOKEN"))
+        .secret("OWNER_API_TOKEN")
         .map(|value| value.to_string())
+        .or_else(|_| {
+            env.secret("DAIS_OWNER_TOKEN")
+                .map(|value| value.to_string())
+        })
+        .or_else(|_| env.var("OWNER_API_TOKEN").map(|value| value.to_string()))
+        .or_else(|_| env.var("DAIS_OWNER_TOKEN").map(|value| value.to_string()))
         .unwrap_or_else(|_| {
-            if env
-                .var("ENVIRONMENT")
-                .map(|value| value.to_string() == "production")
-                .unwrap_or(false)
-            {
+            if remote_environment(env) {
                 String::new()
             } else {
                 "dais-local-owner-token".to_string()
@@ -12300,6 +12361,12 @@ fn owner_bearer_tokens(env: &Env) -> Vec<OwnerToken> {
     }
     tokens.extend(scoped_owner_tokens(env));
     tokens
+}
+
+fn remote_environment(env: &Env) -> bool {
+    env.var("ENVIRONMENT")
+        .map(|value| value.to_string() != "dev")
+        .unwrap_or(false)
 }
 
 fn scoped_owner_tokens(env: &Env) -> Vec<OwnerToken> {

@@ -1,0 +1,36 @@
+id = "skpt-cl"
+environment = "skpt"
+description = "Independent Dais instance for skpt.cl cross-instance testing."
+
+[identity]
+handle_domain = "skpt.cl"
+activitypub_domain = "social.skpt.cl"
+pds_hostname = "pds.skpt.cl"
+username = "social"
+actor_url = "https://social.skpt.cl/users/social"
+
+[cloudflare]
+account_id = "248ac0655d8619f33b402e64be9f8f41"
+worker_domain = "marc-t-jones.workers.dev"
+
+[resources]
+d1_database_name = "dais-skpt"
+d1_database_id = "39490363-8871-4c24-b28e-4873e6a25a0a"
+r2_bucket = "dais-media-skpt"
+delivery_queue = "delivery-queue-skpt"
+delivery_dead_letter_queue = "delivery-dlq-skpt"
+
+[workers]
+actor = "actor-skpt"
+auth = "auth-skpt"
+delivery_queue = "delivery-queue-skpt"
+inbox = "inbox-skpt"
+landing = "landing-skpt"
+outbox = "outbox-skpt"
+pds = "pds-skpt"
+router = "router-skpt"
+webfinger = "webfinger-skpt"
+
+[routes]
+activitypub = "social.skpt.cl"
+pds = "pds.skpt.cl"

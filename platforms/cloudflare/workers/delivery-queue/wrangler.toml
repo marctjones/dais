@@ -42,3 +42,30 @@ bucket_name = "dais-media"
 [env.production.vars]
 DOMAIN = "dais.social"
 ACTIVITYPUB_DOMAIN = "social.dais.social"
+
+[env.skpt]
+name = "delivery-queue-skpt"
+
+[[env.skpt.queues.producers]]
+binding = "DELIVERY_QUEUE"
+queue = "delivery-queue-skpt"
+
+[[env.skpt.queues.consumers]]
+queue = "delivery-queue-skpt"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 3
+dead_letter_queue = "delivery-dlq-skpt"
+
+[[env.skpt.d1_databases]]
+binding = "DB"
+database_name = "dais-skpt"
+database_id = "39490363-8871-4c24-b28e-4873e6a25a0a"
+
+[[env.skpt.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media-skpt"
+
+[env.skpt.vars]
+DOMAIN = "skpt.cl"
+ACTIVITYPUB_DOMAIN = "social.skpt.cl"

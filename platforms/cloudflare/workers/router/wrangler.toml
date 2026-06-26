@@ -44,9 +44,45 @@ crons = ["*/30 * * * *"]
 
 [env.production.vars]
 ENVIRONMENT = "production"
+DOMAIN = "dais.social"
+ACTIVITYPUB_DOMAIN = "social.dais.social"
+USERNAME = "social"
 WEBFINGER_URL = "https://webfinger-production.marc-t-jones.workers.dev"
 ACTOR_URL = "https://actor-production.marc-t-jones.workers.dev"
 INBOX_URL = "https://inbox-production.marc-t-jones.workers.dev"
 OUTBOX_URL = "https://outbox-production.marc-t-jones.workers.dev"
 PDS_URL = "https://pds-production.marc-t-jones.workers.dev"
 DELIVERY_QUEUE_URL = "https://delivery-queue-production.marc-t-jones.workers.dev"
+
+[env.skpt]
+name = "router-skpt"
+routes = [
+  { pattern = "social.skpt.cl", custom_domain = true }
+]
+
+[[env.skpt.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "dais-media-skpt"
+
+[[env.skpt.d1_databases]]
+binding = "DB"
+database_name = "dais-skpt"
+database_id = "39490363-8871-4c24-b28e-4873e6a25a0a"
+
+[env.skpt.ai]
+binding = "AI"
+
+[env.skpt.triggers]
+crons = ["*/30 * * * *"]
+
+[env.skpt.vars]
+ENVIRONMENT = "skpt"
+DOMAIN = "skpt.cl"
+ACTIVITYPUB_DOMAIN = "social.skpt.cl"
+USERNAME = "social"
+WEBFINGER_URL = "https://webfinger-skpt.marc-t-jones.workers.dev"
+ACTOR_URL = "https://actor-skpt.marc-t-jones.workers.dev"
+INBOX_URL = "https://inbox-skpt.marc-t-jones.workers.dev"
+OUTBOX_URL = "https://outbox-skpt.marc-t-jones.workers.dev"
+PDS_URL = "https://pds-skpt.marc-t-jones.workers.dev"
+DELIVERY_QUEUE_URL = "https://delivery-queue-skpt.marc-t-jones.workers.dev"

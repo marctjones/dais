@@ -23,3 +23,15 @@ DOMAIN = "dais.social"
 ACTIVITYPUB_DOMAIN = "social.dais.social"
 USERNAME = "social"
 WEBFINGER_URL = "https://webfinger-production.marc-t-jones.workers.dev"
+
+[env.skpt]
+name = "landing-skpt"
+routes = [
+  { pattern = "skpt.cl/.well-known/webfinger*", zone_name = "skpt.cl" }
+]
+
+[env.skpt.vars]
+DOMAIN = "skpt.cl"
+ACTIVITYPUB_DOMAIN = "social.skpt.cl"
+USERNAME = "social"
+WEBFINGER_URL = "https://webfinger-skpt.marc-t-jones.workers.dev"
