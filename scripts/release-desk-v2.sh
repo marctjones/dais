@@ -96,7 +96,7 @@ run_cmd "Bluesky conformance gate" env DAIS_CONFORMANCE_ONLY=bluesky cargo test 
 run_cmd "Design alignment progress evidence" test -f docs/guides/DESIGN_ALIGNMENT_MATRIX.md
 run_cmd "Desk product completeness audit evidence" test -f docs/guides/DESK_PRODUCT_COMPLETENESS_AUDIT.md
 run_cmd "Design coverage screenshots present" bash -c '
-  for shot in home home-compose-media home-inbox-notifications home-reading home-today people-find-search people-relationship people-friends people-followers people-following people-watches-sources people-audience-groups people-blocks server-health server-deliveries server-stats server-identity server-moderation server-security server-settings server-accounts; do
+  for shot in home home-compose-media home-inbox-notifications home-reading home-today workflow-save-post workflow-reply-compose people-find-search people-relationship people-friends people-followers people-following people-watches-sources people-audience-groups workflow-audience-compose workflow-follower-approve people-blocks server-health server-deliveries server-stats server-identity server-moderation server-security server-settings server-accounts; do
     path="apps/dais-desk/target/dais-desk-screenshots/${shot}.png"
     if [ ! -f "${path}" ]; then
       echo "Missing required screenshot: ${shot}.png"
@@ -123,7 +123,7 @@ run_cmd "Design coverage screenshots present" bash -c '
   echo "- Report: \`${REPORT_FILE}\`"
   echo
   echo "- Desk screenshots:"
-  for screenshot in home home-compose-media home-inbox-notifications home-reading home-today people-find-search people-relationship people-friends people-followers people-following people-watches-sources people-audience-groups people-blocks server-health server-deliveries server-stats server-identity server-moderation server-security server-settings server-accounts; do
+  for screenshot in home home-compose-media home-inbox-notifications home-reading home-today workflow-save-post workflow-reply-compose people-find-search people-relationship people-friends people-followers people-following people-watches-sources people-audience-groups workflow-audience-compose workflow-follower-approve people-blocks server-health server-deliveries server-stats server-identity server-moderation server-security server-settings server-accounts; do
     path="${ROOT_DIR}/apps/dais-desk/target/dais-desk-screenshots/${screenshot}.png"
     if [ -f "${path}" ]; then
       echo "  - ✅ ${screenshot}.png"

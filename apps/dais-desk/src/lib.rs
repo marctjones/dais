@@ -972,7 +972,7 @@ impl DeskController {
             Ok(message) => self.status_message = message,
             Err(error) => self.status_message = format!("{action} failed: {error}"),
         }
-        if matches!(
+        let should_refresh_after_action = matches!(
             action,
             "Favorite"
                 | "Boost"
@@ -999,7 +999,14 @@ impl DeskController {
                 | "Unblock"
                 | "Revoke media"
                 | "Delete draft"
-        ) {
+        );
+        let preview_mode = self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty();
+        if should_refresh_after_action && (!preview_mode || action == "Refresh") {
             self.refresh();
         }
     }
@@ -1086,7 +1093,15 @@ impl DeskController {
                 self.compose.audience_list_id = None;
                 self.compose.attachments.clear();
                 self.active_screen = "today".into();
-                self.refresh();
+                if !self
+                    .settings
+                    .owner_token
+                    .as_deref()
+                    .unwrap_or("")
+                    .is_empty()
+                {
+                    self.refresh();
+                }
             }
             Err(error) => self.status_message = format!("Post failed: {error}"),
         }

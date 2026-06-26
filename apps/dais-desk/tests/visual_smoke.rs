@@ -38,8 +38,14 @@ fn run() -> Result<(), Box<dyn Error>> {
     capture(&window, &output_dir, "home-inbox-notifications")?;
     window.invoke_select_screen("reading".into());
     capture(&window, &output_dir, "home-reading")?;
+    window.invoke_row_action("timeline:fixture-private-post".into(), "Save".into());
+    capture(&window, &output_dir, "workflow-save-post")?;
     window.invoke_select_screen("today".into());
     capture(&window, &output_dir, "home-today")?;
+
+    window.invoke_select_screen("inbox".into());
+    window.invoke_row_action("notification:notice-reply".into(), "Reply".into());
+    capture(&window, &output_dir, "workflow-reply-compose")?;
 
     window.invoke_select_mode("people".into());
     window.invoke_select_screen("find".into());
@@ -59,6 +65,16 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     window.invoke_select_screen("audience".into());
     capture(&window, &output_dir, "people-audience-groups")?;
+    window.invoke_row_action("audience:close-friends".into(), "Use in compose".into());
+    capture(&window, &output_dir, "workflow-audience-compose")?;
+    window.invoke_select_mode("people".into());
+    window.invoke_select_screen("followers".into());
+    window.invoke_row_action(
+        "follower:https://new.example/users/follower".into(),
+        "Approve".into(),
+    );
+    capture(&window, &output_dir, "workflow-follower-approve")?;
+    window.invoke_select_screen("audience".into());
     window.invoke_select_screen("blocks".into());
     capture(&window, &output_dir, "people-blocks")?;
 

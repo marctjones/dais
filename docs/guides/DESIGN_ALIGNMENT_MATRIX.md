@@ -82,8 +82,8 @@ Evidence:
 
 | Screen | Coverage |
 | --- | --- |
-| Home | `home`, `home-compose-media`, `home-inbox-notifications`, `home-reading`, `home-today` |
-| People | `people-find-search`, `people-relationship`, `people-friends`, `people-followers`, `people-following`, `people-watches-sources`, `people-audience-groups`, `people-blocks` |
+| Home | `home`, `home-compose-media`, `home-inbox-notifications`, `home-reading`, `home-today`, `workflow-save-post`, `workflow-reply-compose` |
+| People | `people-find-search`, `people-relationship`, `people-friends`, `people-followers`, `people-following`, `people-watches-sources`, `people-audience-groups`, `workflow-audience-compose`, `workflow-follower-approve`, `people-blocks` |
 | Server | `server-health`, `server-deliveries`, `server-stats`, `server-identity`, `server-moderation`, `server-security`, `server-settings`, `server-accounts` |
 
 Progress is considered complete when:

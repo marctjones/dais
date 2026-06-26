@@ -8,6 +8,7 @@ fn click_label(window: &dais_desk::MainWindow, label: &str) {
         "expected to find an accessible control labelled {label:?}"
     );
     matches[0].mock_single_click(PointerEventButton::Left);
+    slint::platform::update_timers_and_animations();
 }
 
 #[test]
@@ -44,4 +45,57 @@ fn navigates_primary_workflows_through_accessible_controls() {
         "expected the feature-complete shell to expose many actionable controls, found {}",
         buttons.len()
     );
+}
+
+#[test]
+fn exercises_normal_owner_task_flows_through_projection() {
+    let mut controller = dais_desk::DeskController::fixture_for_tests();
+
+    controller.select_screen("reading");
+    let projection = controller.projection();
+    assert_eq!(projection.active_mode, "home");
+    assert_eq!(projection.active_screen, "reading");
+    assert!(projection
+        .rows
+        .iter()
+        .any(|row| row.id == "timeline:fixture-private-post"));
+    assert!(projection.rows.iter().any(|row| row.id
+        == "url:https://social.example/users/nobel/posts/1"
+        && row.subtitle == "Watched public post"));
+
+    controller.row_action("timeline:fixture-private-post", "Save");
+    let status = controller.projection().status_message;
+    assert!(
+        status.contains("owner-only bookmark"),
+        "unexpected save status: {status}"
+    );
+
+    controller.select_screen("inbox");
+    controller.row_action("notification:notice-reply", "Reply");
+    let projection = controller.projection();
+    assert_eq!(projection.active_screen, "compose");
+    assert_eq!(projection.compose_visibility, "followers");
+    assert!(projection.status_message.contains("reply"));
+
+    controller.select_mode("people");
+    controller.select_screen("audience");
+    controller.row_action("audience:close-friends", "Use in compose");
+    let projection = controller.projection();
+    assert_eq!(projection.active_mode, "home");
+    assert_eq!(projection.active_screen, "compose");
+    assert_eq!(projection.compose_visibility, "direct");
+    assert_eq!(projection.compose_audience_list, "close-friends");
+
+    controller.update_compose_from_ui("GUI workflow reply", "", "close-friends", "", false);
+    controller.compose_send();
+    let status = controller.projection().status_message;
+    assert!(
+        status.contains("Preview post prepared"),
+        "unexpected compose status: {status}"
+    );
+
+    controller.select_mode("people");
+    controller.select_screen("followers");
+    controller.row_action("follower:https://new.example/users/follower", "Approve");
+    assert!(controller.projection().status_message.contains("approved"));
 }

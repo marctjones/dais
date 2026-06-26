@@ -99,8 +99,10 @@ Required screenshot names at release time:
 
 ```text
 home, home-compose-media, home-inbox-notifications, home-reading, home-today,
+workflow-save-post, workflow-reply-compose,
 people-find-search, people-relationship, people-friends, people-followers, people-following,
 people-watches-sources, people-audience-groups, people-blocks,
+workflow-audience-compose, workflow-follower-approve,
 server-health, server-deliveries, server-stats, server-identity, server-moderation, server-security, server-settings, server-accounts
 ```
 ```
