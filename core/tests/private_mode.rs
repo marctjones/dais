@@ -23,6 +23,7 @@ struct FakeDbState {
     friends_rows: Vec<Row>,
     home_rows: Vec<Row>,
     timeline_posts: HashMap<String, Row>,
+    replies: HashMap<String, Row>,
     conversations: HashMap<String, Row>,
     direct_messages: HashMap<String, Row>,
     participants: HashSet<(String, String)>,
@@ -155,6 +156,10 @@ impl FakeDb {
             .direct_messages
             .get(message_id)
             .cloned()
+    }
+
+    fn reply(&self, reply_id: &str) -> Option<Row> {
+        self.state.lock().unwrap().replies.get(reply_id).cloned()
     }
 
     fn conversation(&self, conversation_id: &str) -> Option<Row> {
@@ -407,6 +412,27 @@ impl DatabaseProvider for FakeDb {
             insert_row_value(&mut row, "content", params.get(3));
             insert_row_value(&mut row, "published_at", params.get(4));
             state.direct_messages.insert(message_id.to_string(), row);
+            return Ok(Vec::new());
+        }
+
+        if sql.contains("INSERT OR IGNORE INTO replies") {
+            let reply_id = params.first().and_then(Value::as_str).unwrap_or_default();
+            let mut row = Row::new();
+            insert_row_value(&mut row, "id", params.first());
+            insert_row_value(&mut row, "post_id", params.get(1));
+            insert_row_value(&mut row, "actor_id", params.get(2));
+            insert_row_value(&mut row, "actor_username", params.get(3));
+            insert_row_value(&mut row, "actor_display_name", params.get(4));
+            insert_row_value(&mut row, "actor_avatar_url", params.get(5));
+            insert_row_value(&mut row, "content", params.get(6));
+            insert_row_value(&mut row, "published_at", params.get(7));
+            insert_row_value(&mut row, "visibility", params.get(8));
+            insert_row_value(&mut row, "moderation_status", params.get(9));
+            insert_row_value(&mut row, "moderation_score", params.get(10));
+            insert_row_value(&mut row, "moderation_flags", params.get(11));
+            insert_row_value(&mut row, "moderation_checked_at", params.get(12));
+            insert_row_value(&mut row, "hidden", params.get(13));
+            state.replies.insert(reply_id.to_string(), row);
             return Ok(Vec::new());
         }
 
@@ -1123,6 +1149,69 @@ async fn inbox_direct_message_uses_conversation_schema() {
         .get_string("participants")
         .expect("participants json should be stored")
         .contains(local_actor));
+}
+
+#[tokio::test]
+async fn inbox_reply_preserves_followers_only_visibility() {
+    let db = FakeDb::default();
+    let http = FakeHttp {
+        actor_json: json!({
+            "preferredUsername": "alice",
+            "name": "Alice",
+            "icon": { "url": "https://remote.example/avatar.png" }
+        })
+        .to_string(),
+    };
+
+    let local_post = "https://social.dais.social/users/social/posts/private-root";
+    db.insert_post(
+        "https://social.dais.social/users/social",
+        local_post,
+        "followers root",
+        "followers",
+        None,
+    );
+
+    let activity = activitypub::Activity {
+        context: activitypub::Context::default(),
+        activity_type: "Create".to_string(),
+        id: "https://remote.example/activities/reply-1".to_string(),
+        actor: "https://remote.example/users/alice".to_string(),
+        object: Some(json!({
+            "type": "Note",
+            "id": "https://remote.example/users/alice/statuses/reply-1",
+            "content": "followers-only reply",
+            "published": "2026-06-10T12:10:00Z",
+            "inReplyTo": local_post,
+            "to": ["https://social.dais.social/users/social/followers"]
+        })),
+        target: None,
+        to: None,
+        cc: None,
+        published: Some("2026-06-10T12:10:00Z".to_string()),
+        extra: HashMap::new(),
+    };
+
+    activitypub::process_inbox_activity(
+        &db,
+        &http,
+        activity,
+        "https://social.dais.social/users/social",
+        "",
+        None,
+    )
+    .await
+    .expect("followers-only reply should ingest");
+
+    let reply = db
+        .reply("https://remote.example/users/alice/statuses/reply-1")
+        .expect("reply row should be stored");
+    assert_eq!(reply.get_string("post_id").as_deref(), Some(local_post));
+    assert_eq!(
+        reply.get_string("content").as_deref(),
+        Some("followers-only reply")
+    );
+    assert_eq!(reply.get_string("visibility").as_deref(), Some("followers"));
 }
 
 fn count_row(count: u64) -> Row {

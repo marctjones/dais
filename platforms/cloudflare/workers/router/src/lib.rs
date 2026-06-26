@@ -6330,7 +6330,7 @@ async fn owner_post_replies(env: &Env, id: &str) -> Result<Vec<Map<String, Value
     db.prepare(
         r#"
         SELECT id, actor_id, actor_username, actor_display_name, actor_avatar_url,
-               content, published_at, created_at
+               content, published_at, created_at, visibility
         FROM replies
         WHERE post_id = ?1 AND (hidden IS NULL OR hidden = 0)
         ORDER BY published_at ASC

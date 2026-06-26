@@ -714,6 +714,7 @@ async fn handle_reply(
         .get("published")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let visibility = infer_note_visibility(object);
 
     // Fetch actor info
     let (actor_username, actor_display_name, actor_avatar_url) =
@@ -744,10 +745,10 @@ async fn handle_reply(
     let insert_query = r#"
         INSERT OR IGNORE INTO replies (
             id, post_id, actor_id, actor_username, actor_display_name,
-            actor_avatar_url, content, published_at,
+            actor_avatar_url, content, published_at, visibility,
             moderation_status, moderation_score, moderation_flags,
             moderation_checked_at, hidden
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
     "#;
 
     db.execute(
@@ -761,6 +762,7 @@ async fn handle_reply(
             Value::String(actor_avatar_url.clone()),
             Value::String(content.to_string()),
             Value::String(published_at.to_string()),
+            Value::String(visibility),
             Value::String(moderation_status),
             Value::Number(serde_json::Number::from_f64(moderation_score).unwrap()),
             Value::String(moderation_flags),
