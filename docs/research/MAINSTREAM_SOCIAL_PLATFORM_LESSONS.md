@@ -519,6 +519,71 @@ Avoid:
 - channel ads that the operator cannot control;
 - crypto/financial complexity as a default product path.
 
+### Discord and Telegram watch/import feasibility
+
+Policy checked: 2026-06-26.
+
+Recommendation:
+
+- **Discord:** do not build a general Discord scraper, self-bot, user-token
+  importer, or public index connector. Treat Discord as out of scope for direct
+  watch ingestion until there is an owner-authorized bot integration for a
+  server/channel the owner controls or administers.
+- **Telegram:** support owner-authorized bot/channel imports only for channels
+  or chats where the bot is deliberately added and allowed to receive updates.
+  Do not scrape Telegram web views, broad channel directories, private chats, or
+  user-account sessions.
+- **Both:** allow manual import of owner-exported files or pasted URLs/text as
+  local, owner-only source material, with provenance labels and no automatic
+  reposting. These imports should not train models, populate public indexes, or
+  bypass platform access controls.
+
+Supported paths:
+
+- Manual import: owner supplies an export, file, URL, or paste and Dais stores it
+  as a local source with clear provenance and retention controls.
+- Discord bot integration: only for a server/channel where the owner has
+  permission to install the bot, with visible scopes and an explicit channel
+  allowlist. Store only the messages needed for the stated reader feature.
+- Telegram Bot API integration: only for channels/groups/chats where the bot is
+  added by an authorized operator and receives updates through Telegram's Bot
+  API. Channel-post and chat-member update access should be treated as explicit
+  integration state, not public crawl permission.
+
+Not appropriate:
+
+- Discord API data mining/scraping, self-bots, user-token collection, private
+  server mirroring, member profiling, or message-content use for model training.
+  Discord's developer policy requires explicit user/server permission for
+  actions, forbids credential/token collection, restricts API data use to the
+  stated functionality, and prohibits mining or scraping Discord service data.
+- Telegram broad scraping, indexing, harvesting, AI/ML dataset creation, private
+  chat mirroring, or importing content from one context into another without
+  explicit consent. Telegram's content licensing terms prohibit platform data
+  scraping/indexing/harvesting outside ordinary intended platform use, with a
+  limited exception for legitimate Telegram clients, bots, and mini apps.
+
+Product decision:
+
+- Direct connectors are **not** the default v1.32 path. Prioritize manual import
+  and owner-authorized bots. Discord should remain a future bot-integration
+  candidate, not a watch source. Telegram can be a future bot/channel connector
+  if the owner explicitly configures the bot and Dais labels the source as
+  Telegram, bot-mediated, and not end-to-end encrypted.
+
+Sources:
+
+- Discord Developer Policy:
+  <https://support-dev.discord.com/hc/en-us/articles/8563934450327-Discord-Developer-Policy>
+- Discord Developer Terms of Service:
+  <https://support-dev.discord.com/hc/en-us/articles/8562894815383-Discord-Developer-Terms-of-Service>
+- Telegram Bot API:
+  <https://core.telegram.org/bots/api>
+- Telegram Terms of Service:
+  <https://telegram.org/tos>
+- Telegram Content Licensing Terms:
+  <https://telegram.org/tos/content-licensing>
+
 ### Snapchat
 
 Build:
