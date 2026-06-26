@@ -7019,31 +7019,119 @@ fn open_url(url: &str) -> Result<(), String> {
 }
 
 fn choose_media_file_path() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(r#"POSIX path of (choose file with prompt "Choose media to upload")"#)
-            .output()
-            .map_err(|error| error.to_string())?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("-128") || stderr.to_ascii_lowercase().contains("cancel") {
-                return Ok(None);
-            }
-            return Err(stderr.trim().if_empty("native file chooser failed"));
-        }
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if path.is_empty() {
+    let command = media_file_chooser_command().ok_or_else(|| {
+        "No native media chooser found; paste a local file path instead.".to_string()
+    })?;
+    let output = Command::new(command.program)
+        .args(command.args)
+        .output()
+        .map_err(|error| error.to_string())?;
+    parse_media_chooser_output(
+        output.status.success(),
+        &output.stdout,
+        &output.stderr,
+        &command,
+    )
+}
+
+struct MediaChooserCommand {
+    program: &'static str,
+    args: &'static [&'static str],
+    cancel_markers: &'static [&'static str],
+}
+
+fn media_file_chooser_command() -> Option<MediaChooserCommand> {
+    media_file_chooser_command_for_os(std::env::consts::OS, command_available)
+}
+
+fn media_file_chooser_command_for_os(
+    os: &str,
+    available: impl Fn(&str) -> bool,
+) -> Option<MediaChooserCommand> {
+    match os {
+        "macos" => Some(MediaChooserCommand {
+            program: "osascript",
+            args: &[
+                "-e",
+                r#"POSIX path of (choose file with prompt "Choose media to upload")"#,
+            ],
+            cancel_markers: &["-128", "cancel"],
+        }),
+        "windows" => Some(MediaChooserCommand {
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-STA",
+                "-Command",
+                r#"Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title = "Choose media to upload"; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.FileName }"#,
+            ],
+            cancel_markers: &["cancel"],
+        }),
+        "linux" if available("zenity") => Some(MediaChooserCommand {
+            program: "zenity",
+            args: &["--file-selection", "--title=Choose media to upload"],
+            cancel_markers: &["no file selected", "cancel"],
+        }),
+        "linux" if available("kdialog") => Some(MediaChooserCommand {
+            program: "kdialog",
+            args: &[
+                "--getopenfilename",
+                ".",
+                "*",
+                "--title",
+                "Choose media to upload",
+            ],
+            cancel_markers: &["cancel"],
+        }),
+        _ => None,
+    }
+}
+
+fn command_available(program: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut cmd = Command::new("where");
+        cmd.arg(program);
+        cmd
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(format!("command -v {program}"));
+        cmd
+    };
+    command
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn parse_media_chooser_output(
+    success: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+    command: &MediaChooserCommand,
+) -> Result<Option<String>, String> {
+    let path = String::from_utf8_lossy(stdout).trim().to_string();
+    if success {
+        return if path.is_empty() {
             Ok(None)
         } else {
             Ok(Some(path))
-        }
+        };
     }
-    #[cfg(not(target_os = "macos"))]
+    let stderr = String::from_utf8_lossy(stderr);
+    let stderr_lower = stderr.to_ascii_lowercase();
+    if path.is_empty()
+        && (stderr.trim().is_empty()
+            || command
+                .cancel_markers
+                .iter()
+                .any(|marker| stderr_lower.contains(marker)))
     {
-        Err("native media chooser is not implemented on this platform; paste a local file path instead".into())
+        return Ok(None);
     }
+    Err(stderr.trim().if_empty("native file chooser failed"))
 }
 
 fn object_id_from_row(row_id: &str) -> Option<&str> {
@@ -10204,5 +10292,59 @@ mod tests {
         controller.media_form.media_type = "image/custom".into();
         controller.set_media_file_path("/tmp/movie.mp4");
         assert_eq!(controller.media_form.media_type, "image/custom");
+    }
+
+    #[test]
+    fn media_file_chooser_strategy_covers_supported_desktop_platforms() {
+        let mac = media_file_chooser_command_for_os("macos", |_| false).expect("mac chooser");
+        assert_eq!(mac.program, "osascript");
+
+        let windows =
+            media_file_chooser_command_for_os("windows", |_| false).expect("windows chooser");
+        assert_eq!(windows.program, "powershell");
+        assert!(windows
+            .args
+            .iter()
+            .any(|arg| arg.contains("OpenFileDialog")));
+
+        let linux_zenity =
+            media_file_chooser_command_for_os("linux", |program| program == "zenity")
+                .expect("linux zenity chooser");
+        assert_eq!(linux_zenity.program, "zenity");
+
+        let linux_kdialog =
+            media_file_chooser_command_for_os("linux", |program| program == "kdialog")
+                .expect("linux kdialog chooser");
+        assert_eq!(linux_kdialog.program, "kdialog");
+
+        assert!(media_file_chooser_command_for_os("linux", |_| false).is_none());
+    }
+
+    #[test]
+    fn media_file_chooser_output_distinguishes_selection_cancel_and_errors() {
+        let command = MediaChooserCommand {
+            program: "test",
+            args: &[],
+            cancel_markers: &["cancel"],
+        };
+        assert_eq!(
+            parse_media_chooser_output(true, b"/tmp/photo.png\n", b"", &command)
+                .expect("selection")
+                .as_deref(),
+            Some("/tmp/photo.png")
+        );
+        assert!(parse_media_chooser_output(true, b"\n", b"", &command)
+            .expect("empty success")
+            .is_none());
+        assert!(
+            parse_media_chooser_output(false, b"", b"user cancel", &command)
+                .expect("cancel")
+                .is_none()
+        );
+        assert!(
+            parse_media_chooser_output(false, b"", b"dialog crashed", &command)
+                .expect_err("error")
+                .contains("dialog crashed")
+        );
     }
 }
