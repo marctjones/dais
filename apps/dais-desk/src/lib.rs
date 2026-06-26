@@ -8232,6 +8232,49 @@ mod tests {
         }
     }
 
+    fn row_text(row: &UiRow) -> String {
+        format!(
+            "{}\n{}\n{}\n{}\n{}\n{}",
+            row.id, row.title, row.subtitle, row.detail, row.primary, row.secondary
+        )
+        .to_ascii_lowercase()
+    }
+
+    fn row_is_empty_state(row: &UiRow) -> bool {
+        row.id.as_str().ends_with(":empty")
+    }
+
+    fn row_has_placeholder_language(row: &UiRow) -> bool {
+        let text = row_text(row);
+        ["not implemented", "coming soon", "placeholder", "stub"]
+            .iter()
+            .any(|phrase| text.contains(phrase))
+            || text
+                .split(|ch: char| !ch.is_ascii_alphanumeric())
+                .any(|token| matches!(token, "todo" | "fixme"))
+    }
+
+    fn assert_primary_workflow_complete(controller: &mut DeskController, screen: &str) {
+        controller.select_screen(screen);
+        let rows = controller.rows_for_active_screen_for_projection();
+        assert!(
+            !rows.is_empty(),
+            "primary workflow screen {screen} has no rows"
+        );
+        assert!(
+            rows.iter().any(|row| !row_is_empty_state(row)),
+            "primary workflow screen {screen} is only an empty state"
+        );
+        for row in &rows {
+            assert!(
+                !row_has_placeholder_language(row),
+                "primary workflow screen {screen} contains placeholder row {}: {:?}",
+                row.id,
+                row
+            );
+        }
+    }
+
     #[test]
     fn fixture_rows_only_include_supported_primary_secondary_actions() {
         let mut controller = DeskController::fixture_for_tests();
@@ -8268,6 +8311,37 @@ mod tests {
         }
         controller.select_row("post:fixture-private-post");
         assert_supported_row_actions(&controller.inspector_rows("post:fixture-private-post"));
+    }
+
+    #[test]
+    fn product_completeness_primary_workflows_are_not_placeholders() {
+        let mut controller = DeskController::fixture_for_tests();
+        for screen in &[
+            "today",
+            "reading",
+            "inbox",
+            "compose",
+            "posts",
+            "saved",
+            "find",
+            "relationship",
+            "friends",
+            "followers",
+            "following",
+            "watches",
+            "audience",
+            "blocks",
+            "health",
+            "deliveries",
+            "moderation",
+            "security",
+            "identity",
+            "accounts",
+            "settings",
+            "stats",
+        ] {
+            assert_primary_workflow_complete(&mut controller, screen);
+        }
     }
 
     #[test]

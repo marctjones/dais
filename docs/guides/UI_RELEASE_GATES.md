@@ -39,6 +39,11 @@ The smoke gate must cover:
 Design-alignment coverage tracking lives in:
 
 - `docs/guides/DESIGN_ALIGNMENT_MATRIX.md`
+- `docs/guides/DESK_PRODUCT_COMPLETENESS_AUDIT.md`
+
+The product-completeness gate maps Home, People, Server, Discovery, Compose,
+DMs, media, and settings to the product docs. Its Rust test fails when a claimed
+primary workflow screen is empty or placeholder-only.
 
 ## Accessibility Gates
 
@@ -96,7 +101,7 @@ Required screenshot names at release time:
 home, home-compose-media, home-inbox-notifications, home-reading, home-today,
 people-find-search, people-relationship, people-friends, people-followers, people-following,
 people-watches-sources, people-audience-groups, people-blocks,
-server-health, server-deliveries, server-stats, server-identity, server-moderation, server-accounts
+server-health, server-deliveries, server-stats, server-identity, server-moderation, server-security, server-settings, server-accounts
 ```
 ```
 

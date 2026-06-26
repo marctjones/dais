@@ -19,6 +19,11 @@ and **AT Protocol (Bluesky)**.
 - **Track work in GitHub issues** (`gh issue …`), grouped under epic **#70**. Do
   not create `TODO.md` / `NOTES.md` / `SCRATCH.md` / `BACKLOG.md` style trackers,
   and avoid inline `// TODO` / `# FIXME` comments — open an issue instead.
+- **Allocate model capacity by risk** using `docs/guides/MODEL_ALLOCATION.md`.
+  Start with mini for audit/docs/triage, use the standard model for normal
+  implementation, and reserve the strongest model for crypto, privacy
+  boundaries, data recovery, large protocol refactors, release gates, and
+  security review.
 - **Cloudflare is the only supported deployment target** (Vercel/Netlify dropped).
 - Commit/push only when asked; branch off rather than committing to `release/*`
   or `main`.

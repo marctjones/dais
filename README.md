@@ -69,6 +69,7 @@ The source of truth for the product is:
 - [docs/design/PRIVATE_MODE.md](docs/design/PRIVATE_MODE.md)
 - [docs/design/PROTOCOL_ADAPTERS.md](docs/design/PROTOCOL_ADAPTERS.md)
 - [docs/design/E2EE_WIRE_FORMAT.md](docs/design/E2EE_WIRE_FORMAT.md)
+- [docs/guides/MODEL_ALLOCATION.md](docs/guides/MODEL_ALLOCATION.md)
 
 GitHub issues under epic #70 track roadmap, decisions, and active work.
 
@@ -179,6 +180,8 @@ See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the longer operational guide.
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - [docs/guides/DEVELOPMENT.md](docs/guides/DEVELOPMENT.md)
 - [docs/guides/OPERATIONAL_RUNBOOK.md](docs/guides/OPERATIONAL_RUNBOOK.md)
+- [docs/guides/DESK_PRODUCT_COMPLETENESS_AUDIT.md](docs/guides/DESK_PRODUCT_COMPLETENESS_AUDIT.md)
+- [docs/guides/MODEL_ALLOCATION.md](docs/guides/MODEL_ALLOCATION.md)
 - [docs/guides/PRIVACY_GUIDE.md](docs/guides/PRIVACY_GUIDE.md)
 - [docs/guides/FEDERATION_GUIDE.md](docs/guides/FEDERATION_GUIDE.md)
 - [docs/reference/API_DOCUMENTATION.md](docs/reference/API_DOCUMENTATION.md)

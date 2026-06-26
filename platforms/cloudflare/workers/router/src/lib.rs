@@ -635,16 +635,21 @@ async fn activitypub_actor(env: &Env, url: &worker::Url) -> Result<Response> {
                 serde_json::json!({ "type": "Image", "mediaType": media_type_for_filename(&image), "url": image }),
             );
         }
-        let devices = public_e2ee_devices(env, &actor_url).await?;
-        if !devices.is_empty() {
-            object.insert(
-                "daisE2ee".to_string(),
-                serde_json::json!({
-                    "v": 1,
-                    "protocol": "dais-mls-v1",
-                    "devices": devices,
-                }),
-            );
+        match public_e2ee_devices(env, &actor_url).await {
+            Ok(devices) if !devices.is_empty() => {
+                object.insert(
+                    "daisE2ee".to_string(),
+                    serde_json::json!({
+                        "v": 1,
+                        "protocol": "dais-mls-v1",
+                        "devices": devices,
+                    }),
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                worker::console_log!("Skipping public E2EE devices on actor document: {}", error);
+            }
         }
     }
     activity_json(&actor)

@@ -37,6 +37,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKERS_DIR="$ROOT/platforms/cloudflare/workers"
 WRANGLER="${WRANGLER:-wrangler}"
 BUILD_PATH="$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:$PATH"
+BUILD_RUSTC=""
+if command -v rustup >/dev/null 2>&1; then
+  BUILD_RUSTC="$(rustup which rustc 2>/dev/null || true)"
+fi
 
 # Deploy order: backends first, router LAST (it proxies to the others' URLs).
 WORKERS=(webfinger actor inbox outbox pds delivery-queue auth landing router)
@@ -154,7 +158,11 @@ run_one() {
   [ "$DRY_RUN" = "true" ] && flags="$flags --dry-run"
   [ "$mode" = "build" ] && flags="$flags --dry-run"
   info ">> $w  (env=$ENVIRONMENT${flags:+,$flags})"
-  ( cd "$dir" && PATH="$BUILD_PATH" "$WRANGLER" deploy $flags )
+  if [ -n "$BUILD_RUSTC" ]; then
+    ( cd "$dir" && PATH="$BUILD_PATH" RUSTC="$BUILD_RUSTC" "$WRANGLER" deploy $flags )
+  else
+    ( cd "$dir" && PATH="$BUILD_PATH" "$WRANGLER" deploy $flags )
+  fi
 }
 
 do_deploy() {
