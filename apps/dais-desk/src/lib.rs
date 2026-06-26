@@ -8610,6 +8610,50 @@ mod tests {
     }
 
     #[test]
+    fn public_search_rows_identify_provider_source_and_limits() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.run_filtered_search(SearchFormInput {
+            query: "science policy",
+            scope: "public",
+            provider: "all",
+            result_type: "all",
+            servers: "",
+            sort: "",
+            since: "",
+            until: "",
+            author: "",
+            mentions: "",
+            lang: "",
+            domain: "",
+            url: "",
+            tags: "",
+            confirm_public_sensitive: false,
+        });
+
+        let projection = controller.projection();
+        assert!(projection
+            .status_message
+            .contains("Preview filtered search results"));
+        assert_eq!(projection.search_scope, "public");
+        assert_eq!(projection.search_provider, "all");
+
+        let rows = controller.find_rows();
+        assert!(rows.iter().any(|row| row.id.as_str()
+            == "url:https://mastodon.example/@science/123"
+            && row.subtitle.as_str() == "ActivityPub via tootfinder"
+            && row.primary.as_str() == "Open original"
+            && row.secondary.as_str() == "Watch"));
+        assert!(rows.iter().any(|row| row.id.as_str()
+            == "actor:https://mastodon.example/users/science"
+            && row.subtitle.as_str() == "ActivityPub via public-index"
+            && row.detail.contains("Trust signal")));
+        assert!(rows.iter().all(|row| {
+            !row.title.to_ascii_lowercase().contains("complete")
+                && !row.detail.to_ascii_lowercase().contains("complete")
+        }));
+    }
+
+    #[test]
     fn starter_bundle_prefills_private_watch_and_source_review() {
         let mut controller = DeskController::fixture_for_tests();
         controller.select_screen("find");
