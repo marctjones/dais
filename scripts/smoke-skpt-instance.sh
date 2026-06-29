@@ -33,7 +33,7 @@ check_contains \
 check_contains \
   "skpt E2EE device discovery" \
   "https://social.skpt.cl/users/social?format=json" \
-  "skpt-test-device"
+  "daisE2ee"
 
 check_contains \
   "skpt apex WebFinger" \

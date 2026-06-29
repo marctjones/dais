@@ -288,7 +288,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <div class="tile">
                     <span class="status partial">experimental</span>
                     <h3>E2EE</h3>
-                    <p>The encryptedMessage envelope, CLI encrypt/decrypt helpers, and Mastodon fallback modes exist. A separate skpt.cl deployment is being used as the cross-instance testbed; MLS-based decentralized DMs are still prototype work.</p>
+                    <p>The encryptedMessage v1 envelope, CLI encrypt/decrypt helpers, owner device publication, peer discovery/trust, and owner send/decrypt commands exist. The independent skpt.cl deployment is the cross-instance testbed; MLS/OpenMLS group state is still prototype work.</p>
                 </div>
                 <div class="tile">
                     <span class="status partial">in progress</span>

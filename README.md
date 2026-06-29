@@ -42,8 +42,10 @@ client and the core-based Cloudflare worker tree.
 - AT Protocol support includes PDS/AppView-style public read endpoints and Rust
   client Bluesky public operations.
 - E2EE support includes a dais `encryptedMessage` envelope, Rust CLI
-  encrypt/decrypt helpers, and keyless/split/trusted fallback modes for
-  Mastodon-style recipients.
+  encrypt/decrypt helpers, keyless/split/trusted fallback modes for
+  Mastodon-style recipients, owner device publication, peer discovery/trust,
+  and owner API send/decrypt commands for the current v1 fallback path. Full
+  MLS/OpenMLS group state is still prototype work.
 - Rich ActivityPub object support includes ActivityStreams `Note`, `Article`,
   `Document`, and `Event` objects from the Rust CLI, including title/summary,
   event time, and location metadata while preserving Mastodon fallback status
@@ -152,6 +154,22 @@ cargo check --manifest-path client/Cargo.toml
 cargo check --manifest-path platforms/cloudflare/workers/actor/Cargo.toml
 cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
+
+Live independent-instance smoke:
+
+```bash
+scripts/smoke-skpt-instance.sh
+scripts/smoke-cross-instance-e2ee.sh
+```
+
+`scripts/smoke-skpt-instance.sh` verifies the independent `skpt.cl` deployment.
+`scripts/smoke-cross-instance-e2ee.sh` verifies both actors and, when both
+`DAIS_OWNER_TOKEN`/`DAIS_OWNER_TOKEN_FILE` and
+`SKPT_OWNER_TOKEN`/`SKPT_OWNER_TOKEN_FILE` are available, initializes missing
+devices, discovers and trusts peers, sends encrypted messages in both
+directions, and decrypts them with the retained private keys. Without both
+owner tokens it reports the missing prerequisite and skips the send/decrypt
+path.
 
 Worker builds use current `worker-build` with the rustup toolchain path set in
 each worker `wrangler.toml`.

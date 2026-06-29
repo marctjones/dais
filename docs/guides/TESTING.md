@@ -322,6 +322,34 @@ cargo run --manifest-path client/Cargo.toml -- deliveries process <delivery-id>
 cargo run --manifest-path client/Cargo.toml -- deliveries process-queued --remote --limit 10
 ```
 
+## Independent skpt.cl and cross-instance E2EE smoke
+
+The independent `skpt.cl` instance has its own Cloudflare workers, D1 database,
+R2 bucket, delivery queue, owner token, ActivityPub actor, and AT Protocol PDS.
+Run the single-instance smoke after deploys that touch `skpt` routing,
+ActivityPub, PDS, owner API auth, or E2EE actor metadata:
+
+```bash
+scripts/smoke-skpt-instance.sh
+```
+
+Run the cross-instance E2EE harness when validating encrypted DMs between the
+production project instance and the independent skpt testbed:
+
+```bash
+DAIS_OWNER_TOKEN_FILE=/private/tmp/dais-owner-token-20260614.txt \
+SKPT_OWNER_TOKEN_FILE=/private/tmp/dais-skpt-owner-token.txt \
+scripts/smoke-cross-instance-e2ee.sh
+```
+
+The cross-instance harness always verifies that both actors fetch. When both
+owner tokens are available, it initializes missing CLI devices, verifies actor
+device publication, discovers and trusts peer devices in both directions, sends
+encrypted messages from `dais.social` to `social.skpt.cl` and back, and decrypts
+the received messages with the retained private keys. When an owner token is not
+available, it prints the missing prerequisite and exits without claiming the
+send/decrypt path passed.
+
 If Mastodon shows a follow request as pending, approve it from dais so the
 server sends a signed ActivityPub `Accept`:
 
