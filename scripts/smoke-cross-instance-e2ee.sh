@@ -14,6 +14,7 @@ DAIS_OWNER_TOKEN_FILE="${DAIS_OWNER_TOKEN_FILE:-/private/tmp/dais-owner-token-20
 SKPT_OWNER_TOKEN_FILE="${SKPT_OWNER_TOKEN_FILE:-/private/tmp/dais-skpt-owner-token.txt}"
 MESSAGE_TEXT="${MESSAGE_TEXT:-cross-instance e2ee smoke $(date -u +%Y%m%dT%H%M%SZ)}"
 INIT_DEVICES="${INIT_DEVICES:-1}"
+REQUIRE_FULL="${REQUIRE_FULL:-0}"
 
 if [ -n "${DAIS_CLI:-}" ]; then
   read -r -a CLI <<< "$DAIS_CLI"
@@ -176,7 +177,11 @@ curl -fsS --max-time 20 -H 'Accept: application/activity+json' "$SKPT_ACTOR" >/d
 ok "skpt actor fetch"
 
 if [ -z "$DAIS_TOKEN" ]; then
-  skip "dais.social owner token unavailable; set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE=$DAIS_OWNER_TOKEN_FILE"
+  message="dais.social owner token unavailable; set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE=$DAIS_OWNER_TOKEN_FILE"
+  if [ "$REQUIRE_FULL" = "1" ]; then
+    fail "$message"
+  fi
+  skip "$message"
   if actor_has_device "$SKPT_ACTOR" "$SKPT_DEVICE_ID"; then
     ok "skpt actor publishes $SKPT_DEVICE_ID"
   fi
@@ -189,7 +194,11 @@ if [ -z "$DAIS_TOKEN" ]; then
 fi
 
 if [ -z "$SKPT_TOKEN" ]; then
-  skip "skpt owner token unavailable; set SKPT_OWNER_TOKEN or SKPT_OWNER_TOKEN_FILE=$SKPT_OWNER_TOKEN_FILE"
+  message="skpt owner token unavailable; set SKPT_OWNER_TOKEN or SKPT_OWNER_TOKEN_FILE=$SKPT_OWNER_TOKEN_FILE"
+  if [ "$REQUIRE_FULL" = "1" ]; then
+    fail "$message"
+  fi
+  skip "$message"
   exit 0
 fi
 

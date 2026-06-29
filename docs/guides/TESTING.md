@@ -348,7 +348,8 @@ device publication, discovers and trusts peer devices in both directions, sends
 encrypted messages from `dais.social` to `social.skpt.cl` and back, and decrypts
 the received messages with the retained private keys. When an owner token is not
 available, it prints the missing prerequisite and exits without claiming the
-send/decrypt path passed.
+send/decrypt path passed. Set `REQUIRE_FULL=1` for release gates that should
+fail unless the full cross-instance encrypted send/decrypt path completes.
 
 If Mastodon shows a follow request as pending, approve it from dais so the
 server sends a signed ActivityPub `Accept`:

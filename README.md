@@ -169,7 +169,7 @@ scripts/smoke-cross-instance-e2ee.sh
 devices, discovers and trusts peers, sends encrypted messages in both
 directions, and decrypts them with the retained private keys. Without both
 owner tokens it reports the missing prerequisite and skips the send/decrypt
-path.
+path. Set `REQUIRE_FULL=1` to make missing prerequisites fail a release gate.
 
 Worker builds use current `worker-build` with the rustup toolchain path set in
 each worker `wrangler.toml`.
