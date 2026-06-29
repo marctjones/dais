@@ -1,3 +1,7 @@
+use dais_cloudflare::D1Provider;
+use dais_core::traits::DatabaseProvider;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 /// Refactored Auth worker
 ///
 /// This worker handles authentication for the admin user.
@@ -8,12 +12,7 @@
 /// - Rate limiting
 /// - CSRF protection
 /// - Secure session management
-
 use worker::*;
-use dais_cloudflare::D1Provider;
-use dais_core::traits::DatabaseProvider;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Deserialize)]
 struct LoginRequest {
@@ -33,6 +32,20 @@ struct ValidateResponse {
     username: Option<String>,
 }
 
+/// Constant-time byte-slice equality — no early exit on first mismatch, so compare
+/// timing doesn't reveal how many leading bytes matched. (Length difference is not
+/// hidden, but password length is not the secret.)
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
@@ -44,7 +57,10 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let headers = Headers::new();
             headers.set("Access-Control-Allow-Origin", "*")?;
             headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")?;
-            headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization")?;
+            headers.set(
+                "Access-Control-Allow-Headers",
+                "Content-Type, Authorization",
+            )?;
             headers.set("Access-Control-Max-Age", "86400")?;
             Ok(Response::empty()?.with_headers(headers))
         })
@@ -69,15 +85,22 @@ async fn handle_login(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
     };
 
     // Get expected password from environment
-    let expected_password = ctx.env.var("ADMIN_PASSWORD")
+    let expected_password = ctx
+        .env
+        .var("ADMIN_PASSWORD")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| {
             console_log!("WARNING: ADMIN_PASSWORD not set");
             String::new()
         });
 
-    // Verify password (in production, use password hashing!)
-    if body.password != expected_password {
+    // Verify password with a constant-time comparison so equality timing can't leak
+    // the secret (#sec S3). NOTE: still a single shared secret with no hashing or
+    // rate limiting — those need infra (stored hash, KV counter) and are tracked as
+    // follow-ups; this closes the timing side-channel now.
+    if expected_password.is_empty()
+        || !constant_time_eq(body.password.as_bytes(), expected_password.as_bytes())
+    {
         return Response::from_json(&LoginResponse {
             success: false,
             token: None,
@@ -89,7 +112,9 @@ async fn handle_login(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
     let token = uuid::Uuid::new_v4().to_string();
 
     // Get username from environment
-    let username = ctx.env.var("USERNAME")
+    let username = ctx
+        .env
+        .var("USERNAME")
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "admin".to_string());
 
@@ -106,19 +131,23 @@ async fn handle_login(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
         VALUES (?1, ?2, ?3, ?4)
     "#;
 
-    match db_provider.execute(query, &[
-        Value::String(token.clone()),
-        Value::String(username.clone()),
-        Value::String(now),
-        Value::String(expires_at_str),
-    ]).await {
-        Ok(_) => {
-            Response::from_json(&LoginResponse {
-                success: true,
-                token: Some(token),
-                message: "Login successful".to_string(),
-            })
-        }
+    match db_provider
+        .execute(
+            query,
+            &[
+                Value::String(token.clone()),
+                Value::String(username.clone()),
+                Value::String(now),
+                Value::String(expires_at_str),
+            ],
+        )
+        .await
+    {
+        Ok(_) => Response::from_json(&LoginResponse {
+            success: true,
+            token: Some(token),
+            message: "Login successful".to_string(),
+        }),
         Err(e) => {
             console_log!("Database error: {}", e);
             Response::from_json(&LoginResponse {
@@ -176,10 +205,10 @@ async fn handle_validate(req: Request, ctx: RouteContext<()>) -> Result<Response
         WHERE token = ?1 AND expires_at > ?2
     "#;
 
-    match db_provider.execute(query, &[
-        Value::String(token),
-        Value::String(now),
-    ]).await {
+    match db_provider
+        .execute(query, &[Value::String(token), Value::String(now)])
+        .await
+    {
         Ok(rows) => {
             if rows.is_empty() {
                 Response::from_json(&ValidateResponse {
@@ -187,7 +216,8 @@ async fn handle_validate(req: Request, ctx: RouteContext<()>) -> Result<Response
                     username: None,
                 })
             } else {
-                let username = rows[0].get("username")
+                let username = rows[0]
+                    .get("username")
                     .and_then(|v| v.as_str())
                     .unwrap_or("admin")
                     .to_string();
