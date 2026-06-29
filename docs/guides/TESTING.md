@@ -330,8 +330,14 @@ Run the single-instance smoke after deploys that touch `skpt` routing,
 ActivityPub, PDS, owner API auth, or E2EE actor metadata:
 
 ```bash
+scripts/audit-skpt-independence.sh
 scripts/smoke-skpt-instance.sh
 ```
+
+The audit checks config isolation before any live network calls: skpt worker
+names, D1 database, R2 bucket, delivery queue/DLQ, custom domains, and PDS
+hostname must all use skpt-specific resources and must not point at production
+`dais.social` resources.
 
 Run the cross-instance E2EE harness when validating encrypted DMs between the
 production project instance and the independent skpt testbed:
