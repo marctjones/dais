@@ -220,6 +220,13 @@ impl OwnerApiClient {
         Ok(response.items)
     }
 
+    pub async fn upsert_e2ee_device(
+        &self,
+        device: &OwnerE2eeDeviceUpsert,
+    ) -> ClientResult<OwnerE2eeDevice> {
+        self.post("/api/dais/owner/e2ee/devices", device).await
+    }
+
     pub async fn e2ee_peer_devices(&self) -> ClientResult<Vec<OwnerE2eePeerDevice>> {
         let response: OwnerItems<OwnerE2eePeerDevice> =
             self.get("/api/dais/owner/e2ee/peers").await?;
@@ -954,6 +961,15 @@ pub struct OwnerE2eeDevice {
     pub status: String,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerE2eeDeviceUpsert {
+    pub device_id: String,
+    pub display_name: Option<String>,
+    pub protocol: String,
+    pub credential: String,
+    pub key_package: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

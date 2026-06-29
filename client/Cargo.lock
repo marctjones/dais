@@ -416,9 +416,14 @@ dependencies = [
 name = "dais-client-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "base64",
+ "rand 0.8.6",
  "reqwest",
+ "rsa",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

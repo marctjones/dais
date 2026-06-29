@@ -26,18 +26,22 @@ use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient,
-    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerFollower, OwnerFollowing,
-    OwnerFriend, OwnerInteraction, OwnerMediaUpload, OwnerNotification, OwnerPostDetail,
-    OwnerProfile, OwnerProfileUpdate, OwnerSearchQuery, OwnerSearchResult, OwnerSnapshot,
-    OwnerSourceAdd, OwnerSources, OwnerStats, OwnerWatchAdd, ProtocolRoute as OwnerProtocolRoute,
-    Visibility as OwnerVisibility,
+    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice,
+    OwnerE2eeDeviceUpsert, OwnerE2eePeerDevice, OwnerE2eePeerDiscoverRequest, OwnerFollower,
+    OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerMediaUpload, OwnerNotification,
+    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSearchQuery, OwnerSearchResult,
+    OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats, OwnerWatchAdd,
+    ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
     ActivityOutcome, PostDraft, PostOutcome,
 };
+use rand::rngs::OsRng;
 use rand::RngCore;
 use routing::{Protocol, Visibility};
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::{RsaPrivateKey, RsaPublicKey};
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -1080,6 +1084,33 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_direct_messages(&messages);
         }
+        OwnerCommand::E2eeDevices(args) => {
+            let devices = owner_api(&args)
+                .e2ee_devices()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_e2ee_devices(&devices);
+        }
+        OwnerCommand::E2eeDeviceInit(args) => {
+            init_owner_e2ee_device(args).await?;
+        }
+        OwnerCommand::E2eePeers(args) => {
+            let devices = owner_api(&args)
+                .e2ee_peer_devices()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_e2ee_peer_devices(&devices);
+        }
+        OwnerCommand::E2eePeerDiscover(args) => {
+            let result = owner_api(&args.api)
+                .discover_e2ee_peer_devices(&OwnerE2eePeerDiscoverRequest {
+                    actor_id: args.actor_id,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("actor={}", result.actor_id);
+            print_owner_e2ee_peer_devices(&result.items);
+        }
         OwnerCommand::Search(args) => {
             let results = owner_api(&args.api)
                 .search_with_options(&OwnerSearchQuery {
@@ -1477,6 +1508,68 @@ async fn handle_owner_profile(command: cli::OwnerProfileCommand) -> Result<()> {
     Ok(())
 }
 
+async fn init_owner_e2ee_device(args: cli::OwnerE2eeDeviceInitArgs) -> Result<()> {
+    if args.private_key_out.exists() && !args.force {
+        return Err(anyhow::anyhow!(
+            "{} already exists; pass --force to overwrite",
+            args.private_key_out.display()
+        ));
+    }
+
+    let mut rng = OsRng;
+    let private_key = RsaPrivateKey::new(&mut rng, 2048)?;
+    let public_key = RsaPublicKey::from(&private_key);
+    let private_pem = private_key.to_pkcs8_pem(LineEnding::LF)?;
+    let public_pem = public_key.to_public_key_pem(LineEnding::LF)?;
+
+    if let Some(parent) = args.private_key_out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&args.private_key_out, private_pem.as_bytes())?;
+    set_private_key_permissions(&args.private_key_out)?;
+
+    let device = owner_api(&args.api)
+        .upsert_e2ee_device(&OwnerE2eeDeviceUpsert {
+            device_id: args.device_id.clone(),
+            display_name: args.display_name,
+            protocol: "dais-mls-v1".to_string(),
+            credential: public_pem.clone(),
+            key_package: public_pem,
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    println!("Published E2EE device");
+    println!("device_id={}", device.device_id);
+    println!("actor={}", device.actor_id);
+    println!("fingerprint={}", device.fingerprint);
+    println!("private_key={}", args.private_key_out.display());
+    println!("protocol={}", device.protocol);
+    println!("status={}", device.status);
+    println!("wire_material=v1-rsa-fallback");
+    println!(
+        "Back up this private key; losing it means old encrypted messages cannot be decrypted."
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_key_permissions(_path: &std::path::Path) -> Result<()> {
+    Ok(())
+}
+
 async fn owner_interact(
     args: &cli::OwnerApiArgs,
     object_id: &str,
@@ -1722,6 +1815,50 @@ fn print_owner_direct_messages(messages: &[OwnerDirectMessage]) {
         );
         println!("sender={}", message.sender_id);
         println!("{}", message.content);
+        println!();
+    }
+}
+
+fn print_owner_e2ee_devices(devices: &[OwnerE2eeDevice]) {
+    if devices.is_empty() {
+        println!("No E2EE devices found");
+        return;
+    }
+    for device in devices {
+        println!(
+            "{} [{}] {}",
+            device.device_id, device.status, device.protocol
+        );
+        println!("actor={}", device.actor_id);
+        if let Some(display_name) = device.display_name.as_deref() {
+            println!("display_name={display_name}");
+        }
+        println!("fingerprint={}", device.fingerprint);
+        if let Some(updated_at) = device.updated_at.as_deref() {
+            println!("updated_at={updated_at}");
+        }
+        println!();
+    }
+}
+
+fn print_owner_e2ee_peer_devices(devices: &[OwnerE2eePeerDevice]) {
+    if devices.is_empty() {
+        println!("No E2EE peer devices found");
+        return;
+    }
+    for device in devices {
+        println!(
+            "{} [{}] {}",
+            device.device_id, device.trust_state, device.protocol
+        );
+        println!("actor={}", device.actor_id);
+        if let Some(display_name) = device.display_name.as_deref() {
+            println!("display_name={display_name}");
+        }
+        println!("fingerprint={}", device.fingerprint);
+        if let Some(last_seen_at) = device.last_seen_at.as_deref() {
+            println!("last_seen_at={last_seen_at}");
+        }
         println!();
     }
 }

@@ -807,6 +807,14 @@ pub enum OwnerCommand {
     Deliveries(OwnerApiArgs),
     /// List live owner API direct messages.
     Dms(OwnerApiArgs),
+    /// List local E2EE devices published by the live owner API.
+    E2eeDevices(OwnerApiArgs),
+    /// Generate a local E2EE device key and publish its public material.
+    E2eeDeviceInit(OwnerE2eeDeviceInitArgs),
+    /// List discovered E2EE peer devices.
+    E2eePeers(OwnerApiArgs),
+    /// Discover and store E2EE devices published by a remote ActivityPub actor.
+    E2eePeerDiscover(OwnerE2eePeerDiscoverArgs),
     /// Search live owner API posts and actor relationships.
     Search(OwnerSearchArgs),
     /// Show live owner API server stats.
@@ -883,6 +891,32 @@ pub struct OwnerApiArgs {
     /// Owner API bearer token.
     #[arg(long, env = "DAIS_OWNER_TOKEN")]
     pub owner_token: String,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeDeviceInitArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Stable local device id to publish.
+    #[arg(long)]
+    pub device_id: String,
+    /// Human-readable device label.
+    #[arg(long)]
+    pub display_name: Option<String>,
+    /// Path where the generated private key PEM will be written.
+    #[arg(long)]
+    pub private_key_out: PathBuf,
+    /// Overwrite the private key file if it already exists.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eePeerDiscoverArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Remote ActivityPub actor URL to fetch, for example https://social.skpt.cl/users/social.
+    pub actor_id: String,
 }
 
 #[derive(Args, Clone, Debug)]
