@@ -819,6 +819,10 @@ pub enum OwnerCommand {
     E2eeDeviceInit(OwnerE2eeDeviceInitArgs),
     /// Revoke/deactivate one local E2EE device.
     E2eeDeviceRevoke(OwnerE2eeDeviceRefArgs),
+    /// List local stored E2EE private keys.
+    E2eeKeys(OwnerE2eeKeyListArgs),
+    /// Export one stored E2EE private key for backup.
+    E2eeKeyExport(OwnerE2eeKeyExportArgs),
     /// List discovered E2EE peer devices.
     E2eePeers(OwnerApiArgs),
     /// Discover and store E2EE devices published by a remote ActivityPub actor.
@@ -915,9 +919,9 @@ pub struct OwnerE2eeDeviceInitArgs {
     /// Human-readable device label.
     #[arg(long)]
     pub display_name: Option<String>,
-    /// Path where the generated private key PEM will be written.
+    /// Path where the generated private key PEM will be written. Defaults to the local Dais key store.
     #[arg(long)]
-    pub private_key_out: PathBuf,
+    pub private_key_out: Option<PathBuf>,
     /// Overwrite the private key file if it already exists.
     #[arg(long)]
     pub force: bool,
@@ -930,6 +934,33 @@ pub struct OwnerE2eeDeviceRefArgs {
     /// Local device id.
     #[arg(long)]
     pub device_id: String,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeKeyListArgs {
+    /// Dais instance base URL to filter by.
+    #[arg(long, env = "DAIS_OWNER_INSTANCE_URL")]
+    pub instance_url: Option<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeKeyExportArgs {
+    /// Dais instance base URL.
+    #[arg(
+        long,
+        env = "DAIS_OWNER_INSTANCE_URL",
+        default_value = "https://social.dais.social"
+    )]
+    pub instance_url: String,
+    /// Local device id.
+    #[arg(long)]
+    pub device_id: String,
+    /// Backup/export destination path.
+    #[arg(long)]
+    pub output: PathBuf,
+    /// Overwrite output if it already exists.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -984,9 +1015,12 @@ pub struct OwnerE2eeDecryptArgs {
     pub api: OwnerApiArgs,
     /// Owner E2EE message id.
     pub message_id: String,
-    /// PKCS#8 PEM private key file.
+    /// PKCS#8 PEM private key file. If omitted, --device-id is loaded from the local Dais key store.
     #[arg(long)]
-    pub private_key: PathBuf,
+    pub private_key: Option<PathBuf>,
+    /// Local device id to load from the Dais key store when --private-key is omitted.
+    #[arg(long)]
+    pub device_id: Option<String>,
     /// Recipient key id to select. Optional only when the message has one recipient.
     #[arg(long)]
     pub key_id: Option<String>,

@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
         Command::Stats(args) => handle_stats(args).await?,
         Command::Timeline(command) => handle_timeline(command, &store).await?,
         Command::Friends(command) => handle_friends(command).await?,
-        Command::Owner(command) => handle_owner(command).await?,
+        Command::Owner(command) => handle_owner(command, &store).await?,
         Command::Followers(command) => handle_followers(command).await?,
         Command::Notifications(command) => handle_notifications(command).await?,
         Command::Deliveries(command) => handle_deliveries(command).await?,
@@ -1002,7 +1002,7 @@ async fn handle_followers(command: FollowersCommand) -> Result<()> {
     Ok(())
 }
 
-async fn handle_owner(command: OwnerCommand) -> Result<()> {
+async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> {
     match command {
         OwnerCommand::Snapshot(args) => {
             let snapshot = owner_api(&args)
@@ -1096,7 +1096,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
             send_owner_e2ee_message(args).await?;
         }
         OwnerCommand::E2eeDecrypt(args) => {
-            decrypt_owner_e2ee_message(args).await?;
+            decrypt_owner_e2ee_message(args, store).await?;
         }
         OwnerCommand::E2eeDevices(args) => {
             let devices = owner_api(&args)
@@ -1106,7 +1106,7 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
             print_owner_e2ee_devices(&devices);
         }
         OwnerCommand::E2eeDeviceInit(args) => {
-            init_owner_e2ee_device(args).await?;
+            init_owner_e2ee_device(args, store).await?;
         }
         OwnerCommand::E2eeDeviceRevoke(args) => {
             let device = owner_api(&args.api)
@@ -1116,6 +1116,12 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .await
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_e2ee_devices(&[device]);
+        }
+        OwnerCommand::E2eeKeys(args) => {
+            print_owner_e2ee_keys(store, args.instance_url.as_deref())?;
+        }
+        OwnerCommand::E2eeKeyExport(args) => {
+            export_owner_e2ee_key(store, args)?;
         }
         OwnerCommand::E2eePeers(args) => {
             let devices = owner_api(&args)
@@ -1545,27 +1551,39 @@ async fn handle_owner_profile(command: cli::OwnerProfileCommand) -> Result<()> {
     Ok(())
 }
 
-async fn init_owner_e2ee_device(args: cli::OwnerE2eeDeviceInitArgs) -> Result<()> {
-    if args.private_key_out.exists() && !args.force {
-        return Err(anyhow::anyhow!(
-            "{} already exists; pass --force to overwrite",
-            args.private_key_out.display()
-        ));
-    }
-
+async fn init_owner_e2ee_device(
+    args: cli::OwnerE2eeDeviceInitArgs,
+    store: &ConfigStore,
+) -> Result<()> {
     let mut rng = OsRng;
     let private_key = RsaPrivateKey::new(&mut rng, 2048)?;
     let public_key = RsaPublicKey::from(&private_key);
     let private_pem = private_key.to_pkcs8_pem(LineEnding::LF)?;
     let public_pem = public_key.to_public_key_pem(LineEnding::LF)?;
 
-    if let Some(parent) = args.private_key_out.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
+    let private_key_path = if let Some(path) = args.private_key_out.as_ref() {
+        if path.exists() && !args.force {
+            return Err(anyhow::anyhow!(
+                "{} already exists; pass --force to overwrite",
+                path.display()
+            ));
         }
-    }
-    fs::write(&args.private_key_out, private_pem.as_bytes())?;
-    set_private_key_permissions(&args.private_key_out)?;
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, private_pem.as_bytes())?;
+        set_private_key_permissions(path)?;
+        path.clone()
+    } else {
+        store.save_e2ee_private_key(
+            &args.api.instance_url,
+            &args.device_id,
+            private_pem.as_ref(),
+            args.force,
+        )?
+    };
 
     let device = owner_api(&args.api)
         .upsert_e2ee_device(&OwnerE2eeDeviceUpsert {
@@ -1582,7 +1600,7 @@ async fn init_owner_e2ee_device(args: cli::OwnerE2eeDeviceInitArgs) -> Result<()
     println!("device_id={}", device.device_id);
     println!("actor={}", device.actor_id);
     println!("fingerprint={}", device.fingerprint);
-    println!("private_key={}", args.private_key_out.display());
+    println!("private_key={}", private_key_path.display());
     println!("protocol={}", device.protocol);
     println!("status={}", device.status);
     println!("wire_material=v1-rsa-fallback");
@@ -1619,7 +1637,10 @@ async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
     Ok(())
 }
 
-async fn decrypt_owner_e2ee_message(args: cli::OwnerE2eeDecryptArgs) -> Result<()> {
+async fn decrypt_owner_e2ee_message(
+    args: cli::OwnerE2eeDecryptArgs,
+    store: &ConfigStore,
+) -> Result<()> {
     let messages = owner_api(&args.api)
         .e2ee_messages()
         .await
@@ -1629,9 +1650,66 @@ async fn decrypt_owner_e2ee_message(args: cli::OwnerE2eeDecryptArgs) -> Result<(
         .find(|message| message.id == args.message_id)
         .ok_or_else(|| anyhow::anyhow!("owner E2EE message {} not found", args.message_id))?;
     let encrypted = e2ee::encrypted_message_from_json(message.encrypted_message)?;
-    let private_key = fs::read_to_string(args.private_key)?;
+    let private_key = if let Some(path) = args.private_key.as_ref() {
+        fs::read_to_string(path)?
+    } else {
+        let device_id = args.device_id.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("--device-id is required when --private-key is omitted")
+        })?;
+        store.load_e2ee_private_key(&args.api.instance_url, device_id)?
+    };
     let plaintext = e2ee::decrypt_message(&encrypted, &private_key, args.key_id.as_deref())?;
     println!("{plaintext}");
+    Ok(())
+}
+
+fn print_owner_e2ee_keys(store: &ConfigStore, instance_url: Option<&str>) -> Result<()> {
+    let entries = store.list_e2ee_private_keys()?;
+    let instance_filter = instance_url.map(|value| {
+        store
+            .e2ee_private_key_path(value, "placeholder")
+            .parent()
+            .and_then(|path| path.file_name())
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+    let mut printed = 0usize;
+    for entry in entries {
+        if instance_filter
+            .as_ref()
+            .is_some_and(|filter| filter != &entry.instance)
+        {
+            continue;
+        }
+        println!("{} {}", entry.instance, entry.device_id);
+        println!("path={}", entry.path.display());
+        printed += 1;
+    }
+    if printed == 0 {
+        println!("No stored E2EE private keys found");
+    }
+    Ok(())
+}
+
+fn export_owner_e2ee_key(store: &ConfigStore, args: cli::OwnerE2eeKeyExportArgs) -> Result<()> {
+    if args.output.exists() && !args.force {
+        return Err(anyhow::anyhow!(
+            "{} already exists; pass --force to overwrite",
+            args.output.display()
+        ));
+    }
+    let private_key = store.load_e2ee_private_key(&args.instance_url, &args.device_id)?;
+    if let Some(parent) = args.output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&args.output, private_key)?;
+    set_private_key_permissions(&args.output)?;
+    println!("Exported E2EE private key");
+    println!("device_id={}", args.device_id);
+    println!("output={}", args.output.display());
+    println!("Store this backup securely; anyone with it can decrypt messages for this device.");
     Ok(())
 }
 

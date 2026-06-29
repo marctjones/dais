@@ -12,6 +12,10 @@ DAIS_PRIVATE_KEY="${DAIS_PRIVATE_KEY:-/private/tmp/dais-dais-cli-device.private.
 SKPT_PRIVATE_KEY="${SKPT_PRIVATE_KEY:-/private/tmp/dais-skpt-cli-device.private.pem}"
 DAIS_OWNER_TOKEN_FILE="${DAIS_OWNER_TOKEN_FILE:-/private/tmp/dais-owner-token-20260614.txt}"
 SKPT_OWNER_TOKEN_FILE="${SKPT_OWNER_TOKEN_FILE:-/private/tmp/dais-skpt-owner-token.txt}"
+DAIS_DELIVERY_WORKER_URL="${DAIS_DELIVERY_WORKER_URL:-https://delivery-queue-production.marc-t-jones.workers.dev}"
+SKPT_DELIVERY_WORKER_URL="${SKPT_DELIVERY_WORKER_URL:-https://delivery-queue-skpt.marc-t-jones.workers.dev}"
+DAIS_DELIVERY_ADMIN_TOKEN_FILE="${DAIS_DELIVERY_ADMIN_TOKEN_FILE:-/private/tmp/dais-delivery-admin-token.txt}"
+SKPT_DELIVERY_ADMIN_TOKEN_FILE="${SKPT_DELIVERY_ADMIN_TOKEN_FILE:-/private/tmp/dais-skpt-delivery-admin-token.txt}"
 MESSAGE_TEXT="${MESSAGE_TEXT:-cross-instance e2ee smoke $(date -u +%Y%m%dT%H%M%SZ)}"
 INIT_DEVICES="${INIT_DEVICES:-1}"
 REQUIRE_FULL="${REQUIRE_FULL:-0}"
@@ -60,15 +64,18 @@ owner() {
 actor_has_device() {
   local actor_url="$1"
   local device_id="$2"
-  curl -fsS --max-time 20 -H 'Accept: application/activity+json' "$actor_url" \
-    | grep -Fq "\"deviceId\":\"$device_id\""
+  local body
+  body="$(curl -fsS --max-time 20 -H 'Accept: application/activity+json' "$actor_url")"
+  grep -Fq "\"deviceId\":\"$device_id\"" <<< "$body"
 }
 
 owner_has_device() {
   local base_url="$1"
   local token="$2"
   local device_id="$3"
-  owner "$base_url" "$token" e2ee-devices | grep -Fq "$device_id"
+  local output
+  output="$(owner "$base_url" "$token" e2ee-devices)"
+  grep -Fq "$device_id" <<< "$output"
 }
 
 ensure_device() {
@@ -132,28 +139,61 @@ latest_message_id() {
     | awk '/^https:\/\// {print $1; exit}'
 }
 
+process_delivery_if_possible() {
+  local label="$1"
+  local worker_url="$2"
+  local admin_token="$3"
+  local delivery_id="$4"
+
+  if [ -z "$delivery_id" ] || [ "$delivery_id" = "[]" ]; then
+    return 0
+  fi
+  if [ -z "$worker_url" ] || [ -z "$admin_token" ]; then
+    skip "$label delivery $delivery_id not processed; delivery admin token unavailable"
+    return 0
+  fi
+
+  curl -fsS --max-time 30 \
+    -H "Content-Type: application/json" \
+    -H "X-Dais-Admin-Token: $admin_token" \
+    -d "{\"delivery_id\":\"$delivery_id\"}" \
+    "$worker_url/deliveries/process" >/tmp/dais-delivery-process.out
+  ok "$label delivery $delivery_id processed"
+}
+
 send_and_decrypt() {
   local sender_label="$1"
   local sender_url="$2"
   local sender_token="$3"
   local sender_device="$4"
-  local recipient_label="$5"
-  local recipient_url="$6"
-  local recipient_token="$7"
-  local recipient_actor="$8"
-  local recipient_device="$9"
-  local recipient_private_key="${10}"
+  local sender_delivery_worker_url="$5"
+  local sender_delivery_admin_token="$6"
+  local recipient_label="$7"
+  local recipient_url="$8"
+  local recipient_token="$9"
+  local recipient_actor="${10}"
+  local recipient_device="${11}"
+  local recipient_private_key="${12}"
 
-  local before after
+  local before after send_output delivery_ids delivery_id
   before="$(latest_message_id "$recipient_url" "$recipient_token" || true)"
-  owner "$sender_url" "$sender_token" e2ee-send \
+  send_output="$(owner "$sender_url" "$sender_token" e2ee-send \
     --recipient-actor-id "$recipient_actor" \
     --recipient-device-id "$recipient_device" \
     --sender-device-id "$sender_device" \
-    "$MESSAGE_TEXT"
+    "$MESSAGE_TEXT")"
+  printf '%s\n' "$send_output"
   ok "$sender_label sent encrypted message to $recipient_label"
 
-  sleep 8
+  delivery_ids="$(awk -F= '/^delivery_ids=/ {print $2; exit}' <<< "$send_output")"
+  if [ -n "$delivery_ids" ]; then
+    IFS=',' read -r -a delivery_id_list <<< "$delivery_ids"
+    for delivery_id in "${delivery_id_list[@]}"; do
+      process_delivery_if_possible "$sender_label" "$sender_delivery_worker_url" "$sender_delivery_admin_token" "$delivery_id"
+    done
+  fi
+
+  sleep 2
   after="$(latest_message_id "$recipient_url" "$recipient_token" || true)"
   if [ -z "$after" ] || [ "$after" = "$before" ]; then
     fail "$recipient_label did not receive a new E2EE message"
@@ -170,6 +210,8 @@ send_and_decrypt() {
 
 DAIS_TOKEN="$(token_from_env_or_file DAIS_OWNER_TOKEN "$DAIS_OWNER_TOKEN_FILE" || true)"
 SKPT_TOKEN="$(token_from_env_or_file SKPT_OWNER_TOKEN "$SKPT_OWNER_TOKEN_FILE" || true)"
+DAIS_DELIVERY_ADMIN_TOKEN="$(token_from_env_or_file DAIS_DELIVERY_ADMIN_TOKEN "$DAIS_DELIVERY_ADMIN_TOKEN_FILE" || true)"
+SKPT_DELIVERY_ADMIN_TOKEN="$(token_from_env_or_file SKPT_DELIVERY_ADMIN_TOKEN "$SKPT_DELIVERY_ADMIN_TOKEN_FILE" || true)"
 
 curl -fsS --max-time 20 -H 'Accept: application/activity+json' "$DAIS_ACTOR" >/dev/null
 ok "dais.social actor fetch"
@@ -209,9 +251,9 @@ discover_and_trust "dais.social -> skpt" "$DAIS_URL" "$DAIS_TOKEN" "$SKPT_ACTOR"
 discover_and_trust "skpt -> dais.social" "$SKPT_URL" "$SKPT_TOKEN" "$DAIS_ACTOR" "$DAIS_DEVICE_ID"
 
 send_and_decrypt \
-  "dais.social" "$DAIS_URL" "$DAIS_TOKEN" "$DAIS_DEVICE_ID" \
+  "dais.social" "$DAIS_URL" "$DAIS_TOKEN" "$DAIS_DEVICE_ID" "$DAIS_DELIVERY_WORKER_URL" "$DAIS_DELIVERY_ADMIN_TOKEN" \
   "skpt" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_ACTOR" "$SKPT_DEVICE_ID" "$SKPT_PRIVATE_KEY"
 
 send_and_decrypt \
-  "skpt" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_DEVICE_ID" \
+  "skpt" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_DEVICE_ID" "$SKPT_DELIVERY_WORKER_URL" "$SKPT_DELIVERY_ADMIN_TOKEN" \
   "dais.social" "$DAIS_URL" "$DAIS_TOKEN" "$DAIS_ACTOR" "$DAIS_DEVICE_ID" "$DAIS_PRIVATE_KEY"

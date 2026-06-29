@@ -1423,6 +1423,97 @@ async fn activitypub_store_create(env: &Env, body: &Value) -> std::result::Resul
     .run()
     .await
     .map_err(|error| error.to_string())?;
+
+    if activitypub_direct_to_actor(&Value::Object(object.clone()), &local_actor_url(env)) {
+        if let Some(encrypted_message) = object.get("encryptedMessage") {
+            activitypub_store_e2ee_direct_message(
+                env,
+                &actor,
+                &object_id,
+                &Value::Object(object.clone()),
+                &published,
+                &content,
+                encrypted_message,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn activitypub_store_e2ee_direct_message(
+    env: &Env,
+    actor: &str,
+    object_id: &str,
+    object: &Value,
+    published: &str,
+    fallback_content: &str,
+    encrypted_message: &Value,
+) -> std::result::Result<(), String> {
+    let local_actor = local_actor_url(env);
+    let mut participants = vec![actor.to_string(), local_actor.clone()];
+    participants.sort();
+    let participants_json =
+        serde_json::to_string(&participants).map_err(|error| error.to_string())?;
+    let conversation_id = format!("e2ee-conversation-{}", stable_id(&participants.join("\n")));
+    let sender_device_id = object
+        .get("daisE2ee")
+        .and_then(|value| value.get("senderDeviceId"))
+        .and_then(Value::as_str)
+        .or_else(|| object.get("senderDeviceId").and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("unknown");
+    let encrypted_json =
+        serde_json::to_string(encrypted_message).map_err(|error| error.to_string())?;
+    let aad_json = serde_json::to_string(&serde_json::json!({
+        "recipientActorId": local_actor,
+        "fallbackContent": fallback_content,
+    }))
+    .map_err(|error| error.to_string())?;
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let conversation_arg = D1Type::Text(&conversation_id);
+    let participants_arg = D1Type::Text(&participants_json);
+    let published_arg = D1Type::Text(published);
+    db.prepare(
+        r#"
+        INSERT INTO e2ee_conversations (id, protocol, participants, created_at, updated_at)
+        VALUES (?1, 'dais-mls-v1', ?2, ?3, ?3)
+        ON CONFLICT(id) DO UPDATE SET updated_at = ?3
+        "#,
+    )
+    .bind_refs(&[conversation_arg, participants_arg, published_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let id_arg = D1Type::Text(object_id);
+    let conversation_arg = D1Type::Text(&conversation_id);
+    let actor_arg = D1Type::Text(actor);
+    let sender_device_arg = D1Type::Text(sender_device_id);
+    let encrypted_arg = D1Type::Text(&encrypted_json);
+    let aad_arg = D1Type::Text(&aad_json);
+    let published_arg = D1Type::Text(published);
+    db.prepare(
+        r#"
+        INSERT OR IGNORE INTO e2ee_messages (
+            id, conversation_id, sender_actor_id, sender_device_id, ciphertext, aad, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "#,
+    )
+    .bind_refs(&[
+        id_arg,
+        conversation_arg,
+        actor_arg,
+        sender_device_arg,
+        encrypted_arg,
+        aad_arg,
+        published_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -1455,6 +1546,14 @@ fn activitypub_public_recipients(activity: &Value, object: &Value) -> bool {
     collect_recipients(object.get("to"), &mut recipients);
     collect_recipients(object.get("cc"), &mut recipients);
     recipients.iter().any(|value| value == PUBLIC_COLLECTION)
+}
+
+fn activitypub_direct_to_actor(object: &Value, actor_url: &str) -> bool {
+    let mut recipients = Vec::new();
+    collect_recipients(object.get("to"), &mut recipients);
+    collect_recipients(object.get("cc"), &mut recipients);
+    recipients.iter().any(|value| value == actor_url)
+        && !recipients.iter().any(|value| value == PUBLIC_COLLECTION)
 }
 
 fn supported_timeline_object_type(object_type: &str) -> bool {
@@ -7578,11 +7677,29 @@ async fn owner_e2ee_inbox_for_actor(
         .first::<Map<String, Value>>(None)
         .await
         .map_err(|error| error.to_string())?;
-    row.as_ref()
+    if let Some(inbox) = row
+        .as_ref()
         .and_then(|row| string_field(Some(row), "inbox"))
-        .ok_or_else(|| {
-            "recipient inbox is not known; follow or discover the actor first".to_string()
-        })
+    {
+        Ok(inbox)
+    } else {
+        async_resolve_e2ee_actor_inbox(env, actor_id).await
+    }
+}
+
+async fn async_resolve_e2ee_actor_inbox(
+    env: &Env,
+    actor_id: &str,
+) -> std::result::Result<String, String> {
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let actor = resolve_activitypub_actor_for_local(actor_id, &local_actor).await?;
+    let inbox = actor.shared_inbox.unwrap_or(actor.inbox);
+    if inbox.trim().is_empty() {
+        return Err("recipient actor does not expose an inbox".to_string());
+    }
+    public_https_url(&inbox, "recipient inbox")
 }
 
 #[derive(Clone)]
