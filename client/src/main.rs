@@ -27,7 +27,8 @@ use d1::D1Client;
 use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient,
     OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice,
-    OwnerE2eeDeviceUpsert, OwnerE2eePeerDevice, OwnerE2eePeerDiscoverRequest, OwnerFollower,
+    OwnerE2eeDeviceUpsert, OwnerE2eeMessage, OwnerE2eeMessageSend, OwnerE2eePeerDevice,
+    OwnerE2eePeerDeviceRef, OwnerE2eePeerDiscoverRequest, OwnerE2eePeerTrustRequest, OwnerFollower,
     OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerMediaUpload, OwnerNotification,
     OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSearchQuery, OwnerSearchResult,
     OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats, OwnerWatchAdd,
@@ -1084,6 +1085,19 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_direct_messages(&messages);
         }
+        OwnerCommand::E2eeMessages(args) => {
+            let messages = owner_api(&args)
+                .e2ee_messages()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_e2ee_messages(&messages);
+        }
+        OwnerCommand::E2eeSend(args) => {
+            send_owner_e2ee_message(args).await?;
+        }
+        OwnerCommand::E2eeDecrypt(args) => {
+            decrypt_owner_e2ee_message(args).await?;
+        }
         OwnerCommand::E2eeDevices(args) => {
             let devices = owner_api(&args)
                 .e2ee_devices()
@@ -1110,6 +1124,20 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             println!("actor={}", result.actor_id);
             print_owner_e2ee_peer_devices(&result.items);
+        }
+        OwnerCommand::E2eePeerTrust(args) => {
+            let peer = trust_owner_e2ee_peer(args).await?;
+            print_owner_e2ee_peer_devices(&[peer]);
+        }
+        OwnerCommand::E2eePeerRevoke(args) => {
+            let peer = owner_api(&args.api)
+                .revoke_e2ee_peer_device(&OwnerE2eePeerDeviceRef {
+                    actor_id: args.actor_id,
+                    device_id: args.device_id,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_e2ee_peer_devices(&[peer]);
         }
         OwnerCommand::Search(args) => {
             let results = owner_api(&args.api)
@@ -1555,6 +1583,122 @@ async fn init_owner_e2ee_device(args: cli::OwnerE2eeDeviceInitArgs) -> Result<()
     Ok(())
 }
 
+async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
+    let recipient_public_key = resolve_owner_e2ee_recipient_key(&args).await?;
+    let mut recipients = BTreeMap::new();
+    recipients.insert(args.recipient_device_id.clone(), recipient_public_key);
+    let payload =
+        e2ee::encrypted_note_payload(&args.plaintext, &recipients, args.view_url.as_deref())?;
+    let encrypted_message = serde_json::to_value(&payload.encrypted_message)?;
+
+    let result = owner_api(&args.api)
+        .send_e2ee_message(&OwnerE2eeMessageSend {
+            recipient_actor_id: args.recipient_actor_id,
+            recipient_device_id: Some(args.recipient_device_id),
+            sender_device_id: args.sender_device_id,
+            encrypted_message,
+            fallback_content: Some(payload.content),
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    println!("Sent owner E2EE message");
+    println!("id={}", result.message.id);
+    println!("conversation_id={}", result.message.conversation_id);
+    println!("recipient_actor={:?}", result.message.recipient_actor_id);
+    println!("delivery_ids={}", result.delivery_ids.join(","));
+    Ok(())
+}
+
+async fn decrypt_owner_e2ee_message(args: cli::OwnerE2eeDecryptArgs) -> Result<()> {
+    let messages = owner_api(&args.api)
+        .e2ee_messages()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let message = messages
+        .into_iter()
+        .find(|message| message.id == args.message_id)
+        .ok_or_else(|| anyhow::anyhow!("owner E2EE message {} not found", args.message_id))?;
+    let encrypted = e2ee::encrypted_message_from_json(message.encrypted_message)?;
+    let private_key = fs::read_to_string(args.private_key)?;
+    let plaintext = e2ee::decrypt_message(&encrypted, &private_key, args.key_id.as_deref())?;
+    println!("{plaintext}");
+    Ok(())
+}
+
+async fn trust_owner_e2ee_peer(args: cli::OwnerE2eePeerRefArgs) -> Result<OwnerE2eePeerDevice> {
+    let peers = owner_api(&args.api)
+        .e2ee_peer_devices()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let peer = peers
+        .into_iter()
+        .find(|peer| peer.actor_id == args.actor_id && peer.device_id == args.device_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "E2EE peer device {} for {} not found; run e2ee-peer-discover first",
+                args.device_id,
+                args.actor_id
+            )
+        })?;
+    owner_api(&args.api)
+        .trust_e2ee_peer_device(&OwnerE2eePeerTrustRequest {
+            actor_id: peer.actor_id,
+            device_id: peer.device_id,
+            display_name: peer.display_name,
+            protocol: peer.protocol,
+            credential: peer.credential,
+            key_package: peer.key_package,
+            fingerprint: Some(peer.fingerprint),
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+async fn resolve_owner_e2ee_recipient_key(args: &cli::OwnerE2eeSendArgs) -> Result<String> {
+    if let Some(path) = args.recipient_public_key.as_ref() {
+        return Ok(fs::read_to_string(path)?);
+    }
+
+    let api = owner_api(&args.api);
+    let local_devices = api
+        .e2ee_devices()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if let Some(device) = local_devices.iter().find(|device| {
+        device.actor_id == args.recipient_actor_id && device.device_id == args.recipient_device_id
+    }) {
+        return Ok(device.credential.clone());
+    }
+
+    let peers = api
+        .e2ee_peer_devices()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let peer = peers
+        .iter()
+        .find(|peer| {
+            peer.actor_id == args.recipient_actor_id
+                && peer.device_id == args.recipient_device_id
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "recipient E2EE device {} for {} not found; provide --recipient-public-key or run e2ee-peer-discover",
+                args.recipient_device_id,
+                args.recipient_actor_id
+            )
+        })?;
+    if peer.trust_state != "trusted" && !args.allow_untrusted {
+        return Err(anyhow::anyhow!(
+            "recipient E2EE device {} for {} is {}; run e2ee-peer-trust or pass --allow-untrusted",
+            peer.device_id,
+            peer.actor_id,
+            peer.trust_state
+        ));
+    }
+    Ok(peer.credential.clone())
+}
+
 #[cfg(unix)]
 fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -1815,6 +1959,26 @@ fn print_owner_direct_messages(messages: &[OwnerDirectMessage]) {
         );
         println!("sender={}", message.sender_id);
         println!("{}", message.content);
+        println!();
+    }
+}
+
+fn print_owner_e2ee_messages(messages: &[OwnerE2eeMessage]) {
+    if messages.is_empty() {
+        println!("No owner E2EE messages found");
+        return;
+    }
+    for message in messages {
+        println!("{} [{}]", message.id, message.conversation_id);
+        println!("sender={}", message.sender_actor_id);
+        println!("sender_device={}", message.sender_device_id);
+        if let Some(recipient) = message.recipient_actor_id.as_deref() {
+            println!("recipient={recipient}");
+        }
+        println!("delivery_ids={}", message.delivery_ids.join(","));
+        if let Some(created_at) = message.created_at.as_deref() {
+            println!("created_at={created_at}");
+        }
         println!();
     }
 }

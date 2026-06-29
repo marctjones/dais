@@ -807,6 +807,12 @@ pub enum OwnerCommand {
     Deliveries(OwnerApiArgs),
     /// List live owner API direct messages.
     Dms(OwnerApiArgs),
+    /// List encrypted owner E2EE messages.
+    E2eeMessages(OwnerApiArgs),
+    /// Encrypt and send an owner E2EE message to a known device.
+    E2eeSend(OwnerE2eeSendArgs),
+    /// Decrypt one encrypted owner E2EE message with a local private key.
+    E2eeDecrypt(OwnerE2eeDecryptArgs),
     /// List local E2EE devices published by the live owner API.
     E2eeDevices(OwnerApiArgs),
     /// Generate a local E2EE device key and publish its public material.
@@ -815,6 +821,10 @@ pub enum OwnerCommand {
     E2eePeers(OwnerApiArgs),
     /// Discover and store E2EE devices published by a remote ActivityPub actor.
     E2eePeerDiscover(OwnerE2eePeerDiscoverArgs),
+    /// Mark a discovered E2EE peer device trusted.
+    E2eePeerTrust(OwnerE2eePeerRefArgs),
+    /// Revoke trust for a discovered E2EE peer device.
+    E2eePeerRevoke(OwnerE2eePeerRefArgs),
     /// Search live owner API posts and actor relationships.
     Search(OwnerSearchArgs),
     /// Show live owner API server stats.
@@ -917,6 +927,58 @@ pub struct OwnerE2eePeerDiscoverArgs {
     pub api: OwnerApiArgs,
     /// Remote ActivityPub actor URL to fetch, for example https://social.skpt.cl/users/social.
     pub actor_id: String,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eePeerRefArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Remote ActivityPub actor URL.
+    #[arg(long)]
+    pub actor_id: String,
+    /// Remote device id.
+    #[arg(long)]
+    pub device_id: String,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeSendArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Remote recipient ActivityPub actor URL.
+    #[arg(long)]
+    pub recipient_actor_id: String,
+    /// Recipient device id.
+    #[arg(long)]
+    pub recipient_device_id: String,
+    /// Local sender device id.
+    #[arg(long)]
+    pub sender_device_id: String,
+    /// Plaintext message to encrypt and send.
+    pub plaintext: String,
+    /// Recipient public key PEM file. If omitted, trusted peer devices are used.
+    #[arg(long)]
+    pub recipient_public_key: Option<PathBuf>,
+    /// URL to include in fallback HTML.
+    #[arg(long)]
+    pub view_url: Option<String>,
+    /// Permit sending to an untrusted discovered peer device.
+    #[arg(long)]
+    pub allow_untrusted: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeDecryptArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Owner E2EE message id.
+    pub message_id: String,
+    /// PKCS#8 PEM private key file.
+    #[arg(long)]
+    pub private_key: PathBuf,
+    /// Recipient key id to select. Optional only when the message has one recipient.
+    #[arg(long)]
+    pub key_id: Option<String>,
 }
 
 #[derive(Args, Clone, Debug)]

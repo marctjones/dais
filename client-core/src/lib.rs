@@ -936,6 +936,7 @@ pub struct OwnerE2eeMessage {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OwnerE2eeMessageSend {
     pub recipient_actor_id: String,
+    pub recipient_device_id: Option<String>,
     pub sender_device_id: String,
     pub encrypted_message: serde_json::Value,
     pub fallback_content: Option<String>,
