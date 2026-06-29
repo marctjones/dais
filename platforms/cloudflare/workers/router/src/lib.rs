@@ -3835,6 +3835,13 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
             }
         }
+        (worker::Method::Post, "/e2ee/devices/revoke") => {
+            let body = read_json(&mut req).await;
+            match owner_revoke_e2ee_device(&env, &body).await {
+                Ok(device) => api_json(&device, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, "/e2ee/peers") => api_json(
             &OwnerItems {
                 items: owner_e2ee_peer_devices(&env).await?,
@@ -7189,6 +7196,38 @@ async fn owner_upsert_e2ee_device(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "device not found after upsert".to_string())
+}
+
+async fn owner_revoke_e2ee_device(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let device_id = normalize_e2ee_device_id(
+        &body_string_any(body, &["device_id", "deviceId"]).ok_or("deviceId is required")?,
+    )?;
+    let actor_arg = D1Type::Text(&local_actor.id);
+    let device_arg = D1Type::Text(&device_id);
+    env.d1("DB")
+        .map_err(|error| error.to_string())?
+        .prepare(
+            r#"
+            UPDATE e2ee_devices
+            SET status = 'revoked', updated_at = datetime('now')
+            WHERE actor_id = ?1 AND device_id = ?2
+            "#,
+        )
+        .bind_refs(&[actor_arg, device_arg])
+        .map_err(|error| error.to_string())?
+        .run()
+        .await
+        .map_err(|error| error.to_string())?;
+    owner_e2ee_device_by_actor_and_device(env, &local_actor.id, &device_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "device not found".to_string())
 }
 
 async fn owner_e2ee_peer_devices(env: &Env) -> Result<Vec<Map<String, Value>>> {

@@ -26,7 +26,7 @@ use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient,
-    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice,
+    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eeDeviceRef,
     OwnerE2eeDeviceUpsert, OwnerE2eeMessage, OwnerE2eeMessageSend, OwnerE2eePeerDevice,
     OwnerE2eePeerDeviceRef, OwnerE2eePeerDiscoverRequest, OwnerE2eePeerTrustRequest, OwnerFollower,
     OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerMediaUpload, OwnerNotification,
@@ -1107,6 +1107,15 @@ async fn handle_owner(command: OwnerCommand) -> Result<()> {
         }
         OwnerCommand::E2eeDeviceInit(args) => {
             init_owner_e2ee_device(args).await?;
+        }
+        OwnerCommand::E2eeDeviceRevoke(args) => {
+            let device = owner_api(&args.api)
+                .revoke_e2ee_device(&OwnerE2eeDeviceRef {
+                    device_id: args.device_id,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_e2ee_devices(&[device]);
         }
         OwnerCommand::E2eePeers(args) => {
             let devices = owner_api(&args)

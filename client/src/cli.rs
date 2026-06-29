@@ -817,6 +817,8 @@ pub enum OwnerCommand {
     E2eeDevices(OwnerApiArgs),
     /// Generate a local E2EE device key and publish its public material.
     E2eeDeviceInit(OwnerE2eeDeviceInitArgs),
+    /// Revoke/deactivate one local E2EE device.
+    E2eeDeviceRevoke(OwnerE2eeDeviceRefArgs),
     /// List discovered E2EE peer devices.
     E2eePeers(OwnerApiArgs),
     /// Discover and store E2EE devices published by a remote ActivityPub actor.
@@ -919,6 +921,15 @@ pub struct OwnerE2eeDeviceInitArgs {
     /// Overwrite the private key file if it already exists.
     #[arg(long)]
     pub force: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeDeviceRefArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Local device id.
+    #[arg(long)]
+    pub device_id: String,
 }
 
 #[derive(Args, Clone, Debug)]
