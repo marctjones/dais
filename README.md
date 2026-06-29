@@ -44,8 +44,11 @@ client and the core-based Cloudflare worker tree.
 - E2EE support includes a dais `encryptedMessage` envelope, Rust CLI
   encrypt/decrypt helpers, keyless/split/trusted fallback modes for
   Mastodon-style recipients, owner device publication, peer discovery/trust,
-  and owner API send/decrypt commands for the current v1 fallback path. Full
-  MLS/OpenMLS group state is still prototype work.
+  local private-key storage/export, and owner API send/decrypt commands for the
+  current v1 fallback path. The live `social.dais.social` and independent
+  `social.skpt.cl` instances pass bidirectional encrypted owner-DM delivery and
+  CLI decrypt smoke tests. Full MLS/OpenMLS group state is still prototype
+  work.
 - Rich ActivityPub object support includes ActivityStreams `Note`, `Article`,
   `Document`, and `Event` objects from the Rust CLI, including title/summary,
   event time, and location metadata while preserving Mastodon fallback status

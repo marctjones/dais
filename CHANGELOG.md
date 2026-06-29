@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.131] - 2026-06-29
+
+### Added
+- Added local E2EE private-key storage keyed by instance and device id, plus
+  `owner e2ee-keys`, `owner e2ee-key-export`, default key-store output for
+  `owner e2ee-device-init`, and stored-key decrypt by `--device-id`.
+- Added deterministic bidirectional cross-instance E2EE smoke coverage for the
+  independent `social.dais.social` and `social.skpt.cl` deployments, including
+  delivery-worker processing and recipient-side CLI decrypt verification.
+
+### Changed
+- Updated the `dais.social` landing page and README to describe the independent
+  `skpt.cl` testbed and current E2EE boundary accurately.
+
+### Fixed
+- Persist inbound direct ActivityPub `Create` activities with `encryptedMessage`
+  into recipient `e2ee_conversations` and `e2ee_messages` when they arrive via
+  the router custom-domain inbox path.
+- Resolved owner E2EE recipient inbox lookup without requiring a prior follow by
+  fetching the remote actor inbox as a fallback.
+
 ### Added
 - Added the native Slint `apps/dais-desk` owner client with Home, People, and
   Server workflows, local multi-account profiles, accessible source-list/row

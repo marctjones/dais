@@ -286,9 +286,9 @@ async fn handle_landing(env: Env) -> Result<Response> {
                     <p>The PDS exposes identity, repo metadata, public record reads, author feed, timeline, notifications, likes, followers, follows, and subscribeRepos status. Full AT Protocol compatibility remains in progress.</p>
                 </div>
                 <div class="tile">
-                    <span class="status partial">experimental</span>
+                    <span class="status">verified</span>
                     <h3>E2EE</h3>
-                    <p>The encryptedMessage v1 envelope, CLI encrypt/decrypt helpers, owner device publication, peer discovery/trust, and owner send/decrypt commands exist. The independent skpt.cl deployment is the cross-instance testbed; MLS/OpenMLS group state is still prototype work.</p>
+                    <p>The encryptedMessage v1 envelope, CLI encrypt/decrypt helpers, owner device publication, peer discovery/trust, local key storage, and owner send/decrypt commands exist. The independent skpt.cl deployment now passes bidirectional cross-instance encrypted owner-DM delivery and CLI decrypt smoke tests. Full MLS/OpenMLS group state remains roadmap work.</p>
                 </div>
                 <div class="tile">
                     <span class="status partial">in progress</span>
@@ -304,15 +304,15 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <li><a href="https://skpt.cl/projects/dais/">dais on Skeptical Engineering</a></li>
                 <li><a href="https://social.skpt.cl/users/social">Independent skpt.cl dais instance</a></li>
                 <li><a href="https://github.com/marctjones/dais">Current public source repository and issues</a></li>
-                <li><a href="https://github.com/marctjones/dais/blob/client/rust-greenfield/README.md">README and setup notes</a></li>
-                <li><a href="https://github.com/marctjones/dais/blob/client/rust-greenfield/docs/POSITIONING.md">Positioning and product vision</a></li>
+                <li><a href="https://github.com/marctjones/dais/blob/main/README.md">README and setup notes</a></li>
+                <li><a href="https://github.com/marctjones/dais/blob/main/docs/POSITIONING.md">Positioning and product vision</a></li>
                 <li><a href="{actor_url}">Follow the live dais project instance</a></li>
             </ul>
         </section>
     </main>
 
     <div class="footer">
-        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues.</p>
+        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-06-29 cross-instance E2EE smoke release.</p>
     </div>
 </body>
 </html>"#,
