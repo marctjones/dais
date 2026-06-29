@@ -394,6 +394,10 @@ pub struct UiProjection {
     pub rows: Vec<UiRow>,
     pub inspector_rows: Vec<UiRow>,
     pub accounts: Vec<AccountRow>,
+    pub account_options: Vec<String>,
+    pub active_account_index: i32,
+    pub active_account_label: String,
+    pub active_account_url: String,
     pub active_mode: String,
     pub active_screen: String,
     pub selected_row: String,
@@ -1062,6 +1066,17 @@ impl DeskController {
         }
     }
 
+    pub fn switch_account_option(&mut self, option: &str) {
+        let account_id = account_summaries(&self.settings)
+            .into_iter()
+            .find(|account| account_option_text(account) == option)
+            .map(|account| account.id);
+        match account_id {
+            Some(account_id) => self.switch_account(&account_id),
+            None => self.status_message = "Account selection is no longer available.".into(),
+        }
+    }
+
     pub fn delete_account(&mut self, account_id: &str) {
         match self.delete_account_result(account_id) {
             Ok(message) => {
@@ -1473,15 +1488,32 @@ impl DeskController {
             };
         let compose_warning = compose_warning(&self.compose);
         let account = active_account(&self.settings);
+        let account_summaries = account_summaries(&self.settings);
+        let active_account_index = account_summaries
+            .iter()
+            .position(|account| account.active)
+            .unwrap_or(0) as i32;
+        let account_options: Vec<String> =
+            account_summaries.iter().map(account_option_text).collect();
+        let active_account_label = account
+            .map(|account| account.label.clone())
+            .unwrap_or_else(|| "No account".into());
+        let active_account_url = account
+            .map(|account| account.instance_url.clone())
+            .unwrap_or_default();
         UiProjection {
             mode_nav: self.mode_nav(unread, failed),
             screen_nav: self.screen_nav(),
             rows,
             inspector_rows,
-            accounts: account_summaries(&self.settings)
+            accounts: account_summaries
                 .into_iter()
                 .map(|account| account_row(account, self.settings.accounts.len() > 1))
                 .collect(),
+            account_options,
+            active_account_index,
+            active_account_label,
+            active_account_url,
             active_mode: self.active_mode.clone(),
             active_screen: self.active_screen.clone(),
             selected_row,
@@ -5078,6 +5110,15 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
 
     let weak = window.as_weak();
     let ctrl = controller.clone();
+    window.on_switch_account_option(move |option| {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().switch_account_option(option.as_str());
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
     window.on_delete_account(move |account_id| {
         if let Some(window) = weak.upgrade() {
             ctrl.borrow_mut().delete_account(account_id.as_str());
@@ -5216,6 +5257,16 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_rows(model(projection.rows));
     window.set_inspector_rows(model(projection.inspector_rows));
     window.set_accounts(model(projection.accounts));
+    window.set_account_options(model(
+        projection
+            .account_options
+            .iter()
+            .map(|value| s(value))
+            .collect(),
+    ));
+    window.set_active_account_index(projection.active_account_index);
+    window.set_active_account_label(s(&projection.active_account_label));
+    window.set_active_account_url(s(&projection.active_account_url));
     window.set_active_mode(s(&projection.active_mode));
     window.set_active_screen(s(&projection.active_screen));
     window.set_selected_row(s(&projection.selected_row));
@@ -5382,6 +5433,18 @@ fn account_row(account: OwnerAccountSummary, can_delete: bool) -> AccountRow {
         token: account.owner_token_present,
         can_delete,
     }
+}
+
+fn account_option_text(account: &OwnerAccountSummary) -> String {
+    let token_status = if account.owner_token_present {
+        "token"
+    } else {
+        "preview"
+    };
+    format!(
+        "{} - {} ({token_status})",
+        account.label, account.instance_url
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -10536,6 +10599,70 @@ mod tests {
         assert_eq!(inactive.primary.as_str(), "Switch");
         assert_eq!(inactive.secondary.as_str(), "Delete");
         assert_eq!(inactive.chip.as_str(), "Account");
+    }
+
+    #[test]
+    fn projection_exposes_active_account_selector_state() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.settings.accounts = vec![
+            StoredOwnerAccount {
+                id: "account-dais".into(),
+                label: "Dais Social".into(),
+                instance_url: "https://social.dais.social".into(),
+                owner_token: Some("token-a".into()),
+            },
+            StoredOwnerAccount {
+                id: "account-skpt".into(),
+                label: "SKPT Testbed".into(),
+                instance_url: "https://social.skpt.cl".into(),
+                owner_token: Some("token-b".into()),
+            },
+        ];
+        controller.settings.active_account_id = Some("account-skpt".into());
+        controller.settings.instance_url = "https://social.skpt.cl".into();
+        controller.settings.owner_token = Some("token-b".into());
+
+        let projection = controller.projection();
+
+        assert_eq!(projection.active_account_index, 1);
+        assert_eq!(projection.active_account_label, "SKPT Testbed");
+        assert_eq!(projection.active_account_url, "https://social.skpt.cl");
+        assert_eq!(projection.account_options.len(), 2);
+        assert!(projection.account_options[0].contains("Dais Social"));
+        assert!(projection.account_options[1].contains("social.skpt.cl"));
+    }
+
+    #[test]
+    fn account_selector_option_switches_active_account() {
+        let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        controller.settings_path = temp_dir.path().join("owner-settings.json");
+        controller.settings.accounts = vec![
+            StoredOwnerAccount {
+                id: "account-dais".into(),
+                label: "Dais Social".into(),
+                instance_url: "https://social.dais.social".into(),
+                owner_token: Some("token-a".into()),
+            },
+            StoredOwnerAccount {
+                id: "account-skpt".into(),
+                label: "SKPT Testbed".into(),
+                instance_url: "https://social.skpt.cl".into(),
+                owner_token: Some("token-b".into()),
+            },
+        ];
+        controller.settings.active_account_id = Some("account-dais".into());
+        controller.settings.instance_url = "https://social.dais.social".into();
+        controller.settings.owner_token = Some("token-a".into());
+
+        let option = controller.projection().account_options[1].clone();
+        controller.switch_account_option(&option);
+
+        assert_eq!(
+            controller.settings.active_account_id,
+            Some("account-skpt".into())
+        );
+        assert_eq!(controller.settings.instance_url, "https://social.skpt.cl");
     }
 
     #[test]

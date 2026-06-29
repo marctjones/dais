@@ -1,6 +1,7 @@
 import {
     Button,
     CheckBox,
+    ComboBox,
     LineEdit,
     ScrollView,
     TextEdit,
@@ -332,6 +333,10 @@ export component MainWindow inherits Window {
     in property <[UiRow]> rows;
     in property <[UiRow]> inspector-rows;
     in property <[AccountRow]> accounts;
+    in property <[string]> account-options;
+    in property <int> active-account-index;
+    in property <string> active-account-label;
+    in property <string> active-account-url;
     in property <string> active-mode;
     in property <string> active-screen;
     in property <string> selected-row;
@@ -435,6 +440,7 @@ export component MainWindow inherits Window {
     callback revoke-media(string);
     callback save-account(string, string, string);
     callback switch-account(string);
+    callback switch-account-option(string);
     callback delete-account(string);
     callback compose-send();
     callback compose-set-visibility(string);
@@ -614,7 +620,7 @@ export component MainWindow inherits Window {
             horizontal-stretch: 1;
 
             Rectangle {
-                height: 58px;
+                height: 68px;
                 background: #ffffff;
                 border-width: 1px;
                 border-color: #d7dde6;
@@ -630,6 +636,27 @@ export component MainWindow inherits Window {
                         horizontal-stretch: 1;
                         accepted => {
                             root.run-command(root.command-text);
+                        }
+                    }
+
+                    VerticalLayout {
+                        width: 230px;
+                        padding-top: 7px;
+                        padding-bottom: 5px;
+                        spacing: 2px;
+                        Text {
+                            text: "Logged in as " + root.active-account-label;
+                            color: #344055;
+                            font-size: 11px;
+                            font-weight: 700;
+                            overflow: elide;
+                        }
+                        ComboBox {
+                            model: root.account-options;
+                            current-index: root.active-account-index;
+                            selected(option) => {
+                                root.switch-account-option(option);
+                            }
                         }
                     }
 
