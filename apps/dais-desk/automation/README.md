@@ -36,11 +36,25 @@ Handlers:
 
 ## Visual UX Review
 
+Build a repeatable local macOS app bundle for live automation:
+
+```sh
+scripts/package-dais-desk-macos.sh
+open -n "apps/dais-desk/target/macos/Dais Desk.app"
+osascript apps/dais-desk/automation/DaisDesk.applescript healthcheck
+```
+
 Run the visual review script to regenerate every modeled screen screenshot and
 produce a macOS-oriented UX recommendations report:
 
 ```sh
 scripts/review-dais-desk-visual-ux.sh
+```
+
+To include a live native-window capture from a freshly packaged macOS app:
+
+```sh
+LAUNCH_PACKAGED_APP=1 scripts/review-dais-desk-visual-ux.sh
 ```
 
 The script writes screenshots and `DAIS_DESK_VISUAL_UX_REVIEW.md` under

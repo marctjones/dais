@@ -1,7 +1,5 @@
 use scripting additions
 
-property appNames : {"Dais Desk", "dais-desk", "DaisDeskLauncher"}
-
 on run argv
 	if (count of argv) is 0 then
 		return "usage: osascript DaisDesk.applescript <processName|healthcheck|activate|clickButton|pressShortcut|typeText|screenshotWindow|screenshotActiveScreen|screenshotDisplay|windowBounds> [args]"
@@ -36,13 +34,11 @@ on run argv
 end run
 
 on findDeskProcess()
-	repeat with candidate in appNames
-		set candidateName to contents of candidate
-		try
-			do shell script "/usr/bin/pgrep -x " & quoted form of candidateName & " >/dev/null"
-			return candidateName
-		end try
-	end repeat
+	set probeScript to "tell application \"System Events\" to return name of every process whose name is \"Dais Desk\" or name is \"DaisDesk\" or name is \"dais-desk\" or name is \"DaisDeskLauncher\""
+	try
+		set matchesText to do shell script "/usr/bin/osascript -e " & quoted form of probeScript
+		if matchesText is not "" then return first paragraph of matchesText
+	end try
 	error "Dais Desk is not running. Start the app, then retry the automation command."
 end findDeskProcess
 
@@ -128,10 +124,18 @@ on screenshotWindow(outputPath)
 	tell application "System Events"
 		tell process processName
 			if (count of windows) is 0 then error "Dais Desk has no visible windows"
-			set unixWindowId to value of attribute "AXWindowNumber" of window 1
+			try
+				set unixWindowId to value of attribute "AXWindowNumber" of window 1
+			on error
+				set unixWindowId to ""
+			end try
 		end tell
 	end tell
-	do shell script "/usr/sbin/screencapture -x -l " & unixWindowId & " " & quoted form of POSIX path of outputPath
+	if unixWindowId is "" then
+		do shell script "/usr/sbin/screencapture -x " & quoted form of POSIX path of outputPath
+	else
+		do shell script "/usr/sbin/screencapture -x -l " & unixWindowId & " " & quoted form of POSIX path of outputPath
+	end if
 	return outputPath
 end screenshotWindow
 

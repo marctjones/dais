@@ -4762,6 +4762,7 @@ impl ModerationCounts for ModerationState {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let controller = Rc::new(RefCell::new(DeskController::load_default()?));
     let window = build_window(controller)?;
+    window.show()?;
     window.run()?;
     Ok(())
 }
