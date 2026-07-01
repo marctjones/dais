@@ -823,6 +823,8 @@ pub enum OwnerCommand {
     E2eeMlsDeviceInit(OwnerE2eeMlsDeviceInitArgs),
     /// Encrypt and send a true MLS v2 owner E2EE message.
     E2eeMlsSend(OwnerE2eeMlsSendArgs),
+    /// Encrypt one MLS v2 message to every trusted device in a named audience group.
+    E2eeMlsGroupSend(OwnerE2eeMlsGroupSendArgs),
     /// Decrypt one true MLS v2 owner E2EE message with local MLS state.
     E2eeMlsDecrypt(OwnerE2eeMlsDecryptArgs),
     /// Revoke/deactivate one local E2EE device.
@@ -1113,6 +1115,26 @@ pub struct OwnerE2eeMlsSendArgs {
     /// Plaintext message to encrypt and send.
     pub plaintext: String,
     /// Permit sending to an untrusted discovered peer device.
+    #[arg(long)]
+    pub allow_untrusted: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeMlsGroupSendArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Audience group id from owner audience lists.
+    #[arg(long)]
+    pub audience_list_id: String,
+    /// Local sender MLS device id.
+    #[arg(long)]
+    pub sender_device_id: String,
+    /// Stable raw MLS group id. Defaults to audience id plus trusted member devices.
+    #[arg(long)]
+    pub group_id: Option<String>,
+    /// Plaintext message to encrypt and send.
+    pub plaintext: String,
+    /// Permit sending to untrusted discovered peer devices.
     #[arg(long)]
     pub allow_untrusted: bool,
 }

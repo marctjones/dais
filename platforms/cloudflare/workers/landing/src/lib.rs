@@ -288,7 +288,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <div class="tile">
                     <span class="status">verified</span>
                     <h3>E2EE</h3>
-                    <p>The encryptedMessage v1 envelope, CLI encrypt/decrypt helpers, owner device publication, peer discovery/trust, local key storage, and owner send/decrypt commands exist. The independent skpt.cl deployment now passes bidirectional cross-instance encrypted owner-DM delivery and CLI decrypt smoke tests. Full MLS/OpenMLS group state remains roadmap work.</p>
+                    <p>The encryptedMessage v1 fallback and MLS v2 owner-device paths are implemented. The independent skpt.cl deployment now passes MLS device publication, bidirectional owner-DM delivery/decrypt, and audience-list group delivery/decrypt smoke tests with dais.social.</p>
                 </div>
                 <div class="tile">
                     <span class="status partial">in progress</span>
@@ -312,7 +312,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
     </main>
 
     <div class="footer">
-        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-06-29 cross-instance E2EE smoke release.</p>
+        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-07-01 cross-instance MLS smoke release.</p>
     </div>
 </body>
 </html>"#,

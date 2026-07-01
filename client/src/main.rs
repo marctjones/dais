@@ -1121,6 +1121,9 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
         OwnerCommand::E2eeMlsSend(args) => {
             send_owner_e2ee_mls_message(args, store).await?;
         }
+        OwnerCommand::E2eeMlsGroupSend(args) => {
+            send_owner_e2ee_mls_group_message(args, store).await?;
+        }
         OwnerCommand::E2eeMlsDecrypt(args) => {
             decrypt_owner_e2ee_mls_message(args, store).await?;
         }
@@ -1798,6 +1801,102 @@ async fn send_owner_e2ee_mls_message(
     Ok(())
 }
 
+async fn send_owner_e2ee_mls_group_message(
+    args: cli::OwnerE2eeMlsGroupSendArgs,
+    store: &ConfigStore,
+) -> Result<()> {
+    let api = owner_api(&args.api);
+    let audience_lists = api
+        .audience_lists()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let audience = audience_lists
+        .iter()
+        .find(|list| list.id == args.audience_list_id)
+        .ok_or_else(|| anyhow::anyhow!("audience group {} not found", args.audience_list_id))?;
+    let peers = api
+        .e2ee_peer_devices()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let plan = plan_owner_mls_group_recipients(audience, &peers, args.allow_untrusted)?;
+    let device_state_file =
+        store.load_mls_device_state(&args.api.instance_url, &args.sender_device_id)?;
+    let private_state: MlsDevicePrivateState =
+        serde_json::from_str(&device_state_file.serialized_device_state)?;
+    let mut sender = MlsDevice::from_private_state(&private_state)?;
+    let invitees: Vec<MlsPublicDevice> = plan
+        .devices
+        .iter()
+        .map(|device| {
+            MlsPublicDevice::from_material(MlsDeviceMaterial {
+                account_id: device.actor_id.clone(),
+                device_id: device.device_id.clone(),
+                ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_string(),
+                signature_scheme: "ED25519".to_string(),
+                credential_identity: device.credential.clone(),
+                key_package: device.key_package.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let group_id = args
+        .group_id
+        .clone()
+        .unwrap_or_else(|| owner_mls_audience_group_id(audience, &plan));
+    let welcome = sender.create_group_with_members(group_id.as_bytes(), &invitees)?;
+    let mut envelope = sender.encrypt_application_message(args.plaintext.as_bytes())?;
+    envelope.welcome = Some(welcome.to_wire()?);
+    let sender_state = sender.export_state()?;
+    store.save_mls_group_state(
+        &MlsGroupStateFile {
+            version: 1,
+            instance_url: args.api.instance_url.clone(),
+            local_actor_id: device_state_file.local_actor_id,
+            device_id: args.sender_device_id.clone(),
+            group_id: sender_state.group_id.clone(),
+            epoch: sender_state.epoch,
+            serialized_group_state: serde_json::to_string(&sender_state)?,
+            recovery_status: "active".to_string(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        },
+        true,
+    )?;
+
+    println!("Sending owner MLS group E2EE message");
+    println!("audience_id={}", audience.id);
+    println!("audience_name={}", audience.name);
+    println!("member_count={}", plan.member_count);
+    println!("recipient_device_count={}", plan.devices.len());
+    println!("mls_group={}", sender_state.group_id);
+    println!("mls_epoch={}", sender_state.epoch);
+    println!("wire_material=daisEncryptedMessage-v2-mls-rfc9420");
+
+    let encrypted_message = serde_json::to_value(&envelope)?;
+    let mut all_delivery_ids = Vec::new();
+    for delivery in &plan.deliveries {
+        let result = api
+            .send_e2ee_message(&OwnerE2eeMessageSend {
+                recipient_actor_id: delivery.actor_id.clone(),
+                recipient_device_id: Some(delivery.validation_device_id.clone()),
+                sender_device_id: args.sender_device_id.clone(),
+                dais_encrypted_message: Some(encrypted_message.clone()),
+                encrypted_message: None,
+                fallback_content: Some(
+                    "Encrypted MLS group message. Open in a dais client to decrypt.".to_string(),
+                ),
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        all_delivery_ids.extend(result.delivery_ids);
+        println!(
+            "sent actor={} validation_device={} message={}",
+            delivery.actor_id, delivery.validation_device_id, result.message.id
+        );
+    }
+
+    println!("delivery_ids={}", all_delivery_ids.join(","));
+    Ok(())
+}
+
 async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
     let recipient_public_key = resolve_owner_e2ee_recipient_key(&args).await?;
     let mut recipients = BTreeMap::new();
@@ -2233,6 +2332,13 @@ struct OwnerE2eeGroupDelivery {
     validation_device_id: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OwnerMlsGroupPlan {
+    member_count: usize,
+    devices: Vec<OwnerE2eePeerDevice>,
+    deliveries: Vec<OwnerE2eeGroupDelivery>,
+}
+
 fn plan_owner_e2ee_group_recipients(
     audience: &OwnerAudienceList,
     peers: &[OwnerE2eePeerDevice],
@@ -2286,6 +2392,70 @@ fn plan_owner_e2ee_group_recipients(
         recipients,
         deliveries,
     })
+}
+
+fn plan_owner_mls_group_recipients(
+    audience: &OwnerAudienceList,
+    peers: &[OwnerE2eePeerDevice],
+    allow_untrusted: bool,
+) -> Result<OwnerMlsGroupPlan> {
+    let members: Vec<String> = audience
+        .member_actor_ids
+        .iter()
+        .map(|member| member.trim())
+        .filter(|member| !member.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if members.is_empty() {
+        return Err(anyhow::anyhow!(
+            "audience group {} has no members",
+            audience.id
+        ));
+    }
+
+    let mut devices = Vec::new();
+    let mut deliveries = Vec::new();
+    for actor_id in &members {
+        let member_devices: Vec<OwnerE2eePeerDevice> = peers
+            .iter()
+            .filter(|peer| {
+                peer.actor_id == *actor_id
+                    && peer.protocol == "mls-rfc9420"
+                    && (peer.trust_state == "trusted" || allow_untrusted)
+                    && peer.revoked_at.is_none()
+            })
+            .cloned()
+            .collect();
+        if member_devices.is_empty() {
+            return Err(anyhow::anyhow!(
+                "audience member {} has no {}MLS E2EE peer devices; run e2ee-peer-discover and e2ee-peer-trust first",
+                actor_id,
+                if allow_untrusted { "discovered " } else { "trusted " }
+            ));
+        }
+
+        deliveries.push(OwnerE2eeGroupDelivery {
+            actor_id: actor_id.clone(),
+            validation_device_id: member_devices[0].device_id.clone(),
+        });
+        devices.extend(member_devices);
+    }
+
+    Ok(OwnerMlsGroupPlan {
+        member_count: members.len(),
+        devices,
+        deliveries,
+    })
+}
+
+fn owner_mls_audience_group_id(audience: &OwnerAudienceList, plan: &OwnerMlsGroupPlan) -> String {
+    let mut members: Vec<String> = plan
+        .devices
+        .iter()
+        .map(|device| format!("{}#{}", device.actor_id, device.device_id))
+        .collect();
+    members.sort();
+    format!("dais-mls-audience:{}:{}", audience.id, members.join(","))
 }
 
 fn owner_e2ee_group_key_id(actor_id: &str, device_id: &str) -> String {
@@ -3123,12 +3293,21 @@ mod tests {
     }
 
     fn peer(actor_id: &str, device_id: &str, trust_state: &str) -> OwnerE2eePeerDevice {
+        peer_with_protocol(actor_id, device_id, trust_state, "dais-mls-v1")
+    }
+
+    fn peer_with_protocol(
+        actor_id: &str,
+        device_id: &str,
+        trust_state: &str,
+        protocol: &str,
+    ) -> OwnerE2eePeerDevice {
         OwnerE2eePeerDevice {
             id: format!("{actor_id}#{device_id}"),
             actor_id: actor_id.to_string(),
             device_id: device_id.to_string(),
             display_name: None,
-            protocol: "dais-mls-v1".to_string(),
+            protocol: protocol.to_string(),
             credential: format!(
                 "-----BEGIN PUBLIC KEY-----\n{actor_id}-{device_id}\n-----END PUBLIC KEY-----"
             ),
@@ -3192,6 +3371,38 @@ mod tests {
             true
         )
         .is_ok());
+    }
+
+    #[test]
+    fn mls_group_plan_requires_trusted_mls_devices_and_tracks_membership() {
+        let alice = "https://alice.example/users/alice";
+        let bob = "https://bob.example/users/bob";
+        let peers = vec![
+            peer_with_protocol(alice, "phone", "trusted", "mls-rfc9420"),
+            peer_with_protocol(bob, "laptop", "trusted", "mls-rfc9420"),
+            peer_with_protocol(bob, "legacy", "trusted", "dais-mls-v1"),
+        ];
+
+        let original = plan_owner_mls_group_recipients(
+            &audience("close-friends", &[alice, bob]),
+            &peers,
+            false,
+        )
+        .unwrap();
+        let after_remove =
+            plan_owner_mls_group_recipients(&audience("close-friends", &[alice]), &peers, false)
+                .unwrap();
+
+        assert_eq!(original.member_count, 2);
+        assert_eq!(original.devices.len(), 2);
+        assert_eq!(original.deliveries.len(), 2);
+        assert_eq!(after_remove.member_count, 1);
+        assert_eq!(after_remove.devices.len(), 1);
+        assert_eq!(after_remove.devices[0].actor_id, alice);
+        assert_ne!(
+            owner_mls_audience_group_id(&audience("close-friends", &[alice, bob]), &original),
+            owner_mls_audience_group_id(&audience("close-friends", &[alice]), &after_remove)
+        );
     }
 
     #[test]

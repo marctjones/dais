@@ -330,6 +330,19 @@ impl MlsDevice {
         group_id: impl AsRef<[u8]>,
         invitee: &MlsPublicDevice,
     ) -> MlsResult<MlsWelcome> {
+        self.create_group_with_members(group_id, core::slice::from_ref(invitee))
+    }
+
+    pub fn create_group_with_members(
+        &mut self,
+        group_id: impl AsRef<[u8]>,
+        invitees: &[MlsPublicDevice],
+    ) -> MlsResult<MlsWelcome> {
+        if invitees.is_empty() {
+            return Err(MlsError::OpenMls(
+                "MLS group requires at least one invitee".to_string(),
+            ));
+        }
         let mut group = MlsGroup::new_with_group_id(
             &self.provider,
             &self.signer,
@@ -338,12 +351,12 @@ impl MlsDevice {
             self.credential.clone(),
         )
         .map_err(openmls_error)?;
+        let key_packages: Vec<KeyPackage> = invitees
+            .iter()
+            .map(|invitee| invitee.key_package.clone())
+            .collect();
         let (_commit, welcome, _group_info) = group
-            .add_members(
-                &self.provider,
-                &self.signer,
-                core::slice::from_ref(&invitee.key_package),
-            )
+            .add_members(&self.provider, &self.signer, key_packages.as_slice())
             .map_err(openmls_error)?;
         group
             .merge_pending_commit(&self.provider)

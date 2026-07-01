@@ -357,6 +357,26 @@ available, it prints the missing prerequisite and exits without claiming the
 send/decrypt path passed. Set `REQUIRE_FULL=1` for release gates that should
 fail unless the full cross-instance encrypted send/decrypt path completes.
 
+Run the cross-instance MLS v2 harness when validating the OpenMLS owner-device
+path between the same independent instances:
+
+```bash
+DAIS_OWNER_TOKEN_FILE=/private/tmp/dais-owner-token-20260614.txt \
+SKPT_OWNER_TOKEN_FILE=/private/tmp/dais-skpt-owner-token.txt \
+REQUIRE_FULL=1 \
+scripts/smoke-cross-instance-mls.sh
+```
+
+The MLS harness verifies actor fetches, MLS device publication, peer
+discovery/trust, bidirectional 1:1 MLS send/decrypt, and audience-list MLS
+group send/decrypt. When delivery admin tokens are available at
+`/private/tmp/dais-delivery-admin-token.txt` and
+`/private/tmp/dais-skpt-delivery-admin-token.txt`, it also processes queued
+deliveries through the live delivery workers. The live two-instance gate proves
+the cross-instance MLS transport and one-recipient audience-list path; broader
+multi-member and multi-device MLS lifecycle coverage should be tested with
+additional independent actors.
+
 If Mastodon shows a follow request as pending, approve it from dais so the
 server sends a signed ActivityPub `Accept`:
 

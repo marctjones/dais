@@ -45,10 +45,11 @@ client and the core-based Cloudflare worker tree.
   encrypt/decrypt helpers, keyless/split/trusted fallback modes for
   Mastodon-style recipients, owner device publication, peer discovery/trust,
   local private-key storage/export, and owner API send/decrypt commands for the
-  current v1 fallback path. The live `social.dais.social` and independent
-  `social.skpt.cl` instances pass bidirectional encrypted owner-DM delivery and
-  CLI decrypt smoke tests. Full MLS/OpenMLS group state is still prototype
-  work.
+  v1 fallback path and MLS v2. The live `social.dais.social` and independent
+  `social.skpt.cl` instances pass MLS v2 device publication, bidirectional
+  owner-DM delivery/decrypt, and audience-list group delivery/decrypt smoke
+  tests. Larger multi-member and multi-device MLS lifecycle testing remains
+  roadmap work.
 - Rich ActivityPub object support includes ActivityStreams `Note`, `Article`,
   `Document`, and `Event` objects from the Rust CLI, including title/summary,
   event time, and location metadata while preserving Mastodon fallback status
@@ -165,6 +166,7 @@ scripts/smoke-local-mls.sh
 scripts/audit-skpt-independence.sh
 scripts/smoke-skpt-instance.sh
 scripts/smoke-cross-instance-e2ee.sh
+scripts/smoke-cross-instance-mls.sh
 ```
 
 `scripts/smoke-local-mls.sh` runs the no-token OpenMLS gate: device material,
@@ -180,6 +182,12 @@ devices, discovers and trusts peers, sends encrypted messages in both
 directions, and decrypts them with the retained private keys. Without both
 owner tokens it reports the missing prerequisite and skips the send/decrypt
 path. Set `REQUIRE_FULL=1` to make missing prerequisites fail a release gate.
+`scripts/smoke-cross-instance-mls.sh` runs the live MLS v2 gate between
+`social.dais.social` and `social.skpt.cl`: actor fetch, MLS device publication,
+mutual discovery/trust, bidirectional 1:1 send/decrypt, audience-list group
+send/decrypt, and delivery queue processing when delivery admin tokens are
+available. Set `REQUIRE_FULL=1` for release gates that must fail if either
+owner token is unavailable.
 
 Worker builds use current `worker-build` with the rustup toolchain path set in
 each worker `wrangler.toml`.
