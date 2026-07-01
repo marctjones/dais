@@ -1,17 +1,17 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use dais_client_core::{
-    ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate, ModerationState,
-    OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost, OwnerDeletedPost,
-    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eeMessage,
-    OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef, OwnerE2eePeerTrustRequest, OwnerFollowResult,
-    OwnerFollower, OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerInteractionResult,
-    OwnerMedia, OwnerMediaUpload, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
-    OwnerProfileUpdate, OwnerPublicSearchActor, OwnerPublicSearchPost, OwnerSavePost,
-    OwnerSavedPost, OwnerSearchQuery, OwnerSearchResult, OwnerSection, OwnerSettings,
-    OwnerSettingsUpdate, OwnerSourceAdd, OwnerSourceAddResult, OwnerSourceRefreshResult,
-    OwnerSources, OwnerStats, OwnerTimelinePost, OwnerWatchAdd, ProtocolRoute, SourceItem,
-    SourceSubscription, Visibility,
+    e2ee, ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate,
+    ModerationState, OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost,
+    OwnerDeletedPost, OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice,
+    OwnerE2eeMessage, OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef, OwnerE2eePeerTrustRequest,
+    OwnerFollowResult, OwnerFollower, OwnerFollowing, OwnerFriend, OwnerInteraction,
+    OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification, OwnerPost,
+    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerPublicSearchActor,
+    OwnerPublicSearchPost, OwnerSavePost, OwnerSavedPost, OwnerSearchQuery, OwnerSearchResult,
+    OwnerSection, OwnerSettings, OwnerSettingsUpdate, OwnerSourceAdd, OwnerSourceAddResult,
+    OwnerSourceRefreshResult, OwnerSources, OwnerStats, OwnerTimelinePost, OwnerWatchAdd,
+    ProtocolRoute, SourceItem, SourceSubscription, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -3437,6 +3437,9 @@ impl DeskController {
         for dm in &self.data.direct_messages {
             rows.push(dm_row(dm));
         }
+        for message in &self.data.e2ee_messages {
+            rows.push(e2ee_social_message_row(&self.settings, message));
+        }
         for post in &self.data.snapshot.home_timeline {
             rows.push(timeline_row(post));
         }
@@ -3495,6 +3498,12 @@ impl DeskController {
         });
         let mut rows: Vec<UiRow> = notices.into_iter().map(notification_row).collect();
         rows.extend(self.data.direct_messages.iter().map(dm_row));
+        rows.extend(
+            self.data
+                .e2ee_messages
+                .iter()
+                .map(|message| e2ee_social_message_row(&self.settings, message)),
+        );
         rows.extend(
             self.data
                 .snapshot
@@ -6154,6 +6163,141 @@ fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
         "Reply",
         "",
     )
+}
+
+fn e2ee_social_message_row(settings: &StoredOwnerSettings, message: &OwnerE2eeMessage) -> UiRow {
+    let peer = message
+        .recipient_actor_id
+        .as_deref()
+        .unwrap_or(message.sender_actor_id.as_str());
+    let created_at = message
+        .created_at
+        .as_deref()
+        .unwrap_or("Encrypted direct message");
+    let chip = if message.e2ee_protocol == "mls-rfc9420" {
+        "MLS"
+    } else {
+        "E2EE"
+    };
+    match decrypt_e2ee_message_for_desk(settings, message) {
+        Ok(plaintext) => row_with_kind(
+            "message",
+            &format!("e2ee-message:{}", message.id),
+            &format!("Direct message from {}", compact_actor(peer)),
+            created_at,
+            &plaintext,
+            "Encrypted end-to-end on the server and decrypted on this device.",
+            chip,
+            "ok",
+            "Reply",
+            "",
+        ),
+        Err(error) => row_with_kind(
+            "message",
+            &format!("e2ee-message:{}", message.id),
+            &format!("Locked encrypted message from {}", compact_actor(peer)),
+            created_at,
+            message.fallback_content.as_deref().unwrap_or(
+                "This encrypted message needs local device state before it can be read.",
+            ),
+            &error,
+            chip,
+            "warn",
+            "",
+            "",
+        ),
+    }
+}
+
+fn decrypt_e2ee_message_for_desk(
+    settings: &StoredOwnerSettings,
+    message: &OwnerE2eeMessage,
+) -> Result<String, String> {
+    if message.e2ee_protocol == "mls-rfc9420" {
+        return Err("MLS decrypt needs local group state wired into Desk.".into());
+    }
+    let encrypted = e2ee::encrypted_message_from_json(message.encrypted_message.clone())?;
+    let mut attempted = Vec::new();
+    for recipient in &encrypted.recipients {
+        attempted.push(recipient.key_id.clone());
+        let Some(private_key) =
+            load_local_e2ee_private_key(&settings.instance_url, &recipient.key_id)
+        else {
+            continue;
+        };
+        match e2ee::decrypt_message(&encrypted, &private_key, Some(&recipient.key_id)) {
+            Ok(plaintext) => return Ok(plaintext),
+            Err(error) => {
+                return Err(format!(
+                    "Could not decrypt with {}: {error}",
+                    recipient.key_id
+                ))
+            }
+        }
+    }
+    if attempted.is_empty() {
+        Err("Encrypted message has no recipient device ids.".into())
+    } else {
+        Err(format!(
+            "No local private key found for device {}.",
+            attempted.join(", ")
+        ))
+    }
+}
+
+fn load_local_e2ee_private_key(instance_url: &str, device_id: &str) -> Option<String> {
+    for root in dais_state_roots() {
+        let path = root
+            .join("e2ee")
+            .join(safe_path_component(instance_url))
+            .join(format!("{}.pkcs8.pem", safe_path_component(device_id)));
+        if let Ok(private_key) = fs::read_to_string(path) {
+            return Some(private_key);
+        }
+    }
+    None
+}
+
+fn dais_state_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(path) = std::env::var_os("DAIS_HOME") {
+        roots.push(PathBuf::from(path));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd.join(".dais"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for ancestor in exe.ancestors() {
+            let candidate = ancestor.join(".dais");
+            if candidate.exists() {
+                roots.push(candidate);
+            }
+        }
+    }
+    roots.dedup();
+    roots
+}
+
+fn safe_path_component(value: &str) -> String {
+    let component: String = value
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':') {
+                byte as char
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if component.is_empty() {
+        "default".to_string()
+    } else {
+        component
+    }
 }
 
 #[allow(dead_code)]
@@ -10592,8 +10736,16 @@ mod tests {
         let rows = controller.home_today_rows();
         assert_eq!(rows[0].id.as_str(), "notification:notice-reply");
         assert_eq!(rows[1].id.as_str(), "dm:dm-fixture");
-        assert_eq!(rows[2].id.as_str(), "timeline:ada-week-friday-space-news");
-        assert_eq!(rows.len(), 10);
+        assert_eq!(
+            rows[2].id.as_str(),
+            "e2ee-message:https://social.dais.social/users/social/e2ee/messages/fixture"
+        );
+        assert_eq!(
+            rows[3].id.as_str(),
+            "e2ee-message:https://social.dais.social/users/social/e2ee/messages/mls-fixture"
+        );
+        assert_eq!(rows[4].id.as_str(), "timeline:ada-week-friday-space-news");
+        assert_eq!(rows.len(), 12);
         assert!(!rows
             .iter()
             .any(|row| row.id.as_str() == "notification:notice-like-context"));
@@ -10628,6 +10780,14 @@ mod tests {
         assert_eq!(rows[2].id.as_str(), "dm:dm-fixture");
         assert_eq!(
             rows[3].id.as_str(),
+            "e2ee-message:https://social.dais.social/users/social/e2ee/messages/fixture"
+        );
+        assert_eq!(
+            rows[4].id.as_str(),
+            "e2ee-message:https://social.dais.social/users/social/e2ee/messages/mls-fixture"
+        );
+        assert_eq!(
+            rows[5].id.as_str(),
             "follower:https://new.example/users/follower"
         );
         assert!(!rows.iter().any(|row| row.id.starts_with("delivery:")));
@@ -10637,10 +10797,16 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_transport_rows_stay_out_of_primary_social_lists() {
+    fn encrypted_messages_are_primary_social_rows_with_quiet_lock_fallback() {
         let controller = DeskController::fixture_for_tests();
         for rows in [controller.home_today_rows(), controller.inbox_rows()] {
-            assert!(!rows.iter().any(|row| row.id.starts_with("e2ee-message:")));
+            let e2ee = rows
+                .iter()
+                .find(|row| row.id.starts_with("e2ee-message:") && row.chip.as_str() == "E2EE")
+                .expect("v1 encrypted message row");
+            assert_eq!(e2ee.kind.as_str(), "message");
+            assert!(e2ee.title.contains("Locked encrypted message"));
+            assert!(e2ee.meta.contains("No local private key"));
         }
     }
 
