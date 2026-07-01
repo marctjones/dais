@@ -6226,17 +6226,39 @@ fn e2ee_message_row(message: &OwnerE2eeMessage) -> UiRow {
         .fallback_content
         .as_deref()
         .unwrap_or("Encrypted payload is available only to trusted recipient devices.");
-    row_with_kind(
-        "message",
-        &format!("e2ee-message:{}", message.id),
-        &format!("Encrypted DM with {}", compact_actor(peer)),
+    let title = if message.e2ee_protocol == "mls-rfc9420" {
+        format!("MLS E2EE with {}", compact_actor(peer))
+    } else {
+        format!("Encrypted DM with {}", compact_actor(peer))
+    };
+    let meta = if message.e2ee_protocol == "mls-rfc9420" {
+        format!(
+            "group={} epoch={}",
+            message.mls_group_id.as_deref().unwrap_or("unknown"),
+            message
+                .mls_epoch
+                .map(|epoch| epoch.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        )
+    } else {
         message
             .created_at
             .as_deref()
-            .unwrap_or("Encrypted direct message"),
+            .unwrap_or("Encrypted direct message")
+            .to_string()
+    };
+    row_with_kind(
+        "message",
+        &format!("e2ee-message:{}", message.id),
+        &title,
+        &meta,
         detail,
         &delivery_summary,
-        "E2EE",
+        if message.e2ee_protocol == "mls-rfc9420" {
+            "MLS"
+        } else {
+            "E2EE"
+        },
         tone,
         "",
         "",
@@ -6859,7 +6881,7 @@ fn e2ee_device_row(device: &OwnerE2eeDevice) -> UiRow {
         device.display_name.as_deref().unwrap_or(&device.device_id),
         "Local encrypted-message device",
         &format!(
-            "{}. Fingerprint {}. Updated {}.",
+            "{}. Fingerprint {}. Updated {}. Lost private state can make old MLS content unrecoverable.",
             device.protocol,
             short_fingerprint(&device.fingerprint),
             device.updated_at.as_deref().unwrap_or("unknown")
@@ -6887,7 +6909,7 @@ fn e2ee_peer_device_row(peer: &OwnerE2eePeerDevice) -> UiRow {
         peer.display_name.as_deref().unwrap_or(&peer.device_id),
         &compact_url(&peer.actor_id),
         &format!(
-            "{} peer key. Fingerprint {}. Last seen {}.",
+            "{} peer key. Fingerprint {}. Last seen {}. Changed MLS material requires explicit re-trust.",
             peer.protocol,
             short_fingerprint(&peer.fingerprint),
             peer.last_seen_at.as_deref().unwrap_or("unknown")
@@ -7931,6 +7953,8 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
             sender_actor_id: "https://social.dais.social/users/social".into(),
             sender_device_id: "macbook".into(),
             recipient_actor_id: Some("https://friend.example/users/ada".into()),
+            e2ee_protocol: "dais-mls-v1".into(),
+            dais_encrypted_message: serde_json::Value::Null,
             encrypted_message: serde_json::json!({
                 "v": 1,
                 "alg": "AES-256-GCM",
@@ -7939,6 +7963,8 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 "ciphertext": "Y2lwaGVydGV4dA==",
                 "recipients": [{ "keyId": "ada-phone", "wrappedKey": "d3JhcHBlZA==" }]
             }),
+            mls_group_id: None,
+            mls_epoch: None,
             fallback_content: Some("Encrypted message. Open in dais to decrypt.".into()),
             delivery_ids: vec!["delivery-e2ee-queued".into()],
             delivery_statuses: vec![OwnerDelivery {

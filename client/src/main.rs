@@ -1667,7 +1667,8 @@ async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
             recipient_actor_id: args.recipient_actor_id,
             recipient_device_id: Some(args.recipient_device_id),
             sender_device_id: args.sender_device_id,
-            encrypted_message,
+            dais_encrypted_message: None,
+            encrypted_message: Some(encrypted_message),
             fallback_content: Some(payload.content),
         })
         .await
@@ -1717,7 +1718,8 @@ async fn send_owner_e2ee_group_message(args: cli::OwnerE2eeGroupSendArgs) -> Res
                 recipient_actor_id: delivery.actor_id.clone(),
                 recipient_device_id: Some(delivery.validation_device_id.clone()),
                 sender_device_id: args.sender_device_id.clone(),
-                encrypted_message: encrypted_message.clone(),
+                dais_encrypted_message: None,
+                encrypted_message: Some(encrypted_message.clone()),
                 fallback_content: Some(payload.content.clone()),
             })
             .await
@@ -1745,6 +1747,17 @@ async fn decrypt_owner_e2ee_message(
         .into_iter()
         .find(|message| message.id == args.message_id)
         .ok_or_else(|| anyhow::anyhow!("owner E2EE message {} not found", args.message_id))?;
+    if message.e2ee_protocol == "mls-rfc9420" {
+        return Err(anyhow::anyhow!(
+            "message {} is MLS E2EE group={} epoch={}; v1 RSA fallback decrypt cannot decrypt MLS state",
+            message.id,
+            message.mls_group_id.as_deref().unwrap_or("unknown"),
+            message
+                .mls_epoch
+                .map(|epoch| epoch.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ));
+    }
     let encrypted = e2ee::encrypted_message_from_json(message.encrypted_message)?;
     let private_key = if let Some(path) = args.private_key.as_ref() {
         fs::read_to_string(path)?

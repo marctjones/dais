@@ -932,7 +932,15 @@ pub struct OwnerE2eeMessage {
     pub sender_actor_id: String,
     pub sender_device_id: String,
     pub recipient_actor_id: Option<String>,
+    #[serde(default = "default_e2ee_protocol")]
+    pub e2ee_protocol: String,
+    #[serde(default)]
+    pub dais_encrypted_message: serde_json::Value,
     pub encrypted_message: serde_json::Value,
+    #[serde(default)]
+    pub mls_group_id: Option<String>,
+    #[serde(default)]
+    pub mls_epoch: Option<u64>,
     pub fallback_content: Option<String>,
     #[serde(default)]
     pub delivery_ids: Vec<String>,
@@ -946,8 +954,15 @@ pub struct OwnerE2eeMessageSend {
     pub recipient_actor_id: String,
     pub recipient_device_id: Option<String>,
     pub sender_device_id: String,
-    pub encrypted_message: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dais_encrypted_message: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_message: Option<serde_json::Value>,
     pub fallback_content: Option<String>,
+}
+
+fn default_e2ee_protocol() -> String {
+    "dais-mls-v1".to_string()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1535,6 +1550,54 @@ mod tests {
             route_warning(&draft),
             Some("Direct posts cannot be represented on Bluesky; route ActivityPub only.")
         );
+    }
+
+    #[test]
+    fn owner_e2ee_message_deserializes_mls_metadata() {
+        let message: OwnerE2eeMessage = serde_json::from_value(serde_json::json!({
+            "id": "msg-1",
+            "conversation_id": "conversation-1",
+            "sender_actor_id": "https://social.dais.social/users/social",
+            "sender_device_id": "mac",
+            "recipient_actor_id": "https://social.skpt.cl/users/social",
+            "e2ee_protocol": "mls-rfc9420",
+            "dais_encrypted_message": {
+                "v": 2,
+                "protocol": "mls-rfc9420",
+                "groupId": "group",
+                "epoch": 2,
+                "senderDeviceId": "mac",
+                "ciphertext": "Y2lwaGVydGV4dA=="
+            },
+            "encrypted_message": null,
+            "mls_group_id": "group",
+            "mls_epoch": 2,
+            "fallback_content": "Encrypted message",
+            "created_at": "today"
+        }))
+        .unwrap();
+
+        assert_eq!(message.e2ee_protocol, "mls-rfc9420");
+        assert_eq!(message.mls_group_id.as_deref(), Some("group"));
+        assert_eq!(message.mls_epoch, Some(2));
+        assert_eq!(message.encrypted_message, serde_json::Value::Null);
+        assert_eq!(message.dais_encrypted_message["v"], 2);
+    }
+
+    #[test]
+    fn owner_e2ee_send_serializes_only_selected_envelope() {
+        let mls = OwnerE2eeMessageSend {
+            recipient_actor_id: "https://social.skpt.cl/users/social".into(),
+            recipient_device_id: Some("phone".into()),
+            sender_device_id: "mac".into(),
+            dais_encrypted_message: Some(serde_json::json!({"v": 2})),
+            encrypted_message: None,
+            fallback_content: Some("Encrypted".into()),
+        };
+        let value = serde_json::to_value(mls).unwrap();
+
+        assert!(value.get("dais_encrypted_message").is_some());
+        assert!(value.get("encrypted_message").is_none());
     }
 
     #[test]
