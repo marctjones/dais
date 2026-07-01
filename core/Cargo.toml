@@ -38,6 +38,9 @@ anyhow = "1.0"
 rsa = { version = "0.9", features = ["getrandom", "pem", "sha2"] }
 sha2 = "0.10"
 base64 = "0.21"
+openmls = { version = "0.8.1", optional = true, features = ["js", "openmls_rust_crypto"] }
+openmls_basic_credential = { version = "0.5.0", optional = true }
+openmls_rust_crypto = { version = "0.5.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
@@ -45,6 +48,11 @@ tokio-test = "0.4"
 
 [features]
 default = []
+mls = [
+    "dep:openmls",
+    "dep:openmls_basic_credential",
+    "dep:openmls_rust_crypto",
+]
 
 # Platform-specific features (for conditional compilation).
 # Cloudflare is the only supported deployment target; the provider-trait
