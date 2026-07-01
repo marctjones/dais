@@ -659,10 +659,12 @@ impl DeskController {
     }
 
     pub fn select_mode(&mut self, mode: &str) {
-        self.active_mode = mode.to_string();
-        self.active_screen = match mode {
+        self.active_mode = match mode {
+            "people" => "people".to_string(),
+            _ => "home".to_string(),
+        };
+        self.active_screen = match self.active_mode.as_str() {
             "people" => "find".to_string(),
-            "server" => "health".to_string(),
             _ => "today".to_string(),
         };
         self.selected_row = self.first_row_id();
@@ -944,8 +946,8 @@ impl DeskController {
                     }
                 }
                 "Inspect delivery" => {
-                    self.active_mode = "server".to_string();
-                    self.active_screen = "deliveries".to_string();
+                    self.active_mode = "home".to_string();
+                    self.active_screen = "inbox".to_string();
                     self.selected_row = if row_id.starts_with("delivery:") {
                         row_id.to_string()
                     } else {
@@ -957,7 +959,7 @@ impl DeskController {
                             .map(|delivery| format!("delivery:{}", delivery.id))
                             .unwrap_or_else(|| row_id.to_string())
                     };
-                    Ok("Opened delivery inspector.".to_string())
+                    Ok("Delivery details are hidden from the simplified social view.".to_string())
                 }
                 "Copy evidence" => {
                     if let Some(row) = self.find_row(row_id) {
@@ -1468,24 +1470,17 @@ impl DeskController {
             .iter()
             .filter(|notice| !json_truthy(&notice.read))
             .count();
-        let failed = self
+        let conversational_unread = self
             .data
-            .deliveries
+            .notifications
             .iter()
-            .filter(|delivery| delivery.status == "failed")
+            .filter(|notice| !json_truthy(&notice.read) && !is_lightweight_notification(notice))
             .count();
-        let attention =
-            if unread == 0 && failed == 0 && self.data.snapshot.moderation.reply_queue_count() == 0
-            {
-                "All clear".to_string()
-            } else {
-                format!(
-                    "{} unread, {} failed, {} review",
-                    unread,
-                    failed,
-                    self.data.snapshot.moderation.reply_queue_count()
-                )
-            };
+        let attention = if conversational_unread == 0 {
+            "No new replies".to_string()
+        } else {
+            format!("{conversational_unread} new")
+        };
         let compose_warning = compose_warning(&self.compose);
         let account = active_account(&self.settings);
         let account_summaries = account_summaries(&self.settings);
@@ -1502,7 +1497,7 @@ impl DeskController {
             .map(|account| account.instance_url.clone())
             .unwrap_or_default();
         UiProjection {
-            mode_nav: self.mode_nav(unread, failed),
+            mode_nav: self.mode_nav(unread),
             screen_nav: self.screen_nav(),
             rows,
             inspector_rows,
@@ -1521,7 +1516,7 @@ impl DeskController {
             window_subtitle: self.subtitle_for_active_screen(),
             attention_summary: attention,
             privacy_status: format!(
-                "Default audience: {}. Graph and watches are owner-only.",
+                "{} by default. Reading people you know.",
                 visibility_label(&self.data.snapshot.settings.default_visibility)
             ),
             status_message: self.status_message.clone(),
@@ -2339,10 +2334,7 @@ impl DeskController {
             normalize_settings(self.settings.clone()),
         )?;
         self.settings = load_settings_from(&self.settings_path).unwrap_or_default();
-        Ok(
-            "Switched account. Reads, posts, follows, watches, and server commands use it now."
-                .into(),
-        )
+        Ok("Switched account. Feeds, posts, follows, and messages use it now.".into())
     }
 
     fn delete_account_result(&mut self, account_id: &str) -> Result<String, String> {
@@ -3349,7 +3341,7 @@ impl DeskController {
         rows
     }
 
-    fn mode_nav(&self, unread: usize, failed: usize) -> Vec<NavItem> {
+    fn mode_nav(&self, unread: usize) -> Vec<NavItem> {
         vec![
             nav("home", "Home", unread, self.active_mode == "home"),
             nav(
@@ -3357,10 +3349,9 @@ impl DeskController {
                 "People",
                 self.data.snapshot.followers.len()
                     + self.data.snapshot.following.len()
-                    + self.data.watches.subscriptions.len(),
+                    + self.data.snapshot.friends.len(),
                 self.active_mode == "people",
             ),
-            nav("server", "Server", failed, self.active_mode == "server"),
         ]
     }
 
@@ -3368,55 +3359,16 @@ impl DeskController {
         let screens: &[(&str, &str, usize)] = match self.active_mode.as_str() {
             "people" => &[
                 ("find", "Find", self.find_rows().len()),
-                ("relationship", "Relationship", 0),
                 ("friends", "Friends", self.data.snapshot.friends.len()),
                 ("followers", "Followers", self.data.snapshot.followers.len()),
                 ("following", "Following", self.data.snapshot.following.len()),
-                (
-                    "watches",
-                    "Watches & Sources",
-                    self.data.watches.subscriptions.len(),
-                ),
-                (
-                    "audience",
-                    "Audience Groups",
-                    self.data.snapshot.audience_lists.len(),
-                ),
-                (
-                    "blocks",
-                    "Blocks & Mutes",
-                    self.data.snapshot.moderation.blocks.len(),
-                ),
-            ],
-            "server" => &[
-                ("health", "Health", self.data.snapshot.diagnostics.len()),
-                ("deliveries", "Deliveries", self.data.deliveries.len()),
-                (
-                    "moderation",
-                    "Moderation",
-                    self.data.moderation_replies.len(),
-                ),
-                (
-                    "security",
-                    "Security",
-                    self.data.e2ee_devices.len() + self.data.e2ee_peer_devices.len(),
-                ),
-                ("identity", "Identity", 0),
-                (
-                    "accounts",
-                    "Accounts & Tokens",
-                    self.settings.accounts.len(),
-                ),
-                ("settings", "Settings", 0),
-                ("stats", "Stats", 0),
             ],
             _ => &[
-                ("today", "Today", self.home_today_rows().len()),
-                ("reading", "Reading", self.reading_rows().len()),
+                ("today", "Feed", self.home_today_rows().len()),
                 ("inbox", "Inbox", self.inbox_rows().len()),
                 ("compose", "Compose", 0),
                 ("posts", "My Posts", self.data.snapshot.posts.len()),
-                ("saved", "Saved & Drafts", self.saved_rows().len()),
+                ("saved", "Saved", self.saved_rows().len()),
             ],
         };
         screens
@@ -3427,12 +3379,12 @@ impl DeskController {
 
     fn title_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
-            "today" => "Today".into(),
+            "today" => "Feed".into(),
             "reading" => "Reading".into(),
             "inbox" => "Inbox".into(),
             "compose" => "Compose".into(),
             "posts" => "My Posts".into(),
-            "saved" => "Saved & Drafts".into(),
+            "saved" => "Saved".into(),
             "find" => "Find".into(),
             "relationship" => "Relationship".into(),
             "friends" => "Friends".into(),
@@ -3455,22 +3407,20 @@ impl DeskController {
 
     fn subtitle_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
-            "today" => "Read, reply, and handle the day without protocol clutter.".into(),
+            "today" => "Posts, replies, and messages from people you know.".into(),
             "reading" => {
                 "Posts from followed accounts, private watches, and reading sources.".into()
             }
-            "inbox" => {
-                "Notifications, DMs, requests, delivery failures, and moderation attention.".into()
-            }
+            "inbox" => "Replies, mentions, messages, and follow requests.".into(),
             "compose" => "Audience and visibility are selected before posting.".into(),
-            "find" => "Handles, URLs, domains, posts, feeds, and public search.".into(),
-            "relationship" => "One account, all relationship consequences.".into(),
+            "find" => "Find people to follow by handle, URL, or name.".into(),
+            "relationship" => "Relationship context for one person.".into(),
             "watches" => "Private monitoring of public posts without follow approval.".into(),
             "deliveries" => "Where posts went and what needs operator action.".into(),
             "moderation" => "Review replies, warnings, blocks, and sensitivity policy.".into(),
             "security" => "E2EE devices, peer keys, fingerprints, and trust decisions.".into(),
             "accounts" => "Multiple Dais instances and owner tokens.".into(),
-            _ => "Private-by-default social work with operator controls nearby.".into(),
+            _ => "A quiet social client for people you know.".into(),
         }
     }
 
@@ -3490,14 +3440,13 @@ impl DeskController {
         for post in &self.data.snapshot.home_timeline {
             rows.push(timeline_row(post));
         }
-        for post in &self.data.snapshot.posts {
-            rows.push(post_row(post));
-        }
-        for message in &self.data.e2ee_messages {
-            rows.push(e2ee_message_row(message));
-        }
-        for delivery in self.data.deliveries.iter().filter(|d| d.status == "failed") {
-            rows.push(delivery_attention_row(delivery));
+        if rows.is_empty() {
+            rows.push(empty_state_row(
+                "feed:empty",
+                "No posts yet",
+                "Follow people to fill the feed with posts, replies, and messages from accounts you know.",
+                "Find people",
+            ));
         }
         rows
     }
@@ -3554,20 +3503,14 @@ impl DeskController {
                 .filter(|f| f.status == "pending")
                 .map(follower_row),
         );
-        rows.extend(
-            self.data
-                .moderation_replies
-                .iter()
-                .map(moderation_reply_row),
-        );
-        rows.extend(
-            self.data
-                .deliveries
-                .iter()
-                .filter(|d| d.status == "failed")
-                .map(delivery_attention_row),
-        );
-        rows.extend(self.data.e2ee_messages.iter().map(e2ee_message_row));
+        if rows.is_empty() {
+            rows.push(empty_state_row(
+                "inbox:empty",
+                "No conversations need attention",
+                "Replies, mentions, messages, and follow requests will appear here.",
+                "",
+            ));
+        }
         rows
     }
 
@@ -4222,7 +4165,7 @@ impl DeskController {
             "inspector:privacy",
             "Visibility consequences",
             "Private by default",
-            "Posts, follows, watches, and groups expose different information. Follow may notify a remote account; Watch does not.",
+            "Posts and follows expose different information. Public posts can travel widely; followers-only posts are intended for approved people.",
             "Safety",
             "ok",
             "",
@@ -4230,10 +4173,10 @@ impl DeskController {
         ));
         rows.push(row(
             "inspector:raw",
-            "Advanced details",
+            "More details",
             "Hidden by default",
-            "Raw ActivityPub, AT Protocol, delivery IDs, and provider payloads belong in Diagnostics, not normal reading rows.",
-            "Debug",
+            "Protocol and delivery evidence is not part of the normal reading view.",
+            "More",
             "info",
             "",
             "",
@@ -4753,6 +4696,7 @@ impl IfEmptyStr for &str {
     }
 }
 
+#[allow(dead_code)]
 trait ModerationCounts {
     fn reply_queue_count(&self) -> usize;
 }
@@ -6165,11 +6109,6 @@ fn notification_context_label(notice: &OwnerNotification) -> String {
 }
 
 fn notification_preview_detail(notice: &OwnerNotification) -> String {
-    let visibility = notice
-        .context_post_visibility
-        .as_deref()
-        .map(visibility_explanation_str)
-        .unwrap_or("Visibility is not included with this notification.");
     let reply_text = notice.content.as_deref().map(preview_markdown_safe);
     let context_text = notice
         .context_post_content_html
@@ -6179,14 +6118,10 @@ fn notification_preview_detail(notice: &OwnerNotification) -> String {
 
     if matches!(notice.kind.as_str(), "reply" | "mention") {
         return match (reply_text, context_text) {
-            (Some(reply), Some(context)) => {
-                format!("{visibility} Reply: {reply} Original post: {context}")
-            }
-            (Some(reply), None) => format!("{visibility} Reply: {reply}"),
-            (None, Some(context)) => format!("{visibility} Original post: {context}"),
-            (None, None) => {
-                format!("{visibility} Open this notice to inspect reply details.")
-            }
+            (Some(reply), Some(context)) => format!("Reply: {reply} Original: {context}"),
+            (Some(reply), None) => reply,
+            (None, Some(context)) => format!("Original: {context}"),
+            (None, None) => "Open this notice to inspect reply details.".to_string(),
         };
     }
 
@@ -6200,13 +6135,18 @@ fn notification_preview_detail(notice: &OwnerNotification) -> String {
     let source = context_text
         .or(reply_text)
         .unwrap_or_else(|| "Open this notice to inspect details.".to_string());
+    let visibility = notice
+        .context_post_visibility
+        .as_deref()
+        .map(visibility_explanation_str)
+        .unwrap_or("Visibility is not included with this notification.");
     format!("{visibility} {source}")
 }
 
 fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
     row(
         &format!("dm:{}", dm.id),
-        &format!("Direct message from {}", dm.sender_id),
+        &format!("Direct message from {}", compact_actor(&dm.sender_id)),
         &dm.published_at,
         &dm.content,
         "Direct",
@@ -6216,6 +6156,7 @@ fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
     )
 }
 
+#[allow(dead_code)]
 fn e2ee_message_row(message: &OwnerE2eeMessage) -> UiRow {
     let peer = message
         .recipient_actor_id
@@ -6902,6 +6843,7 @@ fn diagnostic_row(diagnostic: &DiagnosticStatus) -> UiRow {
     )
 }
 
+#[allow(dead_code)]
 fn delivery_attention_row(delivery: &OwnerDelivery) -> UiRow {
     let mut row = delivery_row(delivery);
     if delivery.status == "failed" {
@@ -9874,7 +9816,8 @@ mod tests {
 
     #[test]
     fn selected_post_inspector_has_first_class_visibility_context() {
-        let controller = DeskController::fixture_for_tests();
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("posts");
         let rows = controller.inspector_rows("post:fixture-private-post");
         let visibility = rows
             .iter()
@@ -9906,9 +9849,9 @@ mod tests {
             context_post_protocol: None,
             context_post_published_at: None,
         });
-        assert!(row.detail.contains("followers/friends"));
         assert!(row.detail.contains("Reply: Reply text"));
-        assert!(row.detail.contains("Original post: Original context"));
+        assert!(row.detail.contains("Original: Original context"));
+        assert!(row.subtitle.contains("Followers thread"));
     }
 
     #[test]
@@ -10484,10 +10427,10 @@ mod tests {
             .iter()
             .map(|item| item.id.to_string())
             .collect();
-        assert_eq!(modes, vec!["home", "people", "server"]);
+        assert_eq!(modes, vec!["home", "people"]);
         assert!(projection
             .privacy_status
-            .contains("Graph and watches are owner-only"));
+            .contains("Reading people you know"));
     }
 
     #[test]
@@ -10568,19 +10511,7 @@ mod tests {
             .iter()
             .map(|item| item.id.to_string())
             .collect();
-        assert_eq!(
-            screens,
-            vec![
-                "find",
-                "relationship",
-                "friends",
-                "followers",
-                "following",
-                "watches",
-                "audience",
-                "blocks",
-            ]
-        );
+        assert_eq!(screens, vec!["find", "friends", "followers", "following"]);
     }
 
     #[test]
@@ -10590,7 +10521,7 @@ mod tests {
         assert_eq!(rows[0].id.as_str(), "notification:notice-reply");
         assert_eq!(rows[1].id.as_str(), "dm:dm-fixture");
         assert_eq!(rows[2].id.as_str(), "timeline:fixture-private-post");
-        assert_eq!(rows[3].id.as_str(), "post:fixture-private-post");
+        assert_eq!(rows.len(), 3);
         assert!(!rows
             .iter()
             .any(|row| row.id.as_str() == "notification:notice-like-context"));
@@ -10627,34 +10558,29 @@ mod tests {
             rows[3].id.as_str(),
             "follower:https://new.example/users/follower"
         );
-        assert_eq!(rows[4].id.as_str(), "moderation-reply:mod-reply-sensitive");
-        assert_eq!(rows[5].id.as_str(), "delivery:delivery-failed");
+        assert!(!rows.iter().any(|row| row.id.starts_with("delivery:")));
+        assert!(!rows
+            .iter()
+            .any(|row| row.id.starts_with("moderation-reply:")));
     }
 
     #[test]
-    fn encrypted_dm_rows_show_context_and_delivery_state() {
+    fn encrypted_transport_rows_stay_out_of_primary_social_lists() {
         let controller = DeskController::fixture_for_tests();
         for rows in [controller.home_today_rows(), controller.inbox_rows()] {
-            let row = rows
-                .iter()
-                .find(|row| row.id.starts_with("e2ee-message:"))
-                .expect("encrypted DM row");
-            assert_eq!(row.chip.as_str(), "E2EE");
-            assert_eq!(row.tone.as_str(), "warn");
-            assert!(row.title.contains("ada"));
-            assert!(row.meta.contains("queued"));
+            assert!(!rows.iter().any(|row| row.id.starts_with("e2ee-message:")));
         }
     }
 
     #[test]
     fn mls_message_rows_show_group_and_epoch_context() {
         let controller = DeskController::fixture_for_tests();
-        let rows = controller.home_today_rows();
+        let rows = controller.security_rows();
         let row = rows
             .iter()
             .find(|row| row.chip.as_str() == "MLS")
             .expect("MLS message row");
-        assert!(row.title.contains("MLS E2EE"));
+        assert_eq!(row.title.as_str(), "MLS encrypted group");
         assert!(row.subtitle.contains("epoch=3"));
         assert!(row.subtitle.contains("group="));
     }
@@ -10678,9 +10604,12 @@ mod tests {
     fn health_delivery_action_opens_failed_delivery() {
         let mut controller = DeskController::fixture_for_tests();
         controller.row_action("health:queues", "Inspect delivery");
-        assert_eq!(controller.active_mode, "server");
-        assert_eq!(controller.active_screen, "deliveries");
+        assert_eq!(controller.active_mode, "home");
+        assert_eq!(controller.active_screen, "inbox");
         assert_eq!(controller.selected_row, "delivery:delivery-failed");
+        assert!(controller
+            .status_message
+            .contains("hidden from the simplified social view"));
     }
 
     #[test]
@@ -10929,7 +10858,7 @@ mod tests {
             controller
                 .switch_account_result("account-b")
                 .expect("switch"),
-            "Switched account. Reads, posts, follows, watches, and server commands use it now."
+            "Switched account. Feeds, posts, follows, and messages use it now."
         );
         assert_eq!(
             controller.settings.active_account_id,
@@ -11070,6 +10999,7 @@ mod tests {
     #[test]
     fn selecting_post_loads_thread_detail_for_inspector() {
         let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("posts");
         controller.select_row("post:fixture-private-post");
         let projection = controller.projection();
         assert!(projection

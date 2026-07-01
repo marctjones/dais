@@ -36,22 +36,23 @@ fn navigates_primary_workflows_through_accessible_controls() {
     assert_eq!(window.get_active_screen().as_str(), "followers");
     assert!(window.get_window_title().contains("Followers"));
 
-    click_label(&window, "Server");
-    assert_eq!(window.get_active_mode().as_str(), "server");
-    assert_eq!(window.get_active_screen().as_str(), "health");
+    let server_controls: Vec<_> =
+        ElementHandle::find_by_accessible_label(&window, "Server").collect();
+    assert!(
+        server_controls.is_empty(),
+        "Server should not be exposed in the simplified social UI"
+    );
 
-    click_label(&window, "Accounts & Tokens");
-    assert_eq!(window.get_active_screen().as_str(), "accounts");
-    assert!(window
-        .get_window_subtitle()
-        .contains("Multiple Dais instances"));
+    click_label(&window, "Compose");
+    assert_eq!(window.get_active_mode().as_str(), "home");
+    assert_eq!(window.get_active_screen().as_str(), "compose");
 
     let buttons: Vec<_> = i_slint_backend_testing::ElementQuery::from_root(&window)
         .match_accessible_role(i_slint_backend_testing::AccessibleRole::Button)
         .find_all();
     assert!(
-        buttons.len() >= 12,
-        "expected the feature-complete shell to expose many actionable controls, found {}",
+        buttons.len() >= 8,
+        "expected the simplified social shell to expose core actionable controls, found {}",
         buttons.len()
     );
 }
@@ -60,17 +61,18 @@ fn navigates_primary_workflows_through_accessible_controls() {
 fn exercises_normal_owner_task_flows_through_projection() {
     let mut controller = dais_desk::DeskController::fixture_for_tests();
 
-    controller.select_screen("reading");
+    controller.select_screen("today");
     let projection = controller.projection();
     assert_eq!(projection.active_mode, "home");
-    assert_eq!(projection.active_screen, "reading");
+    assert_eq!(projection.active_screen, "today");
     assert!(projection
         .rows
         .iter()
         .any(|row| row.id == "timeline:fixture-private-post"));
-    assert!(projection.rows.iter().any(|row| row.id
-        == "url:https://social.example/users/nobel/posts/1"
-        && row.subtitle == "Watched public post"));
+    assert!(!projection
+        .rows
+        .iter()
+        .any(|row| row.id.starts_with("delivery:")));
 
     controller.row_action("timeline:fixture-private-post", "Save");
     let status = controller.projection().status_message;

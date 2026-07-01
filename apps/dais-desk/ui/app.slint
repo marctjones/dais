@@ -658,14 +658,14 @@ export component MainWindow inherits Window {
         KeyBinding {
             keys: @keys(Control + "3");
             activated => {
-                root.select-mode("server");
+                root.select-screen("compose");
             }
         }
 
         KeyBinding {
             keys: @keys(Meta + "3");
             activated => {
-                root.select-mode("server");
+                root.select-screen("compose");
             }
         }
 
@@ -805,7 +805,7 @@ export component MainWindow inherits Window {
                 }
 
                 Text {
-                    text: "Screens";
+                    text: "Views";
                     font-size: 11px;
                     color: #687386;
                     font-weight: 700;
@@ -844,7 +844,7 @@ export component MainWindow inherits Window {
 
                     LineEdit {
                         text <=> root.command-text;
-                        placeholder-text: "Search, paste a handle, URL, feed, domain, or command";
+                        placeholder-text: "Search people or posts";
                         horizontal-stretch: 1;
                         accepted => {
                             root.run-command(root.command-text);
@@ -893,7 +893,7 @@ export component MainWindow inherits Window {
                     ToolbarCommandButton {
                         symbol: "R";
                         label: "Refresh";
-                        description: "Refresh owner server state";
+                        description: "Refresh posts and conversations";
                         activate => {
                             root.refresh();
                         }
@@ -936,7 +936,7 @@ export component MainWindow inherits Window {
 
                             Chip {
                                 label: root.attention-summary;
-                                tone: root.attention-summary == "All clear" ? "ok" : "warn";
+                                tone: root.attention-summary == "No new replies" ? "ok" : "warn";
                             }
                         }
 
@@ -1129,14 +1129,14 @@ export component MainWindow inherits Window {
                         spacing: 10px;
 
                         Text {
-                            text: "Inspector";
+                            text: "Conversation";
                             font-size: 16px;
                             font-weight: 800;
                             color: #101828;
                         }
 
                         Text {
-                            text: "Context, consequences, and less common actions stay here.";
+                            text: "Thread context, people, and less common actions stay here.";
                             font-size: 12px;
                             color: #5b6676;
                             wrap: word-wrap;

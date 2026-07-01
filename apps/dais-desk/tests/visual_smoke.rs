@@ -36,8 +36,6 @@ fn run() -> Result<(), Box<dyn Error>> {
     window.invoke_select_screen("inbox".into());
     window.invoke_select_row("notification:notice-reply".into());
     capture(&window, &output_dir, "home-inbox-notifications")?;
-    window.invoke_select_screen("reading".into());
-    capture(&window, &output_dir, "home-reading")?;
     window.invoke_row_action("timeline:fixture-private-post".into(), "Save".into());
     capture(&window, &output_dir, "workflow-save-post")?;
     window.invoke_select_screen("today".into());
@@ -51,22 +49,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     window.invoke_select_screen("find".into());
     capture(&window, &output_dir, "people-find-search")?;
 
-    window.invoke_select_screen("relationship".into());
-    capture(&window, &output_dir, "people-relationship")?;
     window.invoke_select_screen("friends".into());
     capture(&window, &output_dir, "people-friends")?;
     window.invoke_select_screen("followers".into());
     capture(&window, &output_dir, "people-followers")?;
     window.invoke_select_screen("following".into());
     capture(&window, &output_dir, "people-following")?;
-
-    window.invoke_select_screen("watches".into());
-    capture(&window, &output_dir, "people-watches-sources")?;
-
-    window.invoke_select_screen("audience".into());
-    capture(&window, &output_dir, "people-audience-groups")?;
-    window.invoke_row_action("audience:close-friends".into(), "Use in compose".into());
-    capture(&window, &output_dir, "workflow-audience-compose")?;
     window.invoke_select_mode("people".into());
     window.invoke_select_screen("followers".into());
     window.invoke_row_action(
@@ -74,29 +62,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         "Approve".into(),
     );
     capture(&window, &output_dir, "workflow-follower-approve")?;
-    window.invoke_select_screen("audience".into());
-    window.invoke_select_screen("blocks".into());
-    capture(&window, &output_dir, "people-blocks")?;
-
-    window.invoke_select_mode("server".into());
-    window.invoke_select_screen("health".into());
-    capture(&window, &output_dir, "server-health")?;
-    window.invoke_select_screen("deliveries".into());
-    capture(&window, &output_dir, "server-deliveries")?;
-    window.invoke_select_screen("stats".into());
-    capture(&window, &output_dir, "server-stats")?;
-    window.invoke_select_screen("identity".into());
-    capture(&window, &output_dir, "server-identity")?;
-
-    window.invoke_select_screen("moderation".into());
-    capture(&window, &output_dir, "server-moderation")?;
-    window.invoke_select_screen("security".into());
-    capture(&window, &output_dir, "server-security")?;
-    window.invoke_select_screen("settings".into());
-    capture(&window, &output_dir, "server-settings")?;
-
-    window.invoke_select_screen("accounts".into());
-    capture(&window, &output_dir, "server-accounts")?;
 
     window.hide()?;
     Ok(())
