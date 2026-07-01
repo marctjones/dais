@@ -811,6 +811,8 @@ pub enum OwnerCommand {
     E2eeMessages(OwnerApiArgs),
     /// Encrypt and send an owner E2EE message to a known device.
     E2eeSend(OwnerE2eeSendArgs),
+    /// Encrypt one message to every trusted device in a named audience group.
+    E2eeGroupSend(OwnerE2eeGroupSendArgs),
     /// Decrypt one encrypted owner E2EE message with a local private key.
     E2eeDecrypt(OwnerE2eeDecryptArgs),
     /// List local E2EE devices published by the live owner API.
@@ -819,8 +821,12 @@ pub enum OwnerCommand {
     E2eeDeviceInit(OwnerE2eeDeviceInitArgs),
     /// Revoke/deactivate one local E2EE device.
     E2eeDeviceRevoke(OwnerE2eeDeviceRefArgs),
+    /// Revoke one local E2EE device and publish a replacement device.
+    E2eeDeviceRotate(OwnerE2eeDeviceRotateArgs),
     /// List local stored E2EE private keys.
     E2eeKeys(OwnerE2eeKeyListArgs),
+    /// Compare published devices with local private-key recovery material.
+    E2eeRecovery(OwnerApiArgs),
     /// Export one stored E2EE private key for backup.
     E2eeKeyExport(OwnerE2eeKeyExportArgs),
     /// List discovered E2EE peer devices.
@@ -937,6 +943,27 @@ pub struct OwnerE2eeDeviceRefArgs {
 }
 
 #[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeDeviceRotateArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Existing local device id to revoke.
+    #[arg(long)]
+    pub old_device_id: String,
+    /// Replacement local device id to generate and publish.
+    #[arg(long)]
+    pub new_device_id: String,
+    /// Human-readable replacement device label.
+    #[arg(long)]
+    pub display_name: Option<String>,
+    /// Path where the replacement private key PEM will be written. Defaults to the local Dais key store.
+    #[arg(long)]
+    pub private_key_out: Option<PathBuf>,
+    /// Overwrite the replacement private key file if it already exists.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args, Clone, Debug)]
 pub struct OwnerE2eeKeyListArgs {
     /// Dais instance base URL to filter by.
     #[arg(long, env = "DAIS_OWNER_INSTANCE_URL")]
@@ -1005,6 +1032,26 @@ pub struct OwnerE2eeSendArgs {
     #[arg(long)]
     pub view_url: Option<String>,
     /// Permit sending to an untrusted discovered peer device.
+    #[arg(long)]
+    pub allow_untrusted: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeGroupSendArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Audience group id from owner audience lists.
+    #[arg(long)]
+    pub audience_list_id: String,
+    /// Local sender device id.
+    #[arg(long)]
+    pub sender_device_id: String,
+    /// Plaintext message to encrypt and send.
+    pub plaintext: String,
+    /// URL to include in fallback HTML.
+    #[arg(long)]
+    pub view_url: Option<String>,
+    /// Permit sending to untrusted discovered peer devices.
     #[arg(long)]
     pub allow_untrusted: bool,
 }

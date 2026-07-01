@@ -26,13 +26,13 @@ use config::ConfigStore;
 use d1::D1Client;
 use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient,
-    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eeDeviceRef,
-    OwnerE2eeDeviceUpsert, OwnerE2eeMessage, OwnerE2eeMessageSend, OwnerE2eePeerDevice,
-    OwnerE2eePeerDeviceRef, OwnerE2eePeerDiscoverRequest, OwnerE2eePeerTrustRequest, OwnerFollower,
-    OwnerFollowing, OwnerFriend, OwnerInteraction, OwnerMediaUpload, OwnerNotification,
-    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerSearchQuery, OwnerSearchResult,
-    OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats, OwnerWatchAdd,
-    ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
+    OwnerAudienceList, OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice,
+    OwnerE2eeDeviceRef, OwnerE2eeDeviceUpsert, OwnerE2eeMessage, OwnerE2eeMessageSend,
+    OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef, OwnerE2eePeerDiscoverRequest,
+    OwnerE2eePeerTrustRequest, OwnerFollower, OwnerFollowing, OwnerFriend, OwnerInteraction,
+    OwnerMediaUpload, OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate,
+    OwnerSearchQuery, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats,
+    OwnerWatchAdd, ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
@@ -1095,6 +1095,9 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
         OwnerCommand::E2eeSend(args) => {
             send_owner_e2ee_message(args).await?;
         }
+        OwnerCommand::E2eeGroupSend(args) => {
+            send_owner_e2ee_group_message(args).await?;
+        }
         OwnerCommand::E2eeDecrypt(args) => {
             decrypt_owner_e2ee_message(args, store).await?;
         }
@@ -1117,8 +1120,14 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_e2ee_devices(&[device]);
         }
+        OwnerCommand::E2eeDeviceRotate(args) => {
+            rotate_owner_e2ee_device(args, store).await?;
+        }
         OwnerCommand::E2eeKeys(args) => {
             print_owner_e2ee_keys(store, args.instance_url.as_deref())?;
+        }
+        OwnerCommand::E2eeRecovery(args) => {
+            print_owner_e2ee_recovery(&args, store).await?;
         }
         OwnerCommand::E2eeKeyExport(args) => {
             export_owner_e2ee_key(store, args)?;
@@ -1610,6 +1619,41 @@ async fn init_owner_e2ee_device(
     Ok(())
 }
 
+async fn rotate_owner_e2ee_device(
+    args: cli::OwnerE2eeDeviceRotateArgs,
+    store: &ConfigStore,
+) -> Result<()> {
+    if args.old_device_id == args.new_device_id {
+        return Err(anyhow::anyhow!(
+            "--new-device-id must differ from --old-device-id"
+        ));
+    }
+    println!("Revoking old E2EE device");
+    let revoked = owner_api(&args.api)
+        .revoke_e2ee_device(&OwnerE2eeDeviceRef {
+            device_id: args.old_device_id.clone(),
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    print_owner_e2ee_devices(&[revoked]);
+    println!(
+        "Rotation note: keep the old private key backup if you need to decrypt messages addressed to {}. Revocation only stops future publication/use.",
+        args.old_device_id
+    );
+
+    init_owner_e2ee_device(
+        cli::OwnerE2eeDeviceInitArgs {
+            api: args.api,
+            device_id: args.new_device_id,
+            display_name: args.display_name,
+            private_key_out: args.private_key_out,
+            force: args.force,
+        },
+        store,
+    )
+    .await
+}
+
 async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
     let recipient_public_key = resolve_owner_e2ee_recipient_key(&args).await?;
     let mut recipients = BTreeMap::new();
@@ -1634,6 +1678,58 @@ async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
     println!("conversation_id={}", result.message.conversation_id);
     println!("recipient_actor={:?}", result.message.recipient_actor_id);
     println!("delivery_ids={}", result.delivery_ids.join(","));
+    Ok(())
+}
+
+async fn send_owner_e2ee_group_message(args: cli::OwnerE2eeGroupSendArgs) -> Result<()> {
+    let api = owner_api(&args.api);
+    let audience_lists = api
+        .audience_lists()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let audience = audience_lists
+        .iter()
+        .find(|list| list.id == args.audience_list_id)
+        .ok_or_else(|| anyhow::anyhow!("audience group {} not found", args.audience_list_id))?;
+    let peers = api
+        .e2ee_peer_devices()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let plan = plan_owner_e2ee_group_recipients(audience, &peers, args.allow_untrusted)?;
+    let payload =
+        e2ee::encrypted_note_payload(&args.plaintext, &plan.recipients, args.view_url.as_deref())?;
+    let encrypted_message = serde_json::to_value(&payload.encrypted_message)?;
+
+    println!("Sending owner E2EE group message");
+    println!("audience_id={}", audience.id);
+    println!("audience_name={}", audience.name);
+    println!("member_count={}", plan.member_count);
+    println!("recipient_device_count={}", plan.recipients.len());
+    println!("wire_material=v1-rsa-fallback-group");
+    println!(
+        "Recovery note: every recipient needs a matching private key; lost keys cannot decrypt this message later."
+    );
+
+    let mut all_delivery_ids = Vec::new();
+    for delivery in &plan.deliveries {
+        let result = api
+            .send_e2ee_message(&OwnerE2eeMessageSend {
+                recipient_actor_id: delivery.actor_id.clone(),
+                recipient_device_id: Some(delivery.validation_device_id.clone()),
+                sender_device_id: args.sender_device_id.clone(),
+                encrypted_message: encrypted_message.clone(),
+                fallback_content: Some(payload.content.clone()),
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        all_delivery_ids.extend(result.delivery_ids);
+        println!(
+            "sent actor={} validation_device={} message={}",
+            delivery.actor_id, delivery.validation_device_id, result.message.id
+        );
+    }
+
+    println!("delivery_ids={}", all_delivery_ids.join(","));
     Ok(())
 }
 
@@ -1713,6 +1809,72 @@ fn export_owner_e2ee_key(store: &ConfigStore, args: cli::OwnerE2eeKeyExportArgs)
     Ok(())
 }
 
+async fn print_owner_e2ee_recovery(args: &cli::OwnerApiArgs, store: &ConfigStore) -> Result<()> {
+    let devices = owner_api(args)
+        .e2ee_devices()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let local_key_ids = local_e2ee_key_device_ids(store, &args.instance_url)?;
+    let mut missing_active = 0usize;
+    let mut revoked_with_key = 0usize;
+
+    println!("E2EE recovery status");
+    println!("instance={}", args.instance_url);
+    for device in &devices {
+        let has_local_key = local_key_ids.contains(&device.device_id);
+        if device.status == "active" && !has_local_key {
+            missing_active += 1;
+        }
+        if device.status == "revoked" && has_local_key {
+            revoked_with_key += 1;
+        }
+        println!(
+            "{} [{}] fingerprint={} local_private_key={}",
+            device.device_id,
+            device.status,
+            device.fingerprint,
+            if has_local_key { "present" } else { "missing" }
+        );
+    }
+
+    if missing_active == 0 {
+        println!("active_key_status=ok");
+    } else {
+        println!("active_key_status=missing_private_key");
+        println!(
+            "WARNING: active devices without local private keys can receive encrypted messages that this client cannot decrypt."
+        );
+    }
+    if revoked_with_key > 0 {
+        println!(
+            "revoked_key_note=keep revoked-device private keys if old encrypted messages still need to be decrypted."
+        );
+    }
+    println!(
+        "Recovery boundary: Dais cannot recover old encrypted content after all recipient private keys are lost."
+    );
+    Ok(())
+}
+
+fn local_e2ee_key_device_ids(
+    store: &ConfigStore,
+    instance_url: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    let instance_dir = store
+        .e2ee_private_key_path(instance_url, "placeholder")
+        .parent()
+        .and_then(|path| path.file_name())
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let ids = store
+        .list_e2ee_private_keys()?
+        .into_iter()
+        .filter(|entry| entry.instance == instance_dir)
+        .map(|entry| entry.device_id)
+        .collect();
+    Ok(ids)
+}
+
 async fn trust_owner_e2ee_peer(args: cli::OwnerE2eePeerRefArgs) -> Result<OwnerE2eePeerDevice> {
     let peers = owner_api(&args.api)
         .e2ee_peer_devices()
@@ -1784,6 +1946,78 @@ async fn resolve_owner_e2ee_recipient_key(args: &cli::OwnerE2eeSendArgs) -> Resu
         ));
     }
     Ok(peer.credential.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OwnerE2eeGroupPlan {
+    member_count: usize,
+    recipients: BTreeMap<String, String>,
+    deliveries: Vec<OwnerE2eeGroupDelivery>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OwnerE2eeGroupDelivery {
+    actor_id: String,
+    validation_device_id: String,
+}
+
+fn plan_owner_e2ee_group_recipients(
+    audience: &OwnerAudienceList,
+    peers: &[OwnerE2eePeerDevice],
+    allow_untrusted: bool,
+) -> Result<OwnerE2eeGroupPlan> {
+    let members: Vec<String> = audience
+        .member_actor_ids
+        .iter()
+        .map(|member| member.trim())
+        .filter(|member| !member.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if members.is_empty() {
+        return Err(anyhow::anyhow!(
+            "audience group {} has no members",
+            audience.id
+        ));
+    }
+
+    let mut recipients = BTreeMap::new();
+    let mut deliveries = Vec::new();
+    for actor_id in &members {
+        let devices: Vec<&OwnerE2eePeerDevice> = peers
+            .iter()
+            .filter(|peer| {
+                peer.actor_id == *actor_id
+                    && (peer.trust_state == "trusted" || allow_untrusted)
+                    && peer.revoked_at.is_none()
+            })
+            .collect();
+        if devices.is_empty() {
+            return Err(anyhow::anyhow!(
+                "audience member {} has no {}E2EE peer devices; run e2ee-peer-discover and e2ee-peer-trust first",
+                actor_id,
+                if allow_untrusted { "discovered " } else { "trusted " }
+            ));
+        }
+
+        for device in &devices {
+            let key_id = owner_e2ee_group_key_id(&device.actor_id, &device.device_id);
+            recipients.insert(key_id, device.credential.clone());
+        }
+        deliveries.push(OwnerE2eeGroupDelivery {
+            actor_id: actor_id.clone(),
+            validation_device_id: devices[0].device_id.clone(),
+        });
+    }
+
+    Ok(OwnerE2eeGroupPlan {
+        member_count: members.len(),
+        recipients,
+        deliveries,
+    })
+}
+
+fn owner_e2ee_group_key_id(actor_id: &str, device_id: &str) -> String {
+    format!("{}#{}", actor_id.trim_end_matches('#'), device_id)
 }
 
 #[cfg(unix)]
@@ -2583,4 +2817,114 @@ fn prompt_password() -> Result<String> {
     let mut password = String::new();
     io::stdin().read_line(&mut password)?;
     Ok(password.trim_end().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn audience(id: &str, members: &[&str]) -> OwnerAudienceList {
+        OwnerAudienceList {
+            id: id.to_string(),
+            name: "Close Friends".to_string(),
+            description: None,
+            allowed_categories: Vec::new(),
+            member_actor_ids: members.iter().map(|member| member.to_string()).collect(),
+            member_count: members.len() as u64,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    fn peer(actor_id: &str, device_id: &str, trust_state: &str) -> OwnerE2eePeerDevice {
+        OwnerE2eePeerDevice {
+            id: format!("{actor_id}#{device_id}"),
+            actor_id: actor_id.to_string(),
+            device_id: device_id.to_string(),
+            display_name: None,
+            protocol: "dais-mls-v1".to_string(),
+            credential: format!(
+                "-----BEGIN PUBLIC KEY-----\n{actor_id}-{device_id}\n-----END PUBLIC KEY-----"
+            ),
+            key_package: "test-key-package".to_string(),
+            fingerprint: format!("fingerprint-{device_id}"),
+            trust_state: trust_state.to_string(),
+            first_seen_at: None,
+            last_seen_at: None,
+            trusted_at: None,
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn group_e2ee_plan_tracks_audience_membership_changes() {
+        let alice = "https://alice.example/users/alice";
+        let bob = "https://bob.example/users/bob";
+        let peers = vec![
+            peer(alice, "phone", "trusted"),
+            peer(bob, "laptop", "trusted"),
+        ];
+
+        let original = plan_owner_e2ee_group_recipients(
+            &audience("close-friends", &[alice, bob]),
+            &peers,
+            false,
+        )
+        .unwrap();
+        let after_remove =
+            plan_owner_e2ee_group_recipients(&audience("close-friends", &[alice]), &peers, false)
+                .unwrap();
+
+        assert_eq!(original.member_count, 2);
+        assert_eq!(original.deliveries.len(), 2);
+        assert_eq!(original.recipients.len(), 2);
+        assert_eq!(after_remove.member_count, 1);
+        assert_eq!(after_remove.deliveries.len(), 1);
+        assert_eq!(after_remove.recipients.len(), 1);
+        assert!(after_remove
+            .recipients
+            .contains_key(&owner_e2ee_group_key_id(alice, "phone")));
+        assert!(!after_remove
+            .recipients
+            .contains_key(&owner_e2ee_group_key_id(bob, "laptop")));
+    }
+
+    #[test]
+    fn group_e2ee_plan_requires_trusted_devices_by_default() {
+        let alice = "https://alice.example/users/alice";
+        let peers = vec![peer(alice, "phone", "untrusted")];
+
+        assert!(plan_owner_e2ee_group_recipients(
+            &audience("close-friends", &[alice]),
+            &peers,
+            false
+        )
+        .is_err());
+        assert!(plan_owner_e2ee_group_recipients(
+            &audience("close-friends", &[alice]),
+            &peers,
+            true
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn recovery_key_inventory_is_scoped_to_instance() {
+        let root =
+            std::env::temp_dir().join(format!("dais-e2ee-recovery-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = ConfigStore::new(root.clone());
+        store
+            .save_e2ee_private_key("https://social.dais.social", "dais-device", "key", false)
+            .unwrap();
+        store
+            .save_e2ee_private_key("https://social.skpt.cl", "skpt-device", "key", false)
+            .unwrap();
+
+        let dais_keys = local_e2ee_key_device_ids(&store, "https://social.dais.social").unwrap();
+
+        assert!(dais_keys.contains("dais-device"));
+        assert!(!dais_keys.contains("skpt-device"));
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

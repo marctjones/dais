@@ -202,11 +202,9 @@ fn select_recipient<'a>(
     my_key_id: Option<&str>,
 ) -> E2eeResult<&'a EncryptedRecipient> {
     if let Some(my_key_id) = my_key_id {
-        if let Some(recipient) = encrypted
-            .recipients
-            .iter()
-            .find(|recipient| recipient.key_id == my_key_id)
-        {
+        if let Some(recipient) = encrypted.recipients.iter().find(|recipient| {
+            recipient.key_id == my_key_id || recipient.key_id.ends_with(&format!("#{my_key_id}"))
+        }) {
             return Ok(recipient);
         }
     }
@@ -242,6 +240,27 @@ mod tests {
         let decrypted = decrypt_message(&encrypted, &private_pem, Some(key_id)).unwrap();
 
         assert_eq!(decrypted, "secret message");
+    }
+
+    #[test]
+    fn grouped_key_id_can_be_selected_by_device_suffix() {
+        let (_alice_private, alice_public) = test_keypair();
+        let (bob_private, bob_public) = test_keypair();
+        let recipients = BTreeMap::from([
+            (
+                "https://alice.example/users/alice#phone".to_string(),
+                alice_public,
+            ),
+            (
+                "https://bob.example/users/bob#laptop".to_string(),
+                bob_public,
+            ),
+        ]);
+        let encrypted = encrypt_message("group secret", &recipients).unwrap();
+
+        let decrypted = decrypt_message(&encrypted, &bob_private, Some("laptop")).unwrap();
+
+        assert_eq!(decrypted, "group secret");
     }
 
     #[test]
