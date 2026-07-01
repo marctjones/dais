@@ -623,6 +623,48 @@ export component MainWindow inherits Window {
         }
 
         KeyBinding {
+            keys: @keys(Control + "f");
+            activated => {
+                root.select-mode("people");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Meta + "f");
+            activated => {
+                root.select-mode("people");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + "n");
+            activated => {
+                root.select-screen("compose");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Meta + "n");
+            activated => {
+                root.select-screen("compose");
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + "r");
+            activated => {
+                root.refresh();
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Meta + "r");
+            activated => {
+                root.refresh();
+            }
+        }
+
+        KeyBinding {
             keys: @keys(J);
             activated => {
                 root.move-selected-row-down();
