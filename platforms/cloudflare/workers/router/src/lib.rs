@@ -7234,14 +7234,15 @@ async fn owner_upsert_e2ee_device(
     let device_id = normalize_e2ee_device_id(
         &body_string_any(body, &["device_id", "deviceId"]).ok_or("deviceId is required")?,
     )?;
-    let credential = required_e2ee_material(body, &["credential", "identityKey"], "credential")?;
-    let key_package = required_e2ee_material(body, &["key_package", "keyPackage"], "keyPackage")?;
     let display_name = body_string_any(body, &["display_name", "displayName"]);
     let protocol = normalize_e2ee_protocol(
         body_string_any(body, &["protocol"])
             .unwrap_or_else(|| "dais-mls-v1".to_string())
             .as_str(),
     )?;
+    let credential = required_e2ee_material(body, &["credential", "identityKey"], "credential")?;
+    let key_package = required_e2ee_material(body, &["key_package", "keyPackage"], "keyPackage")?;
+    validate_e2ee_device_material(&protocol, &credential, &key_package)?;
     let fingerprint = e2ee_device_fingerprint(&credential, &key_package);
     let row_id = format!(
         "e2ee-device-{}",
@@ -7489,14 +7490,15 @@ async fn owner_upsert_peer_device_with_trust(
     let device_id = normalize_e2ee_device_id(
         &body_string_any(body, &["device_id", "deviceId"]).ok_or("deviceId is required")?,
     )?;
-    let credential = required_e2ee_material(body, &["credential", "identityKey"], "credential")?;
-    let key_package = required_e2ee_material(body, &["key_package", "keyPackage"], "keyPackage")?;
     let display_name = body_string_any(body, &["display_name", "displayName"]);
     let protocol = normalize_e2ee_protocol(
         body_string_any(body, &["protocol"])
             .unwrap_or_else(|| "dais-mls-v1".to_string())
             .as_str(),
     )?;
+    let credential = required_e2ee_material(body, &["credential", "identityKey"], "credential")?;
+    let key_package = required_e2ee_material(body, &["key_package", "keyPackage"], "keyPackage")?;
+    validate_e2ee_device_material(&protocol, &credential, &key_package)?;
     let fingerprint = body_string_any(body, &["fingerprint"])
         .map(|value| normalize_e2ee_fingerprint(&value))
         .transpose()?
@@ -12272,7 +12274,12 @@ fn normalize_e2ee_device_id(value: &str) -> std::result::Result<String, String> 
 fn normalize_e2ee_protocol(value: &str) -> std::result::Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "dais-mls-v1" | "mls" | "openmls" => Ok("dais-mls-v1".to_string()),
+        "dais-mls-v1" | "encryptedmessage-v1" | "encrypted-message-v1" => {
+            Ok("dais-mls-v1".to_string())
+        }
+        "mls" | "openmls" | "mls-rfc9420" | "openmls-rfc9420" | "dais-mls-v2" => {
+            Ok("mls-rfc9420".to_string())
+        }
         _ => Err("unsupported E2EE protocol".to_string()),
     }
 }
@@ -12299,6 +12306,28 @@ fn required_e2ee_material(
         return Err(format!("{field} is too large"));
     }
     Ok(value)
+}
+
+fn validate_e2ee_device_material(
+    protocol: &str,
+    credential: &str,
+    key_package: &str,
+) -> std::result::Result<(), String> {
+    if protocol == "mls-rfc9420" {
+        let credential_bytes = BASE64
+            .decode(credential.as_bytes())
+            .map_err(|_| "MLS credential must be base64".to_string())?;
+        let key_package_bytes = BASE64
+            .decode(key_package.as_bytes())
+            .map_err(|_| "MLS keyPackage must be base64".to_string())?;
+        if credential_bytes.is_empty() {
+            return Err("MLS credential must not be empty".to_string());
+        }
+        if key_package_bytes.is_empty() {
+            return Err("MLS keyPackage must not be empty".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn validate_encrypted_message_envelope(value: &Value) -> std::result::Result<(), String> {
@@ -13140,10 +13169,11 @@ mod tests {
         owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
         parse_lenient_json_body, parse_workers_ai_moderation, sha256_hex,
         source_type_for_watch_kind, strip_json_fence, tootfinder_search_items,
-        tootfinder_search_url, validate_encrypted_message_envelope, MediaMetadataInput,
-        OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider,
+        tootfinder_search_url, validate_e2ee_device_material, validate_encrypted_message_envelope,
+        MediaMetadataInput, OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider,
         OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
     };
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     use serde_json::{Map, Value};
 
     #[test]
@@ -13209,8 +13239,27 @@ mod tests {
             "laptop:2026"
         );
         assert!(normalize_e2ee_device_id("bad device").is_err());
-        assert_eq!(normalize_e2ee_protocol("OpenMLS").unwrap(), "dais-mls-v1");
+        assert_eq!(
+            normalize_e2ee_protocol("encryptedMessage-v1").unwrap(),
+            "dais-mls-v1"
+        );
+        assert_eq!(normalize_e2ee_protocol("OpenMLS").unwrap(), "mls-rfc9420");
+        assert_eq!(
+            normalize_e2ee_protocol("dais-mls-v2").unwrap(),
+            "mls-rfc9420"
+        );
         assert!(normalize_e2ee_protocol("legacy-rsa").is_err());
+    }
+
+    #[test]
+    fn validates_mls_device_material_shape() {
+        let credential = BASE64.encode(b"https://social.dais.social/users/social#mac");
+        let key_package = BASE64.encode(b"serialized-openmls-key-package");
+
+        assert!(validate_e2ee_device_material("mls-rfc9420", &credential, &key_package).is_ok());
+        assert!(validate_e2ee_device_material("mls-rfc9420", "not base64", &key_package).is_err());
+        assert!(validate_e2ee_device_material("mls-rfc9420", &credential, "").is_err());
+        assert!(validate_e2ee_device_material("dais-mls-v1", "legacy", "legacy").is_ok());
     }
 
     #[test]
