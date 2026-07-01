@@ -2304,10 +2304,24 @@ fn print_owner_e2ee_messages(messages: &[OwnerE2eeMessage]) {
     }
     for message in messages {
         println!("{} [{}]", message.id, message.conversation_id);
+        println!("protocol={}", message.e2ee_protocol);
         println!("sender={}", message.sender_actor_id);
         println!("sender_device={}", message.sender_device_id);
         if let Some(recipient) = message.recipient_actor_id.as_deref() {
             println!("recipient={recipient}");
+        }
+        if message.e2ee_protocol == "mls-rfc9420" {
+            println!(
+                "mls_group={} mls_epoch={}",
+                message.mls_group_id.as_deref().unwrap_or("unknown"),
+                message
+                    .mls_epoch
+                    .map(|epoch| epoch.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            );
+            println!("envelope=daisEncryptedMessage");
+        } else {
+            println!("envelope=encryptedMessage");
         }
         println!("delivery_ids={}", message.delivery_ids.join(","));
         if let Some(created_at) = message.created_at.as_deref() {

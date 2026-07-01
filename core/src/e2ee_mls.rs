@@ -8,7 +8,7 @@ use openmls_rust_crypto::OpenMlsRustCrypto;
 use serde::{Deserialize, Serialize};
 
 const DAIS_MLS_ENVELOPE_VERSION: u8 = 2;
-const DAIS_MLS_PROTOCOL: &str = "MLS-1.0-OpenMLS";
+const DAIS_MLS_PROTOCOL: &str = "mls-rfc9420";
 
 pub type MlsResult<T> = Result<T, MlsError>;
 
@@ -40,9 +40,12 @@ pub struct MlsDeviceMaterial {
 pub struct DaisMlsEnvelope {
     pub v: u8,
     pub protocol: String,
+    #[serde(rename = "groupId")]
     pub group_id: String,
     pub epoch: u64,
+    #[serde(rename = "senderActorId")]
     pub sender_account_id: String,
+    #[serde(rename = "senderDeviceId")]
     pub sender_device_id: String,
     pub ciphertext: String,
 }
@@ -383,6 +386,13 @@ mod tests {
         assert_eq!(bob.current_epoch().expect("bob epoch"), 1);
         assert_eq!(envelope.v, DAIS_MLS_ENVELOPE_VERSION);
         assert_eq!(envelope.protocol, DAIS_MLS_PROTOCOL);
+
+        let serialized = serde_json::to_value(&envelope).expect("serialize envelope");
+        assert_eq!(serialized["protocol"], "mls-rfc9420");
+        assert!(serialized.get("groupId").is_some());
+        assert!(serialized.get("senderDeviceId").is_some());
+        assert!(serialized.get("group_id").is_none());
+        assert!(serialized.get("sender_device_id").is_none());
     }
 
     #[test]
