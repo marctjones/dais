@@ -36,7 +36,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     window.invoke_select_screen("inbox".into());
     window.invoke_select_row("notification:notice-reply".into());
     capture(&window, &output_dir, "home-inbox-notifications")?;
-    window.invoke_row_action("timeline:fixture-private-post".into(), "Save".into());
+    window.invoke_row_action("timeline:ada-week-friday-space-news".into(), "Save".into());
     capture(&window, &output_dir, "workflow-save-post")?;
     window.invoke_select_screen("today".into());
     capture(&window, &output_dir, "home-today")?;

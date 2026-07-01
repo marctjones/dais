@@ -68,13 +68,13 @@ fn exercises_normal_owner_task_flows_through_projection() {
     assert!(projection
         .rows
         .iter()
-        .any(|row| row.id == "timeline:fixture-private-post"));
+        .any(|row| row.id == "timeline:ada-week-friday-space-news"));
     assert!(!projection
         .rows
         .iter()
         .any(|row| row.id.starts_with("delivery:")));
 
-    controller.row_action("timeline:fixture-private-post", "Save");
+    controller.row_action("timeline:ada-week-friday-space-news", "Save");
     let status = controller.projection().status_message;
     assert!(
         status.contains("owner-only bookmark"),

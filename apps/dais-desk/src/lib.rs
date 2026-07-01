@@ -7902,6 +7902,89 @@ fn fixture_post_detail(object_id: &str, snapshot: &OwnerSnapshotBundle) -> Optio
         })
 }
 
+fn ada_week_timeline_posts() -> Vec<OwnerTimelinePost> {
+    let actor_id = "https://friend.example/users/ada";
+    let actor_username = Some("ada".to_string());
+    let actor_display_name = Some("Ada Kline".to_string());
+    [
+        (
+            "ada-week-friday-space-news",
+            "Ada read a Mars sample-return explainer over coffee and is now convinced the hard part is not the rocket science, it is the project management.",
+            "Fri 8:18 AM",
+            4,
+            7,
+        ),
+        (
+            "ada-week-thursday-family",
+            "Family dinner turned into a three-generation debate about whether Pluto was robbed. My nephew made a surprisingly strong closing argument.",
+            "Thu 7:36 PM",
+            3,
+            6,
+        ),
+        (
+            "ada-week-wednesday-milo-vet",
+            "Milo tolerated the vet, accepted one biscuit, rejected another on principle, and spent the ride home judging every traffic light.",
+            "Wed 4:22 PM",
+            2,
+            5,
+        ),
+        (
+            "ada-week-tuesday-meteor-shower",
+            "Set an alarm for the meteor shower and saw exactly one bright streak before the clouds rolled in. Still worth standing outside in a hoodie.",
+            "Tue 11:58 PM",
+            5,
+            9,
+        ),
+        (
+            "ada-week-tuesday-lunch",
+            "Lunch note: the little soup place by the train station still has the best lentil soup, but the new lemon cookie is the real discovery.",
+            "Tue 12:44 PM",
+            1,
+            4,
+        ),
+        (
+            "ada-week-monday-dog-park",
+            "Milo made two dog-park friends and then immediately fell asleep on my shoes. A complete social battery lifecycle in forty minutes.",
+            "Mon 8:10 PM",
+            3,
+            8,
+        ),
+        (
+            "ada-week-sunday-webb",
+            "Spent Sunday morning reading about how infrared telescopes turn cold dust into structure we can actually see. Space remains extremely unfair to my attention span.",
+            "Sun 10:15 AM",
+            4,
+            11,
+        ),
+        (
+            "ada-week-saturday-yard",
+            "Replanted the basil, fixed one fence latch, and discovered that Milo believes every garden glove is a personal invitation.",
+            "Sat 3:08 PM",
+            2,
+            6,
+        ),
+    ]
+    .into_iter()
+    .map(|(object_id, content, published_at, reply_count, like_count)| OwnerTimelinePost {
+        id: format!("timeline-{object_id}"),
+        object_id: object_id.into(),
+        actor_id: actor_id.into(),
+        actor_username: actor_username.clone(),
+        actor_display_name: actor_display_name.clone(),
+        actor_avatar_url: None,
+        content: content.into(),
+        content_html: Some(format!("<p>{content}</p>")),
+        visibility: "followers".into(),
+        in_reply_to: None,
+        published_at: Some(published_at.into()),
+        protocol: Some("activitypub".into()),
+        reply_count,
+        like_count,
+        boost_count: 0,
+    })
+    .collect()
+}
+
 fn fixture_data(api_error: Option<String>) -> DeskData {
     let settings = StoredOwnerSettings::default();
     let snapshot = local_snapshot(settings, api_error.clone()).into();
@@ -7933,19 +8016,25 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 kind: "reply".into(),
                 actor_id: "https://friend.example/users/ada".into(),
                 actor_username: Some("ada".into()),
-                actor_display_name: Some("Ada Friend".into()),
+                actor_display_name: Some("Ada Kline".into()),
                 actor_avatar_url: None,
-                post_id: Some("fixture-private-post".into()),
+                post_id: Some("ada-week-monday-dog-park".into()),
                 activity_id: None,
-                content: Some("Can we keep this to close friends?".into()),
+                content: Some(
+                    "This is exactly the kind of slow weekend I needed. Also, Milo votes for more park photos."
+                        .into(),
+                ),
                 read: serde_json::Value::Bool(false),
-                created_at: Some("5m".into()),
-                context_post_id: Some("fixture-private-post".into()),
-                context_post_content: Some("Original close-friends post".into()),
+                created_at: Some("12m".into()),
+                context_post_id: Some("ada-week-monday-dog-park".into()),
+                context_post_content: Some(
+                    "Milo made two dog-park friends and then immediately fell asleep on my shoes."
+                        .into(),
+                ),
                 context_post_content_html: None,
                 context_post_visibility: Some("followers".into()),
                 context_post_protocol: Some("activitypub".into()),
-                context_post_published_at: Some("today".into()),
+                context_post_published_at: Some("Mon 8:10 PM".into()),
             },
         ],
         deliveries: vec![
@@ -7982,9 +8071,9 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
             id: "dm-fixture".into(),
             conversation_id: "conversation-ada".into(),
             sender_id: "https://friend.example/users/ada".into(),
-            content: "This should stay direct.".into(),
-            published_at: "today".into(),
-            created_at: Some("today".into()),
+            content: "I found a backyard telescope listing near you. Worth checking, or am I about to enable another hobby?".into(),
+            published_at: "Wed 9:42 PM".into(),
+            created_at: Some("Wed 9:42 PM".into()),
         }],
         e2ee_messages: vec![
             OwnerE2eeMessage {
@@ -8303,23 +8392,7 @@ fn local_snapshot(
             public_handle: "@social@dais.social".to_string(),
             actor_url: "https://social.dais.social/users/social".to_string(),
         },
-        home_timeline: vec![OwnerTimelinePost {
-            id: "timeline-fixture".into(),
-            object_id: "fixture-private-post".into(),
-            actor_id: "https://friend.example/users/ada".into(),
-            actor_username: Some("ada".into()),
-            actor_display_name: Some("Ada Friend".into()),
-            actor_avatar_url: None,
-            content: "A private friend post that can be replied to without changing audience.".into(),
-            content_html: Some("<p>A <b>private</b> friend post that can be replied to safely.</p>".into()),
-            visibility: "followers".into(),
-            in_reply_to: None,
-            published_at: Some("today".into()),
-            protocol: Some("activitypub".into()),
-            reply_count: 2,
-            like_count: 1,
-            boost_count: 0,
-        }],
+        home_timeline: ada_week_timeline_posts(),
         posts: vec![
             OwnerPost {
                 id: "fixture-private-post".to_string(),
@@ -9863,13 +9936,13 @@ mod tests {
             .find(|row| row.id.as_str() == "notification-reply:notice-reply")
             .expect("reply row");
         assert_eq!(reply.title.as_str(), "Reply text");
-        assert!(reply.detail.contains("Can we keep this to close friends?"));
+        assert!(reply.detail.contains("slow weekend"));
         let original = rows
             .iter()
             .find(|row| row.id.as_str() == "notification-context:notice-reply")
             .expect("original post row");
         assert_eq!(original.title.as_str(), "Original post");
-        assert!(original.detail.contains("Original close-friends post"));
+        assert!(original.detail.contains("dog-park friends"));
     }
 
     #[test]
@@ -10306,24 +10379,23 @@ mod tests {
         let row = timeline_row(&controller.data.snapshot.home_timeline[0]);
         assert_eq!(row.secondary.as_str(), "Save");
         let save = controller
-            .save_post_request_from_row("timeline:fixture-private-post")
+            .save_post_request_from_row("timeline:ada-week-friday-space-news")
             .expect("save request");
-        assert_eq!(save.object_id.as_deref(), Some("fixture-private-post"));
+        assert_eq!(
+            save.object_id.as_deref(),
+            Some("ada-week-friday-space-news")
+        );
         assert_eq!(save.source.as_deref(), Some("desk-timeline"));
-        assert!(save
-            .excerpt
-            .as_deref()
-            .unwrap_or_default()
-            .contains("private"));
+        assert!(save.excerpt.as_deref().unwrap_or_default().contains("Mars"));
         controller
-            .load_post_detail("fixture-private-post")
+            .load_post_detail("ada-week-friday-space-news")
             .expect("detail");
-        let detail = controller.post_detail_inspector_rows("post:fixture-private-post");
+        let detail = controller.post_detail_inspector_rows("post:ada-week-friday-space-news");
         assert!(detail.iter().any(|row| row.secondary.as_str() == "Save"));
         let save = controller
-            .save_post_request_from_row("post-detail:fixture-private-post")
+            .save_post_request_from_row("post-detail:ada-week-friday-space-news")
             .expect("thread save request");
-        assert_eq!(save.post_id.as_deref(), Some("fixture-private-post"));
+        assert_eq!(save.post_id.as_deref(), Some("ada-week-friday-space-news"));
         assert_eq!(save.source.as_deref(), Some("desk-thread"));
     }
 
@@ -10520,8 +10592,8 @@ mod tests {
         let rows = controller.home_today_rows();
         assert_eq!(rows[0].id.as_str(), "notification:notice-reply");
         assert_eq!(rows[1].id.as_str(), "dm:dm-fixture");
-        assert_eq!(rows[2].id.as_str(), "timeline:fixture-private-post");
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2].id.as_str(), "timeline:ada-week-friday-space-news");
+        assert_eq!(rows.len(), 10);
         assert!(!rows
             .iter()
             .any(|row| row.id.as_str() == "notification:notice-like-context"));
@@ -10531,10 +10603,10 @@ mod tests {
     fn reading_rows_include_followed_watched_and_source_posts() {
         let controller = DeskController::fixture_for_tests();
         let rows = controller.reading_rows();
-        assert!(rows
-            .iter()
-            .any(|row| row.id.as_str() == "timeline:fixture-private-post"
-                && row.subtitle.contains("Following")));
+        assert!(rows.iter().any(
+            |row| row.id.as_str() == "timeline:ada-week-friday-space-news"
+                && row.subtitle.contains("Following")
+        ));
         assert!(rows
             .iter()
             .any(|row| row.title.as_str() == "Nobel Prize public update"
@@ -11019,7 +11091,7 @@ mod tests {
         assert_eq!(controller.active_screen, "compose");
         assert_eq!(
             controller.compose.in_reply_to.as_deref(),
-            Some("fixture-private-post")
+            Some("ada-week-monday-dog-park")
         );
         assert_eq!(controller.compose.visibility, Visibility::Followers);
     }
