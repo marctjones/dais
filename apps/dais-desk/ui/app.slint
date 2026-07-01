@@ -1048,6 +1048,22 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
+                                if root.compose-visibility == "direct" && root.compose-recipients == "" && root.compose-audience-list == "" : Text {
+                                    text: "Add a direct recipient or audience group before sending.";
+                                    color: #8a4d0a;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    wrap: word-wrap;
+                                }
+
+                                if root.compose-encrypt && root.compose-visibility != "direct" : Text {
+                                    text: "Encryption is only available for direct messages.";
+                                    color: #8a4d0a;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    wrap: word-wrap;
+                                }
+
                                 LineEdit {
                                     text <=> root.compose-audience-list;
                                     placeholder-text: "Audience group id, for example close-friends";
