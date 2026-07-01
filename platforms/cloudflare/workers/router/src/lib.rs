@@ -7663,6 +7663,17 @@ async fn owner_upsert_peer_device_with_trust(
     if fingerprint != e2ee_device_fingerprint(&credential, &key_package) {
         return Err("fingerprint does not match credential and keyPackage".to_string());
     }
+    let existing = owner_e2ee_peer_device_by_actor_and_device(env, &actor_id, &device_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let effective_trust_state = peer_trust_state_after_material_update(
+        existing
+            .as_ref()
+            .and_then(|row| string_field(Some(row), "fingerprint"))
+            .as_deref(),
+        trust_state,
+        &fingerprint,
+    );
     let row_id = format!(
         "e2ee-peer-{}",
         stable_id(&format!("{}\n{}", actor_id, device_id))
@@ -7679,7 +7690,7 @@ async fn owner_upsert_peer_device_with_trust(
     let credential_arg = D1Type::Text(&credential);
     let key_package_arg = D1Type::Text(&key_package);
     let fingerprint_arg = D1Type::Text(&fingerprint);
-    let trust_arg = D1Type::Text(trust_state);
+    let trust_arg = D1Type::Text(effective_trust_state);
     db.prepare(
         r#"
         INSERT INTO e2ee_peer_devices (
@@ -7697,7 +7708,11 @@ async fn owner_upsert_peer_device_with_trust(
             fingerprint = excluded.fingerprint,
             trust_state = excluded.trust_state,
             last_seen_at = datetime('now'),
-            trusted_at = CASE WHEN excluded.trust_state = 'trusted' THEN datetime('now') ELSE trusted_at END,
+            trusted_at = CASE
+                WHEN excluded.trust_state = 'trusted' THEN datetime('now')
+                WHEN e2ee_peer_devices.fingerprint != excluded.fingerprint THEN NULL
+                ELSE trusted_at
+            END,
             revoked_at = CASE WHEN excluded.trust_state = 'revoked' THEN datetime('now') ELSE NULL END
         "#,
     )
@@ -12644,6 +12659,20 @@ fn e2ee_device_fingerprint(credential: &str, key_package: &str) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn peer_trust_state_after_material_update<'a>(
+    existing_fingerprint: Option<&str>,
+    requested_trust_state: &'a str,
+    new_fingerprint: &str,
+) -> &'a str {
+    if requested_trust_state == "trusted" {
+        return "trusted";
+    }
+    match existing_fingerprint {
+        Some(existing) if existing != new_fingerprint => "untrusted",
+        _ => requested_trust_state,
+    }
+}
+
 fn insert_if_string(object: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
     if let Some(value) = value
         .and_then(Value::as_str)
@@ -13404,9 +13433,10 @@ mod tests {
         normalize_e2ee_device_id, normalize_e2ee_fingerprint, normalize_e2ee_protocol,
         owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
         owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
-        parse_lenient_json_body, parse_workers_ai_moderation, sha256_hex,
-        source_type_for_watch_kind, strip_json_fence, tootfinder_search_items,
-        tootfinder_search_url, validate_dais_encrypted_message_v2, validate_e2ee_device_material,
+        parse_lenient_json_body, parse_workers_ai_moderation,
+        peer_trust_state_after_material_update, sha256_hex, source_type_for_watch_kind,
+        strip_json_fence, tootfinder_search_items, tootfinder_search_url,
+        validate_dais_encrypted_message_v2, validate_e2ee_device_material,
         validate_encrypted_message_envelope, validate_owner_e2ee_payload, MediaMetadataInput,
         OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider,
         OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
@@ -13498,6 +13528,26 @@ mod tests {
         assert!(validate_e2ee_device_material("mls-rfc9420", "not base64", &key_package).is_err());
         assert!(validate_e2ee_device_material("mls-rfc9420", &credential, "").is_err());
         assert!(validate_e2ee_device_material("dais-mls-v1", "legacy", "legacy").is_ok());
+    }
+
+    #[test]
+    fn changed_peer_material_requires_explicit_retrust() {
+        assert_eq!(
+            peer_trust_state_after_material_update(Some("old"), "untrusted", "new"),
+            "untrusted"
+        );
+        assert_eq!(
+            peer_trust_state_after_material_update(Some("old"), "trusted", "new"),
+            "trusted"
+        );
+        assert_eq!(
+            peer_trust_state_after_material_update(Some("same"), "trusted", "same"),
+            "trusted"
+        );
+        assert_eq!(
+            peer_trust_state_after_material_update(Some("same"), "revoked", "same"),
+            "revoked"
+        );
     }
 
     #[test]
