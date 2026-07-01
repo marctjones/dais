@@ -71,6 +71,82 @@ component Chip inherits Rectangle {
     }
 }
 
+component MetaPill inherits Rectangle {
+    in property <string> label;
+    in property <string> tone;
+
+    height: 20px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: tone == "danger" ? #f0b8b8 : tone == "warn" ? #ead09a : tone == "ok" ? #bfe1cd : #d7dee8;
+    background: tone == "danger" ? #fff6f6 : tone == "warn" ? #fffbeb : tone == "ok" ? #f1fbf5 : #f7f9fc;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+
+        Text {
+            text: root.label;
+            color: root.tone == "danger" ? #7b1c1c : root.tone == "warn" ? #714a08 : root.tone == "ok" ? #1f5f3b : #536175;
+            font-size: 11px;
+            font-weight: 700;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component SegmentOption inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <string> tone;
+    callback activate();
+
+    height: 32px;
+    min-width: 104px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: selected ? (tone == "danger" ? #b42318 : tone == "warn" ? #b7791f : #2f6fae) : #cfd8e3;
+    background: selected ? (tone == "danger" ? #fff0f0 : tone == "warn" ? #fffbeb : #eaf3ff) : #ffffff;
+    accessible-role: button;
+    accessible-label: selected ? label + " selected" : label;
+    accessible-description: "Choose compose audience or delivery route";
+    accessible-action-default => {
+        root.activate();
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 6px;
+
+        Rectangle {
+            width: 14px;
+            height: 14px;
+            border-radius: 7px;
+            border-width: 1px;
+            border-color: root.selected ? (root.tone == "danger" ? #b42318 : root.tone == "warn" ? #b7791f : #2f6fae) : #aab5c3;
+            background: root.selected ? (root.tone == "danger" ? #b42318 : root.tone == "warn" ? #b7791f : #2f6fae) : #ffffff;
+        }
+
+        Text {
+            text: root.label;
+            color: root.selected ? (root.tone == "danger" ? #7b1c1c : root.tone == "warn" ? #714a08 : #174a7e) : #2f3948;
+            font-size: 12px;
+            font-weight: root.selected ? 800 : 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.activate();
+        }
+    }
+}
+
 component SourceButton inherits Rectangle {
     in property <NavItem> item;
     callback activate(string);
@@ -211,12 +287,9 @@ component RowCard inherits Rectangle {
             }
         }
 
-        if root.entry.meta != "" : Text {
-            text: root.entry.meta;
-            color: root.entry.tone == "warn" ? #7b4e08 : #536175;
-            font-size: 12px;
-            font-weight: root.is-post ? 700 : 500;
-            overflow: elide;
+        if root.entry.meta != "" : MetaPill {
+            label: root.entry.meta;
+            tone: root.entry.tone;
         }
 
         Text {
@@ -740,27 +813,61 @@ export component MainWindow inherits Window {
                                     color: #111827;
                                 }
 
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    Button {
-                                        text: "Followers";
-                                        clicked => { root.compose-set-visibility("followers"); }
+                                VerticalLayout {
+                                    spacing: 6px;
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            text: "Audience";
+                                            width: 72px;
+                                            color: #344055;
+                                            font-size: 12px;
+                                            font-weight: 800;
+                                            vertical-alignment: center;
+                                        }
+                                        SegmentOption {
+                                            label: "Followers";
+                                            selected: root.compose-visibility == "followers";
+                                            tone: "ok";
+                                            activate => { root.compose-set-visibility("followers"); }
+                                        }
+                                        SegmentOption {
+                                            label: "Direct";
+                                            selected: root.compose-visibility == "direct";
+                                            tone: "ok";
+                                            activate => { root.compose-set-visibility("direct"); }
+                                        }
+                                        SegmentOption {
+                                            label: "Public";
+                                            selected: root.compose-visibility == "public";
+                                            tone: "danger";
+                                            activate => { root.compose-set-visibility("public"); }
+                                        }
                                     }
-                                    Button {
-                                        text: "Direct";
-                                        clicked => { root.compose-set-visibility("direct"); }
-                                    }
-                                    Button {
-                                        text: "Public";
-                                        clicked => { root.compose-set-visibility("public"); }
-                                    }
-                                    Button {
-                                        text: "ActivityPub";
-                                        clicked => { root.compose-set-protocol("activitypub"); }
-                                    }
-                                    Button {
-                                        text: "Both";
-                                        clicked => { root.compose-set-protocol("both"); }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            text: "Route";
+                                            width: 72px;
+                                            color: #344055;
+                                            font-size: 12px;
+                                            font-weight: 800;
+                                            vertical-alignment: center;
+                                        }
+                                        SegmentOption {
+                                            label: "ActivityPub";
+                                            selected: root.compose-protocol == "activitypub";
+                                            tone: "ok";
+                                            activate => { root.compose-set-protocol("activitypub"); }
+                                        }
+                                        SegmentOption {
+                                            label: "Both";
+                                            selected: root.compose-protocol == "both";
+                                            tone: root.compose-visibility == "public" ? "danger" : "warn";
+                                            activate => { root.compose-set-protocol("both"); }
+                                        }
                                     }
                                 }
 
