@@ -1425,7 +1425,8 @@ async fn activitypub_store_create(env: &Env, body: &Value) -> std::result::Resul
     .map_err(|error| error.to_string())?;
 
     if activitypub_direct_to_actor(&Value::Object(object.clone()), &local_actor_url(env)) {
-        if let Some(encrypted_message) = object.get("encryptedMessage") {
+        if let Some(encrypted_message) = object.get("daisEncryptedMessage") {
+            validate_dais_encrypted_message_v2(encrypted_message)?;
             activitypub_store_e2ee_direct_message(
                 env,
                 &actor,
@@ -1434,6 +1435,21 @@ async fn activitypub_store_create(env: &Env, body: &Value) -> std::result::Resul
                 &published,
                 &content,
                 encrypted_message,
+                "daisEncryptedMessage",
+                "mls-rfc9420",
+            )
+            .await?;
+        } else if let Some(encrypted_message) = object.get("encryptedMessage") {
+            activitypub_store_e2ee_direct_message(
+                env,
+                &actor,
+                &object_id,
+                &Value::Object(object.clone()),
+                &published,
+                &content,
+                encrypted_message,
+                "encryptedMessage",
+                "dais-mls-v1",
             )
             .await?;
         }
@@ -1449,6 +1465,8 @@ async fn activitypub_store_e2ee_direct_message(
     published: &str,
     fallback_content: &str,
     encrypted_message: &Value,
+    envelope_field: &str,
+    protocol: &str,
 ) -> std::result::Result<(), String> {
     let local_actor = local_actor_url(env);
     let mut participants = vec![actor.to_string(), local_actor.clone()];
@@ -1468,6 +1486,8 @@ async fn activitypub_store_e2ee_direct_message(
     let aad_json = serde_json::to_string(&serde_json::json!({
         "recipientActorId": local_actor,
         "fallbackContent": fallback_content,
+        "e2eeProtocol": protocol,
+        "e2eeField": envelope_field,
     }))
     .map_err(|error| error.to_string())?;
     let db = env.d1("DB").map_err(|error| error.to_string())?;
@@ -1477,11 +1497,16 @@ async fn activitypub_store_e2ee_direct_message(
     db.prepare(
         r#"
         INSERT INTO e2ee_conversations (id, protocol, participants, created_at, updated_at)
-        VALUES (?1, 'dais-mls-v1', ?2, ?3, ?3)
-        ON CONFLICT(id) DO UPDATE SET updated_at = ?3
+        VALUES (?1, ?2, ?3, ?4, ?4)
+        ON CONFLICT(id) DO UPDATE SET protocol = excluded.protocol, updated_at = ?4
         "#,
     )
-    .bind_refs(&[conversation_arg, participants_arg, published_arg])
+    .bind_refs(&[
+        conversation_arg,
+        D1Type::Text(protocol),
+        participants_arg,
+        published_arg,
+    ])
     .map_err(|error| error.to_string())?
     .run()
     .await
@@ -1509,6 +1534,61 @@ async fn activitypub_store_e2ee_direct_message(
         encrypted_arg,
         aad_arg,
         published_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    if protocol == "mls-rfc9420" {
+        persist_mls_message_metadata(
+            env,
+            object_id,
+            &conversation_id,
+            encrypted_message,
+            actor,
+            sender_device_id,
+            published,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn persist_mls_message_metadata(
+    env: &Env,
+    message_id: &str,
+    conversation_id: &str,
+    encrypted_message: &Value,
+    sender_actor_id: &str,
+    sender_device_id: &str,
+    received_at: &str,
+) -> std::result::Result<(), String> {
+    let group_id = encrypted_message
+        .get("groupId")
+        .and_then(Value::as_str)
+        .ok_or("daisEncryptedMessage.groupId is required")?;
+    let epoch = encrypted_message
+        .get("epoch")
+        .and_then(Value::as_u64)
+        .ok_or("daisEncryptedMessage.epoch is required")?;
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    db.prepare(
+        r#"
+        INSERT OR IGNORE INTO e2ee_mls_message_metadata (
+            message_id, conversation_id, group_id, epoch, sender_actor_id,
+            sender_device_id, decrypt_status, received_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)
+        "#,
+    )
+    .bind_refs(&[
+        D1Type::Text(message_id),
+        D1Type::Text(conversation_id),
+        D1Type::Text(group_id),
+        D1Type::Integer(epoch as i32),
+        D1Type::Text(sender_actor_id),
+        D1Type::Text(sender_device_id),
+        D1Type::Text(received_at),
     ])
     .map_err(|error| error.to_string())?
     .run()
@@ -6882,7 +6962,7 @@ async fn owner_e2ee_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, Va
         .prepare(
             r#"
             SELECT m.id, m.conversation_id, m.sender_actor_id, m.sender_device_id,
-                   m.ciphertext, m.aad, m.created_at, c.participants
+                   m.ciphertext, m.aad, m.created_at, c.participants, c.protocol
             FROM e2ee_messages m
             JOIN e2ee_conversations c ON c.id = m.conversation_id
             ORDER BY m.created_at DESC
@@ -6923,11 +7003,24 @@ async fn owner_send_e2ee_message(
             .ok_or("senderDeviceId is required")?,
     )?;
     let encrypted_message = body
-        .get("encrypted_message")
+        .get("dais_encrypted_message")
+        .or_else(|| body.get("daisEncryptedMessage"))
+        .or_else(|| body.get("encrypted_message"))
         .or_else(|| body.get("encryptedMessage"))
         .cloned()
-        .ok_or("encryptedMessage is required")?;
-    validate_encrypted_message_envelope(&encrypted_message)?;
+        .ok_or("encryptedMessage or daisEncryptedMessage is required")?;
+    let (envelope_field, protocol) = validate_owner_e2ee_payload(&encrypted_message)?;
+    if protocol == "mls-rfc9420" {
+        let envelope_sender = encrypted_message
+            .get("senderDeviceId")
+            .and_then(Value::as_str)
+            .ok_or("daisEncryptedMessage.senderDeviceId is required")?;
+        if normalize_e2ee_device_id(envelope_sender)? != sender_device_id {
+            return Err(
+                "senderDeviceId must match daisEncryptedMessage.senderDeviceId".to_string(),
+            );
+        }
+    }
     let fallback_content = body_string_any(body, &["fallback_content", "fallbackContent"])
         .unwrap_or_else(|| "Encrypted message. Open in a dais client to decrypt.".to_string());
     if fallback_content.len() > 512 {
@@ -6981,11 +7074,11 @@ async fn owner_send_e2ee_message(
     db.prepare(
         r#"
         INSERT INTO e2ee_conversations (id, protocol, participants, created_at, updated_at)
-        VALUES (?1, 'dais-mls-v1', ?2, datetime('now'), datetime('now'))
-        ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now')
+        VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))
+        ON CONFLICT(id) DO UPDATE SET protocol = excluded.protocol, updated_at = datetime('now')
         "#,
     )
-    .bind_refs(&[conversation_arg, participants_arg])
+    .bind_refs(&[conversation_arg, D1Type::Text(protocol), participants_arg])
     .map_err(|error| error.to_string())?
     .run()
     .await
@@ -7019,6 +7112,50 @@ async fn owner_send_e2ee_message(
     .await
     .map_err(|error| error.to_string())?;
 
+    if protocol == "mls-rfc9420" {
+        persist_mls_message_metadata(
+            env,
+            &message_id,
+            &conversation_id,
+            &encrypted_message,
+            &local_actor.id,
+            &sender_device_id,
+            &now,
+        )
+        .await?;
+    }
+
+    let mut note = serde_json::json!({
+        "id": message_id,
+        "type": "Note",
+        "attributedTo": local_actor.id,
+        "to": [recipient_actor_id],
+        "published": now,
+        "content": fallback_content,
+        "daisE2ee": {
+            "v": if protocol == "mls-rfc9420" { 2 } else { 1 },
+            "protocol": protocol,
+            "senderDeviceId": sender_device_id,
+        },
+    });
+    if let Some(object) = note.as_object_mut() {
+        object.insert(envelope_field.to_string(), encrypted_message.clone());
+        if protocol == "mls-rfc9420" {
+            if let Some(group_id) = encrypted_message.get("groupId").cloned() {
+                object
+                    .get_mut("daisE2ee")
+                    .and_then(Value::as_object_mut)
+                    .map(|dais| dais.insert("groupId".to_string(), group_id));
+            }
+            if let Some(epoch) = encrypted_message.get("epoch").cloned() {
+                object
+                    .get_mut("daisE2ee")
+                    .and_then(Value::as_object_mut)
+                    .map(|dais| dais.insert("epoch".to_string(), epoch));
+            }
+        }
+    }
+
     let activity = serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
         "id": format!("{message_id}#create"),
@@ -7026,20 +7163,7 @@ async fn owner_send_e2ee_message(
         "actor": local_actor.id,
         "published": now,
         "to": [recipient_actor_id],
-        "object": {
-            "id": message_id,
-            "type": "Note",
-            "attributedTo": local_actor.id,
-            "to": [recipient_actor_id],
-            "published": now,
-            "content": fallback_content,
-            "daisE2ee": {
-                "v": 1,
-                "protocol": "dais-mls-v1",
-                "senderDeviceId": sender_device_id,
-            },
-            "encryptedMessage": encrypted_message,
-        }
+        "object": note
     });
     let delivery_ids = insert_delivery_rows(
         env,
@@ -7083,7 +7207,7 @@ async fn owner_e2ee_message_by_id(
         .prepare(
             r#"
             SELECT m.id, m.conversation_id, m.sender_actor_id, m.sender_device_id,
-                   m.ciphertext, m.aad, m.created_at, c.participants
+                   m.ciphertext, m.aad, m.created_at, c.participants, c.protocol
             FROM e2ee_messages m
             JOIN e2ee_conversations c ON c.id = m.conversation_id
             WHERE m.id = ?1
@@ -7113,6 +7237,13 @@ async fn owner_e2ee_message_row(
     let encrypted_message = string_field(Some(&row), "ciphertext")
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
         .unwrap_or(Value::Null);
+    let protocol = string_field(Some(&row), "protocol")
+        .or_else(|| {
+            aad.get("e2eeProtocol")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "dais-mls-v1".to_string());
     let participants = string_vec_json_field(Some(&row), "participants");
     let recipient_actor_id = aad
         .get("recipientActorId")
@@ -7147,7 +7278,33 @@ async fn owner_e2ee_message_row(
         "recipient_actor_id".to_string(),
         recipient_actor_id.map(Value::String).unwrap_or(Value::Null),
     );
-    item.insert("encrypted_message".to_string(), encrypted_message);
+    item.insert("e2ee_protocol".to_string(), Value::String(protocol.clone()));
+    if protocol == "mls-rfc9420" {
+        item.insert(
+            "dais_encrypted_message".to_string(),
+            encrypted_message.clone(),
+        );
+        item.insert("encrypted_message".to_string(), Value::Null);
+        item.insert(
+            "mls_group_id".to_string(),
+            encrypted_message
+                .get("groupId")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        item.insert(
+            "mls_epoch".to_string(),
+            encrypted_message
+                .get("epoch")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+    } else {
+        item.insert("encrypted_message".to_string(), encrypted_message);
+        item.insert("dais_encrypted_message".to_string(), Value::Null);
+        item.insert("mls_group_id".to_string(), Value::Null);
+        item.insert("mls_epoch".to_string(), Value::Null);
+    }
     item.insert(
         "fallback_content".to_string(),
         fallback_content.map(Value::String).unwrap_or(Value::Null),
@@ -12330,6 +12487,86 @@ fn validate_e2ee_device_material(
     Ok(())
 }
 
+fn validate_owner_e2ee_payload(
+    value: &Value,
+) -> std::result::Result<(&'static str, &'static str), String> {
+    if value.get("protocol").and_then(Value::as_str) == Some("mls-rfc9420")
+        || value.get("v").and_then(Value::as_u64) == Some(2)
+    {
+        validate_dais_encrypted_message_v2(value)?;
+        Ok(("daisEncryptedMessage", "mls-rfc9420"))
+    } else {
+        validate_encrypted_message_envelope(value)?;
+        Ok(("encryptedMessage", "dais-mls-v1"))
+    }
+}
+
+fn validate_dais_encrypted_message_v2(value: &Value) -> std::result::Result<(), String> {
+    let envelope = value
+        .as_object()
+        .ok_or_else(|| "daisEncryptedMessage must be an object".to_string())?;
+    match envelope.get("v").and_then(Value::as_u64) {
+        Some(2) => {}
+        Some(version) => {
+            return Err(format!(
+                "unsupported daisEncryptedMessage version {version}"
+            ))
+        }
+        None => return Err("daisEncryptedMessage.v is required".to_string()),
+    }
+    match envelope.get("protocol").and_then(Value::as_str) {
+        Some("mls-rfc9420") => {}
+        Some(_) => return Err("daisEncryptedMessage.protocol must be mls-rfc9420".to_string()),
+        None => return Err("daisEncryptedMessage.protocol is required".to_string()),
+    }
+    required_nonempty_string(envelope, "groupId", "daisEncryptedMessage", 512)?;
+    let epoch = envelope
+        .get("epoch")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "daisEncryptedMessage.epoch is required".to_string())?;
+    if epoch > i32::MAX as u64 {
+        return Err("daisEncryptedMessage.epoch is too large".to_string());
+    }
+    normalize_e2ee_device_id(&required_nonempty_string(
+        envelope,
+        "senderDeviceId",
+        "daisEncryptedMessage",
+        128,
+    )?)?;
+    if required_dais_mls_base64(envelope, "ciphertext")?.is_empty() {
+        return Err("daisEncryptedMessage.ciphertext must not be empty".to_string());
+    }
+    Ok(())
+}
+
+fn required_nonempty_string(
+    object: &Map<String, Value>,
+    key: &str,
+    prefix: &str,
+    max_len: usize,
+) -> std::result::Result<String, String> {
+    let value = object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{prefix}.{key} is required"))?;
+    if value.len() > max_len {
+        return Err(format!("{prefix}.{key} is too long"));
+    }
+    Ok(value.to_string())
+}
+
+fn required_dais_mls_base64(
+    object: &Map<String, Value>,
+    key: &str,
+) -> std::result::Result<Vec<u8>, String> {
+    let value = required_nonempty_string(object, key, "daisEncryptedMessage", 262144)?;
+    BASE64
+        .decode(value.as_bytes())
+        .map_err(|_| format!("daisEncryptedMessage.{key} must be valid base64"))
+}
+
 fn validate_encrypted_message_envelope(value: &Value) -> std::result::Result<(), String> {
     let envelope = value
         .as_object()
@@ -13169,8 +13406,9 @@ mod tests {
         owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
         parse_lenient_json_body, parse_workers_ai_moderation, sha256_hex,
         source_type_for_watch_kind, strip_json_fence, tootfinder_search_items,
-        tootfinder_search_url, validate_e2ee_device_material, validate_encrypted_message_envelope,
-        MediaMetadataInput, OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider,
+        tootfinder_search_url, validate_dais_encrypted_message_v2, validate_e2ee_device_material,
+        validate_encrypted_message_envelope, validate_owner_e2ee_payload, MediaMetadataInput,
+        OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider,
         OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
     };
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -13260,6 +13498,67 @@ mod tests {
         assert!(validate_e2ee_device_material("mls-rfc9420", "not base64", &key_package).is_err());
         assert!(validate_e2ee_device_material("mls-rfc9420", &credential, "").is_err());
         assert!(validate_e2ee_device_material("dais-mls-v1", "legacy", "legacy").is_ok());
+    }
+
+    #[test]
+    fn validates_dais_encrypted_message_v2_shape() {
+        let envelope = serde_json::json!({
+            "v": 2,
+            "protocol": "mls-rfc9420",
+            "groupId": "bWxzLWdyb3Vw",
+            "epoch": 7,
+            "senderDeviceId": "mac:2026",
+            "ciphertext": BASE64.encode(b"serialized mls private message")
+        });
+
+        assert!(validate_dais_encrypted_message_v2(&envelope).is_ok());
+        assert_eq!(
+            validate_owner_e2ee_payload(&envelope).unwrap(),
+            ("daisEncryptedMessage", "mls-rfc9420")
+        );
+
+        let mut bad_protocol = envelope.clone();
+        bad_protocol["protocol"] = Value::String("dais-mls-v1".to_string());
+        assert!(validate_dais_encrypted_message_v2(&bad_protocol).is_err());
+
+        let mut bad_ciphertext = envelope.clone();
+        bad_ciphertext["ciphertext"] = Value::String("not base64".to_string());
+        assert!(validate_dais_encrypted_message_v2(&bad_ciphertext).is_err());
+
+        let mut missing_epoch = envelope;
+        missing_epoch.as_object_mut().unwrap().remove("epoch");
+        assert!(validate_dais_encrypted_message_v2(&missing_epoch).is_err());
+    }
+
+    #[test]
+    fn mls_activitypub_object_uses_dais_encrypted_message_without_v1_envelope() {
+        let envelope = serde_json::json!({
+            "v": 2,
+            "protocol": "mls-rfc9420",
+            "groupId": "bWxzLWdyb3Vw",
+            "epoch": 1,
+            "senderDeviceId": "dais-mac",
+            "ciphertext": BASE64.encode(b"mls ciphertext")
+        });
+        let note = serde_json::json!({
+            "type": "Note",
+            "content": "Encrypted message. Open in a dais client to decrypt.",
+            "daisE2ee": {
+                "v": 2,
+                "protocol": "mls-rfc9420",
+                "senderDeviceId": "dais-mac",
+                "groupId": envelope["groupId"].clone(),
+                "epoch": envelope["epoch"].clone()
+            },
+            "daisEncryptedMessage": envelope
+        });
+
+        assert!(note.get("encryptedMessage").is_none());
+        assert!(validate_dais_encrypted_message_v2(&note["daisEncryptedMessage"]).is_ok());
+        assert_eq!(
+            note["content"],
+            "Encrypted message. Open in a dais client to decrypt."
+        );
     }
 
     #[test]
