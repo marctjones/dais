@@ -99,7 +99,7 @@ pub struct MlsWelcome {
     ratchet_tree: RatchetTreeIn,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MlsCommit {
     message: MlsMessageOut,
 }
@@ -861,5 +861,73 @@ mod tests {
             b"after bob was removed"
         );
         assert!(bob.decrypt_application_message(&envelope).is_err());
+    }
+
+    #[test]
+    fn mls_group_with_multiple_members_and_devices_survives_restart_and_removal() {
+        let mut alice = MlsDevice::new("https://social.dais.social/users/social", "alice-mac")
+            .expect("alice device");
+        let mut bob_phone =
+            MlsDevice::new("https://social.skpt.cl/users/social", "bob-phone").expect("bob phone");
+        let mut bob_laptop = MlsDevice::new("https://social.skpt.cl/users/social", "bob-laptop")
+            .expect("bob laptop");
+        let mut charlie = MlsDevice::new("https://third.example/users/social", "charlie-tablet")
+            .expect("charlie device");
+
+        let invitees = vec![
+            bob_phone.public_device().expect("bob phone public"),
+            bob_laptop.public_device().expect("bob laptop public"),
+            charlie.public_device().expect("charlie public"),
+        ];
+        let welcome = alice
+            .create_group_with_members("dais-mls-group-multi-topology", &invitees)
+            .expect("create multi-member group");
+        let welcome_wire = welcome.to_wire().expect("welcome wire");
+        for device in [&mut bob_phone, &mut bob_laptop, &mut charlie] {
+            device
+                .join_group(MlsWelcome::from_wire(&welcome_wire).expect("welcome from wire"))
+                .expect("device joins multi-member group");
+        }
+
+        let first = alice
+            .encrypt_application_message(b"multi-device group hello")
+            .expect("encrypt first group message");
+        for device in [&mut bob_phone, &mut bob_laptop, &mut charlie] {
+            assert_eq!(
+                device
+                    .decrypt_application_message(&first)
+                    .expect("member decrypts first message"),
+                b"multi-device group hello"
+            );
+        }
+
+        let charlie_state = charlie.export_state().expect("export charlie group state");
+        let mut restored_charlie =
+            MlsDevice::from_state(&charlie_state).expect("restore charlie group state");
+
+        let remove_bob_laptop = alice.remove_member_at(2).expect("remove bob laptop");
+        bob_phone
+            .apply_commit(remove_bob_laptop.clone())
+            .expect("bob phone applies removal");
+        restored_charlie
+            .apply_commit(remove_bob_laptop)
+            .expect("charlie applies removal after restart");
+
+        let second = alice
+            .encrypt_application_message(b"after laptop removal")
+            .expect("encrypt after removal");
+        assert_eq!(
+            bob_phone
+                .decrypt_application_message(&second)
+                .expect("remaining bob device decrypts"),
+            b"after laptop removal"
+        );
+        assert_eq!(
+            restored_charlie
+                .decrypt_application_message(&second)
+                .expect("restored charlie decrypts"),
+            b"after laptop removal"
+        );
+        assert!(bob_laptop.decrypt_application_message(&second).is_err());
     }
 }

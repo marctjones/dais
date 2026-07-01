@@ -33,7 +33,9 @@ client and the core-based Cloudflare worker tree.
 - ActivityPub federation includes WebFinger, actor/outbox/inbox surfaces,
   locked-profile signaling, public post dereference, private/E2EE anonymous
   denial, follower-only reads, replies/likes/boost metadata, and delivery queue
-  processing.
+  processing. Cross-instance replies between `social.dais.social` and
+  `social.skpt.cl` are verified to preserve remote `inReplyTo` targets and
+  surface in the receiving owner thread and notification views.
 - Mastodon API compatibility has a growing compatibility floor: instance
   metadata, app registration/token compatibility stubs, account reads,
   followers/following, public/home timelines, individual public status reads,
@@ -61,7 +63,9 @@ client and the core-based Cloudflare worker tree.
 - Rust owner tooling includes media upload/attachment helpers, moderation and
   closed-network allowlist controls, delivery/follower review, expanded reports,
   and a TUI for day-to-day operation. The HTTPS owner API exposes token-gated
-  owner reads and compose for GUI/mobile clients.
+  owner reads and compose for GUI/mobile clients. Dais Desk uses the same owner
+  API and now prioritizes replies/mentions as conversational rows while keeping
+  likes and boosts as lightweight activity.
 - Public source subscriptions can ingest standards-based RSS/Atom feeds into a
   private reader item model with rights-policy metadata; scheduled Cloudflare
   refresh stores metadata/excerpts only and never reposts automatically.

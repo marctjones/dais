@@ -268,12 +268,12 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <div class="tile">
                     <span class="status">production</span>
                     <h3>ActivityPub foundation</h3>
-                    <p>WebFinger, actor, inbox, outbox, public dereference, delivery queueing, HTTP signatures, locked-profile signaling, and private/E2EE anonymous denial are implemented.</p>
+                    <p>WebFinger, actor, inbox, outbox, public dereference, delivery queueing, HTTP signatures, locked-profile signaling, private/E2EE anonymous denial, and cross-instance reply threading are implemented.</p>
                 </div>
                 <div class="tile">
                     <span class="status">production</span>
                     <h3>Rust operator client</h3>
-                    <p>The owner interface is the Rust CLI/TUI. It manages posts, timelines, followers, notifications, deliveries, E2EE helpers, events, actor mode, and diagnostics.</p>
+                    <p>The owner interface is the Rust CLI/TUI and native Dais Desk app. It manages posts, timelines, followers, notifications, deliveries, E2EE helpers, events, actor mode, and diagnostics.</p>
                 </div>
                 <div class="tile">
                     <span class="status partial">partial</span>
@@ -293,7 +293,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <div class="tile">
                     <span class="status partial">in progress</span>
                     <h3>Media and polish</h3>
-                    <p>R2 media serving and ActivityStreams attachment metadata exist. Richer media upload, profile editing, moderation UI, analytics, and TUI polish are active roadmap items.</p>
+                    <p>R2 media serving and ActivityStreams attachment metadata exist. Desk now separates conversational replies from lightweight likes/boosts; richer media upload, profile editing, moderation UI, and analytics remain active roadmap items.</p>
                 </div>
             </div>
         </section>
@@ -312,7 +312,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
     </main>
 
     <div class="footer">
-        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-07-01 cross-instance MLS smoke release.</p>
+        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-07-01 cross-instance reply, Desk visual, and MLS smoke work.</p>
     </div>
 </body>
 </html>"#,

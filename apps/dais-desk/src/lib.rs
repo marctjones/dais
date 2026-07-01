@@ -16,7 +16,7 @@ use dais_client_core::{
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, BTreeMap};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -3480,7 +3480,7 @@ impl DeskController {
             .data
             .notifications
             .iter()
-            .filter(|n| !json_truthy(&n.read))
+            .filter(|n| !json_truthy(&n.read) && !is_lightweight_notification(n))
         {
             rows.push(notification_row(notice));
         }
@@ -3536,12 +3536,15 @@ impl DeskController {
     }
 
     fn inbox_rows(&self) -> Vec<UiRow> {
-        let mut rows: Vec<UiRow> = self
-            .data
-            .notifications
-            .iter()
-            .map(notification_row)
-            .collect();
+        let mut notices: Vec<&OwnerNotification> = self.data.notifications.iter().collect();
+        notices.sort_by_key(|notice| {
+            (
+                notification_priority(notice),
+                json_truthy(&notice.read),
+                notice.created_at.as_deref().unwrap_or_default(),
+            )
+        });
+        let mut rows: Vec<UiRow> = notices.into_iter().map(notification_row).collect();
         rows.extend(self.data.direct_messages.iter().map(dm_row));
         rows.extend(
             self.data
@@ -4010,6 +4013,7 @@ impl DeskController {
             "",
             "Copy evidence",
         )];
+        rows.extend(mls_group_rows(&self.data.e2ee_messages));
         rows.extend(self.data.e2ee_devices.iter().map(e2ee_device_row));
         rows.extend(self.data.e2ee_peer_devices.iter().map(e2ee_peer_device_row));
         rows
@@ -6057,27 +6061,15 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         .as_deref()
         .or(notice.actor_username.as_deref())
         .unwrap_or(&notice.actor_id);
-    let action = match notice.kind.as_str() {
-        "mention" => "Mentioned",
-        "reply" => "Replied",
-        "favourite" | "favorite" | "like" => "Liked",
-        "repost" | "boost" => "Boosted",
-        "follow" => "Follow requested",
-        kind => kind,
+    let title = match notice.kind.as_str() {
+        "mention" => format!("Mention from {actor}"),
+        "reply" => format!("Reply from {actor}"),
+        "favourite" | "favorite" | "like" => format!("{actor} liked a post"),
+        "repost" | "boost" => format!("{actor} boosted a post"),
+        "follow" => format!("Follow request from {actor}"),
+        kind => format!("{kind} from {actor}"),
     };
-    let title = format!("{action} • {actor}");
-    let context = format!(
-        "{} {}",
-        notice
-            .context_post_visibility
-            .as_deref()
-            .unwrap_or("related"),
-        if notice.context_post_id.is_some() || notice.post_id.is_some() {
-            "post"
-        } else {
-            "notice"
-        }
-    );
+    let context = notification_context_label(notice);
     let detail = notification_preview_detail(notice);
     let unread = !json_truthy(&notice.read);
     let has_context_post = notice.context_post_id.is_some() || notice.post_id.is_some();
@@ -6118,16 +6110,18 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
     row_with_kind(
         "notification",
         &format!("notification:{}", notice.id),
-        &title,
+        title.trim(),
         subtitle.trim(),
         &detail,
         if unread { "Needs review" } else { "Reviewed" },
-        if json_truthy(&notice.read) {
+        if is_lightweight_notification(notice) {
+            "Activity"
+        } else if json_truthy(&notice.read) {
             "Read"
         } else {
             "Unread"
         },
-        if json_truthy(&notice.read) {
+        if is_lightweight_notification(notice) || json_truthy(&notice.read) {
             "info"
         } else {
             "warn"
@@ -6135,6 +6129,39 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
         primary,
         secondary,
     )
+}
+
+fn is_lightweight_notification(notice: &OwnerNotification) -> bool {
+    matches!(
+        notice.kind.as_str(),
+        "favourite" | "favorite" | "like" | "repost" | "boost"
+    )
+}
+
+fn notification_priority(notice: &OwnerNotification) -> u8 {
+    match notice.kind.as_str() {
+        "reply" | "mention" => 0,
+        "follow" => 1,
+        "favourite" | "favorite" | "like" | "repost" | "boost" => 3,
+        _ => 2,
+    }
+}
+
+fn notification_context_label(notice: &OwnerNotification) -> String {
+    let target = if matches!(notice.kind.as_str(), "reply" | "mention") {
+        "thread"
+    } else if notice.context_post_id.is_some() || notice.post_id.is_some() {
+        "post"
+    } else {
+        "notice"
+    };
+    let visibility = notice
+        .context_post_visibility
+        .as_deref()
+        .map(visibility_string_label)
+        .unwrap_or("Related")
+        .to_string();
+    format!("{visibility} {target}")
 }
 
 fn notification_preview_detail(notice: &OwnerNotification) -> String {
@@ -6161,6 +6188,13 @@ fn notification_preview_detail(notice: &OwnerNotification) -> String {
                 format!("{visibility} Open this notice to inspect reply details.")
             }
         };
+    }
+
+    if is_lightweight_notification(notice) {
+        let source = context_text
+            .or(reply_text)
+            .unwrap_or_else(|| "No post preview is available.".to_string());
+        return format!("Lightweight reaction. {source}");
     }
 
     let source = context_text
@@ -6263,6 +6297,48 @@ fn e2ee_message_row(message: &OwnerE2eeMessage) -> UiRow {
         "",
         "",
     )
+}
+
+fn mls_group_rows(messages: &[OwnerE2eeMessage]) -> Vec<UiRow> {
+    let mut groups: BTreeMap<String, (u64, usize)> = BTreeMap::new();
+    for message in messages
+        .iter()
+        .filter(|message| message.e2ee_protocol == "mls-rfc9420")
+    {
+        let Some(group_id) = message.mls_group_id.as_deref() else {
+            continue;
+        };
+        let epoch = message.mls_epoch.unwrap_or_default();
+        let entry = groups.entry(group_id.to_string()).or_insert((epoch, 0));
+        entry.0 = entry.0.max(epoch);
+        entry.1 += 1;
+    }
+
+    groups
+        .into_iter()
+        .map(|(group_id, (epoch, count))| {
+            row_with_kind(
+                "generic",
+                &format!("mls-group:{group_id}"),
+                "MLS encrypted group",
+                &format!("group={} epoch={}", compact_mls_group_id(&group_id), epoch),
+                "Encrypted history depends on local MLS private state. Device rotation or state loss can make older group content unrecoverable.",
+                &format!("{count} local message(s) reference this group"),
+                "MLS",
+                "ok",
+                "",
+                "Copy evidence",
+            )
+        })
+        .collect()
+}
+
+fn compact_mls_group_id(group_id: &str) -> String {
+    if group_id.len() <= 18 {
+        group_id.to_string()
+    } else {
+        format!("{}...", &group_id[..18])
+    }
 }
 
 fn follower_row(follower: &OwnerFollower) -> UiRow {
@@ -7605,8 +7681,17 @@ fn compose_warning(compose: &ComposeState) -> String {
     if compose.encrypt && !compose.attachments.is_empty() {
         return "Encrypted media attachments are not implemented yet; remove media or turn off encryption.".into();
     }
-    if !compose.attachments.is_empty() && !matches!(compose.protocol, ProtocolRoute::ActivityPub) {
-        return "Media attachments currently require ActivityPub routing.".into();
+    if !compose.attachments.is_empty()
+        && matches!(
+            compose.protocol,
+            ProtocolRoute::AtProto | ProtocolRoute::Both
+        )
+        && !compose
+            .attachments
+            .iter()
+            .all(|attachment| media_attachment_is_public_image(attachment))
+    {
+        return "Bluesky media posts require public image upload URLs.".into();
     }
     if matches!(
         compose.visibility,
@@ -7638,7 +7723,11 @@ fn compose_can_send(compose: &ComposeState) -> bool {
             || !compose.audience_list_id.as_deref().unwrap_or("").is_empty())
         && !(compose.encrypt && !compose.attachments.is_empty())
         && (compose.attachments.is_empty()
-            || matches!(compose.protocol, ProtocolRoute::ActivityPub))
+            || matches!(compose.protocol, ProtocolRoute::ActivityPub)
+            || compose
+                .attachments
+                .iter()
+                .all(|attachment| media_attachment_is_public_image(attachment)))
         && (!matches!(
             compose.visibility,
             Visibility::Followers | Visibility::Direct
@@ -7665,6 +7754,14 @@ fn media_attachment_is_private(url: &str) -> bool {
 
 fn media_attachment_requires_authorized_fetch(url: &str) -> bool {
     media_path(url).is_some_and(|path| path.starts_with("/media/_private_signed/"))
+}
+
+fn media_attachment_is_public_image(url: &str) -> bool {
+    !media_attachment_is_private(url)
+        && matches!(
+            media_type_for_path(Path::new(url)).as_str(),
+            "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+        )
 }
 
 fn media_path(url: &str) -> Option<String> {
@@ -7947,42 +8044,80 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
             published_at: "today".into(),
             created_at: Some("today".into()),
         }],
-        e2ee_messages: vec![OwnerE2eeMessage {
-            id: "https://social.dais.social/users/social/e2ee/messages/fixture".into(),
-            conversation_id: "e2ee-conversation-ada".into(),
-            sender_actor_id: "https://social.dais.social/users/social".into(),
-            sender_device_id: "macbook".into(),
-            recipient_actor_id: Some("https://friend.example/users/ada".into()),
-            e2ee_protocol: "dais-mls-v1".into(),
-            dais_encrypted_message: serde_json::Value::Null,
-            encrypted_message: serde_json::json!({
-                "v": 1,
-                "alg": "AES-256-GCM",
-                "keyWrap": "RSA-OAEP-256",
-                "iv": "MDEyMzQ1Njc4OWFi",
-                "ciphertext": "Y2lwaGVydGV4dA==",
-                "recipients": [{ "keyId": "ada-phone", "wrappedKey": "d3JhcHBlZA==" }]
-            }),
-            mls_group_id: None,
-            mls_epoch: None,
-            fallback_content: Some("Encrypted message. Open in dais to decrypt.".into()),
-            delivery_ids: vec!["delivery-e2ee-queued".into()],
-            delivery_statuses: vec![OwnerDelivery {
-                id: "delivery-e2ee-queued".into(),
-                post_id: "https://social.dais.social/users/social/e2ee/messages/fixture".into(),
-                target_type: Some("inbox".into()),
-                target_url: "https://friend.example/inbox".into(),
-                protocol: "activitypub".into(),
-                status: "queued".into(),
-                retry_count: Some(0),
-                last_attempt_at: None,
-                error_message: None,
-                activity_type: Some("Create".into()),
+        e2ee_messages: vec![
+            OwnerE2eeMessage {
+                id: "https://social.dais.social/users/social/e2ee/messages/fixture".into(),
+                conversation_id: "e2ee-conversation-ada".into(),
+                sender_actor_id: "https://social.dais.social/users/social".into(),
+                sender_device_id: "macbook".into(),
+                recipient_actor_id: Some("https://friend.example/users/ada".into()),
+                e2ee_protocol: "dais-mls-v1".into(),
+                dais_encrypted_message: serde_json::Value::Null,
+                encrypted_message: serde_json::json!({
+                    "v": 1,
+                    "alg": "AES-256-GCM",
+                    "keyWrap": "RSA-OAEP-256",
+                    "iv": "MDEyMzQ1Njc4OWFi",
+                    "ciphertext": "Y2lwaGVydGV4dA==",
+                    "recipients": [{ "keyId": "ada-phone", "wrappedKey": "d3JhcHBlZA==" }]
+                }),
+                mls_group_id: None,
+                mls_epoch: None,
+                fallback_content: Some("Encrypted message. Open in dais to decrypt.".into()),
+                delivery_ids: vec!["delivery-e2ee-queued".into()],
+                delivery_statuses: vec![OwnerDelivery {
+                    id: "delivery-e2ee-queued".into(),
+                    post_id: "https://social.dais.social/users/social/e2ee/messages/fixture".into(),
+                    target_type: Some("inbox".into()),
+                    target_url: "https://friend.example/inbox".into(),
+                    protocol: "activitypub".into(),
+                    status: "queued".into(),
+                    retry_count: Some(0),
+                    last_attempt_at: None,
+                    error_message: None,
+                    activity_type: Some("Create".into()),
+                    created_at: Some("today".into()),
+                    delivered_at: None,
+                }],
                 created_at: Some("today".into()),
-                delivered_at: None,
-            }],
-            created_at: Some("today".into()),
-        }],
+            },
+            OwnerE2eeMessage {
+                id: "https://social.dais.social/users/social/e2ee/messages/mls-fixture".into(),
+                conversation_id: "e2ee-conversation-mls-friends".into(),
+                sender_actor_id: "https://social.dais.social/users/social".into(),
+                sender_device_id: "macbook-mls".into(),
+                recipient_actor_id: Some("https://friend.example/users/ada".into()),
+                e2ee_protocol: "mls-rfc9420".into(),
+                dais_encrypted_message: serde_json::json!({
+                    "v": 2,
+                    "protocol": "mls-rfc9420",
+                    "groupId": "ZGFpcy1kZXNrLW1scy1ncm91cA==",
+                    "epoch": 3,
+                    "ciphertext": "Y2lwaGVydGV4dA=="
+                }),
+                encrypted_message: serde_json::Value::Null,
+                mls_group_id: Some("ZGFpcy1kZXNrLW1scy1ncm91cA==".into()),
+                mls_epoch: Some(3),
+                fallback_content: Some("Encrypted MLS group message.".into()),
+                delivery_ids: vec!["delivery-mls-ok".into()],
+                delivery_statuses: vec![OwnerDelivery {
+                    id: "delivery-mls-ok".into(),
+                    post_id: "https://social.dais.social/users/social/e2ee/messages/mls-fixture"
+                        .into(),
+                    target_type: Some("inbox".into()),
+                    target_url: "https://friend.example/inbox".into(),
+                    protocol: "activitypub".into(),
+                    status: "delivered".into(),
+                    retry_count: Some(0),
+                    last_attempt_at: Some("today".into()),
+                    error_message: None,
+                    activity_type: Some("Create".into()),
+                    created_at: Some("today".into()),
+                    delivered_at: Some("today".into()),
+                }],
+                created_at: Some("today".into()),
+            },
+        ],
         sources: OwnerSources {
             subscriptions: vec![SourceSubscription {
                 id: "source-npr".into(),
@@ -8039,20 +8174,36 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 read: false,
             }],
         },
-        e2ee_devices: vec![OwnerE2eeDevice {
-            id: "e2ee-device-local-laptop".into(),
-            actor_id: "https://social.dais.social/users/social".into(),
-            device_id: "macbook:2026".into(),
-            display_name: Some("MacBook".into()),
-            protocol: "dais-mls-v1".into(),
-            credential: "fixture-credential".into(),
-            key_package: "fixture-key-package".into(),
-            fingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                .into(),
-            status: "active".into(),
-            created_at: Some("today".into()),
-            updated_at: Some("today".into()),
-        }],
+        e2ee_devices: vec![
+            OwnerE2eeDevice {
+                id: "e2ee-device-local-laptop".into(),
+                actor_id: "https://social.dais.social/users/social".into(),
+                device_id: "macbook:2026".into(),
+                display_name: Some("MacBook".into()),
+                protocol: "dais-mls-v1".into(),
+                credential: "fixture-credential".into(),
+                key_package: "fixture-key-package".into(),
+                fingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .into(),
+                status: "active".into(),
+                created_at: Some("today".into()),
+                updated_at: Some("today".into()),
+            },
+            OwnerE2eeDevice {
+                id: "e2ee-device-local-mls".into(),
+                actor_id: "https://social.dais.social/users/social".into(),
+                device_id: "macbook-mls".into(),
+                display_name: Some("MacBook MLS".into()),
+                protocol: "mls-rfc9420".into(),
+                credential: "fixture-mls-credential".into(),
+                key_package: "fixture-mls-key-package".into(),
+                fingerprint: "2222222222222222333333333333333344444444444444445555555555555555"
+                    .into(),
+                status: "active".into(),
+                created_at: Some("today".into()),
+                updated_at: Some("today".into()),
+            },
+        ],
         e2ee_peer_devices: vec![
             OwnerE2eePeerDevice {
                 id: "e2ee-peer-ada-phone".into(),
@@ -9567,6 +9718,7 @@ mod tests {
             context_post_published_at: None,
         });
         assert_eq!(reply.kind.as_str(), "notification");
+        assert_eq!(reply.title.as_str(), "Reply from Ada");
         assert_eq!(reply.primary.as_str(), "Mark read");
         assert_eq!(reply.secondary.as_str(), "Reply");
 
@@ -9590,6 +9742,9 @@ mod tests {
             context_post_published_at: None,
         });
         assert_eq!(read_like.kind.as_str(), "notification");
+        assert_eq!(read_like.title.as_str(), "Ada liked a post");
+        assert_eq!(read_like.chip.as_str(), "Activity");
+        assert_eq!(read_like.tone.as_str(), "info");
         assert_eq!(read_like.primary.as_str(), "Open context");
         assert_eq!(read_like.secondary.as_str(), "");
     }
@@ -9617,9 +9772,7 @@ mod tests {
             context_post_protocol: None,
             context_post_published_at: None,
         });
-        assert!(row
-            .detail
-            .starts_with("Visibility is not included with this notification."));
+        assert!(row.detail.starts_with("Lightweight reaction."));
         assert!(row.detail.contains("Liked your post."));
         assert_eq!(row.primary, "Mark read");
         assert_eq!(row.secondary, "Open link");
@@ -10015,6 +10168,51 @@ mod tests {
     }
 
     #[test]
+    fn compose_allows_public_image_media_for_bluesky_routes() {
+        let compose = ComposeState {
+            text: "public photo".into(),
+            visibility: Visibility::Public,
+            protocol: ProtocolRoute::AtProto,
+            attachments: vec!["https://social.dais.social/media/uploads/photo.png".into()],
+            ..ComposeState::default()
+        };
+        assert!(compose_can_send(&compose));
+        assert_eq!(
+            compose_warning(&compose),
+            "This will be public. Use Post Publicly only when that is intentional."
+        );
+    }
+
+    #[test]
+    fn compose_blocks_private_or_non_image_media_for_bluesky_routes() {
+        let private_image = ComposeState {
+            text: "private photo".into(),
+            visibility: Visibility::Public,
+            protocol: ProtocolRoute::AtProto,
+            attachments: vec!["https://social.dais.social/media/_private/token/photo.png".into()],
+            ..ComposeState::default()
+        };
+        assert!(!compose_can_send(&private_image));
+        assert_eq!(
+            compose_warning(&private_image),
+            "Bluesky media posts require public image upload URLs."
+        );
+
+        let public_video = ComposeState {
+            text: "public video".into(),
+            visibility: Visibility::Public,
+            protocol: ProtocolRoute::Both,
+            attachments: vec!["https://social.dais.social/media/uploads/video.mp4".into()],
+            ..ComposeState::default()
+        };
+        assert!(!compose_can_send(&public_video));
+        assert_eq!(
+            compose_warning(&public_video),
+            "Bluesky media posts require public image upload URLs."
+        );
+    }
+
+    #[test]
     fn compose_blocks_encrypted_media_until_supported() {
         let compose = ComposeState {
             text: "encrypted photo".into(),
@@ -10389,11 +10587,13 @@ mod tests {
     fn home_today_rows_are_attention_first() {
         let controller = DeskController::fixture_for_tests();
         let rows = controller.home_today_rows();
-        assert_eq!(rows[0].id.as_str(), "notification:notice-like-context");
-        assert_eq!(rows[1].id.as_str(), "notification:notice-reply");
-        assert_eq!(rows[2].id.as_str(), "dm:dm-fixture");
-        assert_eq!(rows[3].id.as_str(), "timeline:fixture-private-post");
-        assert_eq!(rows[4].id.as_str(), "post:fixture-private-post");
+        assert_eq!(rows[0].id.as_str(), "notification:notice-reply");
+        assert_eq!(rows[1].id.as_str(), "dm:dm-fixture");
+        assert_eq!(rows[2].id.as_str(), "timeline:fixture-private-post");
+        assert_eq!(rows[3].id.as_str(), "post:fixture-private-post");
+        assert!(!rows
+            .iter()
+            .any(|row| row.id.as_str() == "notification:notice-like-context"));
     }
 
     #[test]
@@ -10420,8 +10620,8 @@ mod tests {
     fn inbox_rows_are_attention_first() {
         let controller = DeskController::fixture_for_tests();
         let rows = controller.inbox_rows();
-        assert_eq!(rows[0].id.as_str(), "notification:notice-like-context");
-        assert_eq!(rows[1].id.as_str(), "notification:notice-reply");
+        assert_eq!(rows[0].id.as_str(), "notification:notice-reply");
+        assert_eq!(rows[1].id.as_str(), "notification:notice-like-context");
         assert_eq!(rows[2].id.as_str(), "dm:dm-fixture");
         assert_eq!(
             rows[3].id.as_str(),
@@ -10444,6 +10644,19 @@ mod tests {
             assert!(row.title.contains("ada"));
             assert!(row.meta.contains("queued"));
         }
+    }
+
+    #[test]
+    fn mls_message_rows_show_group_and_epoch_context() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.home_today_rows();
+        let row = rows
+            .iter()
+            .find(|row| row.chip.as_str() == "MLS")
+            .expect("MLS message row");
+        assert!(row.title.contains("MLS E2EE"));
+        assert!(row.subtitle.contains("epoch=3"));
+        assert!(row.subtitle.contains("group="));
     }
 
     #[test]
@@ -10903,6 +11116,13 @@ mod tests {
             |row| row.id.as_str() == "e2ee-device:e2ee-device-local-laptop"
                 && row.chip.as_str() == "Active"
         ));
+        let mls_group = rows
+            .iter()
+            .find(|row| row.id.as_str().starts_with("mls-group:"))
+            .expect("MLS group row");
+        assert_eq!(mls_group.chip.as_str(), "MLS");
+        assert!(mls_group.subtitle.contains("epoch=3"));
+        assert!(mls_group.detail.contains("unrecoverable"));
         let trusted = rows
             .iter()
             .find(|row| row.id.as_str() == "e2ee-peer:e2ee-peer-ada-phone")

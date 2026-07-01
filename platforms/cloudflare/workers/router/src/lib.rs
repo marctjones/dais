@@ -1101,11 +1101,14 @@ fn activitypub_tags(row: &Map<String, Value>) -> Vec<Value> {
 }
 
 fn display_local_url(origin: &str, value: &str) -> String {
+    let origin_host = worker::Url::parse(origin)
+        .ok()
+        .and_then(|url| url.host_str().map(ToOwned::to_owned));
     worker::Url::parse(value)
         .ok()
         .and_then(|url| {
             let path = url.path();
-            (is_known_activitypub_host(url.host_str()) && path.starts_with("/users/social/"))
+            (url.host_str() == origin_host.as_deref() && path.starts_with("/users/social/"))
                 .then(|| format!("{origin}{path}"))
         })
         .unwrap_or_else(|| value.to_string())
@@ -1424,6 +1427,28 @@ async fn activitypub_store_create(env: &Env, body: &Value) -> std::result::Resul
     .await
     .map_err(|error| error.to_string())?;
 
+    if !in_reply_to.is_empty() && is_local_object_url(&in_reply_to, &activitypub_domain(env)) {
+        let activity_id = body
+            .get("id")
+            .and_then(optional_body_string)
+            .unwrap_or_else(|| object_id.clone());
+        activitypub_store_local_reply(
+            env,
+            &object_id,
+            &in_reply_to,
+            &actor,
+            &username,
+            &display_name,
+            &avatar,
+            &content,
+            &content_html,
+            visibility,
+            &published,
+            &activity_id,
+        )
+        .await?;
+    }
+
     if activitypub_direct_to_actor(&Value::Object(object.clone()), &local_actor_url(env)) {
         if let Some(encrypted_message) = object.get("daisEncryptedMessage") {
             validate_dais_encrypted_message_v2(encrypted_message)?;
@@ -1454,6 +1479,114 @@ async fn activitypub_store_create(env: &Env, body: &Value) -> std::result::Resul
             .await?;
         }
     }
+    Ok(())
+}
+
+async fn activitypub_store_local_reply(
+    env: &Env,
+    reply_id: &str,
+    post_id: &str,
+    actor: &str,
+    username: &str,
+    display_name: &str,
+    avatar: &str,
+    content: &str,
+    content_html: &str,
+    visibility: &str,
+    published: &str,
+    activity_id: &str,
+) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let post_arg = D1Type::Text(post_id);
+    let existing = db
+        .prepare("SELECT id FROM posts WHERE id = ?1 LIMIT 1")
+        .bind_refs(&post_arg)
+        .map_err(|error| error.to_string())?
+        .first::<Map<String, Value>>(None)
+        .await
+        .map_err(|error| error.to_string())?;
+    if existing.is_none() {
+        return Ok(());
+    }
+
+    let reply_arg = D1Type::Text(reply_id);
+    let actor_arg = D1Type::Text(actor);
+    let username_arg = D1Type::Text(username);
+    let display_arg = D1Type::Text(display_name);
+    let avatar_arg = D1Type::Text(avatar);
+    let html_arg = D1Type::Text(content_html);
+    let visibility_arg = D1Type::Text(visibility);
+    let published_arg = D1Type::Text(published);
+    db.prepare(
+        r#"
+        INSERT INTO replies (
+            id, post_id, actor_id, actor_username, actor_display_name,
+            actor_avatar_url, content, published_at, visibility
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        ON CONFLICT(id) DO UPDATE SET
+            post_id = excluded.post_id,
+            actor_id = excluded.actor_id,
+            actor_username = excluded.actor_username,
+            actor_display_name = excluded.actor_display_name,
+            actor_avatar_url = excluded.actor_avatar_url,
+            content = excluded.content,
+            published_at = excluded.published_at,
+            visibility = excluded.visibility
+        "#,
+    )
+    .bind_refs([
+        &reply_arg,
+        &post_arg,
+        &actor_arg,
+        &username_arg,
+        &display_arg,
+        &avatar_arg,
+        &html_arg,
+        &published_arg,
+        &visibility_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let notification_id = format!("notification-reply-{}", stable_id(reply_id));
+    let notification_arg = D1Type::Text(&notification_id);
+    let activity_arg = D1Type::Text(activity_id);
+    let content_arg = D1Type::Text(content);
+    db.prepare(
+        r#"
+        INSERT INTO notifications (
+            id, type, actor_id, actor_username, actor_display_name,
+            actor_avatar_url, post_id, activity_id, content, read, created_at
+        ) VALUES (?1, 'reply', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)
+        ON CONFLICT(id) DO UPDATE SET
+            actor_id = excluded.actor_id,
+            actor_username = excluded.actor_username,
+            actor_display_name = excluded.actor_display_name,
+            actor_avatar_url = excluded.actor_avatar_url,
+            post_id = excluded.post_id,
+            activity_id = excluded.activity_id,
+            content = excluded.content,
+            created_at = excluded.created_at
+        "#,
+    )
+    .bind_refs([
+        &notification_arg,
+        &actor_arg,
+        &username_arg,
+        &display_arg,
+        &avatar_arg,
+        &post_arg,
+        &activity_arg,
+        &content_arg,
+        &published_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
     Ok(())
 }
 
@@ -6186,8 +6319,13 @@ async fn owner_create_post(
     let post_id = format!("{actor_id}/posts/{local_id}");
     let content_html = format!("<p>{}</p>", escape_html(text).replace('\n', "<br>"));
     let media_attachments = normalize_attachments(&attachments)?;
-    if !media_attachments.is_empty() && protocol != "activitypub" {
-        return Err("media attachments currently require ActivityPub routing; AT Protocol media upload is not implemented yet".to_string());
+    if !media_attachments.is_empty()
+        && matches!(&*protocol, "atproto" | "both")
+        && !media_attachments
+            .iter()
+            .all(is_public_atproto_image_attachment)
+    {
+        return Err("AT Protocol media attachments must be public image uploads".to_string());
     }
     if !media_attachments.is_empty() && encrypt {
         return Err(
@@ -6207,7 +6345,7 @@ async fn owner_create_post(
     let mut reply_target_inbox = None;
     if let Some(in_reply_to) = in_reply_to.as_deref() {
         public_https_url(in_reply_to, "in_reply_to")?;
-        if !is_local_object_url(in_reply_to) {
+        if !is_local_object_url(in_reply_to, &activitypub_domain(env)) {
             reply_target_inbox = Some(resolve_activitypub_object_inbox(in_reply_to).await?);
         }
     }
@@ -11930,12 +12068,30 @@ fn is_private_media_attachment(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn is_local_object_url(value: &str) -> bool {
+fn is_public_atproto_image_attachment(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let media_type_is_image = object
+        .get("mediaType")
+        .and_then(Value::as_str)
+        .map(|value| value.starts_with("image/"))
+        .unwrap_or(false);
+    if !media_type_is_image {
+        return false;
+    }
+    !is_private_media_attachment(value)
+        && object
+            .get("url")
+            .and_then(Value::as_str)
+            .and_then(|url| worker::Url::parse(url).ok())
+            .is_some_and(|url| url.scheme() == "https")
+}
+
+fn is_local_object_url(value: &str, local_host: &str) -> bool {
     worker::Url::parse(value)
         .ok()
-        .map(|url| {
-            is_known_activitypub_host(url.host_str()) && url.path().starts_with("/users/social/")
-        })
+        .map(|url| url.host_str() == Some(local_host) && url.path().starts_with("/users/social/"))
         .unwrap_or(false)
 }
 
@@ -13428,7 +13584,8 @@ struct OwnerToken {
 mod tests {
     use super::{
         activitypub_actor_profile_html, activitypub_watch_item, bluesky_actor_target,
-        bluesky_appview_xrpc_url, bluesky_post_uri, bluesky_watch_item, e2ee_device_fingerprint,
+        bluesky_appview_xrpc_url, bluesky_post_uri, bluesky_watch_item, display_local_url,
+        e2ee_device_fingerprint, is_local_object_url, is_public_atproto_image_attachment,
         media_custom_metadata, normalize_ai_categories, normalize_discovered_public_post,
         normalize_e2ee_device_id, normalize_e2ee_fingerprint, normalize_e2ee_protocol,
         owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
@@ -13670,6 +13827,60 @@ mod tests {
             metadata.get("authorized_fetch").map(String::as_str),
             Some("required")
         );
+    }
+
+    #[test]
+    fn atproto_media_validation_allows_public_images_only() {
+        let public_image = serde_json::json!({
+            "type": "Image",
+            "url": "https://social.dais.social/media/uploads/photo.png",
+            "mediaType": "image/png",
+            "name": "public photo"
+        });
+        let private_image = serde_json::json!({
+            "type": "Image",
+            "url": "https://social.dais.social/media/_private/token/photo.png",
+            "mediaType": "image/png"
+        });
+        let public_video = serde_json::json!({
+            "type": "Document",
+            "url": "https://social.dais.social/media/uploads/video.mp4",
+            "mediaType": "video/mp4"
+        });
+
+        assert!(is_public_atproto_image_attachment(&public_image));
+        assert!(!is_public_atproto_image_attachment(&private_image));
+        assert!(!is_public_atproto_image_attachment(&public_video));
+    }
+
+    #[test]
+    fn display_local_url_preserves_remote_reply_targets() {
+        assert_eq!(
+            display_local_url(
+                "https://social.skpt.cl",
+                "https://social.dais.social/users/social/posts/abc"
+            ),
+            "https://social.dais.social/users/social/posts/abc"
+        );
+        assert_eq!(
+            display_local_url(
+                "https://social.skpt.cl",
+                "https://social.skpt.cl/users/social/posts/abc"
+            ),
+            "https://social.skpt.cl/users/social/posts/abc"
+        );
+    }
+
+    #[test]
+    fn local_object_detection_uses_current_instance_host() {
+        assert!(!is_local_object_url(
+            "https://social.dais.social/users/social/posts/abc",
+            "social.skpt.cl"
+        ));
+        assert!(is_local_object_url(
+            "https://social.skpt.cl/users/social/posts/abc",
+            "social.skpt.cl"
+        ));
     }
 
     #[test]

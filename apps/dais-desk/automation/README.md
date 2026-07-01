@@ -44,6 +44,10 @@ open -n "apps/dais-desk/target/macos/Dais Desk.app"
 osascript apps/dais-desk/automation/DaisDesk.applescript healthcheck
 ```
 
+The packaged debug app launches through a small wrapper that defaults
+`SLINT_BACKEND=winit`. On macOS this keeps the Slint window registered as an
+ordinary visible application process for System Events and screenshot capture.
+
 Run the visual review script to regenerate every modeled screen screenshot and
 produce a macOS-oriented UX recommendations report:
 

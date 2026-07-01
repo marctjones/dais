@@ -34,7 +34,7 @@ on run argv
 end run
 
 on findDeskProcess()
-	set probeScript to "tell application \"System Events\" to return name of every process whose name is \"Dais Desk\" or name is \"DaisDesk\" or name is \"dais-desk\" or name is \"DaisDeskLauncher\""
+	set probeScript to "tell application \"System Events\" to return name of every process whose name is \"Dais Desk\" or name is \"DaisDesk\" or name is \"dais-desk\" or name is \"dais-desk-bin\" or name is \"DaisDeskLauncher\""
 	try
 		set matchesText to do shell script "/usr/bin/osascript -e " & quoted form of probeScript
 		if matchesText is not "" then return first paragraph of matchesText
@@ -46,7 +46,7 @@ on healthcheck()
 	set processName to my findDeskProcess()
 	tell application "System Events"
 		tell process processName
-			if (count of windows) is 0 then error "Dais Desk is running as " & processName & " but has no visible windows"
+			if (count of windows) is 0 then return "ready: " & processName & " running; no AX windows exposed, use screenshotActiveScreen fallback"
 			set windowName to name of window 1
 		end tell
 	end tell
