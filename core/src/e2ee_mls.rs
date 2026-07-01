@@ -386,6 +386,32 @@ mod tests {
     }
 
     #[test]
+    fn mls_rejects_wrong_protocol_and_malformed_ciphertext() {
+        let mut alice = MlsDevice::new("https://social.dais.social/users/social", "alice-mac")
+            .expect("alice device");
+        let mut bob =
+            MlsDevice::new("https://social.skpt.cl/users/social", "bob-phone").expect("bob device");
+        let bob_public = bob.public_device().expect("bob public device");
+
+        let welcome = alice
+            .create_group("dais-mls-dm-failure-check", &bob_public)
+            .expect("create group");
+        bob.join_group(welcome).expect("bob joins group");
+
+        let envelope = alice
+            .encrypt_application_message(b"private hello from dais")
+            .expect("encrypt");
+
+        let mut wrong_protocol = envelope.clone();
+        wrong_protocol.protocol = "dais-mls-v1".to_string();
+        assert!(bob.decrypt_application_message(&wrong_protocol).is_err());
+
+        let mut malformed = envelope;
+        malformed.ciphertext = "not base64".to_string();
+        assert!(bob.decrypt_application_message(&malformed).is_err());
+    }
+
+    #[test]
     fn mls_removed_member_cannot_decrypt_future_message() {
         let mut alice = MlsDevice::new("https://social.dais.social/users/social", "alice-mac")
             .expect("alice device");

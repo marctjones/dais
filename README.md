@@ -161,11 +161,15 @@ cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 Live independent-instance smoke:
 
 ```bash
+scripts/smoke-local-mls.sh
 scripts/audit-skpt-independence.sh
 scripts/smoke-skpt-instance.sh
 scripts/smoke-cross-instance-e2ee.sh
 ```
 
+`scripts/smoke-local-mls.sh` runs the no-token OpenMLS gate: device material,
+1:1 send/decrypt, malformed/wrong protocol failure, small-group add/remove, and
+removed-member decrypt failure.
 `scripts/audit-skpt-independence.sh` verifies the `skpt` worker configs use
 distinct worker names, D1, R2, queues, routes, and domains.
 `scripts/smoke-skpt-instance.sh` verifies the independent `skpt.cl` deployment.
