@@ -13,6 +13,7 @@ use dais_client_core::{
     OwnerSourceRefreshResult, OwnerSources, OwnerStats, OwnerTimelinePost, OwnerWatchAdd,
     ProtocolRoute, SourceItem, SourceSubscription, Visibility,
 };
+use dais_core::e2ee_mls::{DaisMlsEnvelope, MlsDevice, MlsDevicePrivateState, MlsDeviceState};
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -46,6 +47,16 @@ pub struct StoredOwnerAccount {
     pub label: String,
     pub instance_url: String,
     pub owner_token: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct StoredMlsGroupStateFile {
+    serialized_group_state: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct StoredMlsDeviceStateFile {
+    serialized_device_state: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -6214,7 +6225,7 @@ fn decrypt_e2ee_message_for_desk(
     message: &OwnerE2eeMessage,
 ) -> Result<String, String> {
     if message.e2ee_protocol == "mls-rfc9420" {
-        return Err("MLS decrypt needs local group state wired into Desk.".into());
+        return decrypt_mls_message_for_desk(settings, message);
     }
     let encrypted = e2ee::encrypted_message_from_json(message.encrypted_message.clone())?;
     let mut attempted = Vec::new();
@@ -6245,6 +6256,57 @@ fn decrypt_e2ee_message_for_desk(
     }
 }
 
+fn decrypt_mls_message_for_desk(
+    settings: &StoredOwnerSettings,
+    message: &OwnerE2eeMessage,
+) -> Result<String, String> {
+    let envelope: DaisMlsEnvelope = serde_json::from_value(message.dais_encrypted_message.clone())
+        .map_err(|error| format!("Could not read MLS envelope: {error}"))?;
+    let mut attempted_state = false;
+    let mut last_error = None;
+
+    for (path, state) in load_local_mls_group_states(&settings.instance_url, &envelope.group_id) {
+        attempted_state = true;
+        let mut device =
+            MlsDevice::from_state(&state).map_err(|error| format!("MLS state failed: {error}"))?;
+        match device.decrypt_application_message(&envelope) {
+            Ok(plaintext) => {
+                if let Ok(updated_state) = device.export_state() {
+                    let _ = persist_local_mls_group_state(&path, &updated_state);
+                }
+                return String::from_utf8(plaintext)
+                    .map_err(|error| format!("MLS plaintext is not valid UTF-8: {error}"));
+            }
+            Err(error) => last_error = Some(error.to_string()),
+        }
+    }
+
+    for private_state in load_local_mls_device_states(&settings.instance_url) {
+        attempted_state = true;
+        let mut device = MlsDevice::from_private_state(&private_state)
+            .map_err(|error| format!("MLS device state failed: {error}"))?;
+        match device.decrypt_application_message(&envelope) {
+            Ok(plaintext) => {
+                return String::from_utf8(plaintext)
+                    .map_err(|error| format!("MLS plaintext is not valid UTF-8: {error}"));
+            }
+            Err(error) => last_error = Some(error.to_string()),
+        }
+    }
+
+    if attempted_state {
+        return Err(format!(
+            "Local MLS state exists, but this message could not be decrypted: {}.",
+            last_error.unwrap_or_else(|| "unknown MLS decrypt error".into())
+        ));
+    }
+
+    Err(format!(
+        "No local MLS state could decrypt group {}.",
+        compact_mls_group_id(&envelope.group_id)
+    ))
+}
+
 fn load_local_e2ee_private_key(instance_url: &str, device_id: &str) -> Option<String> {
     for root in dais_state_roots() {
         let path = root
@@ -6256,6 +6318,82 @@ fn load_local_e2ee_private_key(instance_url: &str, device_id: &str) -> Option<St
         }
     }
     None
+}
+
+fn load_local_mls_group_states(
+    instance_url: &str,
+    group_id: &str,
+) -> Vec<(PathBuf, MlsDeviceState)> {
+    let mut states = Vec::new();
+    for root in dais_state_roots() {
+        let instance_root = root.join("mls").join(safe_path_component(instance_url));
+        let Ok(device_entries) = fs::read_dir(instance_root) else {
+            continue;
+        };
+        for device_entry in device_entries.flatten() {
+            let path = device_entry
+                .path()
+                .join(format!("{}.json", safe_path_component(group_id)));
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(file) = serde_json::from_str::<StoredMlsGroupStateFile>(&content) else {
+                continue;
+            };
+            if let Ok(state) = serde_json::from_str::<MlsDeviceState>(&file.serialized_group_state)
+            {
+                states.push((path, state));
+            }
+        }
+    }
+    states
+}
+
+fn persist_local_mls_group_state(path: &Path, state: &MlsDeviceState) -> Result<(), String> {
+    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|error| error.to_string())?;
+    value["group_id"] = serde_json::Value::String(state.group_id.clone());
+    value["epoch"] = serde_json::Value::Number(serde_json::Number::from(state.epoch));
+    value["serialized_group_state"] =
+        serde_json::Value::String(serde_json::to_string(state).map_err(|error| error.to_string())?);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".into());
+    value["updated_at"] = serde_json::Value::String(now);
+    let json = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    fs::write(path, json).map_err(|error| error.to_string())
+}
+
+fn load_local_mls_device_states(instance_url: &str) -> Vec<MlsDevicePrivateState> {
+    let mut states = Vec::new();
+    for root in dais_state_roots() {
+        let instance_root = root
+            .join("mls-devices")
+            .join(safe_path_component(instance_url));
+        let Ok(device_entries) = fs::read_dir(instance_root) else {
+            continue;
+        };
+        for device_entry in device_entries.flatten() {
+            let path = device_entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(path) else {
+                continue;
+            };
+            let Ok(file) = serde_json::from_str::<StoredMlsDeviceStateFile>(&content) else {
+                continue;
+            };
+            if let Ok(state) =
+                serde_json::from_str::<MlsDevicePrivateState>(&file.serialized_device_state)
+            {
+                states.push(state);
+            }
+        }
+    }
+    states
 }
 
 fn dais_state_roots() -> Vec<PathBuf> {
