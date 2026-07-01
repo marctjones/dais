@@ -25,6 +25,27 @@ pub struct E2eePrivateKeyEntry {
     pub path: PathBuf,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct MlsGroupStateFile {
+    pub version: u8,
+    pub instance_url: String,
+    pub local_actor_id: String,
+    pub device_id: String,
+    pub group_id: String,
+    pub epoch: u64,
+    pub serialized_group_state: String,
+    pub recovery_status: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MlsGroupStateEntry {
+    pub instance: String,
+    pub device_id: String,
+    pub group_id: String,
+    pub path: PathBuf,
+}
+
 impl ConfigStore {
     pub fn default() -> Result<Self> {
         let root = if let Some(path) = std::env::var_os("DAIS_HOME") {
@@ -137,6 +158,116 @@ impl ConfigStore {
         Ok(entries)
     }
 
+    pub fn mls_group_state_path(
+        &self,
+        instance_url: &str,
+        device_id: &str,
+        group_id: &str,
+    ) -> PathBuf {
+        self.root
+            .join("mls")
+            .join(safe_path_component(instance_url))
+            .join(safe_path_component(device_id))
+            .join(format!("{}.json", safe_path_component(group_id)))
+    }
+
+    pub fn save_mls_group_state(&self, state: &MlsGroupStateFile, force: bool) -> Result<PathBuf> {
+        if state.version != 1 {
+            anyhow::bail!("unsupported MLS state version {}", state.version);
+        }
+        if state.device_id.trim().is_empty() {
+            anyhow::bail!("MLS state device_id is required");
+        }
+        if state.group_id.trim().is_empty() {
+            anyhow::bail!("MLS state group_id is required");
+        }
+        let path =
+            self.mls_group_state_path(&state.instance_url, &state.device_id, &state.group_id);
+        if path.exists() && !force {
+            anyhow::bail!(
+                "{} already exists; pass --force to overwrite",
+                path.display()
+            );
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(state)?;
+        fs::write(&path, content)?;
+        set_owner_read_write(&path)?;
+        Ok(path)
+    }
+
+    pub fn load_mls_group_state(
+        &self,
+        instance_url: &str,
+        device_id: &str,
+        group_id: &str,
+    ) -> Result<MlsGroupStateFile> {
+        let path = self.mls_group_state_path(instance_url, device_id, group_id);
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("MLS group state not found at {}", path.display()))?;
+        let state: MlsGroupStateFile = serde_json::from_str(&content)
+            .with_context(|| format!("invalid MLS group state at {}", path.display()))?;
+        if state.version != 1 {
+            anyhow::bail!("unsupported MLS state version {}", state.version);
+        }
+        if safe_path_component(&state.instance_url) != safe_path_component(instance_url)
+            || state.device_id != device_id
+            || state.group_id != group_id
+        {
+            anyhow::bail!(
+                "MLS group state identity does not match requested instance/device/group"
+            );
+        }
+        Ok(state)
+    }
+
+    pub fn list_mls_group_states(&self) -> Result<Vec<MlsGroupStateEntry>> {
+        let root = self.root.join("mls");
+        if !root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut entries = Vec::new();
+        for instance_entry in fs::read_dir(root)? {
+            let instance_entry = instance_entry?;
+            if !instance_entry.file_type()?.is_dir() {
+                continue;
+            }
+            let instance = instance_entry.file_name().to_string_lossy().to_string();
+            for device_entry in fs::read_dir(instance_entry.path())? {
+                let device_entry = device_entry?;
+                if !device_entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let device_id = device_entry.file_name().to_string_lossy().to_string();
+                for state_entry in fs::read_dir(device_entry.path())? {
+                    let state_entry = state_entry?;
+                    if !state_entry.file_type()?.is_file() {
+                        continue;
+                    }
+                    let filename = state_entry.file_name().to_string_lossy().to_string();
+                    let Some(group_id) = filename.strip_suffix(".json") else {
+                        continue;
+                    };
+                    entries.push(MlsGroupStateEntry {
+                        instance: instance.clone(),
+                        device_id: device_id.clone(),
+                        group_id: group_id.to_string(),
+                        path: state_entry.path(),
+                    });
+                }
+            }
+        }
+        entries.sort_by(|left, right| {
+            left.instance
+                .cmp(&right.instance)
+                .then(left.device_id.cmp(&right.device_id))
+                .then(left.group_id.cmp(&right.group_id))
+        });
+        Ok(entries)
+    }
+
     fn bluesky_path(&self) -> PathBuf {
         self.root.join("bluesky.json")
     }
@@ -181,7 +312,7 @@ fn set_owner_read_write(_path: &std::path::Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlueskyConfig, ConfigStore};
+    use super::{BlueskyConfig, ConfigStore, MlsGroupStateFile};
 
     #[test]
     fn round_trips_bluesky_config() {
@@ -250,6 +381,73 @@ mod tests {
                 .load_e2ee_private_key("https://social.skpt.cl", "phone")
                 .unwrap(),
             "two"
+        );
+    }
+
+    #[test]
+    fn stores_mls_group_state_under_instance_device_and_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let state = MlsGroupStateFile {
+            version: 1,
+            instance_url: "https://social.dais.social".to_string(),
+            local_actor_id: "https://social.dais.social/users/social".to_string(),
+            device_id: "mac:2026".to_string(),
+            group_id: "mls-group-1".to_string(),
+            epoch: 3,
+            serialized_group_state: "serialized-openmls-state".to_string(),
+            recovery_status: "available".to_string(),
+            updated_at: "2026-07-01T00:00:00Z".to_string(),
+        };
+
+        let path = store.save_mls_group_state(&state, false).unwrap();
+
+        assert!(path.ends_with("mls/social.dais.social/mac:2026/mls-group-1.json"));
+        assert_eq!(
+            store
+                .load_mls_group_state("https://social.dais.social", "mac:2026", "mls-group-1")
+                .unwrap(),
+            state
+        );
+        let entries = store.list_mls_group_states().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].instance, "social.dais.social");
+        assert_eq!(entries[0].device_id, "mac:2026");
+        assert_eq!(entries[0].group_id, "mls-group-1");
+    }
+
+    #[test]
+    fn mls_group_state_rejects_mismatched_identity_and_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let state = MlsGroupStateFile {
+            version: 1,
+            instance_url: "https://social.skpt.cl".to_string(),
+            local_actor_id: "https://social.skpt.cl/users/social".to_string(),
+            device_id: "phone".to_string(),
+            group_id: "group".to_string(),
+            epoch: 1,
+            serialized_group_state: "one".to_string(),
+            recovery_status: "available".to_string(),
+            updated_at: "2026-07-01T00:00:00Z".to_string(),
+        };
+
+        store.save_mls_group_state(&state, false).unwrap();
+        assert!(store.save_mls_group_state(&state, false).is_err());
+        assert!(store
+            .load_mls_group_state("https://social.skpt.cl", "other-phone", "group")
+            .is_err());
+
+        let mut updated = state;
+        updated.epoch = 2;
+        updated.serialized_group_state = "two".to_string();
+        store.save_mls_group_state(&updated, true).unwrap();
+        assert_eq!(
+            store
+                .load_mls_group_state("https://social.skpt.cl", "phone", "group")
+                .unwrap()
+                .epoch,
+            2
         );
     }
 }

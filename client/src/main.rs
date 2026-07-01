@@ -1828,6 +1828,7 @@ async fn print_owner_e2ee_recovery(args: &cli::OwnerApiArgs, store: &ConfigStore
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let local_key_ids = local_e2ee_key_device_ids(store, &args.instance_url)?;
+    let local_mls_states = store.list_mls_group_states()?;
     let mut missing_active = 0usize;
     let mut revoked_with_key = 0usize;
 
@@ -1861,6 +1862,16 @@ async fn print_owner_e2ee_recovery(args: &cli::OwnerApiArgs, store: &ConfigStore
     if revoked_with_key > 0 {
         println!(
             "revoked_key_note=keep revoked-device private keys if old encrypted messages still need to be decrypted."
+        );
+    }
+    println!("mls_state_count={}", local_mls_states.len());
+    for state in local_mls_states {
+        println!(
+            "mls_state instance={} device={} group={} path={}",
+            state.instance,
+            state.device_id,
+            state.group_id,
+            state.path.display()
         );
     }
     println!(
