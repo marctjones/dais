@@ -38,6 +38,16 @@ pub struct MlsGroupStateFile {
     pub updated_at: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct MlsDeviceStateFile {
+    pub version: u8,
+    pub instance_url: String,
+    pub local_actor_id: String,
+    pub device_id: String,
+    pub serialized_device_state: String,
+    pub updated_at: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MlsGroupStateEntry {
     pub instance: String,
@@ -169,6 +179,61 @@ impl ConfigStore {
             .join(safe_path_component(instance_url))
             .join(safe_path_component(device_id))
             .join(format!("{}.json", safe_path_component(group_id)))
+    }
+
+    pub fn mls_device_state_path(&self, instance_url: &str, device_id: &str) -> PathBuf {
+        self.root
+            .join("mls-devices")
+            .join(safe_path_component(instance_url))
+            .join(format!("{}.json", safe_path_component(device_id)))
+    }
+
+    pub fn save_mls_device_state(
+        &self,
+        state: &MlsDeviceStateFile,
+        force: bool,
+    ) -> Result<PathBuf> {
+        if state.version != 1 {
+            anyhow::bail!("unsupported MLS device state version {}", state.version);
+        }
+        if state.device_id.trim().is_empty() {
+            anyhow::bail!("MLS device state device_id is required");
+        }
+        let path = self.mls_device_state_path(&state.instance_url, &state.device_id);
+        if path.exists() && !force {
+            anyhow::bail!(
+                "{} already exists; pass --force to overwrite",
+                path.display()
+            );
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(state)?;
+        fs::write(&path, content)?;
+        set_owner_read_write(&path)?;
+        Ok(path)
+    }
+
+    pub fn load_mls_device_state(
+        &self,
+        instance_url: &str,
+        device_id: &str,
+    ) -> Result<MlsDeviceStateFile> {
+        let path = self.mls_device_state_path(instance_url, device_id);
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("MLS device state not found at {}", path.display()))?;
+        let state: MlsDeviceStateFile = serde_json::from_str(&content)
+            .with_context(|| format!("invalid MLS device state at {}", path.display()))?;
+        if state.version != 1 {
+            anyhow::bail!("unsupported MLS device state version {}", state.version);
+        }
+        if safe_path_component(&state.instance_url) != safe_path_component(instance_url)
+            || state.device_id != device_id
+        {
+            anyhow::bail!("MLS device state identity does not match requested instance/device");
+        }
+        Ok(state)
     }
 
     pub fn save_mls_group_state(&self, state: &MlsGroupStateFile, force: bool) -> Result<PathBuf> {
@@ -312,7 +377,7 @@ fn set_owner_read_write(_path: &std::path::Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlueskyConfig, ConfigStore, MlsGroupStateFile};
+    use super::{BlueskyConfig, ConfigStore, MlsDeviceStateFile, MlsGroupStateFile};
 
     #[test]
     fn round_trips_bluesky_config() {
@@ -414,6 +479,34 @@ mod tests {
         assert_eq!(entries[0].instance, "social.dais.social");
         assert_eq!(entries[0].device_id, "mac:2026");
         assert_eq!(entries[0].group_id, "mls-group-1");
+    }
+
+    #[test]
+    fn stores_mls_device_state_under_instance_and_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let state = MlsDeviceStateFile {
+            version: 1,
+            instance_url: "https://social.dais.social".to_string(),
+            local_actor_id: "https://social.dais.social/users/social".to_string(),
+            device_id: "mac:2026".to_string(),
+            serialized_device_state: "serialized-openmls-device-state".to_string(),
+            updated_at: "2026-07-01T00:00:00Z".to_string(),
+        };
+
+        let path = store.save_mls_device_state(&state, false).unwrap();
+
+        assert!(path.ends_with("mls-devices/social.dais.social/mac:2026.json"));
+        assert_eq!(
+            store
+                .load_mls_device_state("https://social.dais.social", "mac:2026")
+                .unwrap(),
+            state
+        );
+        assert!(store.save_mls_device_state(&state, false).is_err());
+        assert!(store
+            .load_mls_device_state("https://social.dais.social", "other-device")
+            .is_err());
     }
 
     #[test]

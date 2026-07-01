@@ -819,6 +819,12 @@ pub enum OwnerCommand {
     E2eeDevices(OwnerApiArgs),
     /// Generate a local E2EE device key and publish its public material.
     E2eeDeviceInit(OwnerE2eeDeviceInitArgs),
+    /// Generate a local MLS v2 device and publish its OpenMLS key package.
+    E2eeMlsDeviceInit(OwnerE2eeMlsDeviceInitArgs),
+    /// Encrypt and send a true MLS v2 owner E2EE message.
+    E2eeMlsSend(OwnerE2eeMlsSendArgs),
+    /// Decrypt one true MLS v2 owner E2EE message with local MLS state.
+    E2eeMlsDecrypt(OwnerE2eeMlsDecryptArgs),
     /// Revoke/deactivate one local E2EE device.
     E2eeDeviceRevoke(OwnerE2eeDeviceRefArgs),
     /// Revoke one local E2EE device and publish a replacement device.
@@ -929,6 +935,21 @@ pub struct OwnerE2eeDeviceInitArgs {
     #[arg(long)]
     pub private_key_out: Option<PathBuf>,
     /// Overwrite the private key file if it already exists.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeMlsDeviceInitArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Stable local device id to publish.
+    #[arg(long)]
+    pub device_id: String,
+    /// Human-readable device label.
+    #[arg(long)]
+    pub display_name: Option<String>,
+    /// Overwrite the local MLS device state file if it already exists.
     #[arg(long)]
     pub force: bool,
 }
@@ -1071,6 +1092,40 @@ pub struct OwnerE2eeDecryptArgs {
     /// Recipient key id to select. Optional only when the message has one recipient.
     #[arg(long)]
     pub key_id: Option<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeMlsSendArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Remote recipient ActivityPub actor URL.
+    #[arg(long)]
+    pub recipient_actor_id: String,
+    /// Recipient MLS device id.
+    #[arg(long)]
+    pub recipient_device_id: String,
+    /// Local sender MLS device id.
+    #[arg(long)]
+    pub sender_device_id: String,
+    /// Stable raw MLS group id for this 1:1 conversation. Defaults to sender+recipient ids.
+    #[arg(long)]
+    pub group_id: Option<String>,
+    /// Plaintext message to encrypt and send.
+    pub plaintext: String,
+    /// Permit sending to an untrusted discovered peer device.
+    #[arg(long)]
+    pub allow_untrusted: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeMlsDecryptArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Owner E2EE message id.
+    pub message_id: String,
+    /// Local MLS device id.
+    #[arg(long)]
+    pub device_id: String,
 }
 
 #[derive(Args, Clone, Debug)]

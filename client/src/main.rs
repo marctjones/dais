@@ -22,7 +22,7 @@ use cli::{
     NotificationsCommand, OwnerCommand, PostCommand, ReportsCommand, SearchCommand,
     TimelineCommand,
 };
-use config::ConfigStore;
+use config::{ConfigStore, MlsDeviceStateFile, MlsGroupStateFile};
 use d1::D1Client;
 use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient,
@@ -33,6 +33,10 @@ use dais_client_core::{
     OwnerMediaUpload, OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate,
     OwnerSearchQuery, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats,
     OwnerWatchAdd, ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
+};
+use dais_core::e2ee_mls::{
+    DaisMlsEnvelope, MlsDevice, MlsDeviceMaterial, MlsDevicePrivateState, MlsDeviceState,
+    MlsPublicDevice,
 };
 use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
@@ -1111,6 +1115,15 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
         OwnerCommand::E2eeDeviceInit(args) => {
             init_owner_e2ee_device(args, store).await?;
         }
+        OwnerCommand::E2eeMlsDeviceInit(args) => {
+            init_owner_e2ee_mls_device(args, store).await?;
+        }
+        OwnerCommand::E2eeMlsSend(args) => {
+            send_owner_e2ee_mls_message(args, store).await?;
+        }
+        OwnerCommand::E2eeMlsDecrypt(args) => {
+            decrypt_owner_e2ee_mls_message(args, store).await?;
+        }
         OwnerCommand::E2eeDeviceRevoke(args) => {
             let device = owner_api(&args.api)
                 .revoke_e2ee_device(&OwnerE2eeDeviceRef {
@@ -1619,6 +1632,53 @@ async fn init_owner_e2ee_device(
     Ok(())
 }
 
+async fn init_owner_e2ee_mls_device(
+    args: cli::OwnerE2eeMlsDeviceInitArgs,
+    store: &ConfigStore,
+) -> Result<()> {
+    let snapshot = owner_api(&args.api)
+        .snapshot()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let device = MlsDevice::new(snapshot.profile.actor_url.clone(), &args.device_id)?;
+    let material = device.public_device()?.material().clone();
+    let private_state = device.export_private_state()?;
+
+    let published = owner_api(&args.api)
+        .upsert_e2ee_device(&OwnerE2eeDeviceUpsert {
+            device_id: args.device_id.clone(),
+            display_name: args.display_name,
+            protocol: "mls-rfc9420".to_string(),
+            credential: material.credential_identity,
+            key_package: material.key_package,
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    let state_path = store.save_mls_device_state(
+        &MlsDeviceStateFile {
+            version: 1,
+            instance_url: args.api.instance_url,
+            local_actor_id: snapshot.profile.actor_url,
+            device_id: args.device_id,
+            serialized_device_state: serde_json::to_string(&private_state)?,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        },
+        args.force,
+    )?;
+
+    println!("Published MLS E2EE device");
+    println!("device_id={}", published.device_id);
+    println!("actor={}", published.actor_id);
+    println!("fingerprint={}", published.fingerprint);
+    println!("private_state={}", state_path.display());
+    println!("protocol={}", published.protocol);
+    println!("status={}", published.status);
+    println!("wire_material=daisEncryptedMessage-v2-mls-rfc9420");
+    println!("Back up this MLS device state; losing it means this device cannot join or decrypt MLS conversations.");
+    Ok(())
+}
+
 async fn rotate_owner_e2ee_device(
     args: cli::OwnerE2eeDeviceRotateArgs,
     store: &ConfigStore,
@@ -1654,6 +1714,90 @@ async fn rotate_owner_e2ee_device(
     .await
 }
 
+async fn send_owner_e2ee_mls_message(
+    args: cli::OwnerE2eeMlsSendArgs,
+    store: &ConfigStore,
+) -> Result<()> {
+    let api = owner_api(&args.api);
+    let device_state_file =
+        store.load_mls_device_state(&args.api.instance_url, &args.sender_device_id)?;
+    let private_state: MlsDevicePrivateState =
+        serde_json::from_str(&device_state_file.serialized_device_state)?;
+    let group_id = args.group_id.clone().unwrap_or_else(|| {
+        format!(
+            "dais-mls-dm:{}:{}:{}",
+            args.sender_device_id, args.recipient_actor_id, args.recipient_device_id
+        )
+    });
+    let wire_group_id = STANDARD.encode(group_id.as_bytes());
+    let mut sender = match store.load_mls_group_state(
+        &args.api.instance_url,
+        &args.sender_device_id,
+        &wire_group_id,
+    ) {
+        Ok(group_state_file) => {
+            let state: MlsDeviceState =
+                serde_json::from_str(&group_state_file.serialized_group_state)?;
+            MlsDevice::from_state(&state)?
+        }
+        Err(_) => MlsDevice::from_private_state(&private_state)?,
+    };
+    let welcome = if sender.current_epoch().is_ok() {
+        None
+    } else {
+        let peer = resolve_owner_e2ee_mls_peer(&args).await?;
+        let recipient = MlsPublicDevice::from_material(MlsDeviceMaterial {
+            account_id: peer.actor_id.clone(),
+            device_id: peer.device_id.clone(),
+            ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_string(),
+            signature_scheme: "ED25519".to_string(),
+            credential_identity: peer.credential.clone(),
+            key_package: peer.key_package.clone(),
+        })?;
+        Some(sender.create_group(group_id.as_bytes(), &recipient)?)
+    };
+    let mut envelope = sender.encrypt_application_message(args.plaintext.as_bytes())?;
+    envelope.welcome = welcome.map(|welcome| welcome.to_wire()).transpose()?;
+    let sender_state = sender.export_state()?;
+    store.save_mls_group_state(
+        &MlsGroupStateFile {
+            version: 1,
+            instance_url: args.api.instance_url.clone(),
+            local_actor_id: device_state_file.local_actor_id,
+            device_id: args.sender_device_id.clone(),
+            group_id: sender_state.group_id.clone(),
+            epoch: sender_state.epoch,
+            serialized_group_state: serde_json::to_string(&sender_state)?,
+            recovery_status: "active".to_string(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        },
+        true,
+    )?;
+
+    let result = api
+        .send_e2ee_message(&OwnerE2eeMessageSend {
+            recipient_actor_id: args.recipient_actor_id,
+            recipient_device_id: Some(args.recipient_device_id),
+            sender_device_id: args.sender_device_id,
+            dais_encrypted_message: Some(serde_json::to_value(&envelope)?),
+            encrypted_message: None,
+            fallback_content: Some(
+                "Encrypted MLS message. Open in a dais client to decrypt.".to_string(),
+            ),
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    println!("Sent owner MLS E2EE message");
+    println!("id={}", result.message.id);
+    println!("conversation_id={}", result.message.conversation_id);
+    println!("recipient_actor={:?}", result.message.recipient_actor_id);
+    println!("mls_group={}", sender_state.group_id);
+    println!("mls_epoch={}", sender_state.epoch);
+    println!("delivery_ids={}", result.delivery_ids.join(","));
+    Ok(())
+}
+
 async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
     let recipient_public_key = resolve_owner_e2ee_recipient_key(&args).await?;
     let mut recipients = BTreeMap::new();
@@ -1679,6 +1823,68 @@ async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
     println!("conversation_id={}", result.message.conversation_id);
     println!("recipient_actor={:?}", result.message.recipient_actor_id);
     println!("delivery_ids={}", result.delivery_ids.join(","));
+    Ok(())
+}
+
+async fn decrypt_owner_e2ee_mls_message(
+    args: cli::OwnerE2eeMlsDecryptArgs,
+    store: &ConfigStore,
+) -> Result<()> {
+    let messages = owner_api(&args.api)
+        .e2ee_messages()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let message = messages
+        .into_iter()
+        .find(|message| message.id == args.message_id)
+        .ok_or_else(|| anyhow::anyhow!("owner E2EE message {} not found", args.message_id))?;
+    if message.e2ee_protocol != "mls-rfc9420" {
+        return Err(anyhow::anyhow!(
+            "message {} uses {}; use e2ee-decrypt for v1 RSA fallback messages",
+            message.id,
+            message.e2ee_protocol
+        ));
+    }
+    let envelope: DaisMlsEnvelope = serde_json::from_value(message.dais_encrypted_message)?;
+    let mut device = match store.load_mls_group_state(
+        &args.api.instance_url,
+        &args.device_id,
+        &envelope.group_id,
+    ) {
+        Ok(group_state_file) => {
+            let state: MlsDeviceState =
+                serde_json::from_str(&group_state_file.serialized_group_state)?;
+            MlsDevice::from_state(&state)?
+        }
+        Err(_) => {
+            let device_state_file =
+                store.load_mls_device_state(&args.api.instance_url, &args.device_id)?;
+            let private_state: MlsDevicePrivateState =
+                serde_json::from_str(&device_state_file.serialized_device_state)?;
+            MlsDevice::from_private_state(&private_state)?
+        }
+    };
+    let plaintext = device.decrypt_application_message(&envelope)?;
+    let state = device.export_state()?;
+    store.save_mls_group_state(
+        &MlsGroupStateFile {
+            version: 1,
+            instance_url: args.api.instance_url.clone(),
+            local_actor_id: message
+                .recipient_actor_id
+                .clone()
+                .unwrap_or_else(|| owner_actor_id_hint(&args.api.instance_url)),
+            device_id: args.device_id,
+            group_id: state.group_id.clone(),
+            epoch: state.epoch,
+            serialized_group_state: serde_json::to_string(&state)?,
+            recovery_status: "active".to_string(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        },
+        true,
+    )?;
+
+    println!("{}", String::from_utf8(plaintext)?);
     Ok(())
 }
 
@@ -1970,6 +2176,48 @@ async fn resolve_owner_e2ee_recipient_key(args: &cli::OwnerE2eeSendArgs) -> Resu
         ));
     }
     Ok(peer.credential.clone())
+}
+
+async fn resolve_owner_e2ee_mls_peer(
+    args: &cli::OwnerE2eeMlsSendArgs,
+) -> Result<OwnerE2eePeerDevice> {
+    let peers = owner_api(&args.api)
+        .e2ee_peer_devices()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let peer = peers
+        .into_iter()
+        .find(|peer| {
+            peer.actor_id == args.recipient_actor_id && peer.device_id == args.recipient_device_id
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "recipient MLS device {} for {} not found; run e2ee-peer-discover first",
+                args.recipient_device_id,
+                args.recipient_actor_id
+            )
+        })?;
+    if peer.protocol != "mls-rfc9420" {
+        return Err(anyhow::anyhow!(
+            "recipient device {} for {} uses {}; true MLS send requires mls-rfc9420",
+            peer.device_id,
+            peer.actor_id,
+            peer.protocol
+        ));
+    }
+    if peer.trust_state != "trusted" && !args.allow_untrusted {
+        return Err(anyhow::anyhow!(
+            "recipient MLS device {} for {} is {}; run e2ee-peer-trust or pass --allow-untrusted",
+            peer.device_id,
+            peer.actor_id,
+            peer.trust_state
+        ));
+    }
+    Ok(peer)
+}
+
+fn owner_actor_id_hint(instance_url: &str) -> String {
+    format!("{}/users/social", instance_url.trim_end_matches('/'))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

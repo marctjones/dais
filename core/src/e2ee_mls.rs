@@ -4,8 +4,10 @@ use openmls::prelude::{
     *,
 };
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_rust_crypto::OpenMlsRustCrypto;
+use openmls_rust_crypto::{MemoryStorage, RustCrypto};
+use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize, Serialize};
+use std::{collections::BTreeMap, sync::RwLock};
 
 const DAIS_MLS_ENVELOPE_VERSION: u8 = 2;
 const DAIS_MLS_PROTOCOL: &str = "mls-rfc9420";
@@ -48,6 +50,41 @@ pub struct DaisMlsEnvelope {
     #[serde(rename = "senderDeviceId")]
     pub sender_device_id: String,
     pub ciphertext: String,
+    #[serde(rename = "welcome", skip_serializing_if = "Option::is_none")]
+    pub welcome: Option<DaisMlsWelcome>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DaisMlsWelcome {
+    pub message: String,
+    #[serde(rename = "ratchetTree")]
+    pub ratchet_tree: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MlsDevicePrivateState {
+    pub version: u8,
+    pub account_id: String,
+    pub device_id: String,
+    pub signature_public_key: String,
+    pub serialized_provider_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MlsDeviceState {
+    pub version: u8,
+    pub account_id: String,
+    pub device_id: String,
+    pub group_id: String,
+    pub epoch: u64,
+    pub signature_public_key: String,
+    pub serialized_provider_state: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SerializedProviderState {
+    version: u8,
+    values: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,18 +108,95 @@ pub struct MlsCommit {
 pub struct MlsDevice {
     account_id: String,
     device_id: String,
-    provider: OpenMlsRustCrypto,
+    provider: DaisOpenMlsProvider,
     signer: SignatureKeyPair,
     credential: CredentialWithKey,
     key_package: KeyPackageBundle,
     group: Option<MlsGroup>,
 }
 
+#[derive(Debug)]
+struct DaisOpenMlsProvider {
+    crypto: RustCrypto,
+    key_store: MemoryStorage,
+}
+
+impl Default for DaisOpenMlsProvider {
+    fn default() -> Self {
+        Self {
+            crypto: RustCrypto::default(),
+            key_store: MemoryStorage::default(),
+        }
+    }
+}
+
+impl OpenMlsProvider for DaisOpenMlsProvider {
+    type CryptoProvider = RustCrypto;
+    type RandProvider = RustCrypto;
+    type StorageProvider = MemoryStorage;
+
+    fn storage(&self) -> &Self::StorageProvider {
+        &self.key_store
+    }
+
+    fn crypto(&self) -> &Self::CryptoProvider {
+        &self.crypto
+    }
+
+    fn rand(&self) -> &Self::RandProvider {
+        &self.crypto
+    }
+}
+
+impl DaisOpenMlsProvider {
+    fn export_state(&self) -> MlsResult<String> {
+        let values = self
+            .key_store
+            .values
+            .read()
+            .map_err(|_| MlsError::OpenMls("MLS storage lock poisoned".to_string()))?;
+        let values = values
+            .iter()
+            .map(|(key, value)| (BASE64.encode(key), BASE64.encode(value)))
+            .collect();
+        serde_json::to_string(&SerializedProviderState { version: 1, values })
+            .map_err(|err| MlsError::Wire(err.to_string()))
+    }
+
+    fn import_state(serialized: &str) -> MlsResult<Self> {
+        let state: SerializedProviderState =
+            serde_json::from_str(serialized).map_err(|err| MlsError::Wire(err.to_string()))?;
+        if state.version != 1 {
+            return Err(MlsError::Wire(format!(
+                "unsupported MLS provider state version {}",
+                state.version
+            )));
+        }
+        let mut values = std::collections::HashMap::new();
+        for (key, value) in state.values {
+            values.insert(
+                BASE64
+                    .decode(key)
+                    .map_err(|err| MlsError::Wire(err.to_string()))?,
+                BASE64
+                    .decode(value)
+                    .map_err(|err| MlsError::Wire(err.to_string()))?,
+            );
+        }
+        Ok(Self {
+            crypto: RustCrypto::default(),
+            key_store: MemoryStorage {
+                values: RwLock::new(values),
+            },
+        })
+    }
+}
+
 impl MlsDevice {
     pub fn new(account_id: impl Into<String>, device_id: impl Into<String>) -> MlsResult<Self> {
         let account_id = account_id.into();
         let device_id = device_id.into();
-        let provider = OpenMlsRustCrypto::default();
+        let provider = DaisOpenMlsProvider::default();
         let credential_identity = credential_identity(&account_id, &device_id);
         let signer = SignatureKeyPair::new(default_ciphersuite().signature_algorithm())
             .map_err(openmls_error)?;
@@ -105,6 +219,84 @@ impl MlsDevice {
         Ok(Self {
             account_id,
             device_id,
+            provider,
+            signer,
+            credential,
+            key_package,
+            group: None,
+        })
+    }
+
+    pub fn from_state(state: &MlsDeviceState) -> MlsResult<Self> {
+        if state.version != 1 {
+            return Err(MlsError::Wire(format!(
+                "unsupported MLS device state version {}",
+                state.version
+            )));
+        }
+        let private_state = MlsDevicePrivateState {
+            version: state.version,
+            account_id: state.account_id.clone(),
+            device_id: state.device_id.clone(),
+            signature_public_key: state.signature_public_key.clone(),
+            serialized_provider_state: state.serialized_provider_state.clone(),
+        };
+        let mut device = Self::from_private_state(&private_state)?;
+        let decoded_group_id = BASE64
+            .decode(&state.group_id)
+            .map_err(|err| MlsError::Wire(err.to_string()))?;
+        let group_id = GroupId::from_slice(&decoded_group_id);
+        let group = MlsGroup::load(device.provider.storage(), &group_id)
+            .map_err(|err| MlsError::OpenMls(err.to_string()))?
+            .ok_or_else(|| MlsError::MissingGroup(state.device_id.clone()))?;
+        if group.epoch().as_u64() != state.epoch {
+            return Err(MlsError::Wire(format!(
+                "MLS state epoch mismatch: expected {}, loaded {}",
+                state.epoch,
+                group.epoch().as_u64()
+            )));
+        }
+        device.group = Some(group);
+        Ok(device)
+    }
+
+    pub fn from_private_state(state: &MlsDevicePrivateState) -> MlsResult<Self> {
+        if state.version != 1 {
+            return Err(MlsError::Wire(format!(
+                "unsupported MLS device private state version {}",
+                state.version
+            )));
+        }
+        let provider = DaisOpenMlsProvider::import_state(&state.serialized_provider_state)?;
+        let signature_public_key = BASE64
+            .decode(&state.signature_public_key)
+            .map_err(|err| MlsError::Wire(err.to_string()))?;
+        let signer = SignatureKeyPair::read(
+            provider.storage(),
+            &signature_public_key,
+            default_ciphersuite().signature_algorithm(),
+        )
+        .ok_or_else(|| MlsError::Wire("MLS signature key missing from state".to_string()))?;
+        let credential = CredentialWithKey {
+            credential: BasicCredential::new(credential_identity(
+                &state.account_id,
+                &state.device_id,
+            ))
+            .into(),
+            signature_key: signer.public().into(),
+        };
+        let key_package = KeyPackage::builder()
+            .build(
+                default_ciphersuite(),
+                &provider,
+                &signer,
+                credential.clone(),
+            )
+            .map_err(openmls_error)?;
+
+        Ok(Self {
+            account_id: state.account_id.clone(),
+            device_id: state.device_id.clone(),
             provider,
             signer,
             credential,
@@ -258,6 +450,7 @@ impl MlsDevice {
             sender_account_id: self.account_id.clone(),
             sender_device_id: self.device_id.clone(),
             ciphertext: BASE64.encode(ciphertext.tls_serialize_detached().map_err(openmls_error)?),
+            welcome: None,
         })
     }
 
@@ -280,6 +473,11 @@ impl MlsDevice {
         let protocol_message = message
             .try_into_protocol_message()
             .map_err(|err| MlsError::Wire(err.to_string()))?;
+        if self.group.is_none() {
+            if let Some(welcome) = envelope.welcome.as_ref() {
+                self.join_group(MlsWelcome::from_wire(welcome)?)?;
+            }
+        }
         let group = self
             .group
             .as_mut()
@@ -300,11 +498,84 @@ impl MlsDevice {
             .map(|group| group.epoch().as_u64())
             .ok_or_else(|| MlsError::MissingGroup(self.device_id.clone()))
     }
+
+    pub fn export_state(&self) -> MlsResult<MlsDeviceState> {
+        let group = self
+            .group
+            .as_ref()
+            .ok_or_else(|| MlsError::MissingGroup(self.device_id.clone()))?;
+        Ok(MlsDeviceState {
+            version: 1,
+            account_id: self.account_id.clone(),
+            device_id: self.device_id.clone(),
+            group_id: BASE64.encode(group.group_id().as_slice()),
+            epoch: group.epoch().as_u64(),
+            signature_public_key: BASE64.encode(self.signer.public()),
+            serialized_provider_state: self.provider.export_state()?,
+        })
+    }
+
+    pub fn export_private_state(&self) -> MlsResult<MlsDevicePrivateState> {
+        Ok(MlsDevicePrivateState {
+            version: 1,
+            account_id: self.account_id.clone(),
+            device_id: self.device_id.clone(),
+            signature_public_key: BASE64.encode(self.signer.public()),
+            serialized_provider_state: self.provider.export_state()?,
+        })
+    }
 }
 
 impl MlsPublicDevice {
     pub fn material(&self) -> &MlsDeviceMaterial {
         &self.material
+    }
+
+    pub fn from_material(material: MlsDeviceMaterial) -> MlsResult<Self> {
+        let provider = DaisOpenMlsProvider::default();
+        let decoded = BASE64
+            .decode(&material.key_package)
+            .map_err(|err| MlsError::Wire(err.to_string()))?;
+        let key_package = KeyPackageIn::tls_deserialize(&mut decoded.as_slice())
+            .map_err(|err| MlsError::Wire(err.to_string()))?
+            .validate(provider.crypto(), ProtocolVersion::Mls10)
+            .map_err(openmls_error)?;
+        Ok(Self {
+            material,
+            key_package,
+        })
+    }
+}
+
+impl MlsWelcome {
+    pub fn to_wire(&self) -> MlsResult<DaisMlsWelcome> {
+        Ok(DaisMlsWelcome {
+            message: BASE64.encode(
+                self.welcome
+                    .tls_serialize_detached()
+                    .map_err(openmls_error)?,
+            ),
+            ratchet_tree: BASE64.encode(
+                self.ratchet_tree
+                    .tls_serialize_detached()
+                    .map_err(openmls_error)?,
+            ),
+        })
+    }
+
+    pub fn from_wire(wire: &DaisMlsWelcome) -> MlsResult<Self> {
+        let welcome = BASE64
+            .decode(&wire.message)
+            .map_err(|err| MlsError::Wire(err.to_string()))?;
+        let ratchet_tree = BASE64
+            .decode(&wire.ratchet_tree)
+            .map_err(|err| MlsError::Wire(err.to_string()))?;
+        Ok(Self {
+            welcome: Welcome::tls_deserialize(&mut welcome.as_slice())
+                .map_err(|err| MlsError::Wire(err.to_string()))?,
+            ratchet_tree: RatchetTreeIn::tls_deserialize(&mut ratchet_tree.as_slice())
+                .map_err(|err| MlsError::Wire(err.to_string()))?,
+        })
     }
 }
 
@@ -393,6 +664,124 @@ mod tests {
         assert!(serialized.get("senderDeviceId").is_some());
         assert!(serialized.get("group_id").is_none());
         assert!(serialized.get("sender_device_id").is_none());
+    }
+
+    #[test]
+    fn exported_mls_state_restores_decrypt_capability() {
+        let mut alice = MlsDevice::new("https://social.dais.social/users/social", "alice-mac")
+            .expect("alice device");
+        let mut bob =
+            MlsDevice::new("https://social.skpt.cl/users/social", "bob-phone").expect("bob device");
+        let bob_public = bob.public_device().expect("bob public device");
+
+        let welcome = alice
+            .create_group("dais-mls-dm-persist-bob", &bob_public)
+            .expect("create group");
+        bob.join_group(welcome).expect("bob joins group");
+        let bob_state = bob.export_state().expect("export bob state");
+        drop(bob);
+
+        let envelope = alice
+            .encrypt_application_message(b"state survived restart")
+            .expect("encrypt after bob export");
+        let mut restored_bob = MlsDevice::from_state(&bob_state).expect("restore bob state");
+
+        assert_eq!(
+            restored_bob
+                .decrypt_application_message(&envelope)
+                .expect("restored bob decrypts"),
+            b"state survived restart"
+        );
+    }
+
+    #[test]
+    fn exported_mls_state_restores_send_capability() {
+        let mut alice = MlsDevice::new("https://social.dais.social/users/social", "alice-mac")
+            .expect("alice device");
+        let mut bob =
+            MlsDevice::new("https://social.skpt.cl/users/social", "bob-phone").expect("bob device");
+        let bob_public = bob.public_device().expect("bob public device");
+
+        let welcome = alice
+            .create_group("dais-mls-dm-persist-alice", &bob_public)
+            .expect("create group");
+        bob.join_group(welcome).expect("bob joins group");
+        let alice_state = alice.export_state().expect("export alice state");
+        drop(alice);
+
+        let mut restored_alice = MlsDevice::from_state(&alice_state).expect("restore alice state");
+        let envelope = restored_alice
+            .encrypt_application_message(b"restored sender works")
+            .expect("restored alice encrypts");
+
+        assert_eq!(
+            bob.decrypt_application_message(&envelope)
+                .expect("bob decrypts restored sender"),
+            b"restored sender works"
+        );
+    }
+
+    #[test]
+    fn exported_mls_state_rejects_stale_epoch_metadata() {
+        let mut alice = MlsDevice::new("https://social.dais.social/users/social", "alice-mac")
+            .expect("alice device");
+        let mut bob =
+            MlsDevice::new("https://social.skpt.cl/users/social", "bob-phone").expect("bob device");
+        let bob_public = bob.public_device().expect("bob public device");
+
+        let welcome = alice
+            .create_group("dais-mls-dm-stale-epoch", &bob_public)
+            .expect("create group");
+        bob.join_group(welcome).expect("bob joins group");
+        let mut bob_state = bob.export_state().expect("export bob state");
+        bob_state.epoch += 1;
+
+        assert!(MlsDevice::from_state(&bob_state).is_err());
+    }
+
+    #[test]
+    fn first_contact_envelope_welcome_restores_private_device_into_group() {
+        let mut alice = MlsDevice::new("https://social.dais.social/users/social", "alice-mac")
+            .expect("alice device");
+        let bob =
+            MlsDevice::new("https://social.skpt.cl/users/social", "bob-phone").expect("bob device");
+        let bob_private_state = bob.export_private_state().expect("bob private state");
+        let bob_public = MlsPublicDevice::from_material(
+            bob.public_device()
+                .expect("bob public device")
+                .material()
+                .clone(),
+        )
+        .expect("bob public from material");
+        drop(bob);
+
+        let welcome = alice
+            .create_group("dais-mls-dm-first-contact", &bob_public)
+            .expect("create group");
+        let mut envelope = alice
+            .encrypt_application_message(b"welcome carries first contact")
+            .expect("encrypt");
+        envelope.welcome = Some(welcome.to_wire().expect("wire welcome"));
+
+        let mut restored_bob =
+            MlsDevice::from_private_state(&bob_private_state).expect("restore private state");
+        assert_eq!(
+            restored_bob
+                .decrypt_application_message(&envelope)
+                .expect("welcome joins and decrypts"),
+            b"welcome carries first contact"
+        );
+        assert_eq!(
+            restored_bob
+                .export_state()
+                .expect("export joined state")
+                .epoch,
+            envelope.epoch
+        );
+
+        let serialized = serde_json::to_value(&envelope).expect("serialize envelope");
+        assert!(serialized["welcome"]["message"].as_str().is_some());
+        assert!(serialized["welcome"]["ratchetTree"].as_str().is_some());
     }
 
     #[test]
