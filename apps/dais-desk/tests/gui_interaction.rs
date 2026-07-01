@@ -19,6 +19,15 @@ fn navigates_primary_workflows_through_accessible_controls() {
     assert_eq!(window.get_active_mode().as_str(), "home");
     assert_eq!(window.get_active_screen().as_str(), "today");
 
+    window.set_command_text("ada".into());
+    click_label(&window, "Find");
+    assert_eq!(window.get_active_mode().as_str(), "people");
+    assert_eq!(window.get_active_screen().as_str(), "find");
+
+    click_label(&window, "Home");
+    assert_eq!(window.get_active_mode().as_str(), "home");
+    assert_eq!(window.get_active_screen().as_str(), "today");
+
     click_label(&window, "People");
     assert_eq!(window.get_active_mode().as_str(), "people");
     assert_eq!(window.get_active_screen().as_str(), "find");

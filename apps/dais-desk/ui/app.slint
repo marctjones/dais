@@ -147,6 +147,56 @@ component SegmentOption inherits Rectangle {
     }
 }
 
+component ToolbarCommandButton inherits Rectangle {
+    in property <string> symbol;
+    in property <string> label;
+    in property <string> description;
+    callback activate();
+
+    width: 66px;
+    height: 46px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: #cfd8e3;
+    background: touch-area.pressed ? #dbeafe : touch-area.has-hover ? #f2f7ff : #ffffff;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-description: description;
+    accessible-action-default => {
+        root.activate();
+    }
+
+    VerticalLayout {
+        padding-top: 5px;
+        padding-bottom: 5px;
+        spacing: 1px;
+
+        Text {
+            text: root.symbol;
+            color: #174a7e;
+            font-size: 14px;
+            font-weight: 800;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.label;
+            color: #2f3948;
+            font-size: 10px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    touch-area := TouchArea {
+        clicked => {
+            root.activate();
+        }
+    }
+}
+
 component SourceButton inherits Rectangle {
     in property <NavItem> item;
     callback activate(string);
@@ -713,12 +763,12 @@ export component MainWindow inherits Window {
                     }
 
                     VerticalLayout {
-                        width: 230px;
+                        width: 220px;
                         padding-top: 7px;
                         padding-bottom: 5px;
                         spacing: 2px;
                         Text {
-                            text: "Logged in as " + root.active-account-label;
+                            text: "Account";
                             color: #344055;
                             font-size: 11px;
                             font-weight: 700;
@@ -733,23 +783,29 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    Button {
-                        text: "Find";
-                        clicked => {
+                    ToolbarCommandButton {
+                        symbol: "F";
+                        label: "Find";
+                        description: "Run the command or search text";
+                        activate => {
                             root.run-command(root.command-text);
                         }
                     }
 
-                    Button {
-                        text: "Compose";
-                        clicked => {
+                    ToolbarCommandButton {
+                        symbol: "+";
+                        label: "Compose";
+                        description: "Write a new post";
+                        activate => {
                             root.select-screen("compose");
                         }
                     }
 
-                    Button {
-                        text: "Refresh";
-                        clicked => {
+                    ToolbarCommandButton {
+                        symbol: "R";
+                        label: "Refresh";
+                        description: "Refresh owner server state";
+                        activate => {
                             root.refresh();
                         }
                     }
