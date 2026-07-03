@@ -87,7 +87,18 @@ ensure_device() {
   local private_key="$6"
 
   if owner_has_device "$base_url" "$token" "$device_id"; then
-    ok "$label owner device $device_id exists"
+    if [ -e "$private_key" ]; then
+      ok "$label owner device $device_id exists"
+    elif [ "$INIT_DEVICES" = "1" ]; then
+      owner "$base_url" "$token" e2ee-device-init \
+        --device-id "$device_id" \
+        --display-name "$label CLI device" \
+        --private-key-out "$private_key" \
+        --force
+      ok "$label owner device $device_id refreshed local private key"
+    else
+      fail "$label owner device $device_id exists but local private key $private_key is missing"
+    fi
   elif [ "$INIT_DEVICES" = "1" ]; then
     if [ -e "$private_key" ]; then
       fail "$label owner device $device_id missing but $private_key already exists; remove it or publish a matching device manually"
