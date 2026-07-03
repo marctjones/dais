@@ -500,6 +500,48 @@ fn signed_activity_post(http: &Http, fixture: &FixtureActor, body: &str) -> Resu
     )
 }
 
+fn signed_activity_get(
+    http: &Http,
+    fixture: &FixtureActor,
+    path_or_url: &str,
+    accept: &str,
+) -> Result<HttpResponse> {
+    let url = if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
+        path_or_url.to_string()
+    } else {
+        format!("{}{}", http.config.social_base_url, path_or_url)
+    };
+    let parsed = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
+    let host = parsed.host_str().unwrap_or_default().to_string();
+    let mut request_target = parsed.path().to_string();
+    if let Some(query) = parsed.query() {
+        request_target.push('?');
+        request_target.push_str(query);
+    }
+    let date = http_date();
+    let signing_string = [
+        format!("(request-target): get {request_target}"),
+        format!("host: {host}"),
+        format!("date: {date}"),
+    ]
+    .join("\n");
+    let signature = sign_http(&fixture.private_key, &signing_string);
+    let signature_header = format!(
+        "keyId=\"{}#main-key\",algorithm=\"rsa-sha256\",headers=\"(request-target) host date\",signature=\"{}\"",
+        fixture.actor_url, signature
+    );
+    http.request(
+        "GET",
+        &url,
+        &[
+            ("Accept", accept.to_string()),
+            ("Date", date),
+            ("Signature", signature_header),
+        ],
+        None,
+    )
+}
+
 fn signed_inbox_fixture(http: &Http) -> Result<HttpResponse> {
     let fixture = fixture_actor(&http.config)?;
     let body = json!({
@@ -511,6 +553,92 @@ fn signed_inbox_fixture(http: &Http) -> Result<HttpResponse> {
     })
     .to_string();
     signed_activity_post(http, &fixture, &body)
+}
+
+fn owner_media_upload_private_signed_fixture(http: &Http) -> Result<Value> {
+    let res = http.post_json(
+        "/api/dais/owner/media",
+        json!({
+            "filename": "conformance-private-media.png",
+            "media_type": "image/png",
+            "description": "conformance private authorized-fetch media",
+            "access": "private",
+            "require_authorized_fetch": true,
+            "expires_in_seconds": 3600,
+            "data_base64": TINY_PNG
+        }),
+        Some(&http.config.owner_token),
+    )?;
+    expect_status_any(&res, &[200, 201], "owner private media upload")?;
+    json(&res, "owner private media upload").cloned()
+}
+
+fn signed_private_media_fixture(http: &Http) -> Result<String> {
+    let fixture = fixture_actor(&http.config)?;
+    let follow = json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!("{}#follow/{}", fixture.actor_url, Utc::now().timestamp_millis()),
+        "type": "Follow",
+        "actor": fixture.actor_url,
+        "object": http.config.actor_url()
+    })
+    .to_string();
+    let follow_res = signed_activity_post(http, &fixture, &follow)?;
+    expect_status_any(&follow_res, &[200, 201, 202, 204], "signed fixture Follow")?;
+
+    let status = http.post_json(
+        "/api/dais/owner/followers/status",
+        json!({
+            "follower_actor_id": fixture.actor_url,
+            "status": "approved"
+        }),
+        Some(&http.config.owner_token),
+    )?;
+    expect_status_any(&status, &[200, 201], "approve fixture follower")?;
+
+    let uploaded = owner_media_upload_private_signed_fixture(http)?;
+    let url = str_field(&uploaded, "url").ok_or_else(|| "media upload omitted url".to_string())?;
+    if !url.contains("/media/_private_signed/") {
+        return Err(format!(
+            "expected signed private media URL, got {}",
+            short(url)
+        ));
+    }
+    if uploaded.get("authorized_fetch").and_then(Value::as_bool) != Some(true) {
+        return Err("media upload did not report authorized_fetch=true".to_string());
+    }
+
+    let anonymous = http.request("GET", url, &[("Accept", "image/png".to_string())], None)?;
+    expect_status_any(&anonymous, &[401, 403, 404], "anonymous private media GET")?;
+
+    let attachment = uploaded
+        .get("attachment")
+        .cloned()
+        .ok_or_else(|| "media upload omitted attachment JSON".to_string())?;
+    let post = http.post_json(
+        "/api/dais/owner/posts",
+        json!({
+            "text": format!("Private media conformance fixture {}", Utc::now().to_rfc3339()),
+            "visibility": "followers",
+            "protocol": "activitypub",
+            "encrypt": false,
+            "recipients": [],
+            "attachments": [attachment.to_string()]
+        }),
+        Some(&http.config.owner_token),
+    )?;
+    expect_status_any(&post, &[200, 201], "owner private post with media")?;
+
+    let signed = signed_activity_get(http, &fixture, url, "image/png")?;
+    expect_status(&signed, 200, "signed private media GET")?;
+    if signed.bytes.is_empty() {
+        return Err("signed private media GET returned no bytes".to_string());
+    }
+    Ok(format!(
+        "anonymous GET rejected with {}; signed GET returned {} bytes",
+        anonymous.status,
+        signed.bytes.len()
+    ))
 }
 
 fn run_activitypub(http: &Http) -> Result<()> {
@@ -872,7 +1000,6 @@ fn run_activitypub(http: &Http) -> Result<()> {
 
     let owner_optional = [
         ("MASTODON-SECURITY-02", "MASTODON", "Authorized fetch for private posts is implemented", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live authorized-fetch fixture"),
-        ("MASTODON-SECURITY-03", "MASTODON", "Private media supports recipient-bound authorized fetch", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live signed private media fixture"),
         ("MASTODON-SYNC-01", "MASTODON", "Signed partial follower synchronization collection is available", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live follower synchronization fixture"),
         ("MASTODON-CONTENT-03", "MASTODON", "Live public Question exposes media, tags, summary, and poll shape", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live rich content fixture"),
         ("OWNER-DISCOVERY-01", "DAIS-OWNER", "Actor discovery returns recent public post previews when available", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner discovery fixture"),
@@ -892,6 +1019,23 @@ fn run_activitypub(http: &Http) -> Result<()> {
         } else {
             rows.push(Row::new(id, group, title, "INFO", "Rust conformance preserves this authenticated fixture as credential-gated follow-up coverage"));
         }
+    }
+    if config.owner_token.is_empty() {
+        rows.push(Row::new(
+            "MASTODON-SECURITY-03",
+            "MASTODON",
+            "Private media supports signed authorized fetch",
+            "INFO",
+            "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live signed private media fixture",
+        ));
+    } else {
+        run_case(
+            &mut rows,
+            "MASTODON-SECURITY-03",
+            "MASTODON",
+            "Private media supports signed authorized fetch",
+            || signed_private_media_fixture(http),
+        );
     }
 
     run_case(

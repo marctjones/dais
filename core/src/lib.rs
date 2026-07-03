@@ -83,8 +83,10 @@ impl DaisCore {
 
     /// Initialize the database schema
     pub async fn initialize_database(&self) -> CoreResult<()> {
-        // TODO: Implement database migrations
-        Ok(())
+        Err(CoreError::Internal(
+            "DaisCore::initialize_database is not wired to the real CLI migration set; run the platform migration workflow instead of treating core initialization as complete."
+                .to_string(),
+        ))
     }
 
     /// Get server configuration

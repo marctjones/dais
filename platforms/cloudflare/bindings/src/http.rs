@@ -1,9 +1,8 @@
+use async_trait::async_trait;
 /// HTTP provider implementation for Cloudflare Workers
 ///
 /// Implements the HttpProvider trait using the Workers fetch API
-
-use dais_core::traits::{HttpProvider, PlatformError, PlatformResult, Request, Response, Method};
-use async_trait::async_trait;
+use dais_core::traits::{HttpProvider, Method, PlatformError, PlatformResult, Request, Response};
 use worker::Fetch;
 
 pub struct WorkerHttpProvider;
@@ -49,9 +48,9 @@ impl HttpProvider for WorkerHttpProvider {
 
         // Add body if present
         if let Some(body) = request.body {
-            init.with_body(Some(wasm_bindgen::JsValue::from(
-                js_sys::Uint8Array::from(&body[..]),
-            )));
+            init.with_body(Some(wasm_bindgen::JsValue::from(js_sys::Uint8Array::from(
+                &body[..],
+            ))));
         }
 
         // Create worker::Request
@@ -84,7 +83,7 @@ impl HttpProvider for WorkerHttpProvider {
             status,
             headers: response_headers,
             body,
-            url: request.url.clone(),  // Use original request URL
+            url: request.url.clone(), // Use original request URL
         })
     }
 }

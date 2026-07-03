@@ -40,19 +40,18 @@
 ///     Response::ok("OK")
 /// }
 /// ```
-
 pub mod d1;
 // pub mod r2;  // TODO: Re-enable when R2 API is available in worker-rs
-pub mod queues;
 pub mod http;
+pub mod queues;
 
 pub use d1::D1Provider;
 // pub use r2::R2Provider;
-pub use queues::CloudflareQueueProvider;
 pub use http::WorkerHttpProvider;
+pub use queues::CloudflareQueueProvider;
 
 // Re-export core types for convenience
 pub use dais_core::{
-    DaisCore, CoreConfig, CoreResult, CoreError,
-    DatabaseProvider, StorageProvider, QueueProvider, HttpProvider,
+    CoreConfig, CoreError, CoreResult, DaisCore, DatabaseProvider, HttpProvider, QueueProvider,
+    StorageProvider,
 };

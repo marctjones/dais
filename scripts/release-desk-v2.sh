@@ -8,6 +8,8 @@ STAMP="$(date -u +"%Y%m%d-%H%M%S")"
 REPORT_DIR="${ROOT_DIR}/tmp/desk-release-${STAMP}"
 REPORT_FILE="${REPORT_DIR}/report.md"
 RUN_PRIVATE_MODE_LOCAL_SMOKE="${RUN_PRIVATE_MODE_LOCAL_SMOKE:-0}"
+REQUIRE_FULL_RELEASE_GATES="${REQUIRE_FULL_RELEASE_GATES:-${REQUIRE_FULL:-0}}"
+RELEASE_GATE_FAILURE=0
 
 mkdir -p "${REPORT_DIR}"
 
@@ -45,8 +47,10 @@ token_file_status() {
   echo "- \`DAIS_OWNER_READ_TOKEN_FILE\`: $(token_file_status DAIS_OWNER_READ_TOKEN_FILE)"
   echo "- \`DAIS_MASTODON_BEARER_TOKEN\`: $(secret_status DAIS_MASTODON_BEARER_TOKEN)"
   echo "- \`RUN_PRIVATE_MODE_LOCAL_SMOKE\`: ${RUN_PRIVATE_MODE_LOCAL_SMOKE}"
+  echo "- \`REQUIRE_FULL_RELEASE_GATES\`: ${REQUIRE_FULL_RELEASE_GATES}"
   echo
   echo "Credential-gated live fixtures are reported as \`SKIP\` or \`INFO\` by the conformance harness when required secrets are absent."
+  echo "Set \`REQUIRE_FULL_RELEASE_GATES=1\` to fail this release gate when credential-gated fixtures are skipped or informational rather than verified."
   echo "The local private-mode smoke requires a running local server; set \`RUN_PRIVATE_MODE_LOCAL_SMOKE=1\` and optionally \`BASE_URL\`, \`ACTOR\`, and \`ACTOR_URL\` to run it."
   echo
 } >"${REPORT_FILE}"
@@ -108,9 +112,14 @@ run_cmd "Design coverage screenshots present" bash -c '
 {
   echo "## Credential-Gated Fixture Summary"
   echo
-  if grep -E '^(SKIP|INFO)[[:space:]]+' "${REPORT_FILE}" >/dev/null; then
-    grep -E '^(SKIP|INFO)[[:space:]]+' "${REPORT_FILE}" \
+  if grep -E '^(SKIP|INFO)([[:space:]:]|$)' "${REPORT_FILE}" >/dev/null; then
+    grep -E '^(SKIP|INFO)([[:space:]:]|$)' "${REPORT_FILE}" \
       | sed 's/^/- /'
+    if [[ "${REQUIRE_FULL_RELEASE_GATES}" == "1" ]]; then
+      echo
+      echo "FAIL: strict release mode requires these fixtures to be verified, not skipped or informational."
+      RELEASE_GATE_FAILURE=1
+    fi
   else
     echo "No skipped or informational credential-gated fixture rows were reported."
   fi
@@ -136,3 +145,7 @@ run_cmd "Design coverage screenshots present" bash -c '
 } >>"${REPORT_FILE}"
 
 cat "${REPORT_FILE}"
+
+if [[ "${RELEASE_GATE_FAILURE}" != "0" ]]; then
+  exit "${RELEASE_GATE_FAILURE}"
+fi

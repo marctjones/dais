@@ -1,9 +1,10 @@
+use async_trait::async_trait;
 /// D1 database provider implementation for Cloudflare Workers
 ///
 /// Implements the DatabaseProvider trait using Cloudflare D1 (SQLite at the edge)
-
-use dais_core::traits::{DatabaseProvider, DatabaseDialect, PlatformError, PlatformResult, Row, Statement};
-use async_trait::async_trait;
+use dais_core::traits::{
+    DatabaseDialect, DatabaseProvider, PlatformError, PlatformResult, Row, Statement,
+};
 use serde_json::Value;
 use wasm_bindgen::JsValue;
 use worker::D1Database;
@@ -15,10 +16,7 @@ fn json_to_js(value: &Value) -> JsValue {
     match value {
         Value::Null => JsValue::NULL,
         Value::Bool(b) => JsValue::from_bool(*b),
-        Value::Number(n) => n
-            .as_f64()
-            .map(JsValue::from_f64)
-            .unwrap_or(JsValue::NULL),
+        Value::Number(n) => n.as_f64().map(JsValue::from_f64).unwrap_or(JsValue::NULL),
         Value::String(s) => JsValue::from_str(s),
         other => JsValue::from_str(&other.to_string()),
     }

@@ -11,6 +11,7 @@ export struct NavItem {
     id: string,
     title: string,
     count: string,
+    count-tone: string,
     active: bool,
 }
 
@@ -18,6 +19,7 @@ export struct UiRow {
     id: string,
     kind: string,
     avatar: string,
+    avatar-url: string,
     title: string,
     subtitle: string,
     detail: string,
@@ -154,7 +156,7 @@ component ToolbarCommandButton inherits Rectangle {
     in property <string> description;
     callback activate();
 
-    width: 66px;
+    width: 84px;
     height: 46px;
     border-radius: 6px;
     border-width: 1px;
@@ -168,14 +170,14 @@ component ToolbarCommandButton inherits Rectangle {
     }
 
     VerticalLayout {
-        padding-top: 5px;
-        padding-bottom: 5px;
-        spacing: 1px;
+        padding-top: root.symbol == "" ? 0px : 5px;
+        padding-bottom: root.symbol == "" ? 0px : 5px;
+        spacing: root.symbol == "" ? 0px : 1px;
 
-        Text {
+        if root.symbol != "" : Text {
             text: root.symbol;
             color: #174a7e;
-            font-size: 14px;
+            font-size: 16px;
             font-weight: 800;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -184,9 +186,10 @@ component ToolbarCommandButton inherits Rectangle {
         Text {
             text: root.label;
             color: #2f3948;
-            font-size: 10px;
+            font-size: root.symbol == "" ? 12px : 10px;
             font-weight: 700;
             horizontal-alignment: center;
+            vertical-alignment: center;
             overflow: elide;
         }
     }
@@ -264,12 +267,15 @@ component SourceButton inherits Rectangle {
             min-width: 26px;
             height: 20px;
             border-radius: 10px;
-            background: item.active ? #d3dceb : #eef1f4;
+            background: item.count-tone == "attention" ? #fff0d6 : item.count-tone == "owner" ? #eaf6ee : item.active ? #d3dceb : #eef1f4;
+            border-width: item.count-tone == "attention" ? 1px : 0px;
+            border-color: #e0a12b;
 
             Text {
                 text: item.count;
-                color: #334155;
+                color: item.count-tone == "attention" ? #6d470b : item.count-tone == "owner" ? #1f5f3b : #334155;
                 font-size: 11px;
+                font-weight: item.count-tone == "attention" ? 800 : 500;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -330,9 +336,9 @@ component RowCard inherits Rectangle {
                 width: root.is-post ? 38px : 30px;
                 height: root.is-post ? 38px : 30px;
                 border-radius: root.is-post ? 19px : 15px;
-                background: root.is-relationship ? #eef9f1 : root.is-message || root.is-conversation ? #eff6ff : #e8edf5;
+                background: root.entry.avatar-url != "" ? #dbeafe : root.is-relationship ? #eef9f1 : root.is-message || root.is-conversation ? #eff6ff : #e8edf5;
                 border-width: 1px;
-                border-color: root.is-relationship ? #b9dec4 : root.is-message || root.is-conversation ? #bfd7f2 : #cdd6e2;
+                border-color: root.entry.avatar-url != "" ? #7aa5d8 : root.is-relationship ? #b9dec4 : root.is-message || root.is-conversation ? #bfd7f2 : #cdd6e2;
 
                 Text {
                     text: root.entry.avatar;
@@ -341,6 +347,17 @@ component RowCard inherits Rectangle {
                     font-weight: 800;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                }
+
+                if root.entry.avatar-url != "" : Rectangle {
+                    x: parent.width - 10px;
+                    y: parent.height - 10px;
+                    width: 9px;
+                    height: 9px;
+                    border-radius: 5px;
+                    background: #23814b;
+                    border-width: 1px;
+                    border-color: #ffffff;
                 }
             }
 
@@ -524,6 +541,8 @@ export component MainWindow inherits Window {
     in property <string> active-screen;
     in property <string> selected-row;
     in property <string> inspector-title;
+    in property <bool> inspector-visible;
+    in-out property <bool> inspector-open;
     in property <string> window-title;
     in property <string> window-subtitle;
     in property <string> attention-summary;
@@ -635,6 +654,7 @@ export component MainWindow inherits Window {
     callback move-selected-row-end();
     callback activate-selected-row();
     callback select-row-by-prefix(string);
+    callback toggle-inspector();
 
     forward-focus: command-key-handler;
 
@@ -887,7 +907,7 @@ export component MainWindow inherits Window {
                     }
 
                     ToolbarCommandButton {
-                        symbol: "F";
+                        symbol: "";
                         label: "Find";
                         description: "Run the command or search text";
                         activate => {
@@ -896,7 +916,7 @@ export component MainWindow inherits Window {
                     }
 
                     ToolbarCommandButton {
-                        symbol: "+";
+                        symbol: "";
                         label: "Compose";
                         description: "Write a new post";
                         activate => {
@@ -905,7 +925,7 @@ export component MainWindow inherits Window {
                     }
 
                     ToolbarCommandButton {
-                        symbol: "R";
+                        symbol: "";
                         label: "Refresh";
                         description: "Refresh posts and conversations";
                         activate => {
@@ -1131,8 +1151,27 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                Rectangle {
-                    width: 360px;
+                if root.inspector-visible && !root.inspector-open : Rectangle {
+                    width: 42px;
+                    background: #f7f9fc;
+                    border-width: 1px;
+                    border-color: #d7dde6;
+
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 8px;
+
+                        Button {
+                            text: "Details";
+                            clicked => {
+                                root.toggle-inspector();
+                            }
+                        }
+                    }
+                }
+
+                if root.inspector-visible && root.inspector-open : Rectangle {
+                    width: root.active-screen == "compose" || root.active-screen == "find" ? 332px : 300px;
                     background: #f7f9fc;
                     border-width: 1px;
                     border-color: #d7dde6;
@@ -1141,22 +1180,33 @@ export component MainWindow inherits Window {
                         padding: 14px;
                         spacing: 10px;
 
-                        Text {
-                            text: root.inspector-title;
-                            font-size: 16px;
-                            font-weight: 800;
-                            color: #101828;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: root.inspector-title;
+                                font-size: 16px;
+                                font-weight: 800;
+                                color: #101828;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Button {
+                                text: "Hide";
+                                clicked => {
+                                    root.toggle-inspector();
+                                }
+                            }
                         }
 
                         Text {
-                            text: "Thread context, people, and less common actions stay here.";
+                            text: root.active-screen == "compose" ? "Recipients, media, and final audience checks." : root.active-screen == "find" ? "Discovery filters are here when you need them." : "Context and secondary actions for the selected item.";
                             font-size: 12px;
                             color: #5b6676;
                             wrap: word-wrap;
                         }
 
                                 if root.active-screen == "find" : Rectangle {
-                                    min-height: 354px;
+                                    min-height: 224px;
                                     border-radius: 7px;
                                     border-width: 1px;
                                     border-color: #d9dee6;
@@ -1165,17 +1215,31 @@ export component MainWindow inherits Window {
                             VerticalLayout {
                                 padding: 10px;
                                 spacing: 7px;
-                                Text { text: "Search controls"; font-weight: 800; font-size: 13px; color: #172033; }
+                                Text { text: "Find people and sources"; font-weight: 800; font-size: 13px; color: #172033; }
                                 HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.search-scope; placeholder-text: "scope"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.search-provider; placeholder-text: "provider"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-scope; placeholder-text: "private or public"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-provider; placeholder-text: "network"; horizontal-stretch: 1; }
                                 }
                                 HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.search-type; placeholder-text: "type"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.search-sort; placeholder-text: "sort"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-type; placeholder-text: "people/posts"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-sort; placeholder-text: "recent/relevant"; horizontal-stretch: 1; }
                                 }
+                                LineEdit { text <=> root.search-author; placeholder-text: "handle, URL, or name"; }
+                                LineEdit { text <=> root.search-url; placeholder-text: "source URL"; }
+                                CheckBox {
+                                    text: "Allow broad public search";
+                                    checked <=> root.search-confirm-public-sensitive;
+                                }
+                                Button {
+                                    text: "Search";
+                                    clicked => {
+                                        root.run-filtered-search(root.command-text, root.search-scope, root.search-provider, root.search-type, root.search-servers, root.search-sort, root.search-since, root.search-until, root.search-author, root.search-mentions, root.search-lang, root.search-domain, root.search-url, root.search-tags, root.search-confirm-public-sensitive);
+                                    }
+                                }
+                                Rectangle { height: 1px; background: #e5e9f0; }
+                                Text { text: "Advanced filters"; font-weight: 800; font-size: 12px; color: #4b5565; }
                                 HorizontalLayout {
                                     spacing: 6px;
                                     LineEdit { text <=> root.search-lang; placeholder-text: "lang"; horizontal-stretch: 1; }
@@ -1186,26 +1250,14 @@ export component MainWindow inherits Window {
                                     LineEdit { text <=> root.search-since; placeholder-text: "since"; horizontal-stretch: 1; }
                                     LineEdit { text <=> root.search-until; placeholder-text: "until"; horizontal-stretch: 1; }
                                 }
-                                LineEdit { text <=> root.search-author; placeholder-text: "author handle or actor"; }
                                 LineEdit { text <=> root.search-mentions; placeholder-text: "mentions"; }
-                                LineEdit { text <=> root.search-url; placeholder-text: "URL filter"; }
                                 LineEdit { text <=> root.search-servers; placeholder-text: "servers, comma separated"; }
                                 LineEdit { text <=> root.search-tags; placeholder-text: "tags, comma separated"; }
-                                CheckBox {
-                                    text: "Confirm sensitive public search";
-                                    checked <=> root.search-confirm-public-sensitive;
-                                }
-                                Button {
-                                    text: "Search";
-                                    clicked => {
-                                        root.run-filtered-search(root.command-text, root.search-scope, root.search-provider, root.search-type, root.search-servers, root.search-sort, root.search-since, root.search-until, root.search-author, root.search-mentions, root.search-lang, root.search-domain, root.search-url, root.search-tags, root.search-confirm-public-sensitive);
-                                    }
-                                }
                             }
                         }
 
                         if root.active-screen == "compose" : Rectangle {
-                            min-height: 244px;
+                            height: root.media-file-path == "" && root.media-revoke-url == "" ? 110px : 244px;
                             border-radius: 7px;
                             border-width: 1px;
                             border-color: #d9dee6;
@@ -1214,36 +1266,50 @@ export component MainWindow inherits Window {
                                 VerticalLayout {
                                     padding: 10px;
                                     spacing: 7px;
-                                    Text { text: "Media"; font-weight: 800; font-size: 13px; color: #172033; }
-                                HorizontalLayout {
+                                    Text { text: "Media attachment"; font-weight: 800; font-size: 13px; color: #172033; }
+                                if root.media-file-path == "" : HorizontalLayout {
+                                    height: 34px;
                                     spacing: 6px;
-                                    LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; horizontal-stretch: 1; height: 34px; }
                                     Button {
+                                        height: 34px;
                                         text: "Choose file";
                                         clicked => {
                                             root.choose-media-file();
                                         }
                                     }
                                 }
-                                HorizontalLayout {
+                                if root.media-file-path != "" : HorizontalLayout {
+                                    height: 34px;
+                                    spacing: 6px;
+                                    LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; horizontal-stretch: 1; height: 34px; }
+                                    Button {
+                                        height: 34px;
+                                        text: "Choose file";
+                                        clicked => {
+                                            root.choose-media-file();
+                                        }
+                                    }
+                                }
+                                if root.media-file-path != "" : HorizontalLayout {
                                     spacing: 6px;
                                     LineEdit { text <=> root.media-type; placeholder-text: "media type"; horizontal-stretch: 1; }
                                     LineEdit { text <=> root.media-access; placeholder-text: "access"; horizontal-stretch: 1; }
                                 }
-                                LineEdit { text <=> root.media-description; placeholder-text: "alt text / description"; }
-                                HorizontalLayout {
+                                if root.media-file-path != "" : LineEdit { text <=> root.media-description; placeholder-text: "alt text / description"; }
+                                if root.media-file-path != "" : HorizontalLayout {
                                     spacing: 6px;
                                     LineEdit { text <=> root.media-expires-seconds; placeholder-text: "expires seconds"; horizontal-stretch: 1; }
                                     CheckBox { text: "Auth fetch"; checked <=> root.media-authorized-fetch; }
                                 }
-                                Button {
+                                if root.media-file-path != "" : Button {
                                     text: "Upload and attach";
                                     clicked => {
                                         root.upload-media(root.media-file-path, root.media-type, root.media-description, root.media-access, root.media-expires-seconds, root.media-authorized-fetch);
                                     }
                                 }
-                                LineEdit { text <=> root.media-revoke-url; placeholder-text: "Uploaded media URL to revoke"; }
-                                Button {
+                                if root.media-revoke-url != "" : LineEdit { text <=> root.media-revoke-url; placeholder-text: "Uploaded media URL to revoke"; }
+                                if root.media-revoke-url != "" : Button {
                                     text: "Revoke media";
                                     clicked => {
                                         root.revoke-media(root.media-revoke-url);

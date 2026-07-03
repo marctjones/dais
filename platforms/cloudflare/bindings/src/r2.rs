@@ -173,10 +173,9 @@ impl StorageProvider for R2Provider {
     }
 
     async fn signed_url(&self, key: &str, expires_in: u32) -> PlatformResult<String> {
-        // R2 presigned URLs require additional setup (not available in basic R2 API)
-        // For now, return the public URL
-        // TODO: Implement presigned URLs when R2 supports them in worker-rs
-        Ok(self.public_url(key))
+        Err(PlatformError::Storage(format!(
+            "R2 signed URLs are not implemented for key {key}; refusing to return an unsigned public URL for {expires_in}s access"
+        )))
     }
 }
 

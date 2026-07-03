@@ -1223,6 +1223,8 @@ dependencies = [
  "dais-core",
  "i-slint-backend-testing",
  "image",
+ "rand 0.8.6",
+ "rsa",
  "serde",
  "serde_json",
  "slint",

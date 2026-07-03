@@ -13,7 +13,6 @@ CONTENTS_DIR="${APP_PATH}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 EXECUTABLE_NAME="dais-desk"
-REAL_EXECUTABLE_NAME="dais-desk-bin"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "Dais Desk macOS packaging requires macOS." >&2
@@ -47,16 +46,8 @@ echo "Building Dais Desk (${PROFILE})"
 
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 find "${MACOS_DIR}" -maxdepth 1 -type f ! -name "${EXECUTABLE_NAME}" -delete
-ditto "${BINARY_PATH}" "${MACOS_DIR}/${REAL_EXECUTABLE_NAME}"
-cat >"${MACOS_DIR}/${EXECUTABLE_NAME}" <<'LAUNCHER'
-#!/usr/bin/env bash
-set -euo pipefail
-SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export SLINT_BACKEND="${SLINT_BACKEND:-winit}"
-exec "${SCRIPT_DIR}/dais-desk-bin" "$@"
-LAUNCHER
+ditto "${BINARY_PATH}" "${MACOS_DIR}/${EXECUTABLE_NAME}"
 chmod +x "${MACOS_DIR}/${EXECUTABLE_NAME}"
-chmod +x "${MACOS_DIR}/${REAL_EXECUTABLE_NAME}"
 
 cat >"${CONTENTS_DIR}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -85,6 +76,11 @@ cat >"${CONTENTS_DIR}/Info.plist" <<PLIST
   <string>public.app-category.social-networking</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
+  <key>LSEnvironment</key>
+  <dict>
+    <key>SLINT_BACKEND</key>
+    <string>winit</string>
+  </dict>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSSupportsAutomaticTermination</key>

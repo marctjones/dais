@@ -1,9 +1,8 @@
+use async_trait::async_trait;
 /// Cloudflare Queues provider implementation
 ///
 /// Implements the QueueProvider trait using Cloudflare Queues
-
 use dais_core::traits::{PlatformError, PlatformResult, QueueProvider};
-use async_trait::async_trait;
 use worker::Queue;
 
 pub struct CloudflareQueueProvider {
@@ -40,17 +39,17 @@ impl QueueProvider for CloudflareQueueProvider {
         Ok(())
     }
 
-    async fn send_delayed(&self, message: &str, _delay_seconds: u32) -> PlatformResult<()> {
-        // TODO: Add delay support when available in worker-rs
-        // For now, just send immediately
-        self.send(message).await
+    async fn send_delayed(&self, _message: &str, delay_seconds: u32) -> PlatformResult<()> {
+        Err(PlatformError::Queue(format!(
+            "Cloudflare delayed queue send is not implemented in this binding; refusing to ignore requested {delay_seconds}s delay"
+        )))
     }
 
     async fn depth(&self) -> PlatformResult<u64> {
-        // Cloudflare Queues doesn't expose queue depth in the current API
-        // Return 0 for now
-        // TODO: Implement when API supports it
-        Ok(0)
+        Err(PlatformError::Queue(
+            "Cloudflare queue depth is unavailable in this binding; refusing to report unknown depth as zero"
+                .to_string(),
+        ))
     }
 }
 

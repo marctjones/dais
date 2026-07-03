@@ -14,6 +14,9 @@ use dais_client_core::{
     ProtocolRoute, SourceItem, SourceSubscription, Visibility,
 };
 use dais_core::e2ee_mls::{DaisMlsEnvelope, MlsDevice, MlsDevicePrivateState, MlsDeviceState};
+use rand::rngs::OsRng;
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -23,11 +26,15 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 slint::include_modules!();
 
 const DEFAULT_INSTANCE_URL: &str = "https://social.dais.social";
+const FIXTURE_E2EE_DEVICE_ID: &str = "dais-desk-fixture-device";
+const FIXTURE_E2EE_PLAINTEXT: &str =
+    "Encrypted fixture message decrypted on this device: Ada found a backyard telescope listing.";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredOwnerSettings {
@@ -136,6 +143,7 @@ pub struct DeskData {
     pub search: OwnerSearchResult,
     pub discovered_actor: Option<OwnerDiscoveredActor>,
     pub api_error: Option<String>,
+    pub partial_api_errors: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -422,6 +430,8 @@ pub struct UiProjection {
     pub active_screen: String,
     pub selected_row: String,
     pub inspector_title: String,
+    pub inspector_visible: bool,
+    pub inspector_open: bool,
     pub window_title: String,
     pub window_subtitle: String,
     pub attention_summary: String,
@@ -521,6 +531,7 @@ pub struct DeskController {
     moderation_form: ModerationFormState,
     settings_form: SettingsFormState,
     media_form: MediaFormState,
+    inspector_open: bool,
     status_message: String,
     account_form_label: String,
     account_form_url: String,
@@ -574,6 +585,7 @@ impl DeskController {
             moderation_form: ModerationFormState::default(),
             settings_form: SettingsFormState::default(),
             media_form: MediaFormState::default(),
+            inspector_open: true,
             status_message: "Ready.".to_string(),
             account_form_label,
             account_form_url,
@@ -613,6 +625,7 @@ impl DeskController {
             moderation_form: ModerationFormState::default(),
             settings_form: SettingsFormState::default(),
             media_form: MediaFormState::default(),
+            inspector_open: true,
             status_message: "Fixture mode.".to_string(),
             account_form_label: "Dais Social".to_string(),
             account_form_url: DEFAULT_INSTANCE_URL.to_string(),
@@ -689,6 +702,7 @@ impl DeskController {
             _ => "today".to_string(),
         };
         self.selected_row = self.first_row_id();
+        self.inspector_open = true;
     }
 
     pub fn select_screen(&mut self, screen: &str) {
@@ -702,11 +716,15 @@ impl DeskController {
             }
         }
         self.selected_row = self.first_row_id();
+        self.inspector_open = true;
         self.populate_form_from_selected_row();
     }
 
     pub fn select_row(&mut self, row_id: &str) {
         self.selected_row = row_id.to_string();
+        if self.inspector_visible_for_screen(row_id) {
+            self.inspector_open = true;
+        }
         if let Some(object_id) = row_id.strip_prefix("post:") {
             self.compose.in_reply_to = None;
             self.status_message = match self.load_post_detail(object_id) {
@@ -741,6 +759,10 @@ impl DeskController {
         } else if row_id.starts_with("draft:") {
             self.status_message = "Selected local draft. Open it to continue editing.".into();
         }
+    }
+
+    pub fn toggle_inspector(&mut self) {
+        self.inspector_open = !self.inspector_open;
     }
 
     pub fn select_first_row(&mut self) {
@@ -1487,6 +1509,7 @@ impl DeskController {
         let inspector_rows = self.inspector_rows(&selected_row);
         let inspector_title =
             inspector_title_for_selection(&rows, &selected_row, &self.active_screen);
+        let inspector_visible = self.inspector_visible_for_screen(&selected_row);
         let unread = self
             .data
             .notifications
@@ -1536,6 +1559,8 @@ impl DeskController {
             active_screen: self.active_screen.clone(),
             selected_row,
             inspector_title,
+            inspector_visible,
+            inspector_open: self.inspector_open,
             window_title: self.title_for_active_screen(),
             window_subtitle: self.subtitle_for_active_screen(),
             attention_summary: attention,
@@ -1628,22 +1653,83 @@ impl DeskController {
         let client = OwnerApiClient::new(&settings.instance_url, token);
         self.runtime.block_on(async move {
             let snapshot = client.snapshot().await.map_err(|error| error.to_string())?;
-            let notifications = client.notifications().await.unwrap_or_default();
-            let deliveries = client.deliveries().await.unwrap_or_default();
-            let direct_messages = client.direct_messages().await.unwrap_or_default();
-            let e2ee_messages = client.e2ee_messages().await.unwrap_or_default();
-            let sources = client.sources().await.unwrap_or_else(|_| OwnerSources {
-                subscriptions: Vec::new(),
-                items: Vec::new(),
-            });
-            let watches = client.watches().await.unwrap_or_else(|_| OwnerSources {
-                subscriptions: Vec::new(),
-                items: Vec::new(),
-            });
-            let e2ee_devices = client.e2ee_devices().await.unwrap_or_default();
-            let e2ee_peer_devices = client.e2ee_peer_devices().await.unwrap_or_default();
-            let moderation_replies = client.moderation_replies().await.unwrap_or_default();
-            let stats = client.stats().await.unwrap_or_default();
+            let mut partial_api_errors = Vec::new();
+            let notifications = match client.notifications().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("notifications: {error}"));
+                    Vec::new()
+                }
+            };
+            let deliveries = match client.deliveries().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("deliveries: {error}"));
+                    Vec::new()
+                }
+            };
+            let direct_messages = match client.direct_messages().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("direct messages: {error}"));
+                    Vec::new()
+                }
+            };
+            let e2ee_messages = match client.e2ee_messages().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("E2EE messages: {error}"));
+                    Vec::new()
+                }
+            };
+            let sources = match client.sources().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("sources: {error}"));
+                    OwnerSources {
+                        subscriptions: Vec::new(),
+                        items: Vec::new(),
+                    }
+                }
+            };
+            let watches = match client.watches().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("watches: {error}"));
+                    OwnerSources {
+                        subscriptions: Vec::new(),
+                        items: Vec::new(),
+                    }
+                }
+            };
+            let e2ee_devices = match client.e2ee_devices().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("E2EE local devices: {error}"));
+                    Vec::new()
+                }
+            };
+            let e2ee_peer_devices = match client.e2ee_peer_devices().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("E2EE peer devices: {error}"));
+                    Vec::new()
+                }
+            };
+            let moderation_replies = match client.moderation_replies().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("moderation replies: {error}"));
+                    Vec::new()
+                }
+            };
+            let stats = match client.stats().await {
+                Ok(value) => value,
+                Err(error) => {
+                    partial_api_errors.push(format!("stats: {error}"));
+                    OwnerStats::default()
+                }
+            };
             Ok(DeskData {
                 snapshot: snapshot.into(),
                 post_detail: None,
@@ -1660,6 +1746,7 @@ impl DeskController {
                 search: OwnerSearchResult::default(),
                 discovered_actor: None,
                 api_error: None,
+                partial_api_errors,
             })
         })
     }
@@ -2280,6 +2367,17 @@ impl DeskController {
             require_authorized_fetch: Some(self.media_form.require_authorized_fetch),
             data_base64: BASE64.encode(bytes),
         };
+        if self.compose.encrypt {
+            let attachment = serde_json::json!({
+                "type": "Document",
+                "mediaType": upload.media_type.as_deref().unwrap_or("application/octet-stream"),
+                "name": upload.filename,
+                "summary": upload.description,
+                "data_base64": upload.data_base64,
+            });
+            self.compose.attachments.push(attachment.to_string());
+            return Ok("Prepared encrypted media attachment for the current draft.".into());
+        }
         if self
             .settings
             .owner_token
@@ -3408,8 +3506,13 @@ impl DeskController {
     }
 
     fn mode_nav(&self, unread: usize) -> Vec<NavItem> {
+        let home_count = if unread == 0 {
+            String::new()
+        } else {
+            format!("!{unread}")
+        };
         vec![
-            nav("home", "Home", unread, self.active_mode == "home"),
+            nav_with_count("home", "Home", &home_count, self.active_mode == "home"),
             nav(
                 "people",
                 "People",
@@ -3422,29 +3525,60 @@ impl DeskController {
     }
 
     fn screen_nav(&self) -> Vec<NavItem> {
-        let screens: &[(&str, &str, usize)] = match self.active_mode.as_str() {
-            "people" => &[
-                ("find", "Find", self.find_rows().len()),
-                ("friends", "Friends", self.data.snapshot.friends.len()),
-                ("followers", "Requests", self.data.snapshot.followers.len()),
-                ("following", "Following", self.data.snapshot.following.len()),
+        let screens: Vec<(&str, &str, String)> = match self.active_mode.as_str() {
+            "people" => vec![
+                ("find", "Find", count_label(self.find_rows().len())),
+                (
+                    "friends",
+                    "Friends",
+                    count_label(self.data.snapshot.friends.len()),
+                ),
+                (
+                    "followers",
+                    "Requests",
+                    attention_count_label(
+                        self.data
+                            .snapshot
+                            .followers
+                            .iter()
+                            .filter(|follower| follower.status == "pending")
+                            .count(),
+                    ),
+                ),
+                (
+                    "following",
+                    "Following",
+                    count_label(self.data.snapshot.following.len()),
+                ),
             ],
-            _ => &[
-                ("today", "Feed", self.home_today_rows().len()),
+            _ => vec![
+                ("today", "Feed", count_label(self.home_today_rows().len())),
                 (
                     "conversations",
                     "Conversations",
-                    self.conversation_rows().len(),
+                    count_label(self.conversation_rows().len()),
                 ),
-                ("inbox", "Inbox", self.inbox_rows().len()),
-                ("compose", "Compose", 0),
-                ("posts", "My Posts", self.data.snapshot.posts.len()),
-                ("saved", "Saved", self.saved_rows().len()),
+                (
+                    "inbox",
+                    "Inbox",
+                    attention_count_label(self.inbox_rows().len()),
+                ),
+                ("compose", "Compose", String::new()),
+                (
+                    "posts",
+                    "My Posts",
+                    count_label(self.data.snapshot.posts.len()),
+                ),
+                (
+                    "saved",
+                    "Saved",
+                    owner_saved_count_label(self.saved_rows().len()),
+                ),
             ],
         };
         screens
-            .iter()
-            .map(|(id, title, count)| nav(id, title, *count, self.active_screen == *id))
+            .into_iter()
+            .map(|(id, title, count)| nav_with_count(id, title, &count, self.active_screen == id))
             .collect()
     }
 
@@ -3525,6 +3659,7 @@ impl DeskController {
 
     fn conversation_rows(&self) -> Vec<UiRow> {
         let mut summaries: BTreeMap<String, ConversationSummary> = BTreeMap::new();
+        let mut rows = e2ee_endpoint_error_rows(&self.data.partial_api_errors);
 
         for dm in &self.data.direct_messages {
             let conversation_id = format!("peer:{}", dm.sender_id);
@@ -3644,10 +3779,12 @@ impl DeskController {
                 );
         }
 
-        let mut rows: Vec<UiRow> = summaries
-            .into_values()
-            .map(|summary| summary.into_row())
-            .collect();
+        rows.extend(
+            summaries
+                .into_values()
+                .map(|summary| summary.into_row())
+                .collect::<Vec<_>>(),
+        );
         rows.sort_by(|left, right| right.subtitle.cmp(&left.subtitle));
         if rows.is_empty() {
             rows.push(empty_state_row(
@@ -3715,7 +3852,7 @@ impl DeskController {
             rows.push(empty_state_row(
                 "inbox:empty",
                 "No notifications need attention",
-                "Replies, mentions, reactions, and follow requests appear here. Direct and encrypted messages live in Conversations.",
+                "Replies, mentions, and follow requests appear here. Lightweight likes stay quiet unless they need action.",
                 "",
             ));
         }
@@ -3873,7 +4010,7 @@ impl DeskController {
             vec![empty_state_row(
                 "followers:empty",
                 "No followers yet",
-                "Follow requests appear here for approval before anyone can read follower-only posts.",
+                "Follow requests appear here for approval before anyone can receive private posts.",
                 "",
             )]
         } else {
@@ -4017,21 +4154,34 @@ impl DeskController {
         let failed = stats.deliveries_failed;
         let queued = stats.deliveries_queued + stats.deliveries_retry;
         let review = stats.notifications_unread + moderation.reply_queue_count;
+        let partial_error_summary = partial_api_error_summary(&self.data.partial_api_errors);
         let mut rows = vec![
             row(
                 "health:owner-api",
                 "Owner API",
-                if owner_api_ok {
+                if !self.data.partial_api_errors.is_empty() {
+                    "Partial failure"
+                } else if owner_api_ok {
                     "Authenticated"
                 } else {
                     "Needs token"
                 },
-                self.data
-                    .api_error
-                    .as_deref()
-                    .unwrap_or("Owner API token is present and the latest snapshot loaded."),
-                if owner_api_ok { "OK" } else { "Review" },
-                if owner_api_ok { "ok" } else { "warn" },
+                partial_error_summary.as_deref().unwrap_or_else(|| {
+                    self.data
+                        .api_error
+                        .as_deref()
+                        .unwrap_or("Owner API token is present and all Desk endpoint buckets loaded.")
+                }),
+                if owner_api_ok && self.data.partial_api_errors.is_empty() {
+                    "OK"
+                } else {
+                    "Review"
+                },
+                if owner_api_ok && self.data.partial_api_errors.is_empty() {
+                    "ok"
+                } else {
+                    "warn"
+                },
                 "Refresh",
                 "Copy evidence",
             ),
@@ -4164,6 +4314,7 @@ impl DeskController {
             "",
             "Copy evidence",
         )];
+        rows.extend(e2ee_endpoint_error_rows(&self.data.partial_api_errors));
         rows.extend(mls_group_rows(&self.data.e2ee_messages));
         rows.extend(self.data.e2ee_devices.iter().map(e2ee_device_row));
         rows.extend(self.data.e2ee_peer_devices.iter().map(e2ee_peer_device_row));
@@ -4361,8 +4512,10 @@ impl DeskController {
     fn inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
         let mut rows = Vec::new();
         if let Some(selected) = self.find_row(selected_row) {
-            rows.push(selected.clone());
-            rows.extend(selected_visibility_inspector_rows(&selected));
+            if selected.kind.as_str() != "notification" {
+                rows.push(selected.clone());
+                rows.extend(selected_visibility_inspector_rows(&selected));
+            }
         }
         rows.extend(self.actor_profile_inspector_rows(selected_row));
         rows.extend(self.external_link_inspector_rows(selected_row));
@@ -4373,7 +4526,7 @@ impl DeskController {
             "inspector:privacy",
             "Visibility consequences",
             "Private by default",
-            "Posts and follows expose different information. Public posts can travel widely; followers-only posts are intended for approved people.",
+            "Posts and follows expose different information. Public posts can travel widely; private posts are intended for approved people.",
             "Safety",
             "ok",
             "",
@@ -4383,13 +4536,41 @@ impl DeskController {
             "inspector:raw",
             "More details",
             "Hidden by default",
-            "Protocol and delivery evidence is not part of the normal reading view.",
+            "Protocol and delivery evidence stays out of the normal reading view.",
             "More",
             "info",
             "",
             "",
         ));
         rows
+    }
+
+    fn inspector_visible_for_screen(&self, selected_row: &str) -> bool {
+        matches!(
+            self.active_screen.as_str(),
+            "compose"
+                | "find"
+                | "inbox"
+                | "conversations"
+                | "followers"
+                | "friends"
+                | "following"
+                | "accounts"
+                | "settings"
+                | "security"
+                | "identity"
+                | "audience"
+                | "blocks"
+                | "moderation"
+                | "watches"
+                | "deliveries"
+                | "health"
+                | "stats"
+        ) || selected_row.starts_with("notification:")
+            || selected_row.starts_with("conversation:")
+            || selected_row.starts_with("follower:")
+            || selected_row.starts_with("actor:")
+            || selected_row.starts_with("following:")
     }
 
     fn delivery_inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
@@ -4530,7 +4711,7 @@ impl DeskController {
             return Some((
                 actor.to_string(),
                 "Follower profile",
-                "They follow you; approval controls follower-only access.".to_string(),
+                "They follow you; approval controls private-post access.".to_string(),
             ));
         }
         if let Some(actor) = selected_row.strip_prefix("following:") {
@@ -4612,62 +4793,7 @@ impl DeskController {
             .as_deref()
             .or(notice.actor_username.as_deref())
             .unwrap_or(&notice.actor_id);
-        let mut rows = vec![row_with_kind(
-            "notification",
-            &format!("notification-detail:{}", notice.id),
-            "What happened",
-            actor,
-            &format!(
-                "{}. {}",
-                notification_action_sentence(notice.kind.as_str()),
-                if json_truthy(&notice.read) {
-                    "This notification is already marked read."
-                } else {
-                    "This notification is unread."
-                }
-            ),
-            notice.created_at.as_deref().unwrap_or("notification"),
-            if json_truthy(&notice.read) {
-                "Read"
-            } else {
-                "Unread"
-            },
-            if json_truthy(&notice.read) {
-                "info"
-            } else {
-                "warn"
-            },
-            if json_truthy(&notice.read) {
-                ""
-            } else {
-                "Mark read"
-            },
-            "",
-        )];
-        if matches!(notice.kind.as_str(), "reply" | "mention") {
-            if let Some(reply) = notice.content.as_deref() {
-                rows.push(row_with_kind(
-                    "post",
-                    &format!("notification-reply:{}", notice.id),
-                    if notice.kind == "mention" {
-                        "Mention text"
-                    } else {
-                        "Reply text"
-                    },
-                    actor,
-                    &preview_markdown_safe(reply),
-                    "This is the new content from the other account.",
-                    "Reply",
-                    "info",
-                    if notice.context_post_id.is_some() || notice.post_id.is_some() {
-                        "Reply"
-                    } else {
-                        ""
-                    },
-                    "",
-                ));
-            }
-        }
+        let mut rows = Vec::new();
         let context_source = notice
             .context_post_content_html
             .as_deref()
@@ -4718,6 +4844,74 @@ impl DeskController {
                 },
             ));
         }
+        if matches!(notice.kind.as_str(), "reply" | "mention") {
+            if let Some(reply) = notice.content.as_deref() {
+                let reply_title = if notice.kind == "mention" {
+                    format!("Mention from {actor}")
+                } else {
+                    format!("Reply from {actor}")
+                };
+                rows.push(with_avatar_url(
+                    row_with_kind(
+                        "post",
+                        &format!("notification-reply:{}", notice.id),
+                        &reply_title,
+                        notice.created_at.as_deref().unwrap_or("notification"),
+                        &preview_markdown_safe(reply),
+                        "Selected reply in this thread.",
+                        if notice.kind == "mention" {
+                            "Mention"
+                        } else {
+                            "Reply"
+                        },
+                        "info",
+                        if notice.context_post_id.is_some() || notice.post_id.is_some() {
+                            "Reply"
+                        } else {
+                            ""
+                        },
+                        "",
+                    ),
+                    notice.actor_avatar_url.as_deref(),
+                ));
+            }
+        }
+        rows.push(row_with_kind(
+            "notification",
+            &format!("notification-detail:{}", notice.id),
+            if is_lightweight_notification(notice) {
+                "Quiet activity"
+            } else {
+                "Thread status"
+            },
+            actor,
+            &format!(
+                "{}. {}",
+                notification_action_sentence(notice.kind.as_str()),
+                if json_truthy(&notice.read) {
+                    "This item is already read."
+                } else {
+                    "This item still needs review."
+                }
+            ),
+            notice.created_at.as_deref().unwrap_or("notification"),
+            if json_truthy(&notice.read) {
+                "Read"
+            } else {
+                "Unread"
+            },
+            if json_truthy(&notice.read) {
+                "info"
+            } else {
+                "warn"
+            },
+            if json_truthy(&notice.read) {
+                ""
+            } else {
+                "Mark read"
+            },
+            "",
+        ));
         rows
     }
 
@@ -4975,6 +5169,15 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
     window.on_refresh(move || {
         if let Some(window) = weak.upgrade() {
             ctrl.borrow_mut().refresh();
+            apply_controller_projection(&window, &ctrl);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ctrl = controller.clone();
+    window.on_toggle_inspector(move || {
+        if let Some(window) = weak.upgrade() {
+            ctrl.borrow_mut().toggle_inspector();
             apply_controller_projection(&window, &ctrl);
         }
     });
@@ -5428,6 +5631,8 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_active_screen(s(&projection.active_screen));
     window.set_selected_row(s(&projection.selected_row));
     window.set_inspector_title(s(&projection.inspector_title));
+    window.set_inspector_visible(projection.inspector_visible);
+    window.set_inspector_open(projection.inspector_open);
     window.set_window_title(s(&projection.window_title));
     window.set_window_subtitle(s(&projection.window_subtitle));
     window.set_attention_summary(s(&projection.attention_summary));
@@ -5514,15 +5719,52 @@ fn s(value: &str) -> SharedString {
 }
 
 fn nav(id: &str, title: &str, count: usize, active: bool) -> NavItem {
+    let count = if count == 0 {
+        String::new()
+    } else {
+        count.to_string()
+    };
+    nav_with_count(id, title, &count, active)
+}
+
+fn nav_with_count(id: &str, title: &str, count: &str, active: bool) -> NavItem {
+    let count_tone = if count.starts_with('!') {
+        "attention"
+    } else if count.starts_with('+') {
+        "owner"
+    } else {
+        ""
+    };
     NavItem {
         id: s(id),
         title: s(title),
-        count: if count == 0 {
-            s("")
-        } else {
-            s(&count.to_string())
-        },
+        count: s(count.trim_start_matches(['!', '+'])),
+        count_tone: s(count_tone),
         active,
+    }
+}
+
+fn count_label(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        count.to_string()
+    }
+}
+
+fn attention_count_label(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!("!{count}")
+    }
+}
+
+fn owner_saved_count_label(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!("+{count}")
     }
 }
 
@@ -5557,6 +5799,7 @@ fn row_with_kind(
         id: s(id),
         kind: s(kind),
         avatar: s(&avatar_text_for_row(kind, title, chip)),
+        avatar_url: s(""),
         title: s(&clean_text(title)),
         subtitle: s(&clean_text(subtitle)),
         detail: s(&clean_text(detail)),
@@ -5566,6 +5809,48 @@ fn row_with_kind(
         primary: s(primary),
         secondary: s(secondary),
     }
+}
+
+fn with_avatar_url(mut row: UiRow, avatar_url: Option<&str>) -> UiRow {
+    if let Some(avatar_url) = avatar_url.filter(|url| !url.trim().is_empty()) {
+        row.avatar_url = s(avatar_url.trim());
+    }
+    row
+}
+
+fn partial_api_error_summary(errors: &[String]) -> Option<String> {
+    if errors.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Owner API partially loaded. Failed endpoint(s): {}.",
+            errors.join("; ")
+        ))
+    }
+}
+
+fn e2ee_endpoint_error_rows(errors: &[String]) -> Vec<UiRow> {
+    errors
+        .iter()
+        .filter(|error| error.to_ascii_lowercase().contains("e2ee"))
+        .enumerate()
+        .map(|(index, error)| {
+            row_with_kind(
+                "error",
+                &format!("endpoint-error:e2ee:{index}"),
+                "Encrypted message state did not load",
+                "Owner API partial failure",
+                &format!(
+                    "{error}. Desk cannot prove there are no encrypted messages or devices until this endpoint loads."
+                ),
+                "Not verified",
+                "Error",
+                "danger",
+                "Refresh",
+                "Copy evidence",
+            )
+        })
+        .collect()
 }
 
 fn avatar_text_for_row(_kind: &str, title: &str, chip: &str) -> String {
@@ -5846,7 +6131,7 @@ fn relationship_for_actor(snapshot: &OwnerSnapshotBundle, actor_id: &str) -> Str
         .iter()
         .any(|follower| follower.follower_actor_id == actor_id)
     {
-        "Follower: approval controls follower-only access.".into()
+        "Follower: approval controls private-post access.".into()
     } else {
         "Public/discovered actor; use Watch for private public-post monitoring.".into()
     }
@@ -5868,17 +6153,20 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
         post.like_count,
         post.boost_count,
     );
-    row_with_kind(
-        "post",
-        &format!("timeline:{}", post.object_id),
-        author,
-        post.actor_username.as_deref().unwrap_or(&post.actor_id),
-        &preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content)),
-        &meta,
-        &indicator.label,
-        indicator.tone,
-        "Reply",
-        "Save",
+    with_avatar_url(
+        row_with_kind(
+            "post",
+            &format!("timeline:{}", post.object_id),
+            author,
+            post.actor_username.as_deref().unwrap_or(&post.actor_id),
+            &preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content)),
+            &meta,
+            &indicator.label,
+            indicator.tone,
+            "Reply",
+            "Save",
+        ),
+        post.actor_avatar_url.as_deref(),
     )
 }
 
@@ -6340,32 +6628,51 @@ fn notification_row(notice: &OwnerNotification) -> UiRow {
     } else {
         ("", "")
     };
+    let lightweight = is_lightweight_notification(notice);
     let subtitle = format!(
         "{} · {}",
         context,
         notice.created_at.as_deref().unwrap_or("notification")
     );
-    row_with_kind(
-        "notification",
-        &format!("notification:{}", notice.id),
-        title.trim(),
-        subtitle.trim(),
-        &detail,
-        if unread { "Needs review" } else { "Reviewed" },
-        if is_lightweight_notification(notice) {
-            "Activity"
-        } else if json_truthy(&notice.read) {
-            "Read"
+    let meta = if lightweight {
+        if unread {
+            "New activity"
         } else {
-            "Unread"
-        },
-        if is_lightweight_notification(notice) || json_truthy(&notice.read) {
-            "info"
-        } else {
-            "warn"
-        },
-        primary,
-        secondary,
+            "Seen activity"
+        }
+    } else if unread {
+        "Needs review"
+    } else {
+        "Reviewed"
+    };
+    let chip = if lightweight {
+        "Activity"
+    } else if json_truthy(&notice.read) {
+        "Read"
+    } else {
+        "Unread"
+    };
+    let tone = if lightweight {
+        "info"
+    } else if json_truthy(&notice.read) {
+        "info"
+    } else {
+        "warn"
+    };
+    with_avatar_url(
+        row_with_kind(
+            "notification",
+            &format!("notification:{}", notice.id),
+            title.trim(),
+            subtitle.trim(),
+            &detail,
+            meta,
+            chip,
+            tone,
+            primary,
+            secondary,
+        ),
+        notice.actor_avatar_url.as_deref(),
     )
 }
 
@@ -6423,7 +6730,7 @@ fn notification_preview_detail(notice: &OwnerNotification) -> String {
         let source = context_text
             .or(reply_text)
             .unwrap_or_else(|| "No post preview is available.".to_string());
-        return format!("Lightweight reaction. {source}");
+        return format!("Small activity on a post. {source}");
     }
 
     let source = context_text
@@ -6521,12 +6828,14 @@ fn e2ee_message_render_state(
     }
     match decrypt_e2ee_message_for_desk(settings, message) {
         Ok(plaintext) => {
-            let _ = persist_cached_decrypted_message(
-                &settings.instance_url,
-                &message.id,
-                &plaintext,
-                &message.e2ee_protocol,
-            );
+            if !is_fixture_e2ee_message(message) {
+                let _ = persist_cached_decrypted_message(
+                    &settings.instance_url,
+                    &message.id,
+                    &plaintext,
+                    &message.e2ee_protocol,
+                );
+            }
             E2eeMessageRenderState {
                 preview: preview_markdown_safe(&plaintext),
                 meta: format!("{protocol} encrypted. Decrypted on this device."),
@@ -6539,27 +6848,40 @@ fn e2ee_message_render_state(
                 .fallback_content
                 .as_deref()
                 .map(preview_markdown_safe)
-                .unwrap_or_else(|| "Encrypted content is waiting for a local key.".into());
+                .unwrap_or_else(|| "This private message is encrypted.".into());
             E2eeMessageRenderState {
                 preview: format!("{fallback} {repair}"),
-                meta: format!("{protocol} encrypted. {error}"),
+                meta: format!("{protocol} private message. {error}"),
                 locked: true,
             }
         }
     }
 }
 
+fn is_fixture_e2ee_message(message: &OwnerE2eeMessage) -> bool {
+    message
+        .encrypted_message
+        .get("recipients")
+        .and_then(|recipients| recipients.as_array())
+        .is_some_and(|recipients| {
+            recipients.iter().any(|recipient| {
+                recipient.get("keyId").and_then(|key_id| key_id.as_str())
+                    == Some(FIXTURE_E2EE_DEVICE_ID)
+            })
+        })
+}
+
 fn decrypt_repair_hint(error: &str) -> &'static str {
     if error.contains("requested secret was deleted") {
-        "This old MLS ciphertext was already opened after forward secrecy advanced; keep decrypted plaintext cached before pruning secrets."
+        "The old message key is no longer available on this device."
     } else if error.contains("No local private key") {
-        "Import or restore the matching device key to read it here."
+        "Restore the matching device key to read it here."
     } else if error.contains("No local MLS state") {
-        "Restore MLS device/group state or receive the conversation on a trusted device."
+        "Restore this account's encrypted-message state or open it on a trusted device."
     } else if error.contains("could not be decrypted") {
-        "Check that this account has the current trusted device state."
+        "This account has encrypted-message state, but it does not match this message."
     } else {
-        "Open Security to inspect device and key state."
+        "Check this account's encrypted-message keys."
     }
 }
 
@@ -6682,7 +7004,7 @@ impl ConversationSummary {
             meta.push(format!("{} encrypted", self.encrypted_count));
         }
         if self.locked_count > 0 {
-            meta.push(format!("{} need keys", self.locked_count));
+            meta.push(format!("{} locked", self.locked_count));
         }
         row_with_kind(
             "conversation",
@@ -6878,7 +7200,45 @@ fn load_local_e2ee_private_key(instance_url: &str, device_id: &str) -> Option<St
             return Some(private_key);
         }
     }
+    if instance_url == DEFAULT_INSTANCE_URL && device_id == FIXTURE_E2EE_DEVICE_ID {
+        return Some(fixture_e2ee_keypair().private_key.clone());
+    }
     None
+}
+
+#[derive(Clone, Debug)]
+struct FixtureE2eeKeypair {
+    private_key: String,
+    public_key: String,
+}
+
+fn fixture_e2ee_keypair() -> &'static FixtureE2eeKeypair {
+    static KEYPAIR: OnceLock<FixtureE2eeKeypair> = OnceLock::new();
+    KEYPAIR.get_or_init(|| {
+        let private_key =
+            RsaPrivateKey::new(&mut OsRng, 2048).expect("fixture E2EE key generation failed");
+        let public_key = RsaPublicKey::from(&private_key);
+        FixtureE2eeKeypair {
+            private_key: private_key
+                .to_pkcs8_pem(LineEnding::LF)
+                .expect("fixture private key PEM encoding failed")
+                .to_string(),
+            public_key: public_key
+                .to_public_key_pem(LineEnding::LF)
+                .expect("fixture public key PEM encoding failed"),
+        }
+    })
+}
+
+fn fixture_e2ee_encrypted_message() -> serde_json::Value {
+    let mut recipients = BTreeMap::new();
+    recipients.insert(
+        FIXTURE_E2EE_DEVICE_ID.to_string(),
+        fixture_e2ee_keypair().public_key.clone(),
+    );
+    let encrypted = e2ee::encrypt_message(FIXTURE_E2EE_PLAINTEXT, &recipients)
+        .expect("fixture encrypted message must be decryptable");
+    serde_json::to_value(encrypted).expect("fixture encrypted message should serialize")
 }
 
 fn load_local_mls_group_states(
@@ -7136,11 +7496,11 @@ fn follower_row(follower: &OwnerFollower) -> UiRow {
     };
     let title = format!("{} follows you", compact_actor(&follower.follower_actor_id));
     let detail = match status.as_str() {
-        "pending" => "Review this request before the account can read follower-only posts.",
+        "pending" => "Review this request before the account can receive private posts.",
         "approved" | "accepted" => {
-            "Approved follower. They can receive follower-only posts unless removed."
+            "Approved follower. They can receive private posts unless removed."
         }
-        "rejected" => "Rejected follower. They cannot read follower-only posts through approval.",
+        "rejected" => "Rejected follower. They cannot receive private posts through approval.",
         _ => "Follower status is unusual; review before sharing private content.",
     };
     row_with_kind(
@@ -7149,7 +7509,7 @@ fn follower_row(follower: &OwnerFollower) -> UiRow {
         &title,
         "Can read private posts only if approved",
         detail,
-        "Inbox details hidden; open Diagnostics for raw delivery data.",
+        "Raw delivery details are hidden from the normal reading view.",
         &status_label,
         tone,
         primary,
@@ -7190,9 +7550,9 @@ fn following_row(following: &OwnerFollowing) -> UiRow {
     };
     let (subtitle, detail, meta) = if is_atproto_actor_id(&following.target_actor_id) {
         (
-            "Bluesky public follow",
-            format!(
-                "Follow status: {status_label}. Bluesky follows are public graph records and do not grant follower-only ActivityPub access."
+                "Bluesky public follow",
+                format!(
+                "Follow status: {status_label}. Bluesky follows are public graph records and do not grant private ActivityPub access."
             ),
             "Public graph only; use Friend for mutual private sharing.",
         )
@@ -7244,17 +7604,20 @@ fn discovered_actor_row(actor: &OwnerDiscoveredActor) -> UiRow {
         "pending" | "requested" => "Cancel",
         _ => "Follow",
     };
-    row(
-        &format!("actor:{}", actor.id),
-        title,
-        actor.handle.as_deref().unwrap_or(&actor.id),
-        actor.summary.as_deref().unwrap_or(
-            "Discovered account. Follow may notify; Watch reads public posts privately.",
+    with_avatar_url(
+        row(
+            &format!("actor:{}", actor.id),
+            title,
+            actor.handle.as_deref().unwrap_or(&actor.id),
+            actor.summary.as_deref().unwrap_or(
+                "Discovered account. Follow may notify; Watch reads public posts privately.",
+            ),
+            &follow_status,
+            "info",
+            follow_action,
+            "Watch",
         ),
-        &follow_status,
-        "info",
-        follow_action,
-        "Watch",
+        actor.icon_url.as_deref(),
     )
 }
 
@@ -7269,30 +7632,33 @@ fn public_actor_row(actor: &OwnerPublicSearchActor) -> UiRow {
         .as_deref()
         .unwrap_or("Public search actor result. Choose Follow or Watch deliberately.");
     let detail = format!("{} Trust signal: {}.", summary, trust.1);
-    row(
-        &format!(
-            "actor:{}",
-            actor.follow_target.as_deref().unwrap_or(&actor.id)
+    with_avatar_url(
+        row(
+            &format!(
+                "actor:{}",
+                actor.follow_target.as_deref().unwrap_or(&actor.id)
+            ),
+            actor
+                .display_name
+                .as_deref()
+                .or(actor.handle.as_deref())
+                .unwrap_or(&actor.id),
+            &format!("{} via {}", actor.network, actor.provider),
+            &detail,
+            trust.0,
+            trust.2,
+            if actor.actions.iter().any(|a| a == "follow") {
+                "Follow"
+            } else {
+                ""
+            },
+            if actor.actions.iter().any(|a| a == "watch") {
+                "Watch"
+            } else {
+                ""
+            },
         ),
-        actor
-            .display_name
-            .as_deref()
-            .or(actor.handle.as_deref())
-            .unwrap_or(&actor.id),
-        &format!("{} via {}", actor.network, actor.provider),
-        &detail,
-        trust.0,
-        trust.2,
-        if actor.actions.iter().any(|a| a == "follow") {
-            "Follow"
-        } else {
-            ""
-        },
-        if actor.actions.iter().any(|a| a == "watch") {
-            "Watch"
-        } else {
-            ""
-        },
+        actor.avatar_url.as_deref(),
     )
 }
 
@@ -7795,6 +8161,20 @@ fn e2ee_peer_device_row(peer: &OwnerE2eePeerDevice) -> UiRow {
 }
 
 fn compose_media_attachment_row(index: usize, url: &str) -> UiRow {
+    if media_attachment_is_encryptable(url) {
+        return row(
+            &format!("media:{url}"),
+            &format!("Encrypted media {}", index + 1),
+            "Inline media bytes will be encrypted before delivery",
+            encrypted_media_attachment_name(url)
+                .as_deref()
+                .unwrap_or("Encrypted attachment"),
+            "E2EE media",
+            "ok",
+            "",
+            "Remove",
+        );
+    }
     let signed_private = media_attachment_requires_authorized_fetch(url);
     let private = media_attachment_is_private(url);
     let (chip, tone, subtitle) = if signed_private {
@@ -8463,8 +8843,18 @@ fn compose_warning(compose: &ComposeState) -> String {
     {
         return "Direct posts require named recipients or an audience group.".into();
     }
+    if compose.encrypt && !matches!(compose.protocol, ProtocolRoute::ActivityPub) {
+        return "Encrypted posts can only be sent to ActivityPub.".into();
+    }
     if compose.encrypt && !compose.attachments.is_empty() {
-        return "Encrypted media attachments are not implemented yet; remove media or turn off encryption.".into();
+        if compose
+            .attachments
+            .iter()
+            .all(|attachment| media_attachment_is_encryptable(attachment))
+        {
+            return "This server does not support encrypted media posts yet; remove media before sending.".into();
+        }
+        return "Encrypted media attachments require inline media bytes from the encrypted media upload flow.".into();
     }
     if !compose.attachments.is_empty()
         && matches!(
@@ -8481,10 +8871,11 @@ fn compose_warning(compose: &ComposeState) -> String {
     if matches!(
         compose.visibility,
         Visibility::Followers | Visibility::Direct
-    ) && compose
-        .attachments
-        .iter()
-        .any(|attachment| !media_attachment_is_private(attachment))
+    ) && !compose.encrypt
+        && compose
+            .attachments
+            .iter()
+            .any(|attachment| !media_attachment_is_private(attachment))
     {
         return "Private and direct posts require private media upload URLs.".into();
     }
@@ -8506,6 +8897,7 @@ fn compose_can_send(compose: &ComposeState) -> bool {
         && (!matches!(compose.visibility, Visibility::Direct)
             || !split_list(&compose.recipients).is_empty()
             || !compose.audience_list_id.as_deref().unwrap_or("").is_empty())
+        && (!compose.encrypt || matches!(compose.protocol, ProtocolRoute::ActivityPub))
         && !(compose.encrypt && !compose.attachments.is_empty())
         && (compose.attachments.is_empty()
             || matches!(compose.protocol, ProtocolRoute::ActivityPub)
@@ -8516,10 +8908,11 @@ fn compose_can_send(compose: &ComposeState) -> bool {
         && (!matches!(
             compose.visibility,
             Visibility::Followers | Visibility::Direct
-        ) || compose
-            .attachments
-            .iter()
-            .all(|attachment| media_attachment_is_private(attachment)))
+        ) || compose.encrypt
+            || compose
+                .attachments
+                .iter()
+                .all(|attachment| media_attachment_is_private(attachment)))
 }
 
 fn split_list(value: &str) -> Vec<String> {
@@ -8547,6 +8940,32 @@ fn media_attachment_is_public_image(url: &str) -> bool {
             media_type_for_path(Path::new(url)).as_str(),
             "image/jpeg" | "image/png" | "image/gif" | "image/webp"
         )
+}
+
+fn media_attachment_is_encryptable(value: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(value)
+        .ok()
+        .and_then(|attachment| {
+            attachment
+                .get("data_base64")
+                .or_else(|| attachment.get("dataBase64"))
+                .and_then(serde_json::Value::as_str)
+                .map(|data| !data.trim().is_empty())
+        })
+        .unwrap_or(false)
+}
+
+fn encrypted_media_attachment_name(value: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(value)
+        .ok()
+        .and_then(|attachment| {
+            attachment
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(ToOwned::to_owned)
+        })
 }
 
 fn media_path(url: &str) -> Option<String> {
@@ -8927,17 +9346,10 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 recipient_actor_id: Some("https://friend.example/users/ada".into()),
                 e2ee_protocol: "dais-mls-v1".into(),
                 dais_encrypted_message: serde_json::Value::Null,
-                encrypted_message: serde_json::json!({
-                    "v": 1,
-                    "alg": "AES-256-GCM",
-                    "keyWrap": "RSA-OAEP-256",
-                    "iv": "MDEyMzQ1Njc4OWFi",
-                    "ciphertext": "Y2lwaGVydGV4dA==",
-                    "recipients": [{ "keyId": "ada-phone", "wrappedKey": "d3JhcHBlZA==" }]
-                }),
+                encrypted_message: fixture_e2ee_encrypted_message(),
                 mls_group_id: None,
                 mls_epoch: None,
-                fallback_content: Some("Encrypted message. Open in dais to decrypt.".into()),
+                fallback_content: None,
                 delivery_ids: vec!["delivery-e2ee-queued".into()],
                 delivery_statuses: vec![OwnerDelivery {
                     id: "delivery-e2ee-queued".into(),
@@ -8952,42 +9364,6 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                     activity_type: Some("Create".into()),
                     created_at: Some("today".into()),
                     delivered_at: None,
-                }],
-                created_at: Some("today".into()),
-            },
-            OwnerE2eeMessage {
-                id: "https://social.dais.social/users/social/e2ee/messages/mls-fixture".into(),
-                conversation_id: "e2ee-conversation-mls-friends".into(),
-                sender_actor_id: "https://social.dais.social/users/social".into(),
-                sender_device_id: "macbook-mls".into(),
-                recipient_actor_id: Some("https://friend.example/users/ada".into()),
-                e2ee_protocol: "mls-rfc9420".into(),
-                dais_encrypted_message: serde_json::json!({
-                    "v": 2,
-                    "protocol": "mls-rfc9420",
-                    "groupId": "ZGFpcy1kZXNrLW1scy1ncm91cA==",
-                    "epoch": 3,
-                    "ciphertext": "Y2lwaGVydGV4dA=="
-                }),
-                encrypted_message: serde_json::Value::Null,
-                mls_group_id: Some("ZGFpcy1kZXNrLW1scy1ncm91cA==".into()),
-                mls_epoch: Some(3),
-                fallback_content: Some("Encrypted MLS group message.".into()),
-                delivery_ids: vec!["delivery-mls-ok".into()],
-                delivery_statuses: vec![OwnerDelivery {
-                    id: "delivery-mls-ok".into(),
-                    post_id: "https://social.dais.social/users/social/e2ee/messages/mls-fixture"
-                        .into(),
-                    target_type: Some("inbox".into()),
-                    target_url: "https://friend.example/inbox".into(),
-                    protocol: "activitypub".into(),
-                    status: "delivered".into(),
-                    retry_count: Some(0),
-                    last_attempt_at: Some("today".into()),
-                    error_message: None,
-                    activity_type: Some("Create".into()),
-                    created_at: Some("today".into()),
-                    delivered_at: Some("today".into()),
                 }],
                 created_at: Some("today".into()),
             },
@@ -9157,23 +9533,27 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
         search: OwnerSearchResult::default(),
         discovered_actor: None,
         api_error,
+        partial_api_errors: Vec::new(),
     }
 }
 
 fn fixture_search(query: &str) -> OwnerSearchResult {
     OwnerSearchResult {
         public_posts: vec![OwnerPublicSearchPost {
-            provider: "tootfinder".into(),
+            provider: "offline-preview".into(),
             network: "ActivityPub".into(),
             id: "public-result-1".into(),
             url: "https://mastodon.example/@science/123".into(),
-            content: format!("Public result for {query}. Links stay clickable via Open original."),
+            content: format!(
+                "Offline preview search sample for {query}. This is not a live public-search result."
+            ),
             canonical_url: Some("https://mastodon.example/@science/123".into()),
             actor_id: Some("https://mastodon.example/users/science".into()),
             actor_handle: Some("@science@mastodon.example".into()),
-            actor_display_name: Some("Science Example".into()),
+            actor_display_name: Some("Preview Science Account".into()),
             content_html: Some(
-                "<p>Public result with <a href=\"https://example.org\">link</a></p>".into(),
+                "<p>Offline preview search sample. This is not a live public-search result. Configure an owner token to run live search.</p>"
+                    .into(),
             ),
             summary: None,
             object_type: Some("Note".into()),
@@ -9188,12 +9568,15 @@ fn fixture_search(query: &str) -> OwnerSearchResult {
             like_count: Some(3),
         }],
         public_actors: vec![OwnerPublicSearchActor {
-            provider: "public-index".into(),
+            provider: "offline-preview".into(),
             network: "ActivityPub".into(),
             id: "https://mastodon.example/users/science".into(),
             handle: Some("@science@mastodon.example".into()),
-            display_name: Some("Science Example".into()),
-            summary: Some("Public science account.".into()),
+            display_name: Some("Preview Science Account".into()),
+            summary: Some(
+                "Offline preview account sample. Configure an owner token to search live public indexes."
+                    .into(),
+            ),
             url: Some("https://mastodon.example/@science".into()),
             avatar_url: None,
             watch_type: Some("activitypub".into()),
@@ -9941,7 +10324,7 @@ mod tests {
             name: Some("Friend Name".into()),
             summary: None,
             url: None,
-            icon_url: None,
+            icon_url: Some("https://example.test/avatar.png".into()),
             handle: Some("@friend@example.test".into()),
             following_status: Some("pending".into()),
             target_public_post: None,
@@ -9950,6 +10333,10 @@ mod tests {
         assert_eq!(pending.primary.as_str(), "Cancel");
         assert_eq!(pending.chip.as_str(), "pending");
         assert_eq!(pending.secondary.as_str(), "Watch");
+        assert_eq!(
+            pending.avatar_url.as_str(),
+            "https://example.test/avatar.png"
+        );
     }
 
     #[test]
@@ -9962,7 +10349,7 @@ mod tests {
             display_name: Some("NASA News".into()),
             summary: Some("Official public updates.".into()),
             url: Some("https://nasa.gov/social/news".into()),
-            avatar_url: None,
+            avatar_url: Some("https://nasa.gov/avatar.png".into()),
             watch_type: Some("activitypub".into()),
             watch_target: Some("https://nasa.gov/users/news".into()),
             follow_target: Some("https://nasa.gov/users/news".into()),
@@ -9971,6 +10358,55 @@ mod tests {
         assert_eq!(row.chip.as_str(), "Domain match");
         assert_eq!(row.tone.as_str(), "ok");
         assert!(row.detail.contains("Trust signal"));
+        assert_eq!(row.avatar_url.as_str(), "https://nasa.gov/avatar.png");
+    }
+
+    #[test]
+    fn navigation_badges_distinguish_attention_from_totals() {
+        let mut controller = DeskController::fixture_for_tests();
+        let projection = controller.projection();
+        let home = projection
+            .mode_nav
+            .iter()
+            .find(|item| item.id.as_str() == "home")
+            .expect("home nav");
+        assert_eq!(home.count.as_str(), "2");
+        assert_eq!(home.count_tone.as_str(), "attention");
+        let feed = projection
+            .screen_nav
+            .iter()
+            .find(|item| item.id.as_str() == "today")
+            .expect("feed nav");
+        assert_eq!(feed.count_tone.as_str(), "");
+
+        controller.select_mode("people");
+        let projection = controller.projection();
+        let requests = projection
+            .screen_nav
+            .iter()
+            .find(|item| item.id.as_str() == "followers")
+            .expect("requests nav");
+        assert_eq!(requests.count.as_str(), "1");
+        assert_eq!(requests.count_tone.as_str(), "attention");
+    }
+
+    #[test]
+    fn inspector_can_be_collapsed_without_changing_selection() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("inbox");
+        let selected = controller.selected_row.clone();
+        let projection = controller.projection();
+        assert!(projection.inspector_visible);
+        assert!(projection.inspector_open);
+
+        controller.toggle_inspector();
+        let projection = controller.projection();
+        assert!(projection.inspector_visible);
+        assert!(!projection.inspector_open);
+        assert_eq!(projection.selected_row.as_str(), selected);
+
+        controller.select_row(&selected);
+        assert!(controller.projection().inspector_open);
     }
 
     #[test]
@@ -10004,12 +10440,14 @@ mod tests {
         let rows = controller.find_rows();
         assert!(rows.iter().any(|row| row.id.as_str()
             == "url:https://mastodon.example/@science/123"
-            && row.subtitle.as_str() == "ActivityPub via tootfinder"
+            && row.subtitle.as_str() == "ActivityPub via offline-preview"
+            && row.detail.contains("not a live public-search result")
             && row.primary.as_str() == "Open original"
             && row.secondary.as_str() == "Watch"));
         assert!(rows.iter().any(|row| row.id.as_str()
             == "actor:https://mastodon.example/users/science"
-            && row.subtitle.as_str() == "ActivityPub via public-index"
+            && row.subtitle.as_str() == "ActivityPub via offline-preview"
+            && row.detail.contains("Offline preview account sample")
             && row.detail.contains("Trust signal")));
         assert!(rows.iter().all(|row| {
             !row.title.to_ascii_lowercase().contains("complete")
@@ -10326,7 +10764,7 @@ mod tests {
         assert!(row.detail.contains("public graph records"));
         assert!(row
             .detail
-            .contains("do not grant follower-only ActivityPub access"));
+            .contains("do not grant private ActivityPub access"));
         assert!(row.meta.contains("Public graph only"));
         assert_eq!(row.primary.as_str(), "Unfollow");
     }
@@ -10630,7 +11068,7 @@ mod tests {
             context_post_protocol: None,
             context_post_published_at: None,
         });
-        assert!(row.detail.starts_with("Lightweight reaction."));
+        assert!(row.detail.starts_with("Small activity on a post."));
         assert!(row.detail.contains("Liked your post."));
         assert_eq!(row.primary, "Mark read");
         assert_eq!(row.secondary, "Open link");
@@ -10689,7 +11127,7 @@ mod tests {
             actor_id: "https://example.social/users/alice".into(),
             actor_username: Some("alice".into()),
             actor_display_name: Some("Alice".into()),
-            actor_avatar_url: None,
+            actor_avatar_url: Some("https://example.social/alice.png".into()),
             content: "Unlisted note".into(),
             content_html: None,
             visibility: "unlisted".into(),
@@ -10702,6 +11140,10 @@ mod tests {
         });
         assert_eq!(timeline.chip.as_str(), "Unlisted");
         assert!(timeline.meta.contains("Unlisted"));
+        assert_eq!(
+            timeline.avatar_url.as_str(),
+            "https://example.social/alice.png"
+        );
     }
 
     #[test]
@@ -10773,13 +11215,20 @@ mod tests {
     #[test]
     fn reply_notification_inspector_shows_reply_and_original_post() {
         let controller = DeskController::fixture_for_tests();
-        let rows = controller.inspector_rows("notification:notice-reply");
+        let rows = controller.notification_inspector_rows("notification:notice-reply");
+        assert_eq!(rows[0].title.as_str(), "Original post");
+        assert_eq!(rows[1].title.as_str(), "Reply from Ada Kline");
+        assert_eq!(rows[2].title.as_str(), "Thread status");
         let reply = rows
             .iter()
             .find(|row| row.id.as_str() == "notification-reply:notice-reply")
             .expect("reply row");
-        assert_eq!(reply.title.as_str(), "Reply text");
         assert!(reply.detail.contains("slow weekend"));
+        assert_eq!(
+            reply.avatar_url.as_str(),
+            "",
+            "fixture has no avatar URL, so initials remain the fallback"
+        );
         let original = rows
             .iter()
             .find(|row| row.id.as_str() == "notification-context:notice-reply")
@@ -11072,7 +11521,31 @@ mod tests {
     }
 
     #[test]
-    fn compose_blocks_encrypted_media_until_supported() {
+    fn compose_blocks_inline_encrypted_media_until_server_supports_it() {
+        let compose = ComposeState {
+            text: "encrypted photo".into(),
+            visibility: Visibility::Direct,
+            protocol: ProtocolRoute::ActivityPub,
+            encrypt: true,
+            recipients: "https://friend.example/users/ada".into(),
+            attachments: vec![serde_json::json!({
+                "type": "Document",
+                "mediaType": "image/png",
+                "name": "photo.png",
+                "data_base64": "c2VjcmV0IGltYWdl"
+            })
+            .to_string()],
+            ..ComposeState::default()
+        };
+        assert!(!compose_can_send(&compose));
+        assert_eq!(
+            compose_warning(&compose),
+            "This server does not support encrypted media posts yet; remove media before sending."
+        );
+    }
+
+    #[test]
+    fn compose_blocks_url_media_for_encrypted_posts() {
         let compose = ComposeState {
             text: "encrypted photo".into(),
             visibility: Visibility::Direct,
@@ -11087,7 +11560,7 @@ mod tests {
         assert!(!compose_can_send(&compose));
         assert_eq!(
             compose_warning(&compose),
-            "Encrypted media attachments are not implemented yet; remove media or turn off encryption."
+            "Encrypted media attachments require inline media bytes from the encrypted media upload flow."
         );
     }
 
@@ -11103,6 +11576,34 @@ mod tests {
         let rows = controller.compose_context_rows();
         assert!(rows.iter().any(|row| row.chip.as_str() == "Auth media"));
         assert!(rows.iter().any(|row| row.chip.as_str() == "Public media"));
+    }
+
+    #[test]
+    fn encrypted_media_upload_adds_inline_attachment_without_owner_upload() {
+        let mut controller = DeskController::fixture_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let path = temp_dir.path().join("secret.png");
+        fs::write(&path, b"secret image bytes").expect("write media");
+        controller.compose.encrypt = true;
+        controller.compose.text = "encrypted photo".into();
+        controller.media_form.file_path = path.to_string_lossy().to_string();
+        controller.media_form.media_type = "image/png".into();
+        controller.media_form.description = "Backyard telescope".into();
+
+        let message = controller.upload_media_inner().expect("encrypted upload");
+
+        assert_eq!(
+            message,
+            "Prepared encrypted media attachment for the current draft."
+        );
+        assert_eq!(controller.compose.attachments.len(), 1);
+        let attachment: serde_json::Value =
+            serde_json::from_str(&controller.compose.attachments[0]).expect("attachment JSON");
+        assert_eq!(attachment["mediaType"], "image/png");
+        assert_eq!(attachment["name"], "secret.png");
+        assert_eq!(attachment["data_base64"], "c2VjcmV0IGltYWdlIGJ5dGVz");
+        let rows = controller.compose_context_rows();
+        assert!(rows.iter().any(|row| row.chip.as_str() == "E2EE media"));
     }
 
     #[test]
@@ -11481,7 +11982,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_rows_group_plaintext_and_encrypted_messages() {
+    fn conversation_rows_show_generated_encrypted_messages_as_decrypted() {
         let controller = DeskController::fixture_for_tests();
         let rows = controller.conversation_rows();
         let plaintext = rows
@@ -11492,21 +11993,15 @@ mod tests {
         assert_eq!(plaintext.chip.as_str(), "Encrypted");
         assert!(plaintext.meta.contains("2 messages"));
         assert!(plaintext.meta.contains("1 encrypted"));
+        assert!(!plaintext.meta.contains("locked"));
         assert!(plaintext.detail.contains("backyard telescope"));
-
-        let e2ee = rows
-            .iter()
-            .find(|row| row.id.as_str() == "conversation:group:e2ee-conversation-mls-friends")
-            .expect("MLS encrypted group conversation");
-        assert_eq!(e2ee.kind.as_str(), "conversation");
-        assert_eq!(e2ee.chip.as_str(), "E2EE group");
-        assert!(e2ee.meta.contains("1 encrypted"));
-        assert!(e2ee.meta.contains("1 need keys"));
-        assert!(e2ee.detail.contains("Open Security"));
+        assert!(plaintext
+            .detail
+            .contains("Encrypted fixture message decrypted on this device"));
     }
 
     #[test]
-    fn encrypted_messages_are_readable_rows_with_repair_copy_when_locked() {
+    fn generated_encrypted_messages_decrypt_in_desk() {
         let controller = DeskController::fixture_for_tests();
         let message = controller
             .data
@@ -11516,22 +12011,89 @@ mod tests {
             .expect("v1 encrypted message");
         let e2ee = e2ee_social_message_row(&controller.settings, message);
         assert_eq!(e2ee.kind.as_str(), "message");
-        assert!(e2ee.title.contains("Encrypted message from"));
-        assert!(e2ee.meta.contains("No local private key"));
-        assert!(e2ee.detail.contains("Import or restore"));
+        assert!(e2ee.title.contains("Direct message from"));
+        assert!(e2ee.meta.contains("Decrypted"));
+        assert!(!e2ee.meta.contains("No local private key"));
+        assert!(e2ee
+            .detail
+            .contains("Encrypted fixture message decrypted on this device"));
     }
 
     #[test]
-    fn mls_message_rows_show_group_and_epoch_context() {
+    fn external_broken_encrypted_messages_render_specific_error() {
         let controller = DeskController::fixture_for_tests();
-        let rows = controller.security_rows();
-        let row = rows
+        let mut message = controller
+            .data
+            .e2ee_messages
             .iter()
-            .find(|row| row.chip.as_str() == "MLS")
-            .expect("MLS message row");
-        assert_eq!(row.title.as_str(), "MLS encrypted group");
-        assert!(row.subtitle.contains("epoch=3"));
-        assert!(row.subtitle.contains("group="));
+            .find(|message| message.e2ee_protocol != "mls-rfc9420")
+            .expect("v1 encrypted message")
+            .clone();
+        message.id = "https://external.example/e2ee/messages/broken-missing-key".into();
+        let encrypted = message
+            .encrypted_message
+            .get_mut("recipients")
+            .and_then(|recipients| recipients.as_array_mut())
+            .and_then(|recipients| recipients.first_mut())
+            .expect("fixture recipient");
+        encrypted["keyId"] = serde_json::Value::String("external-missing-device".into());
+        let e2ee = e2ee_social_message_row(&controller.settings, &message);
+        assert_eq!(e2ee.kind.as_str(), "message");
+        assert!(
+            e2ee.title.contains("Encrypted message from"),
+            "title={} meta={} detail={}",
+            e2ee.title,
+            e2ee.meta,
+            e2ee.detail
+        );
+        assert!(
+            e2ee.meta.contains("No local private key"),
+            "title={} meta={} detail={}",
+            e2ee.title,
+            e2ee.meta,
+            e2ee.detail
+        );
+        assert!(
+            e2ee.detail.contains("Restore the matching device key"),
+            "title={} meta={} detail={}",
+            e2ee.title,
+            e2ee.meta,
+            e2ee.detail
+        );
+    }
+
+    #[test]
+    fn partial_e2ee_owner_api_failures_are_visible_in_desk() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.data.e2ee_messages.clear();
+        controller.data.e2ee_devices.clear();
+        controller.data.e2ee_peer_devices.clear();
+        controller.data.partial_api_errors = vec![
+            "E2EE messages: HTTP 500".into(),
+            "E2EE local devices: HTTP 503".into(),
+        ];
+
+        let conversation_rows = controller.conversation_rows();
+        assert!(conversation_rows.iter().any(|row| {
+            row.id.starts_with("endpoint-error:e2ee")
+                && row
+                    .detail
+                    .contains("cannot prove there are no encrypted messages")
+        }));
+
+        let security_rows = controller.security_rows();
+        assert!(security_rows.iter().any(|row| {
+            row.id.starts_with("endpoint-error:e2ee") && row.meta.as_str() == "Not verified"
+        }));
+
+        let health_rows = controller.health_rows();
+        let owner_api = health_rows
+            .iter()
+            .find(|row| row.id.as_str() == "health:owner-api")
+            .expect("owner api health row");
+        assert_eq!(owner_api.subtitle.as_str(), "Partial failure");
+        assert_eq!(owner_api.chip.as_str(), "Review");
+        assert!(owner_api.detail.contains("E2EE messages: HTTP 500"));
     }
 
     #[test]
@@ -11995,13 +12557,11 @@ mod tests {
             |row| row.id.as_str() == "e2ee-device:e2ee-device-local-laptop"
                 && row.chip.as_str() == "Active"
         ));
-        let mls_group = rows
-            .iter()
-            .find(|row| row.id.as_str().starts_with("mls-group:"))
-            .expect("MLS group row");
-        assert_eq!(mls_group.chip.as_str(), "MLS");
-        assert!(mls_group.subtitle.contains("epoch=3"));
-        assert!(mls_group.detail.contains("unrecoverable"));
+        assert!(
+            rows.iter()
+                .all(|row| !row.id.as_str().starts_with("mls-group:")),
+            "preview security screen should not invent undecryptable MLS groups"
+        );
         let trusted = rows
             .iter()
             .find(|row| row.id.as_str() == "e2ee-peer:e2ee-peer-ada-phone")

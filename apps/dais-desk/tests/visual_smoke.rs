@@ -30,6 +30,17 @@ fn run() -> Result<(), Box<dyn Error>> {
     window.show()?;
 
     capture(&window, &output_dir, "home")?;
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(920.0, 660.0));
+    capture(&window, &output_dir, "home-min-width")?;
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(1440.0, 860.0));
+    capture(&window, &output_dir, "home-wide")?;
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(1180.0, 760.0));
 
     window.invoke_select_screen("compose".into());
     capture(&window, &output_dir, "home-compose-media")?;
