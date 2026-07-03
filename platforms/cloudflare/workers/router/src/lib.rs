@@ -1616,11 +1616,13 @@ async fn activitypub_store_e2ee_direct_message(
         .unwrap_or("unknown");
     let encrypted_json =
         serde_json::to_string(encrypted_message).map_err(|error| error.to_string())?;
+    let attachments = encrypted_media_attachments_from_activitypub_object(object)?;
     let aad_json = serde_json::to_string(&serde_json::json!({
         "recipientActorId": local_actor,
         "fallbackContent": fallback_content,
         "e2eeProtocol": protocol,
         "e2eeField": envelope_field,
+        "attachments": attachments,
     }))
     .map_err(|error| error.to_string())?;
     let db = env.d1("DB").map_err(|error| error.to_string())?;
@@ -7177,6 +7179,20 @@ async fn owner_send_e2ee_message(
     if fallback_content.len() > 512 {
         return Err("fallbackContent is too long".to_string());
     }
+    let attachments = normalize_encrypted_media_attachments(
+        &body
+            .get("attachments")
+            .or_else(|| body.get("media_attachments"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    )?;
+    if !attachments.is_empty() && protocol != "dais-mls-v1" {
+        return Err(
+            "encrypted media attachments are currently supported only for encryptedMessage v1"
+                .to_string(),
+        );
+    }
 
     let local_device =
         owner_e2ee_device_by_actor_and_device(env, &local_actor.id, &sender_device_id)
@@ -7214,6 +7230,7 @@ async fn owner_send_e2ee_message(
     let aad = serde_json::json!({
         "recipientActorId": recipient_actor_id,
         "fallbackContent": fallback_content,
+        "attachments": attachments.clone(),
     });
     let aad_json = serde_json::to_string(&aad).map_err(|error| error.to_string())?;
     let ciphertext_json =
@@ -7291,6 +7308,9 @@ async fn owner_send_e2ee_message(
     });
     if let Some(object) = note.as_object_mut() {
         object.insert(envelope_field.to_string(), encrypted_message.clone());
+        if !attachments.is_empty() {
+            object.insert("attachment".to_string(), Value::Array(attachments.clone()));
+        }
         if protocol == "mls-rfc9420" {
             if let Some(group_id) = encrypted_message.get("groupId").cloned() {
                 object
@@ -7466,6 +7486,11 @@ async fn owner_e2ee_message_row(
         .get("fallbackContent")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let attachments = aad
+        .get("attachments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let delivery_statuses = owner_delivery_rows_for_post(env, &message_id).await?;
     let mut item = Map::new();
     item.insert("id".to_string(), string_value_or_default(&row, "id"));
@@ -7516,6 +7541,7 @@ async fn owner_e2ee_message_row(
         "fallback_content".to_string(),
         fallback_content.map(Value::String).unwrap_or(Value::Null),
     );
+    item.insert("attachments".to_string(), Value::Array(attachments));
     item.insert(
         "delivery_ids".to_string(),
         Value::Array(
@@ -12108,6 +12134,93 @@ fn normalize_attachments(values: &[Value]) -> std::result::Result<Vec<Value>, St
     Ok(attachments)
 }
 
+fn normalize_encrypted_media_attachments(
+    values: &[Value],
+) -> std::result::Result<Vec<Value>, String> {
+    let mut attachments = Vec::new();
+    for value in values {
+        let attachment = match value {
+            Value::String(text) if text.trim().starts_with('{') => {
+                serde_json::from_str::<Value>(text)
+                    .map_err(|_| "encrypted media attachment JSON is invalid".to_string())?
+            }
+            Value::Object(_) => value.clone(),
+            _ => {
+                return Err(
+                    "encrypted media attachments must be ciphertext JSON objects".to_string(),
+                )
+            }
+        };
+        let object = attachment
+            .as_object()
+            .ok_or_else(|| "encrypted media attachment must be an object".to_string())?;
+        if object.get("url").is_some()
+            || object.get("data_base64").is_some()
+            || object.get("dataBase64").is_some()
+        {
+            return Err(
+                "encrypted media attachments must not include plaintext bytes or fetch URLs"
+                    .to_string(),
+            );
+        }
+        let encrypted_media = object
+            .get("encryptedMedia")
+            .ok_or_else(|| "encrypted media attachment requires encryptedMedia".to_string())?;
+        validate_encrypted_media_payload(encrypted_media)?;
+
+        let media_type = encrypted_media
+            .get("mediaType")
+            .or_else(|| object.get("mediaType"))
+            .and_then(Value::as_str)
+            .unwrap_or("application/octet-stream");
+        if media_type != "application/octet-stream" && !allowed_media_type(media_type) {
+            return Err("unsupported encrypted attachment media type".to_string());
+        }
+        let mut normalized = Map::new();
+        normalized.insert(
+            "type".to_string(),
+            Value::String(
+                object
+                    .get("type")
+                    .and_then(optional_body_string)
+                    .unwrap_or_else(|| {
+                        if media_type.starts_with("image/") {
+                            "Image".to_string()
+                        } else {
+                            "Document".to_string()
+                        }
+                    }),
+            ),
+        );
+        normalized.insert(
+            "mediaType".to_string(),
+            Value::String(media_type.to_string()),
+        );
+        if let Some(name) = object
+            .get("name")
+            .or_else(|| encrypted_media.get("name"))
+            .and_then(optional_body_string)
+            .map(|name| name.chars().take(160).collect::<String>())
+        {
+            normalized.insert("name".to_string(), Value::String(name));
+        }
+        normalized.insert("encryptedMedia".to_string(), encrypted_media.clone());
+        attachments.push(Value::Object(normalized));
+    }
+    Ok(attachments)
+}
+
+fn encrypted_media_attachments_from_activitypub_object(
+    object: &Value,
+) -> std::result::Result<Vec<Value>, String> {
+    let values = match object.get("attachment") {
+        Some(Value::Array(values)) => values.clone(),
+        Some(value) => vec![value.clone()],
+        None => Vec::new(),
+    };
+    normalize_encrypted_media_attachments(&values)
+}
+
 fn optional_https_url(
     value: Option<&Value>,
     field: &str,
@@ -12864,6 +12977,30 @@ fn validate_encrypted_message_envelope(value: &Value) -> std::result::Result<(),
     Ok(())
 }
 
+fn validate_encrypted_media_payload(value: &Value) -> std::result::Result<(), String> {
+    let payload = value
+        .as_object()
+        .ok_or_else(|| "encryptedMedia must be an object".to_string())?;
+    match payload.get("v").and_then(Value::as_u64) {
+        Some(1) => {}
+        Some(version) => return Err(format!("unsupported encryptedMedia version {version}")),
+        None => return Err("encryptedMedia.v is required".to_string()),
+    }
+    match payload.get("alg").and_then(Value::as_str) {
+        Some("AES-256-GCM") => {}
+        Some(_) => return Err("encryptedMedia.alg must be AES-256-GCM".to_string()),
+        None => return Err("encryptedMedia.alg is required".to_string()),
+    }
+    let iv = required_encrypted_media_base64(payload, "iv")?;
+    if iv.len() != 12 {
+        return Err("encryptedMedia.iv must decode to 12 bytes".to_string());
+    }
+    if required_encrypted_media_base64(payload, "ciphertext")?.is_empty() {
+        return Err("encryptedMedia.ciphertext must not be empty".to_string());
+    }
+    Ok(())
+}
+
 fn required_encrypted_base64(
     object: &Map<String, Value>,
     key: &str,
@@ -12877,6 +13014,21 @@ fn required_encrypted_base64(
     BASE64
         .decode(value.as_bytes())
         .map_err(|_| format!("encryptedMessage.{key} must be valid base64"))
+}
+
+fn required_encrypted_media_base64(
+    object: &Map<String, Value>,
+    key: &str,
+) -> std::result::Result<Vec<u8>, String> {
+    let value = object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("encryptedMedia.{key} is required"))?;
+    BASE64
+        .decode(value.as_bytes())
+        .map_err(|_| format!("encryptedMedia.{key} must be valid base64"))
 }
 
 fn e2ee_device_fingerprint(credential: &str, key_package: &str) -> String {
@@ -13654,18 +13806,19 @@ mod tests {
     use super::{
         activitypub_actor_profile_html, activitypub_watch_item, bluesky_actor_target,
         bluesky_appview_xrpc_url, bluesky_post_uri, bluesky_watch_item, display_local_url,
-        e2ee_device_fingerprint, is_local_object_url, is_public_atproto_image_attachment,
-        media_custom_metadata, normalize_ai_categories, normalize_discovered_public_post,
-        normalize_e2ee_device_id, normalize_e2ee_fingerprint, normalize_e2ee_protocol,
+        e2ee_device_fingerprint, encrypted_media_attachments_from_activitypub_object,
+        is_local_object_url, is_public_atproto_image_attachment, media_custom_metadata,
+        normalize_ai_categories, normalize_discovered_public_post, normalize_e2ee_device_id,
+        normalize_e2ee_fingerprint, normalize_e2ee_protocol, normalize_encrypted_media_attachments,
         owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
         owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
         parse_lenient_json_body, parse_workers_ai_moderation,
         peer_trust_state_after_material_update, sha256_hex, source_type_for_watch_kind,
         strip_json_fence, tootfinder_search_items, tootfinder_search_url,
         validate_dais_encrypted_message_v2, validate_e2ee_device_material,
-        validate_encrypted_message_envelope, validate_owner_e2ee_payload, MediaMetadataInput,
-        OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider,
-        OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
+        validate_encrypted_media_payload, validate_encrypted_message_envelope,
+        validate_owner_e2ee_payload, MediaMetadataInput, OwnerProfile, OwnerPublicSearchOptions,
+        OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
     };
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     use serde_json::{Map, Value};
@@ -13896,6 +14049,89 @@ mod tests {
             metadata.get("authorized_fetch").map(String::as_str),
             Some("required")
         );
+    }
+
+    #[test]
+    fn validates_encrypted_media_payload_shape() {
+        let payload = serde_json::json!({
+            "v": 1,
+            "alg": "AES-256-GCM",
+            "iv": BASE64.encode([7u8; 12]),
+            "ciphertext": BASE64.encode(b"ciphertext"),
+            "mediaType": "image/png",
+            "name": "secret.png"
+        });
+
+        assert!(validate_encrypted_media_payload(&payload).is_ok());
+
+        let mut bad_iv = payload.clone();
+        bad_iv["iv"] = Value::String(BASE64.encode([1u8; 8]));
+        assert!(validate_encrypted_media_payload(&bad_iv).is_err());
+
+        let mut bad_alg = payload;
+        bad_alg["alg"] = Value::String("AES-128-GCM".to_string());
+        assert!(validate_encrypted_media_payload(&bad_alg).is_err());
+    }
+
+    #[test]
+    fn normalizes_only_ciphertext_encrypted_media_attachments() {
+        let encrypted = serde_json::json!({
+            "type": "Document",
+            "mediaType": "image/png",
+            "name": "secret.png",
+            "encryptedMedia": {
+                "v": 1,
+                "alg": "AES-256-GCM",
+                "iv": BASE64.encode([9u8; 12]),
+                "ciphertext": BASE64.encode(b"ciphertext"),
+                "mediaType": "image/png",
+                "name": "secret.png"
+            }
+        });
+        let normalized = normalize_encrypted_media_attachments(&[encrypted]).unwrap();
+
+        assert_eq!(normalized.len(), 1);
+        let object = normalized[0].as_object().unwrap();
+        assert!(object.get("encryptedMedia").is_some());
+        assert!(object.get("url").is_none());
+        assert!(object.get("data_base64").is_none());
+
+        let plaintext = serde_json::json!({
+            "type": "Document",
+            "mediaType": "image/png",
+            "name": "secret.png",
+            "data_base64": BASE64.encode(b"secret image bytes")
+        });
+        assert!(normalize_encrypted_media_attachments(&[plaintext]).is_err());
+    }
+
+    #[test]
+    fn extracts_encrypted_media_attachments_from_activitypub_object() {
+        let note = serde_json::json!({
+            "type": "Note",
+            "attachment": [{
+                "type": "Document",
+                "mediaType": "image/png",
+                "name": "secret.png",
+                "encryptedMedia": {
+                    "v": 1,
+                    "alg": "AES-256-GCM",
+                    "iv": BASE64.encode([3u8; 12]),
+                    "ciphertext": BASE64.encode(b"ciphertext"),
+                    "mediaType": "image/png",
+                    "name": "secret.png"
+                }
+            }]
+        });
+
+        let attachments = encrypted_media_attachments_from_activitypub_object(&note).unwrap();
+
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(
+            attachments[0]["name"],
+            Value::String("secret.png".to_string())
+        );
+        assert!(attachments[0].get("encryptedMedia").is_some());
     }
 
     #[test]

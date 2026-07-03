@@ -12,7 +12,7 @@ mod routing;
 mod sources;
 mod tui;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use clap::{CommandFactory, Parser};
@@ -47,6 +47,7 @@ use rand::RngCore;
 use routing::{Protocol, Visibility};
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::{RsaPrivateKey, RsaPublicKey};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -1794,6 +1795,7 @@ async fn send_owner_e2ee_mls_message(
             fallback_content: Some(
                 "Encrypted MLS message. Open in a dais client to decrypt.".to_string(),
             ),
+            attachments: Vec::new(),
         })
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -1890,6 +1892,7 @@ async fn send_owner_e2ee_mls_group_message(
                 fallback_content: Some(
                     "Encrypted MLS group message. Open in a dais client to decrypt.".to_string(),
                 ),
+                attachments: Vec::new(),
             })
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -1908,9 +1911,13 @@ async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
     let recipient_public_key = resolve_owner_e2ee_recipient_key(&args).await?;
     let mut recipients = BTreeMap::new();
     recipients.insert(args.recipient_device_id.clone(), recipient_public_key);
-    let payload =
-        e2ee::encrypted_note_payload(&args.plaintext, &recipients, args.view_url.as_deref())?;
+    let (payload, content_key) = e2ee::encrypted_note_payload_with_content_key(
+        &args.plaintext,
+        &recipients,
+        args.view_url.as_deref(),
+    )?;
     let encrypted_message = serde_json::to_value(&payload.encrypted_message)?;
+    let attachments = posting::encrypted_attachment_values(&args.attachments, &content_key)?;
 
     let result = owner_api(&args.api)
         .send_e2ee_message(&OwnerE2eeMessageSend {
@@ -1920,6 +1927,7 @@ async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
             dais_encrypted_message: None,
             encrypted_message: Some(encrypted_message),
             fallback_content: Some(payload.content),
+            attachments,
         })
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -2009,9 +2017,13 @@ async fn send_owner_e2ee_group_message(args: cli::OwnerE2eeGroupSendArgs) -> Res
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let plan = plan_owner_e2ee_group_recipients(audience, &peers, args.allow_untrusted)?;
-    let payload =
-        e2ee::encrypted_note_payload(&args.plaintext, &plan.recipients, args.view_url.as_deref())?;
+    let (payload, content_key) = e2ee::encrypted_note_payload_with_content_key(
+        &args.plaintext,
+        &plan.recipients,
+        args.view_url.as_deref(),
+    )?;
     let encrypted_message = serde_json::to_value(&payload.encrypted_message)?;
+    let attachments = posting::encrypted_attachment_values(&args.attachments, &content_key)?;
 
     println!("Sending owner E2EE group message");
     println!("audience_id={}", audience.id);
@@ -2033,6 +2045,7 @@ async fn send_owner_e2ee_group_message(args: cli::OwnerE2eeGroupSendArgs) -> Res
                 dais_encrypted_message: None,
                 encrypted_message: Some(encrypted_message.clone()),
                 fallback_content: Some(payload.content.clone()),
+                attachments: attachments.clone(),
             })
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -2079,8 +2092,26 @@ async fn decrypt_owner_e2ee_message(
         })?;
         store.load_e2ee_private_key(&args.api.instance_url, device_id)?
     };
-    let plaintext = e2ee::decrypt_message(&encrypted, &private_key, args.key_id.as_deref())?;
+    let (plaintext, content_key) =
+        e2ee::decrypt_message_with_content_key(&encrypted, &private_key, args.key_id.as_deref())?;
     println!("{plaintext}");
+    for (index, attachment) in message.attachments.iter().enumerate() {
+        let encrypted_media = e2ee::encrypted_media_from_json(attachment.clone())?;
+        let bytes = e2ee::decrypt_media_bytes_with_content_key(&encrypted_media, &content_key)
+            .with_context(|| format!("could not decrypt attachment {}", index + 1))?;
+        let digest = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        println!(
+            "attachment[{}] name={} media_type={} bytes={} sha256={}",
+            index + 1,
+            encrypted_media.name.as_deref().unwrap_or("unnamed"),
+            encrypted_media.media_type,
+            bytes.len(),
+            digest
+        );
+    }
     Ok(())
 }
 
@@ -2758,6 +2789,9 @@ fn print_owner_e2ee_messages(messages: &[OwnerE2eeMessage]) {
             println!("envelope=daisEncryptedMessage");
         } else {
             println!("envelope=encryptedMessage");
+        }
+        if !message.attachments.is_empty() {
+            println!("attachments={}", message.attachments.len());
         }
         println!("delivery_ids={}", message.delivery_ids.join(","));
         if let Some(created_at) = message.created_at.as_deref() {

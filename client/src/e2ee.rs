@@ -109,6 +109,16 @@ pub fn decrypt_message(
     private_key_pem: &str,
     my_key_id: Option<&str>,
 ) -> Result<String> {
+    let (plaintext, _content_key) =
+        decrypt_message_with_content_key(encrypted, private_key_pem, my_key_id)?;
+    Ok(plaintext)
+}
+
+pub fn decrypt_message_with_content_key(
+    encrypted: &EncryptedMessage,
+    private_key_pem: &str,
+    my_key_id: Option<&str>,
+) -> Result<(String, String)> {
     validate_envelope(encrypted)?;
     let recipient = select_recipient(encrypted, my_key_id)?;
     let private_key =
@@ -133,7 +143,8 @@ pub fn decrypt_message(
         .decrypt(Nonce::from_slice(&iv), ciphertext.as_ref())
         .map_err(|_| anyhow!("AES-256-GCM decryption failed"))?;
 
-    String::from_utf8(plaintext).context("plaintext was not valid UTF-8")
+    let plaintext = String::from_utf8(plaintext).context("plaintext was not valid UTF-8")?;
+    Ok((plaintext, STANDARD.encode(cek)))
 }
 
 pub fn encrypt_media_bytes_with_content_key(
@@ -229,6 +240,11 @@ This message was sent encrypted, so your current client can’t display it.<br>\
 pub fn encrypted_message_from_json(value: Value) -> Result<EncryptedMessage> {
     let encrypted = value.get("encryptedMessage").cloned().unwrap_or(value);
     serde_json::from_value(encrypted).context("could not decode encryptedMessage")
+}
+
+pub fn encrypted_media_from_json(value: Value) -> Result<EncryptedMediaPayload> {
+    let encrypted = value.get("encryptedMedia").cloned().unwrap_or(value);
+    serde_json::from_value(encrypted).context("could not decode encryptedMedia")
 }
 
 fn validate_envelope(encrypted: &EncryptedMessage) -> Result<()> {

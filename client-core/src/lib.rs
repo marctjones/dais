@@ -208,11 +208,8 @@ impl OwnerApiClient {
     }
 
     pub async fn delete_e2ee_message(&self, id: &str) -> ClientResult<OwnerActionResult> {
-        self.delete(&format!(
-            "/api/dais/owner/e2ee/messages/{}",
-            url_encode(id)
-        ))
-        .await
+        self.delete(&format!("/api/dais/owner/e2ee/messages/{}", url_encode(id)))
+            .await
     }
 
     pub async fn send_e2ee_message(
@@ -951,6 +948,8 @@ pub struct OwnerE2eeMessage {
     pub mls_epoch: Option<u64>,
     pub fallback_content: Option<String>,
     #[serde(default)]
+    pub attachments: Vec<serde_json::Value>,
+    #[serde(default)]
     pub delivery_ids: Vec<String>,
     #[serde(default)]
     pub delivery_statuses: Vec<OwnerDelivery>,
@@ -967,6 +966,8 @@ pub struct OwnerE2eeMessageSend {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_message: Option<serde_json::Value>,
     pub fallback_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<serde_json::Value>,
 }
 
 fn default_e2ee_protocol() -> String {
@@ -1601,6 +1602,7 @@ mod tests {
             dais_encrypted_message: Some(serde_json::json!({"v": 2})),
             encrypted_message: None,
             fallback_content: Some("Encrypted".into()),
+            attachments: Vec::new(),
         };
         let value = serde_json::to_value(mls).unwrap();
 

@@ -1050,6 +1050,9 @@ pub struct OwnerE2eeSendArgs {
     pub sender_device_id: String,
     /// Plaintext message to encrypt and send.
     pub plaintext: String,
+    /// Inline media attachment JSON with data_base64/dataBase64. Repeat for multiple encrypted attachments.
+    #[arg(long = "attachment")]
+    pub attachments: Vec<String>,
     /// Recipient public key PEM file. If omitted, trusted peer devices are used.
     #[arg(long)]
     pub recipient_public_key: Option<PathBuf>,
@@ -1073,6 +1076,9 @@ pub struct OwnerE2eeGroupSendArgs {
     pub sender_device_id: String,
     /// Plaintext message to encrypt and send.
     pub plaintext: String,
+    /// Inline media attachment JSON with data_base64/dataBase64. Repeat for multiple encrypted attachments.
+    #[arg(long = "attachment")]
+    pub attachments: Vec<String>,
     /// URL to include in fallback HTML.
     #[arg(long)]
     pub view_url: Option<String>,

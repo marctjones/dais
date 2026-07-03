@@ -772,7 +772,7 @@ fn attachment_values(attachments: &[String]) -> Result<Vec<serde_json::Value>> {
         .collect()
 }
 
-fn encrypted_attachment_values(
+pub(crate) fn encrypted_attachment_values(
     attachments: &[String],
     content_key: &str,
 ) -> Result<Vec<serde_json::Value>> {
