@@ -3478,7 +3478,7 @@ impl DeskController {
 
     fn subtitle_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
-            "today" => "Posts, replies, and messages from people you know.".into(),
+            "today" => "Latest posts and replies from people you know.".into(),
             "conversations" => {
                 "Direct, group, and encrypted messages with normal social context.".into()
             }
@@ -3511,12 +3511,11 @@ impl DeskController {
         for post in &self.data.snapshot.home_timeline {
             rows.push(timeline_row(post));
         }
-        rows.extend(self.conversation_rows().into_iter().take(3));
         if rows.is_empty() {
             rows.push(empty_state_row(
                 "feed:empty",
                 "No posts yet",
-                "Follow people to fill the feed with posts, replies, and messages from accounts you know.",
+                "Follow people to fill the feed with posts and replies from accounts you know. Direct and encrypted messages live in Conversations.",
                 "Find people",
             ));
         }
@@ -11352,13 +11351,8 @@ mod tests {
         let rows = controller.home_today_rows();
         assert_eq!(rows[0].id.as_str(), "notification:notice-reply");
         assert_eq!(rows[1].id.as_str(), "timeline:ada-week-friday-space-news");
-        assert!(rows
-            .iter()
-            .any(|row| row.id.as_str() == "conversation:peer:https://friend.example/users/ada"));
-        assert!(rows
-            .iter()
-            .any(|row| row.id.as_str() == "conversation:group:e2ee-conversation-mls-friends"));
-        assert_eq!(rows.len(), 11);
+        assert!(!rows.iter().any(|row| row.id.starts_with("conversation:")));
+        assert_eq!(rows.len(), 9);
         assert!(!rows
             .iter()
             .any(|row| row.id.as_str() == "notification:notice-like-context"));

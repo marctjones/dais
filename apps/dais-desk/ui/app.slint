@@ -291,14 +291,16 @@ component RowCard inherits Rectangle {
     property <bool> is-conversation: entry.kind == "conversation";
     property <bool> is-relationship: entry.kind == "relationship";
     property <bool> is-reading-source: entry.chip == "Watch" || entry.chip == "Source";
+    property <bool> has-actions: entry.primary != "" || entry.secondary != "";
+    property <bool> show-actions: selected && has-actions;
     callback open(string);
     callback action(string, string);
 
-    height: root.is-post ? 178px : root.is-notification ? 166px : root.is-message || root.is-conversation ? 132px : root.is-relationship ? 132px : 144px;
+    height: root.is-post ? (root.show-actions ? 168px : 128px) : root.is-notification ? (root.show-actions ? 154px : 126px) : root.is-message || root.is-conversation ? (root.show-actions ? 126px : 104px) : root.is-relationship ? (root.show-actions ? 126px : 104px) : (root.show-actions ? 136px : 108px);
     vertical-stretch: 0;
     border-radius: root.is-post ? 8px : 7px;
-    border-width: 1px;
-    border-color: selected ? #5f94ca : root.is-post ? #d2dae6 : #d9dee6;
+    border-width: selected ? 1px : 0px;
+    border-color: #5f94ca;
     background: selected ? #eef6ff : root.is-notification && entry.tone == "warn" ? #fffaf0 : root.is-conversation ? #fbfcff : #ffffff;
     accessible-role: list-item;
     accessible-label: root.entry.title;
@@ -310,7 +312,7 @@ component RowCard inherits Rectangle {
     Rectangle {
         x: 0px;
         y: 0px;
-        width: 4px;
+        width: selected ? 4px : 3px;
         height: root.height;
         border-radius: 3px;
         background: root.entry.tone == "danger" ? #c23b3b : root.entry.tone == "warn" ? #c98a18 : root.entry.tone == "ok" ? #23814b : #7c8da3;
@@ -318,7 +320,7 @@ component RowCard inherits Rectangle {
 
     VerticalLayout {
         padding: root.is-post ? 14px : 12px;
-        spacing: root.is-post ? 9px : root.is-message || root.is-conversation ? 7px : 8px;
+        spacing: root.is-post ? 8px : root.is-message || root.is-conversation ? 6px : 7px;
 
         HorizontalLayout {
             spacing: 10px;
@@ -384,7 +386,7 @@ component RowCard inherits Rectangle {
             overflow: elide;
         }
 
-        HorizontalLayout {
+        if root.show-actions : HorizontalLayout {
             height: 34px;
             spacing: 8px;
             if root.entry.primary != "" : Button {
