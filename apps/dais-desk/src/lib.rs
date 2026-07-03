@@ -3486,7 +3486,7 @@ impl DeskController {
             "reading" => {
                 "Posts from followed accounts, private watches, and reading sources.".into()
             }
-            "inbox" => "Replies, mentions, messages, and follow requests.".into(),
+            "inbox" => "Replies, mentions, reactions, and follow requests.".into(),
             "compose" => "Audience and visibility are selected before posting.".into(),
             "find" => "Find people to follow by handle, URL, or name.".into(),
             "relationship" => "Relationship context for one person.".into(),
@@ -3703,13 +3703,6 @@ impl DeskController {
             )
         });
         let mut rows: Vec<UiRow> = notices.into_iter().map(notification_row).collect();
-        rows.extend(self.data.direct_messages.iter().map(dm_row));
-        rows.extend(
-            self.data
-                .e2ee_messages
-                .iter()
-                .map(|message| e2ee_social_message_row(&self.settings, message)),
-        );
         rows.extend(
             self.data
                 .snapshot
@@ -3721,8 +3714,8 @@ impl DeskController {
         if rows.is_empty() {
             rows.push(empty_state_row(
                 "inbox:empty",
-                "No conversations need attention",
-                "Replies, mentions, messages, and follow requests will appear here.",
+                "No notifications need attention",
+                "Replies, mentions, reactions, and follow requests appear here. Direct and encrypted messages live in Conversations.",
                 "",
             ));
         }
@@ -6444,6 +6437,7 @@ fn notification_preview_detail(notice: &OwnerNotification) -> String {
     format!("{visibility} {source}")
 }
 
+#[cfg(test)]
 fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
     row_with_kind(
         "message",
@@ -6459,6 +6453,7 @@ fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
     )
 }
 
+#[cfg(test)]
 fn e2ee_social_message_row(settings: &StoredOwnerSettings, message: &OwnerE2eeMessage) -> UiRow {
     let peer = message_peer_label(settings, message);
     let created_at = message
@@ -6503,6 +6498,7 @@ fn e2ee_social_message_row(settings: &StoredOwnerSettings, message: &OwnerE2eeMe
 #[derive(Clone, Debug)]
 struct E2eeMessageRenderState {
     preview: String,
+    #[allow(dead_code)]
     meta: String,
     locked: bool,
 }
@@ -6749,6 +6745,7 @@ fn e2ee_reply_recipient(
     e2ee_peer_actor(snapshot, message)
 }
 
+#[cfg(test)]
 fn message_peer_label(settings: &StoredOwnerSettings, message: &OwnerE2eeMessage) -> String {
     let peer = if message.sender_actor_id.starts_with(&settings.instance_url) {
         message
@@ -11471,19 +11468,12 @@ mod tests {
         let rows = controller.inbox_rows();
         assert_eq!(rows[0].id.as_str(), "notification:notice-reply");
         assert_eq!(rows[1].id.as_str(), "notification:notice-like-context");
-        assert_eq!(rows[2].id.as_str(), "dm:dm-fixture");
         assert_eq!(
-            rows[3].id.as_str(),
-            "e2ee-message:https://social.dais.social/users/social/e2ee/messages/fixture"
-        );
-        assert_eq!(
-            rows[4].id.as_str(),
-            "e2ee-message:https://social.dais.social/users/social/e2ee/messages/mls-fixture"
-        );
-        assert_eq!(
-            rows[5].id.as_str(),
+            rows[2].id.as_str(),
             "follower:https://new.example/users/follower"
         );
+        assert!(!rows.iter().any(|row| row.id.starts_with("dm:")));
+        assert!(!rows.iter().any(|row| row.id.starts_with("e2ee-message:")));
         assert!(!rows.iter().any(|row| row.id.starts_with("delivery:")));
         assert!(!rows
             .iter()
@@ -11518,11 +11508,13 @@ mod tests {
     #[test]
     fn encrypted_messages_are_readable_rows_with_repair_copy_when_locked() {
         let controller = DeskController::fixture_for_tests();
-        let rows = controller.inbox_rows();
-        let e2ee = rows
+        let message = controller
+            .data
+            .e2ee_messages
             .iter()
-            .find(|row| row.id.starts_with("e2ee-message:") && row.chip.as_str() == "E2EE")
-            .expect("v1 encrypted message row");
+            .find(|message| message.e2ee_protocol != "mls-rfc9420")
+            .expect("v1 encrypted message");
+        let e2ee = e2ee_social_message_row(&controller.settings, message);
         assert_eq!(e2ee.kind.as_str(), "message");
         assert!(e2ee.title.contains("Encrypted message from"));
         assert!(e2ee.meta.contains("No local private key"));
