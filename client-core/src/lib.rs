@@ -207,6 +207,14 @@ impl OwnerApiClient {
         Ok(response.items)
     }
 
+    pub async fn delete_e2ee_message(&self, id: &str) -> ClientResult<OwnerActionResult> {
+        self.delete(&format!(
+            "/api/dais/owner/e2ee/messages/{}",
+            url_encode(id)
+        ))
+        .await
+    }
+
     pub async fn send_e2ee_message(
         &self,
         message: &OwnerE2eeMessageSend,

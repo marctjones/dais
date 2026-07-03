@@ -287,17 +287,19 @@ component RowCard inherits Rectangle {
     in property <bool> selected;
     property <bool> is-post: entry.kind == "post";
     property <bool> is-notification: entry.kind == "notification";
+    property <bool> is-message: entry.kind == "message";
+    property <bool> is-conversation: entry.kind == "conversation";
     property <bool> is-relationship: entry.kind == "relationship";
     property <bool> is-reading-source: entry.chip == "Watch" || entry.chip == "Source";
     callback open(string);
     callback action(string, string);
 
-    height: root.is-post ? 178px : root.is-notification ? 166px : root.is-relationship ? 132px : 144px;
+    height: root.is-post ? 178px : root.is-notification ? 166px : root.is-message || root.is-conversation ? 132px : root.is-relationship ? 132px : 144px;
     vertical-stretch: 0;
     border-radius: root.is-post ? 8px : 7px;
     border-width: 1px;
     border-color: selected ? #5f94ca : root.is-post ? #d2dae6 : #d9dee6;
-    background: selected ? #eef6ff : root.is-notification && entry.tone == "warn" ? #fffaf0 : #ffffff;
+    background: selected ? #eef6ff : root.is-notification && entry.tone == "warn" ? #fffaf0 : root.is-conversation ? #fbfcff : #ffffff;
     accessible-role: list-item;
     accessible-label: root.entry.title;
     accessible-description: root.entry.subtitle + " " + root.entry.meta + " " + root.entry.detail;
@@ -316,22 +318,22 @@ component RowCard inherits Rectangle {
 
     VerticalLayout {
         padding: root.is-post ? 14px : 12px;
-        spacing: root.is-post ? 9px : 8px;
+        spacing: root.is-post ? 9px : root.is-message || root.is-conversation ? 7px : 8px;
 
         HorizontalLayout {
             spacing: 10px;
 
-            if root.is-post || root.is-relationship : Rectangle {
+            if root.is-post || root.is-relationship || root.is-message || root.is-conversation : Rectangle {
                 width: root.is-post ? 38px : 30px;
                 height: root.is-post ? 38px : 30px;
                 border-radius: root.is-post ? 19px : 15px;
-                background: root.is-relationship ? #eef9f1 : #e8edf5;
+                background: root.is-relationship ? #eef9f1 : root.is-message || root.is-conversation ? #eff6ff : #e8edf5;
                 border-width: 1px;
-                border-color: root.is-relationship ? #b9dec4 : #cdd6e2;
+                border-color: root.is-relationship ? #b9dec4 : root.is-message || root.is-conversation ? #bfd7f2 : #cdd6e2;
 
                 Text {
-                    text: root.is-relationship ? "Rel" : "Post";
-                    color: root.is-relationship ? #145a32 : #27415f;
+                    text: root.is-relationship ? "Rel" : root.is-message || root.is-conversation ? "Msg" : "Post";
+                    color: root.is-relationship ? #145a32 : root.is-message || root.is-conversation ? #174a7e : #27415f;
                     font-size: root.is-post ? 11px : 10px;
                     font-weight: 800;
                     horizontal-alignment: center;
@@ -376,9 +378,9 @@ component RowCard inherits Rectangle {
         Text {
             text: root.entry.detail;
             color: #27313f;
-            font-size: root.is-post ? 14px : 13px;
+            font-size: root.is-post || root.is-message || root.is-conversation ? 14px : 13px;
             wrap: word-wrap;
-            max-height: root.is-post ? 64px : 48px;
+            max-height: root.is-post ? 64px : root.is-message || root.is-conversation ? 42px : 48px;
             overflow: elide;
         }
 

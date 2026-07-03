@@ -40,6 +40,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     capture(&window, &output_dir, "workflow-save-post")?;
     window.invoke_select_screen("today".into());
     capture(&window, &output_dir, "home-today")?;
+    window.invoke_select_screen("conversations".into());
+    capture(&window, &output_dir, "home-conversations")?;
 
     window.invoke_select_screen("inbox".into());
     window.invoke_row_action("notification:notice-reply".into(), "Reply".into());

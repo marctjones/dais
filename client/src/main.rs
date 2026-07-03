@@ -1105,6 +1105,13 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
         OwnerCommand::E2eeDecrypt(args) => {
             decrypt_owner_e2ee_message(args, store).await?;
         }
+        OwnerCommand::E2eeDelete(args) => {
+            let result = owner_api(&args.api)
+                .delete_e2ee_message(&args.message_id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("deleted={} message={}", result.ok, args.message_id);
+        }
         OwnerCommand::E2eeDevices(args) => {
             let devices = owner_api(&args)
                 .e2ee_devices()

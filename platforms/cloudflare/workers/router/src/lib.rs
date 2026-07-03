@@ -4127,6 +4127,19 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Delete, _) if owner_path.starts_with("/e2ee/messages/") => {
+            let message_id = decode_component(owner_path.trim_start_matches("/e2ee/messages/"));
+            if message_id.trim().is_empty() {
+                return api_json(
+                    &serde_json::json!({ "error": "message id is required" }),
+                    400,
+                );
+            }
+            match owner_delete_e2ee_message(&env, &message_id).await? {
+                true => api_json(&serde_json::json!({ "ok": true }), 200),
+                false => api_json(&serde_json::json!({ "error": "message not found" }), 404),
+            }
+        }
         (worker::Method::Post, "/e2ee/messages") => {
             let body = read_json(&mut req).await;
             match owner_send_e2ee_message(&env, &body).await {
@@ -7332,6 +7345,62 @@ async fn owner_send_e2ee_message(
         Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
     );
     Ok(result)
+}
+
+async fn owner_delete_e2ee_message(env: &Env, message_id: &str) -> Result<bool> {
+    let local_actor = owner_local_actor(env).await?;
+    let db = env.d1("DB")?;
+    let message_arg = D1Type::Text(message_id);
+    let Some(row) = db
+        .prepare(
+            r#"
+            SELECT m.conversation_id, c.participants
+            FROM e2ee_messages m
+            JOIN e2ee_conversations c ON c.id = m.conversation_id
+            WHERE m.id = ?1
+            LIMIT 1
+            "#,
+        )
+        .bind_refs(&message_arg)?
+        .first::<Map<String, Value>>(None)
+        .await?
+    else {
+        return Ok(false);
+    };
+    let participants = string_vec_json_field(Some(&row), "participants");
+    if !participants.iter().any(|actor| actor == &local_actor.id) {
+        return Ok(false);
+    }
+    let conversation_id = string_field(Some(&row), "conversation_id").unwrap_or_default();
+
+    db.prepare("DELETE FROM e2ee_mls_message_metadata WHERE message_id = ?1")
+        .bind_refs(&message_arg)?
+        .run()
+        .await?;
+    db.prepare("DELETE FROM e2ee_messages WHERE id = ?1")
+        .bind_refs(&message_arg)?
+        .run()
+        .await?;
+    db.prepare("DELETE FROM deliveries WHERE post_id = ?1")
+        .bind_refs(&message_arg)?
+        .run()
+        .await?;
+
+    if !conversation_id.is_empty() {
+        let conversation_arg = D1Type::Text(&conversation_id);
+        let remaining = db
+            .prepare("SELECT id FROM e2ee_messages WHERE conversation_id = ?1 LIMIT 1")
+            .bind_refs(&conversation_arg)?
+            .first::<Map<String, Value>>(None)
+            .await?;
+        if remaining.is_none() {
+            db.prepare("DELETE FROM e2ee_conversations WHERE id = ?1")
+                .bind_refs(&conversation_arg)?
+                .run()
+                .await?;
+        }
+    }
+    Ok(true)
 }
 
 async fn owner_e2ee_message_by_id(

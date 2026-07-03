@@ -28,6 +28,10 @@ fn navigates_primary_workflows_through_accessible_controls() {
     assert_eq!(window.get_active_mode().as_str(), "home");
     assert_eq!(window.get_active_screen().as_str(), "today");
 
+    click_label(&window, "Conversations");
+    assert_eq!(window.get_active_mode().as_str(), "home");
+    assert_eq!(window.get_active_screen().as_str(), "conversations");
+
     click_label(&window, "People");
     assert_eq!(window.get_active_mode().as_str(), "people");
     assert_eq!(window.get_active_screen().as_str(), "find");

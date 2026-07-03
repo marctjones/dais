@@ -815,6 +815,8 @@ pub enum OwnerCommand {
     E2eeGroupSend(OwnerE2eeGroupSendArgs),
     /// Decrypt one encrypted owner E2EE message with a local private key.
     E2eeDecrypt(OwnerE2eeDecryptArgs),
+    /// Delete one encrypted owner E2EE message row.
+    E2eeDelete(OwnerE2eeDeleteArgs),
     /// List local E2EE devices published by the live owner API.
     E2eeDevices(OwnerApiArgs),
     /// Generate a local E2EE device key and publish its public material.
@@ -1094,6 +1096,14 @@ pub struct OwnerE2eeDecryptArgs {
     /// Recipient key id to select. Optional only when the message has one recipient.
     #[arg(long)]
     pub key_id: Option<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerE2eeDeleteArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    /// Owner E2EE message id.
+    pub message_id: String,
 }
 
 #[derive(Args, Clone, Debug)]

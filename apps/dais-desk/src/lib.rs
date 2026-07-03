@@ -59,6 +59,15 @@ struct StoredMlsDeviceStateFile {
     serialized_device_state: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct StoredDecryptedMessage {
+    instance_url: String,
+    message_id: String,
+    plaintext: String,
+    protocol: String,
+    cached_at: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct StoredDrafts {
     #[serde(default)]
@@ -2449,6 +2458,15 @@ impl DeskController {
     }
 
     fn prepare_reply(&mut self, row_id: &str) -> Result<String, String> {
+        if let Some(recipient) = self.direct_reply_recipient_for_row(row_id) {
+            self.compose.in_reply_to = None;
+            self.compose.visibility = Visibility::Direct;
+            self.compose.protocol = ProtocolRoute::ActivityPub;
+            self.compose.recipients = recipient;
+            self.active_mode = "home".to_string();
+            self.active_screen = "compose".to_string();
+            return Ok("Direct reply prepared. Recipient and Direct visibility are visible before sending.".into());
+        }
         if let Some(id) = row_id.strip_prefix("dm:") {
             let dm = self
                 .data
@@ -2497,6 +2515,41 @@ impl DeskController {
         self.active_mode = "home".to_string();
         self.active_screen = "compose".to_string();
         Ok("Reply context attached. Audience is still visible before sending.".into())
+    }
+
+    fn direct_reply_recipient_for_row(&self, row_id: &str) -> Option<String> {
+        if let Some(id) = row_id.strip_prefix("conversation:") {
+            if let Some(dm) = self
+                .data
+                .direct_messages
+                .iter()
+                .find(|dm| id == format!("peer:{}", dm.sender_id))
+            {
+                return Some(dm.sender_id.clone());
+            }
+            if let Some(message) = self.data.e2ee_messages.iter().find(|message| {
+                if e2ee_message_is_group(message) {
+                    id == format!("group:{}", message.conversation_id)
+                } else {
+                    e2ee_peer_actor(&self.data.snapshot, message)
+                        .is_some_and(|actor| id == format!("peer:{actor}"))
+                }
+            }) {
+                return e2ee_reply_recipient(&self.data.snapshot, message);
+            }
+            if let Some(actor) = id.strip_prefix("peer:") {
+                return Some(actor.to_string());
+            }
+        }
+        if let Some(id) = row_id.strip_prefix("e2ee-message:") {
+            return self
+                .data
+                .e2ee_messages
+                .iter()
+                .find(|message| message.id == id)
+                .and_then(|message| e2ee_reply_recipient(&self.data.snapshot, message));
+        }
+        None
     }
 
     fn interact(&self, row_id: &str, interaction: &str) -> Result<String, String> {
@@ -3306,6 +3359,7 @@ impl DeskController {
     fn rows_for_active_screen_for_projection(&self) -> Vec<UiRow> {
         match self.active_screen.as_str() {
             "today" => self.home_today_rows(),
+            "conversations" => self.conversation_rows(),
             "reading" => self.reading_rows(),
             "inbox" => self.inbox_rows(),
             "compose" => self.compose_context_rows(),
@@ -3376,6 +3430,11 @@ impl DeskController {
             ],
             _ => &[
                 ("today", "Feed", self.home_today_rows().len()),
+                (
+                    "conversations",
+                    "Conversations",
+                    self.conversation_rows().len(),
+                ),
                 ("inbox", "Inbox", self.inbox_rows().len()),
                 ("compose", "Compose", 0),
                 ("posts", "My Posts", self.data.snapshot.posts.len()),
@@ -3391,6 +3450,7 @@ impl DeskController {
     fn title_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
             "today" => "Feed".into(),
+            "conversations" => "Conversations".into(),
             "reading" => "Reading".into(),
             "inbox" => "Inbox".into(),
             "compose" => "Compose".into(),
@@ -3419,6 +3479,9 @@ impl DeskController {
     fn subtitle_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
             "today" => "Posts, replies, and messages from people you know.".into(),
+            "conversations" => {
+                "Direct, group, and encrypted messages with normal social context.".into()
+            }
             "reading" => {
                 "Posts from followed accounts, private watches, and reading sources.".into()
             }
@@ -3445,21 +3508,153 @@ impl DeskController {
         {
             rows.push(notification_row(notice));
         }
-        for dm in &self.data.direct_messages {
-            rows.push(dm_row(dm));
-        }
-        for message in &self.data.e2ee_messages {
-            rows.push(e2ee_social_message_row(&self.settings, message));
-        }
         for post in &self.data.snapshot.home_timeline {
             rows.push(timeline_row(post));
         }
+        rows.extend(self.conversation_rows().into_iter().take(3));
         if rows.is_empty() {
             rows.push(empty_state_row(
                 "feed:empty",
                 "No posts yet",
                 "Follow people to fill the feed with posts, replies, and messages from accounts you know.",
                 "Find people",
+            ));
+        }
+        rows
+    }
+
+    fn conversation_rows(&self) -> Vec<UiRow> {
+        let mut summaries: BTreeMap<String, ConversationSummary> = BTreeMap::new();
+
+        for dm in &self.data.direct_messages {
+            let conversation_id = format!("peer:{}", dm.sender_id);
+            summaries
+                .entry(conversation_id.clone())
+                .or_insert_with(|| {
+                    ConversationSummary::new(
+                        &conversation_id,
+                        &compact_actor(&dm.sender_id),
+                        "Direct",
+                        "ok",
+                    )
+                })
+                .push(
+                    preview_markdown_safe(&dm.content),
+                    dm.published_at.clone(),
+                    false,
+                    false,
+                    false,
+                );
+        }
+
+        for post in self
+            .data
+            .snapshot
+            .home_timeline
+            .iter()
+            .filter(|post| post.visibility.eq_ignore_ascii_case("direct"))
+        {
+            let peer = post
+                .actor_display_name
+                .as_deref()
+                .or(post.actor_username.as_deref())
+                .unwrap_or(&post.actor_id);
+            let conversation_id = format!("peer:{}", post.actor_id);
+            summaries
+                .entry(conversation_id.clone())
+                .or_insert_with(|| ConversationSummary::new(&conversation_id, peer, "Direct", "ok"))
+                .push(
+                    preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content)),
+                    post.published_at
+                        .clone()
+                        .unwrap_or_else(|| "direct post".into()),
+                    false,
+                    false,
+                    false,
+                );
+        }
+
+        for post in self
+            .data
+            .snapshot
+            .posts
+            .iter()
+            .filter(|post| matches!(post.visibility, Visibility::Direct))
+        {
+            let title = post.title.as_deref().unwrap_or("Direct post");
+            let conversation_id = format!("own-direct-post:{}", post.id);
+            let encrypted = post.encrypted;
+            summaries
+                .entry(conversation_id.clone())
+                .or_insert_with(|| {
+                    ConversationSummary::new(
+                        &conversation_id,
+                        title,
+                        if encrypted { "Encrypted" } else { "Direct" },
+                        "ok",
+                    )
+                })
+                .push(
+                    preview_markdown_safe(&post.content),
+                    post.published_at
+                        .clone()
+                        .unwrap_or_else(|| "direct post".into()),
+                    encrypted,
+                    false,
+                    false,
+                );
+        }
+
+        for message in &self.data.e2ee_messages {
+            let rendered = e2ee_message_render_state(&self.settings, message);
+            let peer = conversation_peer_for_e2ee(&self.data.snapshot, message);
+            let is_group = e2ee_message_is_group(message);
+            let conversation_id = if is_group {
+                format!("group:{}", message.conversation_id)
+            } else {
+                format!(
+                    "peer:{}",
+                    e2ee_peer_actor(&self.data.snapshot, message)
+                        .unwrap_or_else(|| message.conversation_id.clone())
+                )
+            };
+            summaries
+                .entry(conversation_id.clone())
+                .or_insert_with(|| {
+                    ConversationSummary::new(
+                        &conversation_id,
+                        &peer,
+                        if is_group {
+                            "Encrypted group"
+                        } else {
+                            "Encrypted"
+                        },
+                        if rendered.locked { "warn" } else { "ok" },
+                    )
+                })
+                .push(
+                    rendered.preview,
+                    message
+                        .created_at
+                        .clone()
+                        .unwrap_or_else(|| "encrypted message".into()),
+                    true,
+                    rendered.locked,
+                    is_group,
+                );
+        }
+
+        let mut rows: Vec<UiRow> = summaries
+            .into_values()
+            .map(|summary| summary.into_row())
+            .collect();
+        rows.sort_by(|left, right| right.subtitle.cmp(&left.subtitle));
+        if rows.is_empty() {
+            rows.push(empty_state_row(
+                "conversation:empty",
+                "No conversations yet",
+                "Direct messages, encrypted messages, and small-group conversations will appear here.",
+                "Compose",
             ));
         }
         rows
@@ -6164,11 +6359,13 @@ fn notification_preview_detail(notice: &OwnerNotification) -> String {
 }
 
 fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
-    row(
+    row_with_kind(
+        "message",
         &format!("dm:{}", dm.id),
         &format!("Direct message from {}", compact_actor(&dm.sender_id)),
         &dm.published_at,
         &dm.content,
+        "Plaintext direct message",
         "Direct",
         "ok",
         "Reply",
@@ -6177,10 +6374,7 @@ fn dm_row(dm: &OwnerDirectMessage) -> UiRow {
 }
 
 fn e2ee_social_message_row(settings: &StoredOwnerSettings, message: &OwnerE2eeMessage) -> UiRow {
-    let peer = message
-        .recipient_actor_id
-        .as_deref()
-        .unwrap_or(message.sender_actor_id.as_str());
+    let peer = message_peer_label(settings, message);
     let created_at = message
         .created_at
         .as_deref()
@@ -6190,34 +6384,318 @@ fn e2ee_social_message_row(settings: &StoredOwnerSettings, message: &OwnerE2eeMe
     } else {
         "E2EE"
     };
-    match decrypt_e2ee_message_for_desk(settings, message) {
-        Ok(plaintext) => row_with_kind(
+    let rendered = e2ee_message_render_state(settings, message);
+    if rendered.locked {
+        row_with_kind(
             "message",
             &format!("e2ee-message:{}", message.id),
-            &format!("Direct message from {}", compact_actor(peer)),
+            &format!("Encrypted message from {}", peer),
             created_at,
-            &plaintext,
-            "Encrypted end-to-end on the server and decrypted on this device.",
+            &rendered.preview,
+            &rendered.meta,
+            chip,
+            "warn",
+            "Reply",
+            "",
+        )
+    } else {
+        row_with_kind(
+            "message",
+            &format!("e2ee-message:{}", message.id),
+            &format!("Direct message from {}", peer),
+            created_at,
+            &rendered.preview,
+            &rendered.meta,
             chip,
             "ok",
             "Reply",
             "",
-        ),
-        Err(error) => row_with_kind(
-            "message",
-            &format!("e2ee-message:{}", message.id),
-            &format!("Locked encrypted message from {}", compact_actor(peer)),
-            created_at,
-            message.fallback_content.as_deref().unwrap_or(
-                "This encrypted message needs local device state before it can be read.",
-            ),
-            &error,
-            chip,
-            "warn",
-            "",
-            "",
-        ),
+        )
     }
+}
+
+#[derive(Clone, Debug)]
+struct E2eeMessageRenderState {
+    preview: String,
+    meta: String,
+    locked: bool,
+}
+
+fn e2ee_message_render_state(
+    settings: &StoredOwnerSettings,
+    message: &OwnerE2eeMessage,
+) -> E2eeMessageRenderState {
+    let protocol = if message.e2ee_protocol == "mls-rfc9420" {
+        "MLS"
+    } else {
+        "E2EE"
+    };
+    if let Some(plaintext) = load_cached_decrypted_message(&settings.instance_url, &message.id) {
+        return E2eeMessageRenderState {
+            preview: preview_markdown_safe(&plaintext),
+            meta: format!("{protocol} encrypted. Decrypted earlier on this device."),
+            locked: false,
+        };
+    }
+    match decrypt_e2ee_message_for_desk(settings, message) {
+        Ok(plaintext) => {
+            let _ = persist_cached_decrypted_message(
+                &settings.instance_url,
+                &message.id,
+                &plaintext,
+                &message.e2ee_protocol,
+            );
+            E2eeMessageRenderState {
+                preview: preview_markdown_safe(&plaintext),
+                meta: format!("{protocol} encrypted. Decrypted on this device."),
+                locked: false,
+            }
+        }
+        Err(error) => {
+            let repair = decrypt_repair_hint(&error);
+            let fallback = message
+                .fallback_content
+                .as_deref()
+                .map(preview_markdown_safe)
+                .unwrap_or_else(|| "Encrypted content is waiting for a local key.".into());
+            E2eeMessageRenderState {
+                preview: format!("{fallback} {repair}"),
+                meta: format!("{protocol} encrypted. {error}"),
+                locked: true,
+            }
+        }
+    }
+}
+
+fn decrypt_repair_hint(error: &str) -> &'static str {
+    if error.contains("requested secret was deleted") {
+        "This old MLS ciphertext was already opened after forward secrecy advanced; keep decrypted plaintext cached before pruning secrets."
+    } else if error.contains("No local private key") {
+        "Import or restore the matching device key to read it here."
+    } else if error.contains("No local MLS state") {
+        "Restore MLS device/group state or receive the conversation on a trusted device."
+    } else if error.contains("could not be decrypted") {
+        "Check that this account has the current trusted device state."
+    } else {
+        "Open Security to inspect device and key state."
+    }
+}
+
+fn load_cached_decrypted_message(instance_url: &str, message_id: &str) -> Option<String> {
+    for root in dais_state_roots() {
+        let path = decrypted_message_cache_path(&root, instance_url, message_id);
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(cached) = serde_json::from_str::<StoredDecryptedMessage>(&content) else {
+            continue;
+        };
+        if cached.instance_url == instance_url && cached.message_id == message_id {
+            return Some(cached.plaintext);
+        }
+    }
+    None
+}
+
+fn persist_cached_decrypted_message(
+    instance_url: &str,
+    message_id: &str,
+    plaintext: &str,
+    protocol: &str,
+) -> Result<(), String> {
+    let root = dais_state_roots()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PathBuf::from(".dais"));
+    let path = decrypted_message_cache_path(&root, instance_url, message_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let cached = StoredDecryptedMessage {
+        instance_url: instance_url.to_string(),
+        message_id: message_id.to_string(),
+        plaintext: plaintext.to_string(),
+        protocol: protocol.to_string(),
+        cached_at: unix_timestamp_label(),
+    };
+    let json = serde_json::to_string_pretty(&cached).map_err(|error| error.to_string())?;
+    fs::write(path, json).map_err(|error| error.to_string())
+}
+
+fn decrypted_message_cache_path(root: &Path, instance_url: &str, message_id: &str) -> PathBuf {
+    root.join("decrypted-messages")
+        .join(safe_path_component(instance_url))
+        .join(format!("{}.json", safe_path_component(message_id)))
+}
+
+#[derive(Clone, Debug)]
+struct ConversationSummary {
+    id: String,
+    peer: String,
+    latest_preview: String,
+    previews: Vec<String>,
+    latest_at: String,
+    count: usize,
+    encrypted_count: usize,
+    locked_count: usize,
+    group: bool,
+    chip: String,
+    tone: String,
+}
+
+impl ConversationSummary {
+    fn new(id: &str, peer: &str, chip: &str, tone: &str) -> Self {
+        Self {
+            id: id.into(),
+            peer: peer.into(),
+            latest_preview: String::new(),
+            previews: Vec::new(),
+            latest_at: String::new(),
+            count: 0,
+            encrypted_count: 0,
+            locked_count: 0,
+            group: false,
+            chip: chip.into(),
+            tone: tone.into(),
+        }
+    }
+
+    fn push(
+        &mut self,
+        preview: String,
+        timestamp: String,
+        encrypted: bool,
+        locked: bool,
+        group: bool,
+    ) {
+        self.latest_preview = preview.clone();
+        self.previews.retain(|existing| existing != &preview);
+        self.previews.insert(0, preview.clone());
+        self.previews.truncate(3);
+        self.latest_at = timestamp;
+        self.count += 1;
+        self.encrypted_count += usize::from(encrypted);
+        self.locked_count += usize::from(locked);
+        self.group |= group;
+        if locked {
+            self.tone = "warn".into();
+        }
+        if encrypted {
+            self.chip = if group {
+                "E2EE group".into()
+            } else {
+                "Encrypted".into()
+            };
+        }
+    }
+
+    fn into_row(self) -> UiRow {
+        let title = if self.group {
+            format!("Group conversation with {}", self.peer)
+        } else {
+            format!("Conversation with {}", self.peer)
+        };
+        let mut meta = vec![message_count_label(self.count)];
+        if self.encrypted_count > 0 {
+            meta.push(format!("{} encrypted", self.encrypted_count));
+        }
+        if self.locked_count > 0 {
+            meta.push(format!("{} need keys", self.locked_count));
+        }
+        row_with_kind(
+            "conversation",
+            &format!("conversation:{}", self.id),
+            &title,
+            &self.latest_at,
+            &self.preview_detail(),
+            &meta.join(" · "),
+            &self.chip,
+            &self.tone,
+            "Reply",
+            "",
+        )
+    }
+
+    fn preview_detail(&self) -> String {
+        let mut previews = self.previews.iter();
+        let Some(first) = previews.next() else {
+            return self.latest_preview.clone();
+        };
+        let mut detail = first.clone();
+        for previous in previews.take(1) {
+            detail.push_str(" Previous: ");
+            detail.push_str(previous);
+        }
+        detail
+    }
+}
+
+fn message_count_label(count: usize) -> String {
+    match count {
+        0 => "No messages".into(),
+        1 => "1 message".into(),
+        value => format!("{value} messages"),
+    }
+}
+
+fn conversation_peer_for_e2ee(
+    snapshot: &OwnerSnapshotBundle,
+    message: &OwnerE2eeMessage,
+) -> String {
+    compact_actor(
+        &e2ee_peer_actor(snapshot, message).unwrap_or_else(|| message.sender_actor_id.clone()),
+    )
+}
+
+fn e2ee_peer_actor(snapshot: &OwnerSnapshotBundle, message: &OwnerE2eeMessage) -> Option<String> {
+    let owner = snapshot.profile.actor_url.as_str();
+    if message.sender_actor_id == owner || message.sender_actor_id.starts_with(owner) {
+        message.recipient_actor_id.clone()
+    } else {
+        Some(message.sender_actor_id.clone())
+    }
+}
+
+fn e2ee_reply_recipient(
+    snapshot: &OwnerSnapshotBundle,
+    message: &OwnerE2eeMessage,
+) -> Option<String> {
+    e2ee_peer_actor(snapshot, message)
+}
+
+fn message_peer_label(settings: &StoredOwnerSettings, message: &OwnerE2eeMessage) -> String {
+    let peer = if message.sender_actor_id.starts_with(&settings.instance_url) {
+        message
+            .recipient_actor_id
+            .as_deref()
+            .unwrap_or(message.sender_actor_id.as_str())
+    } else {
+        message.sender_actor_id.as_str()
+    };
+    compact_actor(peer)
+}
+
+fn e2ee_message_is_group(message: &OwnerE2eeMessage) -> bool {
+    message
+        .mls_group_id
+        .as_deref()
+        .is_some_and(group_id_looks_group)
+        || message.conversation_id.contains("group")
+}
+
+fn group_id_looks_group(group_id: &str) -> bool {
+    let lower = group_id.to_ascii_lowercase();
+    if lower.contains("audience") || lower.contains("group") {
+        return true;
+    }
+    BASE64
+        .decode(group_id)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .is_some_and(|decoded| {
+            let decoded = decoded.to_ascii_lowercase();
+            decoded.contains("audience") || decoded.contains("group")
+        })
 }
 
 fn decrypt_e2ee_message_for_desk(
@@ -10873,17 +11351,14 @@ mod tests {
         let controller = DeskController::fixture_for_tests();
         let rows = controller.home_today_rows();
         assert_eq!(rows[0].id.as_str(), "notification:notice-reply");
-        assert_eq!(rows[1].id.as_str(), "dm:dm-fixture");
-        assert_eq!(
-            rows[2].id.as_str(),
-            "e2ee-message:https://social.dais.social/users/social/e2ee/messages/fixture"
-        );
-        assert_eq!(
-            rows[3].id.as_str(),
-            "e2ee-message:https://social.dais.social/users/social/e2ee/messages/mls-fixture"
-        );
-        assert_eq!(rows[4].id.as_str(), "timeline:ada-week-friday-space-news");
-        assert_eq!(rows.len(), 12);
+        assert_eq!(rows[1].id.as_str(), "timeline:ada-week-friday-space-news");
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "conversation:peer:https://friend.example/users/ada"));
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "conversation:group:e2ee-conversation-mls-friends"));
+        assert_eq!(rows.len(), 11);
         assert!(!rows
             .iter()
             .any(|row| row.id.as_str() == "notification:notice-like-context"));
@@ -10935,17 +11410,42 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_messages_are_primary_social_rows_with_quiet_lock_fallback() {
+    fn conversation_rows_group_plaintext_and_encrypted_messages() {
         let controller = DeskController::fixture_for_tests();
-        for rows in [controller.home_today_rows(), controller.inbox_rows()] {
-            let e2ee = rows
-                .iter()
-                .find(|row| row.id.starts_with("e2ee-message:") && row.chip.as_str() == "E2EE")
-                .expect("v1 encrypted message row");
-            assert_eq!(e2ee.kind.as_str(), "message");
-            assert!(e2ee.title.contains("Locked encrypted message"));
-            assert!(e2ee.meta.contains("No local private key"));
-        }
+        let rows = controller.conversation_rows();
+        let plaintext = rows
+            .iter()
+            .find(|row| row.id.as_str() == "conversation:peer:https://friend.example/users/ada")
+            .expect("1:1 conversation");
+        assert_eq!(plaintext.kind.as_str(), "conversation");
+        assert_eq!(plaintext.chip.as_str(), "Encrypted");
+        assert!(plaintext.meta.contains("2 messages"));
+        assert!(plaintext.meta.contains("1 encrypted"));
+        assert!(plaintext.detail.contains("backyard telescope"));
+
+        let e2ee = rows
+            .iter()
+            .find(|row| row.id.as_str() == "conversation:group:e2ee-conversation-mls-friends")
+            .expect("MLS encrypted group conversation");
+        assert_eq!(e2ee.kind.as_str(), "conversation");
+        assert_eq!(e2ee.chip.as_str(), "E2EE group");
+        assert!(e2ee.meta.contains("1 encrypted"));
+        assert!(e2ee.meta.contains("1 need keys"));
+        assert!(e2ee.detail.contains("Open Security"));
+    }
+
+    #[test]
+    fn encrypted_messages_are_readable_rows_with_repair_copy_when_locked() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.inbox_rows();
+        let e2ee = rows
+            .iter()
+            .find(|row| row.id.starts_with("e2ee-message:") && row.chip.as_str() == "E2EE")
+            .expect("v1 encrypted message row");
+        assert_eq!(e2ee.kind.as_str(), "message");
+        assert!(e2ee.title.contains("Encrypted message from"));
+        assert!(e2ee.meta.contains("No local private key"));
+        assert!(e2ee.detail.contains("Import or restore"));
     }
 
     #[test]
