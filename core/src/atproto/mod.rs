@@ -3,9 +3,9 @@ pub mod repo;
 /// AT Protocol implementation
 ///
 /// This module contains platform-agnostic AT Protocol (Bluesky) logic
-/// that will be migrated from the existing PDS worker.
-///
-/// TODO: Migrate from workers/pds/ to this module
+/// already shared by core plus explicit guard functions for PDS logic that is
+/// still router-owned. Moving repo, record, and sync operations into this module
+/// is tracked in GitHub issue #275.
 pub mod sync;
 
 pub use records::*;

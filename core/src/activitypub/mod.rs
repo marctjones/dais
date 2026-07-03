@@ -8,10 +8,8 @@ pub mod signatures;
 pub mod timeline;
 /// ActivityPub protocol implementation
 ///
-/// This module contains platform-agnostic ActivityPub logic that will be
-/// migrated from the existing workers.
-///
-/// TODO: Migrate from workers/ to this module
+/// This module contains platform-agnostic ActivityPub logic used by the active
+/// router and retained compatibility workers.
 pub mod types;
 
 pub use actor::*;

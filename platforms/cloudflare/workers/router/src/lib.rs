@@ -466,7 +466,10 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
             api_json(&serde_json::json!({}), 200)
         }
         _ => api_json(
-            &serde_json::json!({ "error": "Not implemented in dais Mastodon compatibility API" }),
+            &serde_json::json!({
+                "error": "unsupported Mastodon compatibility endpoint",
+                "detail": "Dais supports a scoped Mastodon-compatible client API, not the full Mastodon API surface. Track full owner-auth separation in issue #333."
+            }),
             404,
         ),
     }
@@ -6333,29 +6336,8 @@ async fn owner_create_post(
     );
     let post_id = format!("{actor_id}/posts/{local_id}");
     let content_html = format!("<p>{}</p>", escape_html(text).replace('\n', "<br>"));
-    let media_attachments = normalize_attachments(&attachments)?;
-    if !media_attachments.is_empty()
-        && matches!(&*protocol, "atproto" | "both")
-        && !media_attachments
-            .iter()
-            .all(is_public_atproto_image_attachment)
-    {
-        return Err("AT Protocol media attachments must be public image uploads".to_string());
-    }
-    if !media_attachments.is_empty() && encrypt {
-        return Err(
-            "E2EE media attachments require encrypted media support and are not implemented yet"
-                .to_string(),
-        );
-    }
-    if !media_attachments.is_empty()
-        && matches!(visibility, "followers" | "direct")
-        && !media_attachments.iter().all(is_private_media_attachment)
-    {
-        return Err(
-            "private and direct media attachments must use private media upload URLs".to_string(),
-        );
-    }
+    let media_attachments =
+        normalize_owner_post_attachments(&attachments, encrypt, protocol, visibility)?;
 
     let mut reply_target_inbox = None;
     if let Some(in_reply_to) = in_reply_to.as_deref() {
@@ -12136,6 +12118,40 @@ fn normalize_attachments(values: &[Value]) -> std::result::Result<Vec<Value>, St
         attachments.push(Value::Object(normalized));
     }
     Ok(attachments)
+}
+
+fn normalize_owner_post_attachments(
+    values: &[Value],
+    encrypt: bool,
+    protocol: &str,
+    visibility: &str,
+) -> std::result::Result<Vec<Value>, String> {
+    let media_attachments = if encrypt {
+        if matches!(protocol, "atproto" | "both") {
+            return Err("encrypted media attachments are ActivityPub-only".to_string());
+        }
+        normalize_encrypted_media_attachments(values)?
+    } else {
+        normalize_attachments(values)?
+    };
+    if !media_attachments.is_empty()
+        && matches!(protocol, "atproto" | "both")
+        && !media_attachments
+            .iter()
+            .all(is_public_atproto_image_attachment)
+    {
+        return Err("AT Protocol media attachments must be public image uploads".to_string());
+    }
+    if !encrypt
+        && !media_attachments.is_empty()
+        && matches!(visibility, "followers" | "direct")
+        && !media_attachments.iter().all(is_private_media_attachment)
+    {
+        return Err(
+            "private and direct media attachments must use private media upload URLs".to_string(),
+        );
+    }
+    Ok(media_attachments)
 }
 
 fn normalize_encrypted_media_attachments(

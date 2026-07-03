@@ -291,5 +291,3 @@ impl Default for Context {
         Context::Single("https://www.w3.org/ns/activitystreams".to_string())
     }
 }
-
-// TODO: Add more ActivityPub types as needed

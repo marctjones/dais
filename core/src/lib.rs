@@ -302,18 +302,16 @@ impl DaisCore {
         webfinger::handle_webfinger(&*self.db, &resource, base_domain, ap).await
     }
 
-    // AT Protocol methods (to be implemented)
+    // AT Protocol methods whose platform-agnostic core migration is tracked in issue #275.
 
     /// Handle AT Protocol commit
     pub async fn handle_commit(&self, _did: String, _commit_cid: String) -> CoreResult<()> {
-        // TODO: Implement in atproto module
-        Err(CoreError::Internal("Not implemented".to_string()))
+        crate::atproto::repo::core_repo_migration_required("handle_commit")
     }
 
     /// Subscribe to repo changes
     pub async fn subscribe_repos(&self) -> CoreResult<()> {
-        // TODO: Implement in atproto module
-        Err(CoreError::Internal("Not implemented".to_string()))
+        crate::atproto::sync::core_sync_migration_required("subscribe_repos")
     }
 
     async fn default_post_visibility(&self) -> String {
@@ -431,5 +429,26 @@ mod tests {
     #[test]
     fn test_resolve_post_visibility_rejects_bad_explicit_value() {
         assert!(resolve_post_visibility("not-valid", Some("followers")).is_err());
+    }
+
+    #[tokio::test]
+    async fn atproto_core_guards_reference_migration_issue() {
+        let repo_error = crate::atproto::get_repo()
+            .await
+            .expect_err("repo migration should be explicit");
+        assert!(matches!(repo_error, CoreError::InvalidAtProto(_)));
+        assert!(repo_error.to_string().contains("#275"));
+
+        let record_error = crate::atproto::create_record()
+            .await
+            .expect_err("record migration should be explicit");
+        assert!(matches!(record_error, CoreError::InvalidAtProto(_)));
+        assert!(record_error.to_string().contains("#275"));
+
+        let sync_error = crate::atproto::handle_sync()
+            .await
+            .expect_err("sync migration should be explicit");
+        assert!(matches!(sync_error, CoreError::InvalidAtProto(_)));
+        assert!(sync_error.to_string().contains("#275"));
     }
 }

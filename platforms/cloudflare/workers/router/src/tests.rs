@@ -5,11 +5,12 @@ use super::{
     is_local_object_url, is_public_atproto_image_attachment, media_custom_metadata,
     normalize_ai_categories, normalize_discovered_public_post, normalize_e2ee_device_id,
     normalize_e2ee_fingerprint, normalize_e2ee_protocol, normalize_encrypted_media_attachments,
-    owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
-    owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
-    parse_lenient_json_body, parse_workers_ai_moderation, peer_trust_state_after_material_update,
-    sha256_hex, source_type_for_watch_kind, strip_json_fence, tootfinder_search_items,
-    tootfinder_search_url, validate_dais_encrypted_message_v2, validate_e2ee_device_material,
+    normalize_owner_post_attachments, owner_normalize_bluesky_post,
+    owner_normalize_tootfinder_status, owner_public_post_row_from_discovered,
+    owner_public_search_mastodon_query_params, parse_lenient_json_body,
+    parse_workers_ai_moderation, peer_trust_state_after_material_update, sha256_hex,
+    source_type_for_watch_kind, strip_json_fence, tootfinder_search_items, tootfinder_search_url,
+    validate_dais_encrypted_message_v2, validate_e2ee_device_material,
     validate_encrypted_media_payload, validate_encrypted_message_envelope,
     validate_owner_e2ee_payload, MediaMetadataInput, OwnerProfile, OwnerPublicSearchOptions,
     OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
@@ -301,6 +302,47 @@ fn normalizes_only_ciphertext_encrypted_media_attachments() {
         "data_base64": BASE64.encode(b"secret image bytes")
     });
     assert!(normalize_encrypted_media_attachments(&[plaintext]).is_err());
+}
+
+#[test]
+fn owner_post_compose_accepts_encrypted_activitypub_media() {
+    let encrypted = serde_json::json!({
+        "type": "Document",
+        "name": "field notes.jpg",
+        "encryptedMedia": {
+            "v": 1,
+            "alg": "AES-256-GCM",
+            "mediaType": "image/jpeg",
+            "iv": BASE64.encode([1u8; 12]),
+            "ciphertext": BASE64.encode(b"ciphertext bytes"),
+            "sha256": sha256_hex(b"plaintext bytes")
+        }
+    });
+
+    let normalized = normalize_owner_post_attachments(&[encrypted], true, "activitypub", "direct")
+        .expect("encrypted owner media should normalize");
+
+    let object = normalized[0].as_object().expect("attachment object");
+    assert!(object.get("encryptedMedia").is_some());
+    assert!(object.get("url").is_none());
+}
+
+#[test]
+fn owner_post_compose_rejects_encrypted_media_for_atproto() {
+    let encrypted = serde_json::json!({
+        "encryptedMedia": {
+            "v": 1,
+            "alg": "AES-256-GCM",
+            "mediaType": "image/png",
+            "iv": BASE64.encode([2u8; 12]),
+            "ciphertext": BASE64.encode(b"ciphertext bytes")
+        }
+    });
+
+    let error = normalize_owner_post_attachments(&[encrypted], true, "both", "followers")
+        .expect_err("encrypted media should not route to ATProto");
+
+    assert!(error.contains("ActivityPub-only"));
 }
 
 #[test]
