@@ -146,8 +146,9 @@ discover_and_trust() {
 latest_message_id() {
   local base_url="$1"
   local token="$2"
-  owner "$base_url" "$token" e2ee-messages \
-    | awk '/^https:\/\// {print $1; exit}'
+  local output
+  output="$(owner "$base_url" "$token" e2ee-messages)"
+  awk 'BEGIN { id="" } /^https:\/\// { candidate=$1 } /^protocol=dais-mls-v1$/ { id=candidate; print id; exit }' <<< "$output"
 }
 
 process_delivery_if_possible() {
