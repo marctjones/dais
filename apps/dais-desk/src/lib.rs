@@ -5563,6 +5563,7 @@ fn row_with_kind(
     UiRow {
         id: s(id),
         kind: s(kind),
+        avatar: s(&avatar_text_for_row(kind, title, chip)),
         title: s(&clean_text(title)),
         subtitle: s(&clean_text(subtitle)),
         detail: s(&clean_text(detail)),
@@ -5572,6 +5573,61 @@ fn row_with_kind(
         primary: s(primary),
         secondary: s(secondary),
     }
+}
+
+fn avatar_text_for_row(_kind: &str, title: &str, chip: &str) -> String {
+    let mut source = clean_text(title);
+    for marker in [
+        " from ",
+        " with ",
+        " and ",
+        "conversation with ",
+        "direct message from ",
+        "encrypted message from ",
+    ] {
+        let lower = source.to_ascii_lowercase();
+        if let Some(index) = lower.find(marker) {
+            source = source[index + marker.len()..].trim().to_string();
+            break;
+        }
+    }
+    let mut initials = String::new();
+    for word in source
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+    {
+        let lower = word.to_ascii_lowercase();
+        if matches!(
+            lower.as_str(),
+            "reply"
+                | "direct"
+                | "encrypted"
+                | "message"
+                | "conversation"
+                | "group"
+                | "you"
+                | "and"
+                | "with"
+                | "from"
+        ) {
+            continue;
+        }
+        if let Some(ch) = word.chars().next() {
+            initials.push(ch.to_ascii_uppercase());
+        }
+        if initials.len() >= 2 {
+            break;
+        }
+    }
+    if !initials.is_empty() {
+        return initials;
+    }
+    chip.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(2)
+        .map(|ch| ch.to_ascii_uppercase())
+        .collect::<String>()
+        .if_empty("D")
 }
 
 fn empty_state_row(id: &str, title: &str, detail: &str, primary: &str) -> UiRow {

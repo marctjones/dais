@@ -17,6 +17,7 @@ export struct NavItem {
 export struct UiRow {
     id: string,
     kind: string,
+    avatar: string,
     title: string,
     subtitle: string,
     detail: string,
@@ -334,9 +335,9 @@ component RowCard inherits Rectangle {
                 border-color: root.is-relationship ? #b9dec4 : root.is-message || root.is-conversation ? #bfd7f2 : #cdd6e2;
 
                 Text {
-                    text: root.is-relationship ? "Rel" : root.is-message || root.is-conversation ? "Msg" : "Post";
+                    text: root.entry.avatar;
                     color: root.is-relationship ? #145a32 : root.is-message || root.is-conversation ? #174a7e : #27415f;
-                    font-size: root.is-post ? 11px : 10px;
+                    font-size: root.is-post ? 12px : 11px;
                     font-weight: 800;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -372,9 +373,17 @@ component RowCard inherits Rectangle {
             }
         }
 
-        if root.entry.meta != "" : MetaPill {
+        if root.entry.meta != "" && !(root.is-post || root.is-message || root.is-conversation) : MetaPill {
             label: root.entry.meta;
             tone: root.entry.tone;
+        }
+
+        if root.entry.meta != "" && (root.is-post || root.is-message || root.is-conversation) : Text {
+            text: root.entry.meta;
+            color: root.entry.tone == "warn" ? #8a5a0a : root.entry.tone == "danger" ? #8a1f1f : #3f6b50;
+            font-size: 12px;
+            font-weight: 700;
+            overflow: elide;
         }
 
         Text {
