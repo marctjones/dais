@@ -514,6 +514,7 @@ export component MainWindow inherits Window {
     in property <string> active-mode;
     in property <string> active-screen;
     in property <string> selected-row;
+    in property <string> inspector-title;
     in property <string> window-title;
     in property <string> window-subtitle;
     in property <string> attention-summary;
@@ -956,10 +957,15 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
 
                                 Text {
-                                    text: "Compose with audience first";
+                                    text: "Write privately by default";
                                     font-size: 15px;
                                     font-weight: 800;
                                     color: #111827;
+                                }
+
+                                TextEdit {
+                                    text <=> root.compose-text;
+                                    height: 108px;
                                 }
 
                                 VerticalLayout {
@@ -976,7 +982,7 @@ export component MainWindow inherits Window {
                                             vertical-alignment: center;
                                         }
                                         SegmentOption {
-                                            label: "Followers";
+                                            label: "Known people";
                                             selected: root.compose-visibility == "followers";
                                             tone: "ok";
                                             activate => { root.compose-set-visibility("followers"); }
@@ -1021,7 +1027,7 @@ export component MainWindow inherits Window {
                                 }
 
                                 Text {
-                                    text: "Audience: " + root.compose-visibility + "   Route: " + root.compose-protocol;
+                                    text: "Audience: " + (root.compose-visibility == "followers" ? "known people" : root.compose-visibility) + "   Route: " + root.compose-protocol;
                                     color: #344055;
                                     font-size: 12px;
                                     font-weight: 700;
@@ -1032,11 +1038,6 @@ export component MainWindow inherits Window {
                                     color: root.compose-visibility == "public" ? #7b1c1c : #27415f;
                                     font-size: 12px;
                                     wrap: word-wrap;
-                                }
-
-                                TextEdit {
-                                    text <=> root.compose-text;
-                                    height: 82px;
                                 }
 
                                 HorizontalLayout {
@@ -1132,7 +1133,7 @@ export component MainWindow inherits Window {
                         spacing: 10px;
 
                         Text {
-                            text: "Conversation";
+                            text: root.inspector-title;
                             font-size: 16px;
                             font-weight: 800;
                             color: #101828;

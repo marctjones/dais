@@ -36,9 +36,9 @@ fn navigates_primary_workflows_through_accessible_controls() {
     assert_eq!(window.get_active_mode().as_str(), "people");
     assert_eq!(window.get_active_screen().as_str(), "find");
 
-    click_label(&window, "Followers");
+    click_label(&window, "Requests");
     assert_eq!(window.get_active_screen().as_str(), "followers");
-    assert!(window.get_window_title().contains("Followers"));
+    assert!(window.get_window_title().contains("Follow Requests"));
 
     let server_controls: Vec<_> =
         ElementHandle::find_by_accessible_label(&window, "Server").collect();

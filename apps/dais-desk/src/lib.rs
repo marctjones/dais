@@ -421,6 +421,7 @@ pub struct UiProjection {
     pub active_mode: String,
     pub active_screen: String,
     pub selected_row: String,
+    pub inspector_title: String,
     pub window_title: String,
     pub window_subtitle: String,
     pub attention_summary: String,
@@ -1484,6 +1485,8 @@ impl DeskController {
                 .unwrap_or_default()
         };
         let inspector_rows = self.inspector_rows(&selected_row);
+        let inspector_title =
+            inspector_title_for_selection(&rows, &selected_row, &self.active_screen);
         let unread = self
             .data
             .notifications
@@ -1532,13 +1535,11 @@ impl DeskController {
             active_mode: self.active_mode.clone(),
             active_screen: self.active_screen.clone(),
             selected_row,
+            inspector_title,
             window_title: self.title_for_active_screen(),
             window_subtitle: self.subtitle_for_active_screen(),
             attention_summary: attention,
-            privacy_status: format!(
-                "{} by default. Reading people you know.",
-                visibility_label(&self.data.snapshot.settings.default_visibility)
-            ),
+            privacy_status: "Private sharing by default. Follow or watch people; they do not need to follow back.".into(),
             status_message: self.status_message.clone(),
             command_text: self.command_text.clone(),
             compose_text: self.compose.text.clone(),
@@ -3425,7 +3426,7 @@ impl DeskController {
             "people" => &[
                 ("find", "Find", self.find_rows().len()),
                 ("friends", "Friends", self.data.snapshot.friends.len()),
-                ("followers", "Followers", self.data.snapshot.followers.len()),
+                ("followers", "Requests", self.data.snapshot.followers.len()),
                 ("following", "Following", self.data.snapshot.following.len()),
             ],
             _ => &[
@@ -3459,7 +3460,7 @@ impl DeskController {
             "find" => "Find".into(),
             "relationship" => "Relationship".into(),
             "friends" => "Friends".into(),
-            "followers" => "Followers".into(),
+            "followers" => "Follow Requests".into(),
             "following" => "Following".into(),
             "watches" => "Watches & Sources".into(),
             "audience" => "Audience Groups".into(),
@@ -4086,7 +4087,7 @@ impl DeskController {
                 "Social graph",
                 "Owner-visible relationship counts",
                 &format!(
-                    "{} approved followers, {} pending, {} following, {} friends.",
+                    "{} approved people, {} pending, {} following, {} friends.",
                     stats.followers_approved,
                     stats.followers_pending,
                     stats.following_total,
@@ -4281,7 +4282,7 @@ impl DeskController {
                 "Authorized fetch",
                 "Private mode",
                 if self.data.snapshot.moderation.require_authorized_fetch {
-                    "Private reads require signed requests from approved followers before content is returned."
+                    "Private reads require signed requests from approved people before content is returned."
                 } else {
                     "Private read protection is not enforced according to the owner snapshot."
                 },
@@ -5433,6 +5434,7 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_active_mode(s(&projection.active_mode));
     window.set_active_screen(s(&projection.active_screen));
     window.set_selected_row(s(&projection.selected_row));
+    window.set_inspector_title(s(&projection.inspector_title));
     window.set_window_title(s(&projection.window_title));
     window.set_window_subtitle(s(&projection.window_subtitle));
     window.set_attention_summary(s(&projection.attention_summary));
@@ -5630,9 +5632,9 @@ fn audience_indicator_for_visibility(visibility: &Visibility) -> AudienceIndicat
             explanation: "Readable by link or addressed/federated audiences, but not promoted as a public timeline item.".into(),
         },
         Visibility::Followers => AudienceIndicator {
-            label: "Followers".into(),
+            label: "Known people".into(),
             tone: "ok",
-            explanation: "Intended for approved followers or friends; follower servers may receive delivered copies.".into(),
+            explanation: "Intended for approved people or friends; remote servers may receive delivered copies.".into(),
         },
         Visibility::Direct => AudienceIndicator {
             label: "Direct".into(),
@@ -5850,7 +5852,7 @@ fn post_row(post: &OwnerPost) -> UiRow {
         audience_indicator_for_visibility(&post.visibility)
     };
     let meta = social_post_meta(
-        visibility_label(&post.visibility),
+        &indicator.label,
         Some(protocol_label(&post.protocol)),
         post.published_at.as_deref(),
         None,
@@ -5946,7 +5948,7 @@ fn compose_audience_summary(compose: &ComposeState, snapshot: &OwnerSnapshotBund
             "Visible to addressed/federated audiences, but not promoted as a public timeline post.".to_string()
         }
         Visibility::Followers => {
-            "Visible to approved followers/friends on ActivityPub. It should not appear in anonymous public feeds.".to_string()
+            "Visible to approved people or friends on ActivityPub. It should not appear in anonymous public feeds.".to_string()
         }
         Visibility::Direct => {
             if let Some(list_id) = compose.audience_list_id.as_deref().filter(|id| !id.is_empty())
@@ -6126,9 +6128,38 @@ fn selected_visibility_inspector_rows(selected: &UiRow) -> Vec<UiRow> {
     )]
 }
 
+fn inspector_title_for_selection(
+    rows: &[UiRow],
+    selected_row: &str,
+    active_screen: &str,
+) -> String {
+    if active_screen == "compose" {
+        return "Compose Context".into();
+    }
+    let Some(row) = rows.iter().find(|row| row.id.as_str() == selected_row) else {
+        return "Details".into();
+    };
+    match row.kind.as_str() {
+        "post" => "Post".into(),
+        "notification" => "Notification".into(),
+        "message" => "Message".into(),
+        "conversation" => "Conversation".into(),
+        "relationship" => "Person".into(),
+        "empty" => "Next Step".into(),
+        _ if row.id.starts_with("source-bundle:") || row.id.starts_with("source:") => {
+            "Source".into()
+        }
+        _ if row.id.starts_with("follower:") => "Follow Request".into(),
+        _ if row.id.starts_with("following:") || row.id.starts_with("friend:") => "Person".into(),
+        _ if row.id.starts_with("audience:") => "Audience".into(),
+        _ if row.id.starts_with("draft:") => "Draft".into(),
+        _ => "Details".into(),
+    }
+}
+
 fn selected_visibility_context(row: &UiRow) -> Option<(&'static str, &'static str, &'static str)> {
     let chip = row.chip.to_ascii_lowercase();
-    if chip.ends_with(" people") || chip == "1 person" {
+    if (chip.ends_with(" people") && chip != "known people") || chip == "1 person" {
         return Some((
             "Direct",
             "Only named recipients or the selected audience group should be able to read this.",
@@ -6146,9 +6177,9 @@ fn selected_visibility_context(row: &UiRow) -> Option<(&'static str, &'static st
             "People with the link or addressed/federated audiences may be able to read this, but it is not promoted as a public timeline post.",
             "info",
         )),
-        "followers" | "private" => Some((
-            "Followers",
-            "Approved followers or friends are the intended audience. Remote follower servers may receive delivered copies.",
+        "followers" | "private" | "known people" => Some((
+            "Known people",
+            "Approved people or friends are the intended audience. Remote servers may receive delivered copies.",
             "ok",
         )),
         "direct" => Some((
@@ -8308,7 +8339,7 @@ fn visibility_explanation_str(visibility: &str) -> &'static str {
             "Visibility: unlisted; not promoted publicly, but may be visible outside friends."
         }
         "followers" | "private" => {
-            "Visibility: followers/friends; intended for approved followers, not anonymous public readers."
+            "Visibility: known people/friends; intended for approved people, not anonymous public readers."
         }
         "direct" => "Visibility: direct/select; intended only for named recipients or a selected group.",
         _ => "Visibility: unknown; the server did not provide a precise audience.",
@@ -8330,7 +8361,7 @@ fn visibility_string_label(visibility: &str) -> &str {
         "public" => "Public",
         "unlisted" => "Unlisted",
         "direct" => "Direct",
-        "followers" | "private" => "Followers",
+        "followers" | "private" => "Known people",
         value => value,
     }
 }
@@ -10187,8 +10218,8 @@ mod tests {
             published_at: Some("today".into()),
         });
         assert_eq!(own.kind.as_str(), "post");
-        assert!(own.subtitle.contains("approved followers"));
-        assert!(own.meta.contains("Followers"));
+        assert!(own.subtitle.contains("approved people"));
+        assert!(own.meta.contains("Known people"));
     }
 
     #[test]
@@ -10627,7 +10658,7 @@ mod tests {
         assert_eq!(public.tone, "warn");
 
         let followers = audience_indicator_for_visibility(&Visibility::Followers);
-        assert_eq!(followers.label, "Followers");
+        assert_eq!(followers.label, "Known people");
         assert_eq!(followers.tone, "ok");
 
         let direct_one = audience_indicator_for_target(&Visibility::Direct, false, 1, false);
@@ -10656,8 +10687,8 @@ mod tests {
             .find(|row| row.id.as_str() == "visibility:post:fixture-private-post")
             .expect("visibility context row");
         assert_eq!(visibility.title.as_str(), "Who can see this");
-        assert_eq!(visibility.chip.as_str(), "Followers");
-        assert!(visibility.detail.contains("Approved followers"));
+        assert_eq!(visibility.chip.as_str(), "Known people");
+        assert!(visibility.detail.contains("Approved people"));
     }
 
     #[test]
@@ -10683,7 +10714,7 @@ mod tests {
         });
         assert!(row.detail.contains("Reply: Reply text"));
         assert!(row.detail.contains("Original: Original context"));
-        assert!(row.subtitle.contains("Followers thread"));
+        assert!(row.subtitle.contains("Known people thread"));
     }
 
     #[test]
@@ -10717,7 +10748,7 @@ mod tests {
             .expect("notification context row");
         assert_eq!(context.kind.as_str(), "post");
         assert!(context.detail.contains("private post with context"));
-        assert!(context.meta.contains("followers/friends"));
+        assert!(context.meta.contains("known people/friends"));
         assert_eq!(context.primary.as_str(), "Open context");
         let link = rows
             .iter()
@@ -11261,7 +11292,7 @@ mod tests {
         assert_eq!(modes, vec!["home", "people"]);
         assert!(projection
             .privacy_status
-            .contains("Reading people you know"));
+            .contains("do not need to follow back"));
     }
 
     #[test]
@@ -11861,7 +11892,7 @@ mod tests {
         assert!(rows
             .iter()
             .any(|row| row.id.as_str() == "compose:visibility-summary"
-                && row.detail.contains("approved followers")));
+                && row.detail.contains("approved people")));
         assert!(rows.iter().any(|row| row.title.as_str() == "Reply context"
             && !row.detail.contains("fixture-private-post")));
     }
