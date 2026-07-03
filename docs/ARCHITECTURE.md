@@ -78,15 +78,14 @@ dais/
 │   │   ├── bindings/          # Cloudflare-specific providers
 │   │   │   ├── src/
 │   │   │   │   ├── d1.rs      # D1Provider (SQLite)
-│   │   │   │   ├── queue.rs   # CloudflareQueueProvider
-│   │   │   │   ├── http.rs    # WorkerHttpProvider
-│   │   │   │   └── r2.rs      # R2Provider (storage)
+│   │   │   │   ├── queues.rs  # CloudflareQueueProvider
+│   │   │   │   └── http.rs    # WorkerHttpProvider
 │   │   │   └── Cargo.toml
-│   │   └── workers/           # Thin worker shims
-│   │       ├── webfinger/
-│   │       ├── actor/
-│   │       ├── inbox/
-│   │       └── ...
+│   │   └── workers/           # Active workers plus legacy split workers
+│   │       ├── landing/        # Active homepage worker
+│   │       ├── router/         # Active protocol/API worker
+│   │       ├── README.md       # Active vs legacy support boundary
+│   │       └── ...             # Legacy compatibility worker sources
 └── client/                    # Rust CLI/TUI client
 ```
 
@@ -347,51 +346,40 @@ ColumnDef::new("settings", ColumnType::Json)
 // MySQL: settings JSON
 ```
 
-## Worker Pattern
+## Active Worker Pattern
 
-### Thin Worker Shims
+### Router-Centered Workers
 
-Each worker is a thin shim (~100-300 LOC) that:
-1. Receives platform-specific requests
-2. Creates platform providers
-3. Calls core library functions
-4. Returns platform-specific responses
+The supported Cloudflare deployment surface is intentionally small:
 
-**Example: WebFinger Worker**
+- `router`: ActivityPub, ATProto/PDS, owner API, media, E2EE/MLS, and compatibility routes.
+- `landing`: the project/instance homepage.
+
+Legacy split-worker sources such as `actor`, `inbox`, `outbox`, `webfinger`,
+`pds`, `auth`, and `delivery-queue` remain in-tree for compatibility and
+historical reference, but the default deploy path does not publish them. Use
+`platforms/cloudflare/workers/README.md` and `scripts/deploy.sh --include-legacy`
+when a legacy compatibility deployment is explicitly required.
+
+The shared Cloudflare binding crate exposes D1, Queue, and HTTP providers. Media
+storage is currently implemented inside the active router worker because private
+media, signed access, metadata, and encrypted attachment semantics have to be
+handled together. The crate does not expose a partial `R2Provider` that would
+return dummy signed URLs or hide unsupported operations.
+
+**Example: Router Worker Provider Setup**
 
 ```rust
-use dais_core::DaisCore;
-use dais_cloudflare::{D1Provider, CloudflareQueueProvider, WorkerHttpProvider, R2Provider};
+use dais_cloudflare::{CloudflareQueueProvider, D1Provider, WorkerHttpProvider};
 use worker::*;
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    // 1. Parse request
-    let url = req.url()?;
-    let resource = url.query_pairs()
-        .find(|(key, _)| key == "resource")
-        .map(|(_, value)| value.to_string())
-        .ok_or_else(|| "Missing resource parameter")?;
-
-    // 2. Create platform providers
     let db = D1Provider::new(env.d1("DB")?);
-    let storage = R2Provider::new(env.bucket("MEDIA")?);
     let queue = CloudflareQueueProvider::new(env.queue("delivery")?);
     let http = WorkerHttpProvider::new();
 
-    // 3. Call core library
-    let core = DaisCore::new(
-        Box::new(db),
-        Box::new(storage),
-        Box::new(queue),
-        Box::new(http),
-    );
-
-    let response = core.webfinger(&resource).await
-        .map_err(|e| format!("WebFinger error: {}", e))?;
-
-    // 4. Return platform-specific response
-    Response::from_json(&response)
+    route_request(req, env, db, queue, http).await
 }
 ```
 
@@ -614,12 +602,12 @@ The dais v1.1 architecture achieves **85-90% code reuse** across platforms throu
 1. **Platform-agnostic core library** - All business logic
 2. **Abstraction traits** - Database, Storage, Queue, HTTP
 3. **SQL dialect support** - SQLite, PostgreSQL, MySQL
-4. **Thin worker shims** - Platform-specific glue code
+4. **Router-centered Cloudflare workers** - Platform-specific glue code
 5. **Portable migrations** - Automatic syntax conversion
 
 Adding a new platform requires:
 - Implementing 4 traits (~500-1000 LOC)
-- Creating worker shims (~1000-2000 LOC)
+- Creating platform worker entrypoints (~1000-2000 LOC)
 - **Total**: ~2-3 weeks vs 6-8 weeks for full rewrite
 
 **Next Steps**:

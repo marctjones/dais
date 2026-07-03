@@ -103,8 +103,6 @@ impl DatabaseProvider for D1Provider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_dialect() {
         // Can't test with real D1 in unit tests, but we can test dialect

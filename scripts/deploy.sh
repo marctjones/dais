@@ -2,15 +2,17 @@
 #
 # dais deployment tool — reusable across the development lifecycle.
 #
-# Deploys the core-based Cloudflare Worker tree (platforms/cloudflare/workers).
-# Supersedes the old hardcoded workers/-tree deploy script.
+# Deploys the active Cloudflare Worker tree (platforms/cloudflare/workers).
+# Router and landing are the default deploy targets. Legacy split workers remain
+# available for compatibility/emergency rollback, but must be requested
+# explicitly.
 #
 # Usage:
 #   scripts/deploy.sh [ACTION] [OPTIONS]
 #
 # Actions:
 #   deploy            Deploy workers (default)
-#   build             Build/package only, no upload (wrangler --dry-run) — CI-friendly
+#   build             Build/package only, no upload (wrangler --dry-run) - CI-friendly
 #   list              List workers and their config/entrypoint status
 #   tail              Stream live logs for a worker (requires --only)
 #
@@ -19,16 +21,18 @@
 #   -w, --only NAME   Act on a single worker (e.g. --only actor)
 #   -n, --dry-run     Deploy as a dry run (build + validate, no upload)
 #   -k, --keep-going  Continue after a worker fails (default: stop on first error)
+#   --include-legacy  Include legacy split workers in all-worker deploy/build
 #   -y, --yes         Skip the confirmation prompt for production/skpt deploys
 #   -h, --help        Show this help
 #
 # Examples:
 #   scripts/deploy.sh list                       # what's deployable
-#   scripts/deploy.sh build                       # validate all workers build for deploy
-#   scripts/deploy.sh deploy                       # deploy all to dev (staging) env
-#   scripts/deploy.sh deploy --only actor          # redeploy one worker to dev
-#   scripts/deploy.sh deploy --env production       # deploy all to production (prompts)
-#   scripts/deploy.sh tail --only inbox --env production
+#   scripts/deploy.sh build                       # validate active workers build for deploy
+#   scripts/deploy.sh deploy                       # deploy active workers to dev
+#   scripts/deploy.sh deploy --only router          # redeploy one active worker to dev
+#   scripts/deploy.sh deploy --env production       # deploy active workers to production
+#   scripts/deploy.sh deploy --include-legacy       # deploy active + legacy workers
+#   scripts/deploy.sh tail --only router --env production
 #
 set -euo pipefail
 
@@ -42,8 +46,12 @@ if command -v rustup >/dev/null 2>&1; then
   BUILD_RUSTC="$(rustup which rustc 2>/dev/null || true)"
 fi
 
-# Deploy order: backends first, router LAST (it proxies to the others' URLs).
-WORKERS=(webfinger actor inbox outbox pds delivery-queue auth landing router)
+# Active deploy order.
+WORKERS=(landing router)
+
+# Legacy split workers. The router owns the production API surface now; these are
+# retained for compatibility, historical configs, and emergency rollback.
+LEGACY_WORKERS=(webfinger actor inbox outbox pds delivery-queue auth)
 
 # --- defaults ----------------------------------------------------------------
 ACTION="deploy"
@@ -52,6 +60,7 @@ ONLY=""
 DRY_RUN="false"
 KEEP_GOING="false"
 ASSUME_YES="false"
+INCLUDE_LEGACY="false"
 
 # --- colors ------------------------------------------------------------------
 if [ -t 1 ]; then
@@ -74,6 +83,7 @@ while [ $# -gt 0 ]; do
     -w|--only)       ONLY="${2:-}"; shift 2 ;;
     -n|--dry-run)    DRY_RUN="true"; shift ;;
     -k|--keep-going) KEEP_GOING="true"; shift ;;
+    --include-legacy) INCLUDE_LEGACY="true"; shift ;;
     -y|--yes)        ASSUME_YES="true"; shift ;;
     -h|--help)       usage; exit 0 ;;
     *) err "Unknown argument: $1"; echo; usage; exit 2 ;;
@@ -85,11 +95,15 @@ case "$ENVIRONMENT" in
   *) err "Invalid --env '$ENVIRONMENT' (expected: dev | production | skpt)"; exit 2 ;;
 esac
 
+ALL_WORKERS=("${WORKERS[@]}" "${LEGACY_WORKERS[@]}")
+
 # Resolve the worker list (single or all), validating --only.
 if [ -n "$ONLY" ]; then
-  found="false"; for w in "${WORKERS[@]}"; do [ "$w" = "$ONLY" ] && found="true"; done
-  [ "$found" = "true" ] || { err "Unknown worker '$ONLY'. Known: ${WORKERS[*]}"; exit 2; }
+  found="false"; for w in "${ALL_WORKERS[@]}"; do [ "$w" = "$ONLY" ] && found="true"; done
+  [ "$found" = "true" ] || { err "Unknown worker '$ONLY'. Known: ${ALL_WORKERS[*]}"; exit 2; }
   TARGETS=("$ONLY")
+elif [ "$INCLUDE_LEGACY" = "true" ]; then
+  TARGETS=("${LEGACY_WORKERS[@]}" "${WORKERS[@]}")
 else
   TARGETS=("${WORKERS[@]}")
 fi
@@ -143,8 +157,17 @@ check_delivery_queue_consumer() {
 
 # --- actions -----------------------------------------------------------------
 do_list() {
-  info "Workers in $WORKERS_DIR (deploy order):"
+  info "Active workers in $WORKERS_DIR (default deploy order):"
   for w in "${WORKERS[@]}"; do
+    dir="$WORKERS_DIR/$w"
+    cfg="missing"; [ -f "$dir/wrangler.toml" ] && cfg="ok"
+    entry="?"
+    [ -f "$dir/Cargo.toml" ] && entry="rust"
+    printf "  %-16s wrangler:%-8s entry:%s\n" "$w" "$cfg" "$entry"
+  done
+  echo
+  info "Legacy split workers (deploy with --include-legacy or --only <worker>):"
+  for w in "${LEGACY_WORKERS[@]}"; do
     dir="$WORKERS_DIR/$w"
     cfg="missing"; [ -f "$dir/wrangler.toml" ] && cfg="ok"
     entry="?"

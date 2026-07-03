@@ -90,8 +90,6 @@ impl HttpProvider for WorkerHttpProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_http_provider() {
         // Can't test with real HTTP in unit tests

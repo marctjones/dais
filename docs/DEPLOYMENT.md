@@ -11,10 +11,15 @@ This guide walks you through deploying dais v1.1 from scratch on Cloudflare Work
 **Cost**: Cloudflare Workers Free tier ($0/month for most single-user instances)
 
 **What you'll deploy**:
-- 9 Cloudflare Workers (WebFinger, Actor, Inbox, Outbox, etc.)
+- 2 active Cloudflare Workers (`router`, `landing`)
 - 1 D1 Database (SQLite)
 - 1 R2 Bucket (media storage)
 - 1 Queue (delivery retries)
+
+Legacy split-worker sources still exist for compatibility (`actor`, `inbox`,
+`outbox`, `webfinger`, `pds`, `auth`, `delivery-queue`), but they are not part
+of the default supported deployment. Deploy them only when you intentionally need
+legacy compatibility by passing `--include-legacy` to `scripts/deploy.sh`.
 
 ## Prerequisites
 
@@ -164,7 +169,7 @@ For each worker in `platforms/cloudflare/workers/*/wrangler.toml`, update:
 **Example** (`platforms/cloudflare/workers/actor/wrangler.toml`):
 
 ```toml
-name = "actor"
+name = "router"
 main = "build/worker/shim.mjs"
 compatibility_date = "2025-01-04"
 
@@ -175,7 +180,7 @@ THEME = "cat-light"
 command = "cargo install -q worker-build && worker-build --release"
 
 [env.production]
-name = "actor-production"
+name = "router-production"
 
 [env.production.vars]
 DOMAIN = "dais.example.com"                      # ← YOUR MAIN DOMAIN
@@ -209,16 +214,13 @@ For Skeptical Engineering this means `@social@skpt.cl` with actor URLs on
 `social.skpt.cl`; for a personal Jones Law instance this means
 `@marc@joneslaw.io` with actor URLs on the configured ActivityPub host.
 
-**Repeat for all 9 workers**:
-- `actor`
-- `inbox`
-- `outbox`
-- `webfinger`
-- `delivery-queue`
-- `auth`
-- `pds`
+Configure the active workers by default:
+
 - `router`
 - `landing`
+
+If you are maintaining an old split-worker install, configure the legacy workers
+as well and deploy with `--include-legacy`.
 
 ### Helper Script for Configuration
 
@@ -235,8 +237,8 @@ PDS_DOMAIN="pds.dais.example.com"
 DATABASE_ID="f90f9da8-136c-40c6-b96a-eba38d7efa65"  # From step 4
 USERNAME="yourusername"
 
-# Update all workers
-for worker in actor inbox outbox webfinger delivery-queue auth pds router landing; do
+# Update active workers
+for worker in router landing; do
     CONFIG="platforms/cloudflare/workers/$worker/wrangler.toml"
     echo "Updating $worker..."
 
@@ -249,6 +251,9 @@ done
 
 echo "Configuration updated!"
 ```
+
+For a legacy compatibility deployment, add `actor inbox outbox webfinger
+delivery-queue auth pds` to the loop and use `scripts/deploy.sh --include-legacy`.
 
 Make executable and run:
 ```bash
@@ -301,27 +306,17 @@ VALUES ('yourusername', 'you@example.com', 'Your Name', 'Your bio', datetime('no
 
 ### Upload Private Key
 
-For workers that need HTTP signature signing (inbox, outbox, delivery-queue):
+For the active deployment, upload the HTTP signature key to the router worker:
 
 ```bash
-# Actor worker
-cd platforms/cloudflare/workers/actor
-wrangler secret put PRIVATE_KEY --env production < ~/.dais/keys/private.pem
-
-# Inbox worker
-cd ../inbox
-wrangler secret put PRIVATE_KEY --env production < ~/.dais/keys/private.pem
-
-# Outbox worker
-cd ../outbox
-wrangler secret put PRIVATE_KEY --env production < ~/.dais/keys/private.pem
-
-# Delivery queue worker
-cd ../delivery-queue
+cd platforms/cloudflare/workers/router
 wrangler secret put PRIVATE_KEY --env production < ~/.dais/keys/private.pem
 
 cd ../../../../
 ```
+
+Legacy split-worker deployments also need the key on the old actor, inbox,
+outbox, and delivery-queue workers.
 
 ### Upload Admin Password (Optional)
 
@@ -352,29 +347,20 @@ Expected output:
 ```
 Testing dais-core library... ✓ PASS
 Testing dais-cloudflare bindings... ✓ PASS
-Testing actor worker... ✓ PASS
-Testing inbox worker... ✓ PASS
-Testing outbox worker... ✓ PASS
-Testing webfinger worker... ✓ PASS
-Testing delivery-queue worker... ✓ PASS
-Testing auth worker... ✓ PASS
-Testing pds worker... ✓ PASS
 Testing router worker... ✓ PASS
 Testing landing worker... ✓ PASS
 
-Total: 11/11 components compiled successfully
+Total: 4/4 active components compiled successfully
 ```
 
 ### Deploy Workers
 
 ```bash
-# Deploy all workers
-for worker in landing webfinger actor auth pds outbox inbox delivery-queue router; do
-    echo "Deploying $worker..."
-    cd platforms/cloudflare/workers/$worker
-    wrangler deploy --env production
-    cd ../../../../
-done
+# Deploy active workers
+scripts/deploy.sh deploy --env production --yes
+
+# Optional legacy compatibility deployment
+scripts/deploy.sh deploy --env production --include-legacy --yes
 ```
 
 This takes ~5-10 minutes. Each worker is deployed to Cloudflare's global network.
@@ -471,18 +457,17 @@ Visit `https://dais.example.com` in browser.
 
 **Check deployment status**:
 ```bash
-wrangler deployments list --name actor-production
+wrangler deployments list --name router-production
 ```
 
 **Check logs**:
 ```bash
-wrangler tail actor-production
+wrangler tail router-production
 ```
 
 **Redeploy**:
 ```bash
-cd platforms/cloudflare/workers/actor
-wrangler deploy --env production
+scripts/deploy.sh deploy --env production --only router --yes
 ```
 
 ### Database errors
@@ -536,7 +521,7 @@ wrangler tail inbox-production
 
 1. Follow your account from Mastodon
 2. Create posts via admin interface or API
-3. Check delivery logs: `wrangler tail delivery-queue-production`
+3. Check router delivery logs: `wrangler tail router-production`
 
 ### Optional Enhancements
 

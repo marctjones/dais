@@ -159,7 +159,8 @@ Run checks:
 ```bash
 cargo test --manifest-path core/Cargo.toml
 cargo check --manifest-path client/Cargo.toml
-cargo check --manifest-path platforms/cloudflare/workers/actor/Cargo.toml
+cargo check --manifest-path platforms/cloudflare/workers/router/Cargo.toml
+cargo check --manifest-path platforms/cloudflare/workers/landing/Cargo.toml
 cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
@@ -209,13 +210,22 @@ scripts/deploy.sh deploy --env production --yes
 scripts/deploy.sh deploy --env skpt --yes
 ```
 
-Deploy individual workers when needed:
+Default deploys target only the active `landing` and `router` workers. The old
+split workers remain in the repository for compatibility and rollback; deploy
+them only when a task explicitly requires it.
+
+Deploy individual active workers when needed:
 
 ```bash
-scripts/deploy.sh deploy --env production --only actor --yes
-scripts/deploy.sh deploy --env production --only inbox --yes
-scripts/deploy.sh deploy --env production --only outbox --yes
+scripts/deploy.sh deploy --env production --only landing --yes
 scripts/deploy.sh deploy --env production --only router --yes
+```
+
+Build or deploy legacy split workers explicitly:
+
+```bash
+scripts/deploy.sh build --include-legacy
+scripts/deploy.sh deploy --env production --include-legacy --yes
 ```
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the longer operational guide.

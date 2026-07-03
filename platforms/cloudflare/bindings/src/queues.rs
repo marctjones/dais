@@ -14,6 +14,20 @@ impl CloudflareQueueProvider {
     pub fn new(queue: Queue) -> Self {
         Self { queue }
     }
+
+    /// Cloudflare Queues support delayed delivery in the platform, but the
+    /// worker-rs Queue binding used here does not expose that option. Keep this
+    /// explicit so callers do not assume requested delays are honored.
+    pub fn supports_delayed_send() -> bool {
+        false
+    }
+
+    /// The Queues binding does not expose queue depth. Returning a guessed zero
+    /// would hide operational risk, so depth remains an explicit unsupported
+    /// operation.
+    pub fn supports_depth() -> bool {
+        false
+    }
 }
 
 #[async_trait(?Send)]
@@ -40,17 +54,25 @@ impl QueueProvider for CloudflareQueueProvider {
     }
 
     async fn send_delayed(&self, _message: &str, delay_seconds: u32) -> PlatformResult<()> {
-        Err(PlatformError::Queue(format!(
-            "Cloudflare delayed queue send is not implemented in this binding; refusing to ignore requested {delay_seconds}s delay"
-        )))
+        Err(unsupported_delayed_send_error(delay_seconds))
     }
 
     async fn depth(&self) -> PlatformResult<u64> {
-        Err(PlatformError::Queue(
-            "Cloudflare queue depth is unavailable in this binding; refusing to report unknown depth as zero"
-                .to_string(),
-        ))
+        Err(unsupported_depth_error())
     }
+}
+
+fn unsupported_delayed_send_error(delay_seconds: u32) -> PlatformError {
+    PlatformError::Queue(format!(
+        "Cloudflare delayed queue send is unavailable in the worker-rs Queue binding; refusing to ignore requested {delay_seconds}s delay"
+    ))
+}
+
+fn unsupported_depth_error() -> PlatformError {
+    PlatformError::Queue(
+        "Cloudflare queue depth is unavailable in the worker-rs Queue binding; refusing to report unknown depth as zero"
+            .to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -58,8 +80,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_queue_provider() {
-        // Can't test with real Queue in unit tests
-        // In integration tests with wrangler dev, we can test real queue operations
+    fn unsupported_capabilities_are_explicit() {
+        assert!(!CloudflareQueueProvider::supports_delayed_send());
+        assert!(!CloudflareQueueProvider::supports_depth());
+    }
+
+    #[test]
+    fn unsupported_delayed_send_reports_requested_delay() {
+        let error = unsupported_delayed_send_error(30).to_string();
+
+        assert!(error.contains("delayed queue send is unavailable"));
+        assert!(error.contains("30s delay"));
+    }
+
+    #[test]
+    fn unsupported_depth_refuses_fake_zero() {
+        let error = unsupported_depth_error().to_string();
+
+        assert!(error.contains("queue depth is unavailable"));
+        assert!(error.contains("unknown depth as zero"));
     }
 }
