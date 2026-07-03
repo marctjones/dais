@@ -369,13 +369,18 @@ scripts/smoke-cross-instance-mls.sh
 
 The MLS harness verifies actor fetches, MLS device publication, peer
 discovery/trust, bidirectional 1:1 MLS send/decrypt, and audience-list MLS
-group send/decrypt. When delivery admin tokens are available at
+group send/decrypt. It also covers the live equivalent of broader group
+topology by publishing a second `skpt.cl` MLS device, sending one group message
+that decrypts on both trusted recipient devices, revoking that second peer
+device from the sender side, sending another group message, and verifying the
+remaining device decrypts while the removed device fails to decrypt. When
+delivery admin tokens are available at
 `/private/tmp/dais-delivery-admin-token.txt` and
 `/private/tmp/dais-skpt-delivery-admin-token.txt`, it also processes queued
-deliveries through the live delivery workers. The live two-instance gate proves
-the cross-instance MLS transport and one-recipient audience-list path; broader
-multi-member and multi-device MLS lifecycle coverage should be tested with
-additional independent actors.
+deliveries through the live delivery workers. The live gate uses two
+independently managed instances and three live MLS devices; add a third
+independent actor when one exists, but do not drop the multi-device removal
+checks from release gates.
 
 If Mastodon shows a follow request as pending, approve it from dais so the
 server sends a signed ActivityPub `Accept`:

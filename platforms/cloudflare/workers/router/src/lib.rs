@@ -7899,11 +7899,15 @@ async fn owner_upsert_peer_device_with_trust(
     let existing = owner_e2ee_peer_device_by_actor_and_device(env, &actor_id, &device_id)
         .await
         .map_err(|error| error.to_string())?;
+    let existing_fingerprint = existing
+        .as_ref()
+        .and_then(|row| string_field(Some(row), "fingerprint"));
+    let existing_trust_state = existing
+        .as_ref()
+        .and_then(|row| string_field(Some(row), "trust_state"));
     let effective_trust_state = peer_trust_state_after_material_update(
-        existing
-            .as_ref()
-            .and_then(|row| string_field(Some(row), "fingerprint"))
-            .as_deref(),
+        existing_fingerprint.as_deref(),
+        existing_trust_state.as_deref(),
         trust_state,
         &fingerprint,
     );
@@ -13038,14 +13042,19 @@ fn e2ee_device_fingerprint(credential: &str, key_package: &str) -> String {
 
 fn peer_trust_state_after_material_update<'a>(
     existing_fingerprint: Option<&str>,
+    existing_trust_state: Option<&'a str>,
     requested_trust_state: &'a str,
     new_fingerprint: &str,
 ) -> &'a str {
     if requested_trust_state == "trusted" {
         return "trusted";
     }
+    if requested_trust_state == "revoked" {
+        return "revoked";
+    }
     match existing_fingerprint {
         Some(existing) if existing != new_fingerprint => "untrusted",
+        Some(_) if existing_trust_state == Some("trusted") => "trusted",
         _ => requested_trust_state,
     }
 }
@@ -13912,19 +13921,48 @@ mod tests {
     #[test]
     fn changed_peer_material_requires_explicit_retrust() {
         assert_eq!(
-            peer_trust_state_after_material_update(Some("old"), "untrusted", "new"),
+            peer_trust_state_after_material_update(
+                Some("old"),
+                Some("trusted"),
+                "untrusted",
+                "new"
+            ),
             "untrusted"
         );
         assert_eq!(
-            peer_trust_state_after_material_update(Some("old"), "trusted", "new"),
+            peer_trust_state_after_material_update(
+                Some("old"),
+                Some("untrusted"),
+                "trusted",
+                "new"
+            ),
             "trusted"
         );
         assert_eq!(
-            peer_trust_state_after_material_update(Some("same"), "trusted", "same"),
+            peer_trust_state_after_material_update(
+                Some("same"),
+                Some("trusted"),
+                "untrusted",
+                "same"
+            ),
             "trusted"
         );
         assert_eq!(
-            peer_trust_state_after_material_update(Some("same"), "revoked", "same"),
+            peer_trust_state_after_material_update(
+                Some("same"),
+                Some("trusted"),
+                "trusted",
+                "same"
+            ),
+            "trusted"
+        );
+        assert_eq!(
+            peer_trust_state_after_material_update(
+                Some("same"),
+                Some("trusted"),
+                "revoked",
+                "same"
+            ),
             "revoked"
         );
     }

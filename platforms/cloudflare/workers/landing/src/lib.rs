@@ -288,12 +288,12 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <div class="tile">
                     <span class="status">verified</span>
                     <h3>E2EE</h3>
-                    <p>The encryptedMessage v1 fallback and MLS v2 owner-device paths are implemented. The independent skpt.cl deployment now passes MLS device publication, bidirectional owner-DM delivery/decrypt, and audience-list group delivery/decrypt smoke tests with dais.social.</p>
+                    <p>The encryptedMessage v1 fallback and MLS v2 owner-device paths are implemented. The independent skpt.cl deployment passes MLS device publication, bidirectional owner-DM delivery/decrypt, audience-list group delivery/decrypt, two-device recipient decrypt, removed-device decrypt failure, and encrypted media attachment smoke tests with dais.social.</p>
                 </div>
                 <div class="tile">
                     <span class="status partial">in progress</span>
                     <h3>Media and polish</h3>
-                    <p>R2 media serving and ActivityStreams attachment metadata exist. Desk now separates conversational replies from lightweight likes/boosts; richer media upload, profile editing, moderation UI, and analytics remain active roadmap items.</p>
+                    <p>R2 media serving, private ActivityPub media, AT Protocol public image upload, and encrypted media attachments are implemented. Desk media presentation, profile editing, moderation UI, and analytics remain active roadmap items.</p>
                 </div>
             </div>
         </section>
@@ -312,7 +312,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
     </main>
 
     <div class="footer">
-        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-07-01 cross-instance reply, Desk visual, and MLS smoke work.</p>
+        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-07-03 encrypted media and MLS multi-device smoke work.</p>
     </div>
 </body>
 </html>"#,
