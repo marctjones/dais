@@ -10,6 +10,13 @@ use worker::{
     Response, Result, ScheduleContext, ScheduledEvent,
 };
 
+mod media;
+#[cfg(test)]
+pub(crate) use media::sha256_hex;
+pub(crate) use media::{
+    media_custom_metadata, media_metadata_is_expired, media_type_for_filename, MediaMetadataInput,
+};
+
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
 const SOURCE_TYPES: &[&str] = &[
     "rss",
@@ -12364,25 +12371,6 @@ fn strip_html(value: &str) -> String {
     output.trim().to_string()
 }
 
-fn media_type_for_filename(filename: &str) -> String {
-    match filename
-        .rsplit('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        _ => "application/octet-stream",
-    }
-    .to_string()
-}
-
 fn allowed_media_type(value: &str) -> bool {
     matches!(
         value,
@@ -12445,52 +12433,6 @@ fn private_media_expires_at(value: Option<&Value>) -> std::result::Result<Option
     Ok(js_sys::Date::new(&JsValue::from_f64(expires_ms))
         .to_iso_string()
         .as_string())
-}
-
-struct MediaMetadataInput<'a> {
-    owner: &'a str,
-    access: &'a str,
-    media_type: &'a str,
-    bytes: &'a [u8],
-    created_at: &'a str,
-    description: Option<&'a str>,
-    expires_at: Option<&'a str>,
-    require_authorized_fetch: bool,
-}
-
-fn media_custom_metadata(input: MediaMetadataInput<'_>) -> HashMap<String, String> {
-    let mut custom_metadata = HashMap::new();
-    custom_metadata.insert("owner".to_string(), input.owner.to_string());
-    custom_metadata.insert("visibility".to_string(), input.access.to_string());
-    custom_metadata.insert("media_type".to_string(), input.media_type.to_string());
-    custom_metadata.insert("size".to_string(), input.bytes.len().to_string());
-    custom_metadata.insert("sha256".to_string(), sha256_hex(input.bytes));
-    custom_metadata.insert("created_at".to_string(), input.created_at.to_string());
-    if let Some(description) = input.description {
-        custom_metadata.insert("description".to_string(), description.to_string());
-    }
-    if let Some(expires_at) = input.expires_at {
-        custom_metadata.insert("expires_at".to_string(), expires_at.to_string());
-    }
-    if input.require_authorized_fetch {
-        custom_metadata.insert("authorized_fetch".to_string(), "required".to_string());
-    }
-    custom_metadata
-}
-
-fn media_metadata_is_expired(metadata: &HashMap<String, String>, now_ms: f64) -> bool {
-    let Some(expires_at) = metadata.get("expires_at").map(String::as_str) else {
-        return false;
-    };
-    let expires_ms = js_sys::Date::parse(expires_at);
-    expires_ms.is_finite() && expires_ms <= now_ms
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 fn js_truthy(value: &Value) -> bool {
