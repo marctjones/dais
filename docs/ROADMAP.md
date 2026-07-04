@@ -11,7 +11,8 @@ order or release policy changes.
 | --- | --- | --- | --- |
 | 4 | `v1.31 - Bluesky and public protocol completion` | First-class public ATProto/Bluesky surface, core repo/record/sync migration, public posting/reading/search/follow parity, server architecture cleanup, and protocol release gates. | #274, #275, #276, #277, #278, #334, #336, #337, #339 |
 | 5 | `v1.32 - Discovery, watches, sources, and communities` | Intentional discovery and reading: RSS/website watches, ActivityPub/Bluesky watches, public search, source provenance, and private community/group primitives. | #280, #281, #282, #283, #286 |
-| 7 | `v1.34 - Managed hosting and operations` | Productized managed hosting and operations: provisioning, backups, migration/import, observability, runbooks, support, and account policy. | #294, #295, #296, #297, #298, #299, #300, #338 |
+| 6 | `v1.33 - Dais Desk usability and GUI quality gates` | Desk usability hardening before managed hosting: compact compose, conversation clarity, responsive layout, scoped status/toolbar behavior, reduced operational language, and automated visual/interaction gates. | #340, #341, #342, #343, #344, #345, #346 |
+| 7 | `v1.34 - Managed hosting and operations` | Productized managed hosting and operations after Desk usability gates: provisioning, backups, migration/import, observability, runbooks, support, and account policy. | #294, #295, #296, #297, #298, #299, #300, #338 |
 
 Recently completed foundations:
 
@@ -20,7 +21,6 @@ Recently completed foundations:
   skpt.cl E2EE/MLS gates.
 - `v1.30`: media foundations including public/private ActivityPub media,
   ATProto public image upload, and encrypted media attachment validation.
-- `v1.33`: Desk owner workflow polish and release-gate foundation.
 - `v1.31` cleanup: server release gate matrix (#335), retired unfinished
   Bluesky reply sidecar (#332), and clarified Mastodon OAuth compatibility-only
   auth behavior (#333).
@@ -43,7 +43,14 @@ Recently completed foundations:
    explicit public-search guardrails. #286 is higher risk because private groups
    intersect with audience semantics, delivery, and E2EE.
 
-3. **Complete v1.34 restore/provisioning gates.**
+3. **Harden v1.33 Desk usability gates.**
+   #340 is the parent epic for the current Desk visual and interaction quality
+   work. Start with #346 so headless GUI tests catch regressions, then fix
+   responsive layout (#343), compact Compose (#341), conversation clarity
+   (#342), scoped status/toolbar behavior (#344), and operational language
+   cleanup (#345).
+
+4. **Complete v1.34 restore/provisioning gates.**
    #297 now has a verifiable backup archive and production/skpt backup smoke,
    but still needs a fresh-environment restore test before closure. #296 and
    #299 should build on that evidence instead of adding separate ad hoc ops
@@ -111,5 +118,6 @@ closed when prerequisites are missing. Use strict environment settings such as
 gh api repos/marctjones/dais/milestones --paginate
 gh issue list --milestone "v1.31 - Bluesky and public protocol completion"
 gh issue list --milestone "v1.32 - Discovery, watches, sources, and communities"
+gh issue list --milestone "v1.33 - Dais Desk usability and GUI quality gates"
 gh issue list --milestone "v1.34 - Managed hosting and operations"
 ```
