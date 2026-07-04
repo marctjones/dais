@@ -1676,24 +1676,6 @@ fn run_activitypub(http: &Http) -> Result<()> {
     } else {
         run_owner_activitypub_authenticated(http, &mut rows);
     }
-    for (id, title) in [
-        (
-            "AP-SOFTWARE-FAMILIES-01",
-            "Inbound Create supports major ActivityPub software object families",
-        ),
-        (
-            "AP-SOFTWARE-FAMILIES-02",
-            "Owner discovery previews non-Note public objects from other servers",
-        ),
-    ] {
-        rows.push(Row::new(
-            id,
-            "INTEROP",
-            title,
-            "INFO",
-            "requires federation-lab software-family fixtures; tracked outside the default single-instance conformance run",
-        ));
-    }
     if config.owner_token.is_empty() {
         rows.push(Row::new(
             "MASTODON-SECURITY-03",
@@ -3338,6 +3320,9 @@ fn run_federation_lab(config: &Config) -> Result<()> {
         "follower_synchronization",
         "private_visibility",
     ];
+    let required_object_families = [
+        "Image", "Video", "Audio", "Article", "Page", "Event", "Question", "Review",
+    ];
     let mut rows = Vec::new();
     for server in required_servers {
         let target = by_server.get(server);
@@ -3367,7 +3352,50 @@ fn run_federation_lab(config: &Config) -> Result<()> {
             ));
         }
     }
+    let empty_object_families = Vec::new();
+    let object_families =
+        array_field(&profile, "object_families").unwrap_or(&empty_object_families);
+    let mut by_family = HashMap::new();
+    for fixture in object_families {
+        if let Some(family) = str_field(fixture, "type") {
+            by_family.insert(family.to_string(), fixture.clone());
+        }
+    }
+    for family in required_object_families {
+        let Some(fixture) = by_family.get(family) else {
+            rows.push(Row::new(
+                family,
+                "software-family",
+                "Deterministic ActivityStreams object fixture",
+                "MISSING",
+                "object_families profile entry is not configured",
+            ));
+            continue;
+        };
+        match validate_activitystreams_object_fixture(family, fixture) {
+            Ok(detail) => {
+                let status = str_field(fixture, "status")
+                    .unwrap_or("pass")
+                    .to_ascii_uppercase();
+                rows.push(Row::new(
+                    family,
+                    "software-family",
+                    "Deterministic ActivityStreams object fixture",
+                    &status,
+                    detail,
+                ));
+            }
+            Err(message) => rows.push(Row::new(
+                family,
+                "software-family",
+                "Deterministic ActivityStreams object fixture",
+                "FAIL",
+                message,
+            )),
+        }
+    }
     let missing = rows.iter().filter(|row| row.status == "MISSING").count();
+    let failed = rows.iter().filter(|row| row.status == "FAIL").count();
     let blocked = rows.iter().filter(|row| row.status == "BLOCKED").count();
     let manual = rows.iter().filter(|row| row.status == "MANUAL").count();
     let pass = rows.iter().filter(|row| row.status == "PASS").count();
@@ -3375,7 +3403,7 @@ fn run_federation_lab(config: &Config) -> Result<()> {
         .iter()
         .filter(|row| config.federation_require_pass.contains(&row.group) && row.status != "PASS")
         .count();
-    println!("\nFederation lab: PASS={pass} MANUAL={manual} BLOCKED={blocked} MISSING={missing} REQUIRED_FAIL={required_fail}");
+    println!("\nFederation lab: PASS={pass} MANUAL={manual} BLOCKED={blocked} FAIL={failed} MISSING={missing} REQUIRED_FAIL={required_fail}");
     println!("| Server | Target | Capability | Status | Detail |");
     println!("| --- | --- | --- | --- | --- |");
     for row in &rows {
@@ -3388,13 +3416,97 @@ fn run_federation_lab(config: &Config) -> Result<()> {
             escape_cell(&row.detail)
         );
     }
-    if missing > 0 || required_fail > 0 {
+    if failed > 0 || missing > 0 || required_fail > 0 {
         Err(format!(
-            "Federation lab failed: MISSING={missing} REQUIRED_FAIL={required_fail}"
+            "Federation lab failed: FAIL={failed} MISSING={missing} REQUIRED_FAIL={required_fail}"
         ))
     } else {
         Ok(())
     }
+}
+
+fn validate_activitystreams_object_fixture(family: &str, fixture: &Value) -> Result<String> {
+    let object = fixture
+        .get("object")
+        .ok_or_else(|| "fixture.object is required".to_string())?;
+    if str_field(object, "type") != Some(family) {
+        return Err(format!(
+            "fixture.object.type must be {family}, got {:?}",
+            object.get("type")
+        ));
+    }
+    let id = str_field(object, "id").unwrap_or_default();
+    if !id.starts_with("https://") {
+        return Err("fixture.object.id must be an HTTPS ActivityPub object URL".to_string());
+    }
+    if str_field(object, "attributedTo")
+        .unwrap_or_default()
+        .is_empty()
+    {
+        return Err("fixture.object.attributedTo is required".to_string());
+    }
+    match family {
+        "Image" | "Video" | "Audio" => {
+            let url = object.get("url").ok_or("media fixture requires url")?;
+            let media_type = url
+                .get("mediaType")
+                .or_else(|| url.get("mimeType"))
+                .and_then(Value::as_str)
+                .or_else(|| object.get("mediaType").and_then(Value::as_str))
+                .unwrap_or_default();
+            if media_type.is_empty() {
+                return Err("media fixture requires mediaType".to_string());
+            }
+            let expected_prefix = match family {
+                "Image" => "image/",
+                "Video" => "video/",
+                _ => "audio/",
+            };
+            if !media_type.starts_with(expected_prefix) {
+                return Err(format!(
+                    "{family} mediaType must start with {expected_prefix}"
+                ));
+            }
+        }
+        "Article" | "Page" => {
+            if str_field(object, "name").unwrap_or_default().is_empty()
+                || str_field(object, "content").unwrap_or_default().is_empty()
+            {
+                return Err(format!("{family} fixture requires name and content"));
+            }
+        }
+        "Event" => {
+            if str_field(object, "name").unwrap_or_default().is_empty()
+                || str_field(object, "startTime")
+                    .unwrap_or_default()
+                    .is_empty()
+            {
+                return Err("Event fixture requires name and startTime".to_string());
+            }
+        }
+        "Question" => {
+            let has_options = object
+                .get("oneOf")
+                .or_else(|| object.get("anyOf"))
+                .and_then(Value::as_array)
+                .map(|values| !values.is_empty())
+                .unwrap_or(false);
+            if !has_options {
+                return Err("Question fixture requires oneOf or anyOf options".to_string());
+            }
+        }
+        "Review" => {
+            if object.get("itemReviewed").is_none()
+                || str_field(object, "content").unwrap_or_default().is_empty()
+            {
+                return Err("Review fixture requires itemReviewed and content".to_string());
+            }
+        }
+        _ => return Err(format!("unexpected object family {family}")),
+    }
+    Ok(str_field(fixture, "detail")
+        .unwrap_or("deterministic fixture validated")
+        .to_string())
 }
 
 fn capability_label(value: &str) -> &str {

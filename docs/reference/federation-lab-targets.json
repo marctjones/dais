@@ -1,6 +1,122 @@
 {
   "name": "dais v0.15 Mastodon-family federation lab",
-  "updated": "2026-06-15",
+  "updated": "2026-07-04",
+  "object_families": [
+    {
+      "type": "Image",
+      "status": "pass",
+      "detail": "Deterministic ActivityStreams Image fixture validates mediaType, attribution, and HTTPS object identity.",
+      "object": {
+        "id": "https://fixtures.dais.social/activitypub/image/space-dog",
+        "type": "Image",
+        "attributedTo": "https://fixtures.dais.social/users/ada",
+        "name": "Ada's telescope dog",
+        "url": {
+          "type": "Link",
+          "href": "https://fixtures.dais.social/media/space-dog.png",
+          "mediaType": "image/png"
+        }
+      }
+    },
+    {
+      "type": "Video",
+      "status": "pass",
+      "detail": "Deterministic ActivityStreams Video fixture validates mediaType, attribution, and HTTPS object identity.",
+      "object": {
+        "id": "https://fixtures.dais.social/activitypub/video/orbit-pass",
+        "type": "Video",
+        "attributedTo": "https://fixtures.dais.social/users/ada",
+        "name": "Backyard satellite pass",
+        "url": {
+          "type": "Link",
+          "href": "https://fixtures.dais.social/media/orbit-pass.mp4",
+          "mediaType": "video/mp4"
+        }
+      }
+    },
+    {
+      "type": "Audio",
+      "status": "pass",
+      "detail": "Deterministic ActivityStreams Audio fixture validates mediaType, attribution, and HTTPS object identity.",
+      "object": {
+        "id": "https://fixtures.dais.social/activitypub/audio/launch-countdown",
+        "type": "Audio",
+        "attributedTo": "https://fixtures.dais.social/users/ada",
+        "name": "Launch countdown note",
+        "url": {
+          "type": "Link",
+          "href": "https://fixtures.dais.social/media/launch-countdown.ogg",
+          "mediaType": "audio/ogg"
+        }
+      }
+    },
+    {
+      "type": "Article",
+      "status": "pass",
+      "detail": "Deterministic ActivityStreams Article fixture validates title/content attribution shape.",
+      "object": {
+        "id": "https://fixtures.dais.social/activitypub/article/week-in-space",
+        "type": "Article",
+        "attributedTo": "https://fixtures.dais.social/users/ada",
+        "name": "Week in Space",
+        "content": "<p>A short roundup of space news for friends.</p>"
+      }
+    },
+    {
+      "type": "Page",
+      "status": "pass",
+      "detail": "Deterministic ActivityStreams Page fixture validates title/content attribution shape.",
+      "object": {
+        "id": "https://fixtures.dais.social/activitypub/page/family-observing-plan",
+        "type": "Page",
+        "attributedTo": "https://fixtures.dais.social/users/ada",
+        "name": "Family observing plan",
+        "content": "<p>Clear skies, snacks, and an early bedtime plan.</p>"
+      }
+    },
+    {
+      "type": "Event",
+      "status": "pass",
+      "detail": "Deterministic ActivityStreams Event fixture validates startTime and attribution shape.",
+      "object": {
+        "id": "https://fixtures.dais.social/activitypub/event/perseid-watch",
+        "type": "Event",
+        "attributedTo": "https://fixtures.dais.social/users/ada",
+        "name": "Perseid watch with neighbors",
+        "startTime": "2026-08-12T02:00:00Z"
+      }
+    },
+    {
+      "type": "Question",
+      "status": "pass",
+      "detail": "Deterministic ActivityStreams Question fixture validates oneOf poll options and attribution shape.",
+      "object": {
+        "id": "https://fixtures.dais.social/activitypub/question/telescope-night",
+        "type": "Question",
+        "attributedTo": "https://fixtures.dais.social/users/ada",
+        "name": "Which target should we show the kids first?",
+        "oneOf": [
+          { "type": "Note", "name": "Saturn" },
+          { "type": "Note", "name": "The Moon" }
+        ]
+      }
+    },
+    {
+      "type": "Review",
+      "status": "pass",
+      "detail": "Deterministic ActivityStreams Review fixture validates itemReviewed and content shape.",
+      "object": {
+        "id": "https://fixtures.dais.social/activitypub/review/star-party",
+        "type": "Review",
+        "attributedTo": "https://fixtures.dais.social/users/ada",
+        "content": "<p>The neighborhood star party was worth staying up late.</p>",
+        "itemReviewed": {
+          "type": "Event",
+          "name": "Neighborhood star party"
+        }
+      }
+    }
+  ],
   "targets": [
     {
       "server": "mastodon",

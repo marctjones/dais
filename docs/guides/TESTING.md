@@ -165,7 +165,11 @@ offline v0.15 gate for making sure Mastodon, Pleroma/Akkoma, Misskey/Firefish,
 and Pixelfed all have explicit coverage rows before live target credentials are
 available. Rows cover discovery, actor shape, follow/accept, Create/Update/
 Delete, replies, Like/Announce/Undo, idempotency, rich content shape, signed
-authorized fetch, and private visibility.
+authorized fetch, private visibility, and deterministic ActivityStreams
+software-family fixtures for Image, Video, Audio, Article, Page, Event,
+Question, and Review objects. The default single-instance ActivityPub run does
+not report those software-family rows as generic `INFO`; use `federation-lab`
+when that coverage is required.
 
 **Usage:**
 ```bash
