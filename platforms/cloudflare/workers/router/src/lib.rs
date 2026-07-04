@@ -2752,6 +2752,7 @@ fn mastodon_media_attachment_for_key(
     serde_json::json!({
         "id": url,
         "type": mastodon_media_attachment_type(media_type),
+        "media_type": media_type,
         "url": url,
         "preview_url": url,
         "remote_url": Value::Null,

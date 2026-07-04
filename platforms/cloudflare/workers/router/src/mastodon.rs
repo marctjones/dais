@@ -239,6 +239,7 @@ pub(crate) fn media_attachments(row: &Map<String, Value>) -> Value {
                 Some(serde_json::json!({
                     "id": format!("{}#media-{}", crate::string_field(Some(row), "id").unwrap_or_default(), index + 1),
                     "type": attachment_type,
+                    "media_type": media_type,
                     "url": url,
                     "preview_url": url,
                     "remote_url": Value::Null,
@@ -513,8 +514,16 @@ mod tests {
             Some("image")
         );
         assert_eq!(
+            attachments[0].get("media_type").and_then(Value::as_str),
+            Some("image/jpeg")
+        );
+        assert_eq!(
             attachments[1].get("type").and_then(Value::as_str),
             Some("video")
+        );
+        assert_eq!(
+            attachments[1].get("media_type").and_then(Value::as_str),
+            Some("video/mp4")
         );
     }
 
