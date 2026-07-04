@@ -12666,32 +12666,29 @@ fn require_owner_bearer(
 }
 
 fn require_mastodon_bearer(req: &Request, env: &Env) -> Result<Option<Response>> {
-    let configured = env
-        .secret("OWNER_API_TOKEN")
-        .map(|value| value.to_string())
-        .or_else(|_| {
-            env.secret("DAIS_OWNER_TOKEN")
-                .map(|value| value.to_string())
-        })
-        .or_else(|_| env.var("OWNER_API_TOKEN").map(|value| value.to_string()))
-        .or_else(|_| env.var("DAIS_OWNER_TOKEN").map(|value| value.to_string()))
-        .unwrap_or_default();
-    if configured.is_empty() && remote_environment(env) {
+    let tokens = owner_bearer_tokens(env);
+    if tokens.is_empty() && remote_environment(env) {
         return Ok(Some(api_json(
             &serde_json::json!({ "error": "OWNER_API_TOKEN is not configured" }),
             503,
         )?));
     }
 
-    let expected = if configured.is_empty() {
-        "dais-local-owner-token".to_string()
-    } else {
-        configured
-    };
     let auth = req.headers().get("Authorization")?.unwrap_or_default();
     let provided = auth.strip_prefix("Bearer ").map(str::trim).unwrap_or("");
-    if !provided.is_empty() && provided == expected {
+    let token = tokens.iter().find(|entry| entry.token == provided);
+    if matches!(
+        token,
+        Some(entry) if owner_token_has_scopes(&entry.scopes, &["owner"])
+    ) {
         return Ok(None);
+    }
+
+    if token.is_some() {
+        return Ok(Some(api_json(
+            &serde_json::json!({ "error": "Bearer token lacks required scope" }),
+            403,
+        )?));
     }
 
     Ok(Some(api_json(
