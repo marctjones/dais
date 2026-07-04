@@ -2912,6 +2912,10 @@ fn json_response(value: Value) -> Result<Response> {
     response
         .headers_mut()
         .set("Content-Type", "application/json")?;
+    response.headers_mut().set("Cache-Control", "no-store")?;
+    response
+        .headers_mut()
+        .set("Vary", "Authorization, Accept")?;
     Ok(response)
 }
 
