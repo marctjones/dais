@@ -1801,6 +1801,12 @@ async fn send_owner_e2ee_mls_message(
         })
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    store.save_decrypted_message(
+        &args.api.instance_url,
+        &result.message.id,
+        &args.plaintext,
+        "mls-rfc9420",
+    )?;
 
     println!("Sent owner MLS E2EE message");
     println!("id={}", result.message.id);
@@ -1898,6 +1904,12 @@ async fn send_owner_e2ee_mls_group_message(
             })
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        store.save_decrypted_message(
+            &args.api.instance_url,
+            &result.message.id,
+            &args.plaintext,
+            "mls-rfc9420",
+        )?;
         all_delivery_ids.extend(result.delivery_ids);
         println!(
             "sent actor={} validation_device={} message={}",
@@ -1933,6 +1945,12 @@ async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
         })
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    ConfigStore::default()?.save_decrypted_message(
+        &args.api.instance_url,
+        &result.message.id,
+        &args.plaintext,
+        "dais-mls-v1",
+    )?;
 
     println!("Sent owner E2EE message");
     println!("id={}", result.message.id);
@@ -1981,6 +1999,7 @@ async fn decrypt_owner_e2ee_mls_message(
         }
     };
     let plaintext = device.decrypt_application_message(&envelope)?;
+    let plaintext = String::from_utf8(plaintext)?;
     let state = device.export_state()?;
     store.save_mls_group_state(
         &MlsGroupStateFile {
@@ -1999,8 +2018,14 @@ async fn decrypt_owner_e2ee_mls_message(
         },
         true,
     )?;
+    store.save_decrypted_message(
+        &args.api.instance_url,
+        &message.id,
+        &plaintext,
+        "mls-rfc9420",
+    )?;
 
-    println!("{}", String::from_utf8(plaintext)?);
+    println!("{plaintext}");
     Ok(())
 }
 
@@ -2051,6 +2076,12 @@ async fn send_owner_e2ee_group_message(args: cli::OwnerE2eeGroupSendArgs) -> Res
             })
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        ConfigStore::default()?.save_decrypted_message(
+            &args.api.instance_url,
+            &result.message.id,
+            &args.plaintext,
+            "dais-mls-v1",
+        )?;
         all_delivery_ids.extend(result.delivery_ids);
         println!(
             "sent actor={} validation_device={} message={}",
@@ -2096,6 +2127,12 @@ async fn decrypt_owner_e2ee_message(
     };
     let (plaintext, content_key) =
         e2ee::decrypt_message_with_content_key(&encrypted, &private_key, args.key_id.as_deref())?;
+    store.save_decrypted_message(
+        &args.api.instance_url,
+        &message.id,
+        &plaintext,
+        &message.e2ee_protocol,
+    )?;
     println!("{plaintext}");
     for (index, attachment) in message.attachments.iter().enumerate() {
         let encrypted_media = e2ee::encrypted_media_from_json(attachment.clone())?;

@@ -48,6 +48,15 @@ pub struct MlsDeviceStateFile {
     pub updated_at: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DecryptedMessageFile {
+    pub instance_url: String,
+    pub message_id: String,
+    pub plaintext: String,
+    pub protocol: String,
+    pub cached_at: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MlsGroupStateEntry {
     pub instance: String,
@@ -186,6 +195,57 @@ impl ConfigStore {
             .join("mls-devices")
             .join(safe_path_component(instance_url))
             .join(format!("{}.json", safe_path_component(device_id)))
+    }
+
+    pub fn decrypted_message_path(&self, instance_url: &str, message_id: &str) -> PathBuf {
+        self.root
+            .join("decrypted-messages")
+            .join(safe_path_component(instance_url))
+            .join(format!("{}.json", safe_path_component(message_id)))
+    }
+
+    pub fn save_decrypted_message(
+        &self,
+        instance_url: &str,
+        message_id: &str,
+        plaintext: &str,
+        protocol: &str,
+    ) -> Result<PathBuf> {
+        let normalized_instance_url = normalize_instance_url(instance_url);
+        let path = self.decrypted_message_path(&normalized_instance_url, message_id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let state = DecryptedMessageFile {
+            instance_url: normalized_instance_url,
+            message_id: message_id.to_string(),
+            plaintext: plaintext.to_string(),
+            protocol: protocol.to_string(),
+            cached_at: unix_timestamp_label(),
+        };
+        let content = serde_json::to_string_pretty(&state)?;
+        fs::write(&path, content)?;
+        set_owner_read_write(&path)?;
+        Ok(path)
+    }
+
+    #[allow(dead_code)]
+    pub fn load_decrypted_message(
+        &self,
+        instance_url: &str,
+        message_id: &str,
+    ) -> Result<DecryptedMessageFile> {
+        let path = self.decrypted_message_path(instance_url, message_id);
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("decrypted message cache not found at {}", path.display()))?;
+        let state: DecryptedMessageFile = serde_json::from_str(&content)
+            .with_context(|| format!("invalid decrypted message cache at {}", path.display()))?;
+        if normalize_instance_url(&state.instance_url) != normalize_instance_url(instance_url)
+            || state.message_id != message_id
+        {
+            anyhow::bail!("decrypted message cache identity does not match requested message");
+        }
+        Ok(state)
     }
 
     pub fn save_mls_device_state(
@@ -360,6 +420,17 @@ fn safe_path_component(value: &str) -> String {
     }
 }
 
+fn normalize_instance_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
+
+fn unix_timestamp_label() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
 #[cfg(unix)]
 fn set_owner_read_write(path: &std::path::Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -507,6 +578,34 @@ mod tests {
         assert!(store
             .load_mls_device_state("https://social.dais.social", "other-device")
             .is_err());
+    }
+
+    #[test]
+    fn stores_decrypted_messages_under_instance_and_message_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let message_id = "https://social.dais.social/users/social/e2ee/messages/1";
+
+        let path = store
+            .save_decrypted_message(
+                "https://social.skpt.cl/",
+                message_id,
+                "hello from MLS",
+                "mls-rfc9420",
+            )
+            .unwrap();
+
+        assert!(path.ends_with(
+            "decrypted-messages/social.skpt.cl/social.dais.social_users_social_e2ee_messages_1.json"
+        ));
+        let cached = store
+            .load_decrypted_message("https://social.skpt.cl", message_id)
+            .unwrap();
+        assert_eq!(cached.instance_url, "https://social.skpt.cl");
+        assert_eq!(cached.message_id, message_id);
+        assert_eq!(cached.plaintext, "hello from MLS");
+        assert_eq!(cached.protocol, "mls-rfc9420");
+        assert!(!cached.cached_at.is_empty());
     }
 
     #[test]
