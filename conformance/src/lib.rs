@@ -2077,28 +2077,148 @@ fn run_mastodon_api_authenticated(http: &Http, rows: &mut Vec<Row>, token: &str)
             Ok("authenticated reads work".to_string())
         },
     );
-    for (id, title) in [
-        (
-            "MASTODON-API-READ-01",
-            "Search, relationships, filters, lists, and conversations have client-safe shapes",
-        ),
-        (
-            "MASTODON-API-READ-02",
-            "Account graph, status context, favourites, moderation, and streaming shapes work",
-        ),
-        (
-            "MASTODON-API-READ-04",
-            "Common Mastodon client probe endpoints return safe compatible shapes",
-        ),
-    ] {
-        rows.push(Row::new(
-            id,
-            "mastodon-api",
-            title,
-            "PASS",
-            "covered by authenticated read smoke",
-        ));
-    }
+    run_case(
+        rows,
+        "MASTODON-API-READ-01",
+        "mastodon-api",
+        "Search, relationships, filters, lists, and conversations have client-safe shapes",
+        || {
+            let account = http.request("GET", "/api/v1/accounts/verify_credentials", auth, None)?;
+            expect_status(&account, 200, "verify_credentials")?;
+            let account_id = str_field(json(&account, "verify_credentials")?, "id")
+                .ok_or("verify_credentials omitted id")?
+                .to_string();
+            let search = http.request("GET", "/api/v2/search?q=dais&limit=2", auth, None)?;
+            expect_status(&search, 200, "search")?;
+            for key in ["accounts", "statuses", "hashtags"] {
+                expect_array(
+                    json(&search, "search")?
+                        .get(key)
+                        .ok_or_else(|| format!("search missing {key}"))?,
+                    key,
+                )?;
+            }
+            let relationships = http.request(
+                "GET",
+                &format!(
+                    "/api/v1/accounts/relationships?id[]={}",
+                    encode(&account_id)
+                ),
+                auth,
+                None,
+            )?;
+            expect_status(&relationships, 200, "relationships")?;
+            let relationship_rows =
+                expect_array(json(&relationships, "relationships")?, "relationships")?;
+            if !relationship_rows
+                .iter()
+                .any(|row| str_field(row, "id") == Some(account_id.as_str()))
+            {
+                return Err("relationships did not include requested account id".to_string());
+            }
+            for path in [
+                "/api/v1/filters",
+                "/api/v2/filters",
+                "/api/v1/lists",
+                "/api/v1/conversations",
+            ] {
+                let res = http.request("GET", path, auth, None)?;
+                expect_status(&res, 200, path)?;
+                expect_array(json(&res, path)?, path)?;
+            }
+            Ok("search, relationships, filters, lists, and conversations returned compatible shapes".to_string())
+        },
+    );
+
+    run_case(
+        rows,
+        "MASTODON-API-READ-02",
+        "mastodon-api",
+        "Account graph, status context, favourites, moderation, and streaming shapes work",
+        || {
+            let account = http.request("GET", "/api/v1/accounts/verify_credentials", auth, None)?;
+            expect_status(&account, 200, "verify_credentials")?;
+            let account_id = str_field(json(&account, "verify_credentials")?, "id")
+                .ok_or("verify_credentials omitted id")?;
+            for path in [
+                format!("/api/v1/accounts/{}/statuses?limit=2", encode(account_id)),
+                format!("/api/v1/accounts/{}/followers?limit=2", encode(account_id)),
+                format!("/api/v1/accounts/{}/following?limit=2", encode(account_id)),
+                "/api/v1/favourites?limit=2".to_string(),
+                "/api/v1/blocks?limit=2".to_string(),
+                "/api/v1/domain_blocks?limit=2".to_string(),
+            ] {
+                let res = http.request("GET", &path, auth, None)?;
+                expect_status(&res, 200, &path)?;
+                expect_array(json(&res, &path)?, &path)?;
+            }
+            let status = mastodon_create_status(
+                http,
+                token,
+                json!({
+                    "status": format!("dais Mastodon read context fixture {}", Utc::now().to_rfc3339()),
+                    "visibility": "public"
+                }),
+            )?;
+            let status_id = mastodon_status_id(json(&status, "context fixture")?)?;
+            let result = (|| {
+                let context = http.request(
+                    "GET",
+                    &format!("/api/v1/statuses/{}/context", encode(&status_id)),
+                    auth,
+                    None,
+                )?;
+                expect_status(&context, 200, "status context")?;
+                let context_json = json(&context, "status context")?;
+                for key in ["ancestors", "descendants"] {
+                    expect_array(
+                        context_json
+                            .get(key)
+                            .ok_or_else(|| format!("status context missing {key}"))?,
+                        key,
+                    )?;
+                }
+                let streaming = http.request("GET", "/api/v1/streaming/public", auth, None)?;
+                expect_status(&streaming, 200, "streaming public")?;
+                if !streaming.content_type.contains("text/event-stream") {
+                    return Err(format!(
+                        "streaming public content-type mismatch: {}",
+                        streaming.content_type
+                    ));
+                }
+                Ok(
+                    "account graph, context, favourites, moderation, and streaming shapes returned"
+                        .to_string(),
+                )
+            })();
+            mastodon_delete_status_quiet(http, token, &status_id);
+            result
+        },
+    );
+
+    run_case(
+        rows,
+        "MASTODON-API-READ-04",
+        "mastodon-api",
+        "Common Mastodon client probe endpoints return safe compatible shapes",
+        || {
+            for path in [
+                "/api/v1/follow_requests",
+                "/api/v1/suggestions",
+                "/api/v1/endorsements",
+                "/api/v1/featured_tags",
+                "/api/v1/followed_tags",
+                "/api/v1/scheduled_statuses",
+                "/api/v1/mutes",
+                "/api/v1/bookmarks",
+            ] {
+                let res = http.request("GET", path, auth, None)?;
+                expect_status(&res, 200, path)?;
+                expect_array(json(&res, path)?, path)?;
+            }
+            Ok("common Mastodon client probe endpoints returned arrays".to_string())
+        },
+    );
     run_case(
         rows,
         "MASTODON-API-WRITE-01",
@@ -2118,51 +2238,474 @@ fn run_mastodon_api_authenticated(http: &Http, rows: &mut Vec<Row>, token: &str)
             let id = str_field(json(&create, "created status")?, "id")
                 .unwrap_or_default()
                 .to_string();
+            let poll = json(&create, "created status")?
+                .get("poll")
+                .ok_or("created poll status omitted poll")?;
+            let options = poll
+                .get("options")
+                .and_then(Value::as_array)
+                .ok_or("created poll omitted options")?;
+            if options.len() != 2 {
+                return Err(format!("expected 2 poll options, got {}", options.len()));
+            }
             if !id.is_empty() {
                 let _ = http.delete_auth(&format!("/api/v1/statuses/{}", encode(&id)), token);
             }
             Ok(id)
         },
     );
-    for (id, title) in [
-        (
-            "MASTODON-API-READ-03",
-            "Timeline and search pagination honor Mastodon cursor parameters",
-        ),
-        (
-            "MASTODON-API-WRITE-02",
-            "Media upload can be attached to a public status and round-trips as media_attachments",
-        ),
-        (
-            "MASTODON-API-WRITE-05",
-            "Video media upload is advertised and round-trips as a video attachment",
-        ),
-        (
-            "MASTODON-API-WRITE-03",
-            "Reply creation round-trips through status read and context descendants",
-        ),
-        (
-            "MASTODON-API-WRITE-04",
-            "Favourite and reblog actions update returned status state",
-        ),
-        (
-            "MASTODON-API-WRITE-06",
-            "Mentions and hashtags round-trip through Mastodon status JSON",
-        ),
-        (
-            "MASTODON-API-WRITE-07",
-            "Relationship block and mute actions return Mastodon-compatible state",
-        ),
-    ] {
-        rows.push(Row::new(
-            id,
-            "mastodon-api",
-            title,
-            "PASS",
-            "covered by Rust authenticated mutation smoke",
+    run_case(
+        rows,
+        "MASTODON-API-READ-03",
+        "mastodon-api",
+        "Timeline and search pagination honor Mastodon cursor parameters",
+        || mastodon_pagination_fixture(http, token, auth),
+    );
+    run_case(
+        rows,
+        "MASTODON-API-WRITE-02",
+        "mastodon-api",
+        "Media upload can be attached to a public status and round-trips as media_attachments",
+        || mastodon_media_status_fixture(http, token, "image/png", "image"),
+    );
+    run_case(
+        rows,
+        "MASTODON-API-WRITE-05",
+        "mastodon-api",
+        "Video media upload is advertised and round-trips as a video attachment",
+        || mastodon_media_status_fixture(http, token, "video/mp4", "video"),
+    );
+    run_case(
+        rows,
+        "MASTODON-API-WRITE-03",
+        "mastodon-api",
+        "Reply creation round-trips through status read and context descendants",
+        || mastodon_reply_fixture(http, token, auth),
+    );
+    run_case(
+        rows,
+        "MASTODON-API-WRITE-04",
+        "mastodon-api",
+        "Favourite and reblog actions update returned status state",
+        || mastodon_favourite_reblog_fixture(http, token, auth),
+    );
+    run_case(
+        rows,
+        "MASTODON-API-WRITE-06",
+        "mastodon-api",
+        "Mentions and hashtags round-trip through Mastodon status JSON",
+        || mastodon_mentions_hashtags_fixture(http, token),
+    );
+    run_case(
+        rows,
+        "MASTODON-API-WRITE-07",
+        "mastodon-api",
+        "Relationship block and mute actions return Mastodon-compatible state",
+        || mastodon_relationship_actions_fixture(http, token, auth),
+    );
+    Ok(())
+}
+
+fn mastodon_create_status(http: &Http, token: &str, body: Value) -> Result<HttpResponse> {
+    let res = http.post_json("/api/v1/statuses", body, Some(token))?;
+    expect_status(&res, 201, "create Mastodon status")?;
+    Ok(res)
+}
+
+fn mastodon_status_id(value: &Value) -> Result<String> {
+    str_field(value, "id")
+        .filter(|id| !id.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| "Mastodon status omitted id".to_string())
+}
+
+fn mastodon_delete_status_quiet(http: &Http, token: &str, id: &str) {
+    let _ = http.delete_auth(&format!("/api/v1/statuses/{}", encode(id)), token);
+}
+
+fn mastodon_pagination_fixture(
+    http: &Http,
+    token: &str,
+    auth: &[(&str, String)],
+) -> Result<String> {
+    let marker = format!("dais-pagination-{}", Utc::now().timestamp_millis());
+    let older = mastodon_create_status(
+        http,
+        token,
+        json!({
+            "status": format!("{marker} older"),
+            "visibility": "public"
+        }),
+    )?;
+    let older_id = mastodon_status_id(json(&older, "older pagination status")?)?;
+    let newer = mastodon_create_status(
+        http,
+        token,
+        json!({
+            "status": format!("{marker} newer"),
+            "visibility": "public"
+        }),
+    )?;
+    let newer_id = mastodon_status_id(json(&newer, "newer pagination status")?)?;
+    let result = (|| {
+        let first = http.request(
+            "GET",
+            &format!("/api/v2/search?q={}&limit=1", encode(&marker)),
+            auth,
+            None,
+        )?;
+        expect_status(&first, 200, "first search page")?;
+        let first_statuses = expect_array(
+            json(&first, "first search page")?
+                .get("statuses")
+                .ok_or("first search page missing statuses")?,
+            "first search statuses",
+        )?;
+        let first_id = first_statuses
+            .first()
+            .and_then(|status| str_field(status, "id"))
+            .ok_or("first search page returned no status id")?;
+        let second = http.request(
+            "GET",
+            &format!(
+                "/api/v2/search?q={}&limit=1&max_id={}",
+                encode(&marker),
+                encode(first_id)
+            ),
+            auth,
+            None,
+        )?;
+        expect_status(&second, 200, "second search page")?;
+        let second_statuses = expect_array(
+            json(&second, "second search page")?
+                .get("statuses")
+                .ok_or("second search page missing statuses")?,
+            "second search statuses",
+        )?;
+        if second_statuses
+            .iter()
+            .all(|status| str_field(status, "id") == Some(first_id))
+        {
+            return Err("search max_id did not advance to a different status".to_string());
+        }
+        let timeline = http.request(
+            "GET",
+            &format!(
+                "/api/v1/timelines/public?limit=1&max_id={}",
+                encode(first_id)
+            ),
+            auth,
+            None,
+        )?;
+        expect_status(&timeline, 200, "timeline max_id page")?;
+        expect_array(
+            json(&timeline, "timeline max_id page")?,
+            "timeline max_id page",
+        )?;
+        Ok("search and timeline cursor parameters returned follow-up pages".to_string())
+    })();
+    mastodon_delete_status_quiet(http, token, &newer_id);
+    mastodon_delete_status_quiet(http, token, &older_id);
+    result
+}
+
+fn mastodon_media_status_fixture(
+    http: &Http,
+    token: &str,
+    media_type: &str,
+    expected_type: &str,
+) -> Result<String> {
+    let ext = if media_type.starts_with("video/") {
+        "mp4"
+    } else {
+        "png"
+    };
+    let media = http.post_json(
+        "/api/v1/media",
+        json!({
+            "filename": format!("conformance-media.{ext}"),
+            "media_type": media_type,
+            "description": format!("conformance {expected_type} media"),
+            "data_base64": TINY_PNG
+        }),
+        Some(token),
+    )?;
+    expect_status(&media, 200, "Mastodon media upload")?;
+    let media_json = json(&media, "Mastodon media upload")?;
+    let media_id = str_field(media_json, "id")
+        .ok_or("Mastodon media upload omitted id")?
+        .to_string();
+    if str_field(media_json, "type") != Some(expected_type) {
+        return Err(format!(
+            "media upload type mismatch: {:?}",
+            media_json.get("type")
         ));
     }
-    Ok(())
+    let status = mastodon_create_status(
+        http,
+        token,
+        json!({
+            "status": format!("dais Mastodon {expected_type} media fixture {}", Utc::now().to_rfc3339()),
+            "visibility": "public",
+            "media_ids": [media_id]
+        }),
+    )?;
+    let status_json = json(&status, "media status")?;
+    let status_id = mastodon_status_id(status_json)?;
+    let result = (|| {
+        let attachments = status_json
+            .get("media_attachments")
+            .and_then(Value::as_array)
+            .ok_or("media status omitted media_attachments")?;
+        let first = attachments
+            .first()
+            .ok_or("media status media_attachments was empty")?;
+        if str_field(first, "type") != Some(expected_type)
+            || str_field(first, "media_type") != Some(media_type)
+        {
+            return Err(format!(
+                "media attachment mismatch: {}",
+                short(&first.to_string())
+            ));
+        }
+        let read = http.request(
+            "GET",
+            &format!("/api/v1/statuses/{}", encode(&status_id)),
+            &[("Authorization", format!("Bearer {token}"))],
+            None,
+        )?;
+        expect_status(&read, 200, "read media status")?;
+        if json(&read, "read media status")?
+            .get("media_attachments")
+            .and_then(Value::as_array)
+            .map(Vec::is_empty)
+            .unwrap_or(true)
+        {
+            return Err("read-back media status omitted attachment".to_string());
+        }
+        Ok(format!("{expected_type} media status round-tripped"))
+    })();
+    mastodon_delete_status_quiet(http, token, &status_id);
+    result
+}
+
+fn mastodon_reply_fixture(http: &Http, token: &str, auth: &[(&str, String)]) -> Result<String> {
+    let root = mastodon_create_status(
+        http,
+        token,
+        json!({
+            "status": format!("dais Mastodon reply root {}", Utc::now().to_rfc3339()),
+            "visibility": "public"
+        }),
+    )?;
+    let root_id = mastodon_status_id(json(&root, "reply root")?)?;
+    let reply = mastodon_create_status(
+        http,
+        token,
+        json!({
+            "status": format!("dais Mastodon reply child {}", Utc::now().to_rfc3339()),
+            "visibility": "public",
+            "in_reply_to_id": root_id
+        }),
+    )?;
+    let reply_json = json(&reply, "reply child")?;
+    let reply_id = mastodon_status_id(reply_json)?;
+    let result = (|| {
+        if str_field(reply_json, "in_reply_to_id") != Some(root_id.as_str()) {
+            return Err("reply status did not preserve in_reply_to_id".to_string());
+        }
+        let context = http.request(
+            "GET",
+            &format!("/api/v1/statuses/{}/context", encode(&root_id)),
+            auth,
+            None,
+        )?;
+        expect_status(&context, 200, "reply context")?;
+        let descendants = expect_array(
+            json(&context, "reply context")?
+                .get("descendants")
+                .ok_or("reply context missing descendants")?,
+            "reply context descendants",
+        )?;
+        if !descendants
+            .iter()
+            .any(|status| str_field(status, "id") == Some(reply_id.as_str()))
+        {
+            return Err("reply context did not include created reply".to_string());
+        }
+        Ok("reply status and context descendants round-tripped".to_string())
+    })();
+    mastodon_delete_status_quiet(http, token, &reply_id);
+    mastodon_delete_status_quiet(http, token, &root_id);
+    result
+}
+
+fn mastodon_favourite_reblog_fixture(
+    http: &Http,
+    token: &str,
+    auth: &[(&str, String)],
+) -> Result<String> {
+    let status = mastodon_create_status(
+        http,
+        token,
+        json!({
+            "status": format!("dais Mastodon favourite/reblog fixture {}", Utc::now().to_rfc3339()),
+            "visibility": "public"
+        }),
+    )?;
+    let status_id = mastodon_status_id(json(&status, "favourite/reblog fixture")?)?;
+    let result = (|| {
+        let favourite = http.request(
+            "POST",
+            &format!("/api/v1/statuses/{}/favourite", encode(&status_id)),
+            auth,
+            None,
+        )?;
+        expect_status(&favourite, 200, "favourite")?;
+        if json(&favourite, "favourite")?
+            .get("favourited")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Err("favourite did not mark status favourited".to_string());
+        }
+        let reblog = http.request(
+            "POST",
+            &format!("/api/v1/statuses/{}/reblog", encode(&status_id)),
+            auth,
+            None,
+        )?;
+        expect_status(&reblog, 200, "reblog")?;
+        if json(&reblog, "reblog")?
+            .get("reblogged")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Err("reblog did not mark status reblogged".to_string());
+        }
+        let _ = http.request(
+            "POST",
+            &format!("/api/v1/statuses/{}/unfavourite", encode(&status_id)),
+            auth,
+            None,
+        );
+        let _ = http.request(
+            "POST",
+            &format!("/api/v1/statuses/{}/unreblog", encode(&status_id)),
+            auth,
+            None,
+        );
+        Ok("favourite and reblog actions updated returned status state".to_string())
+    })();
+    mastodon_delete_status_quiet(http, token, &status_id);
+    result
+}
+
+fn mastodon_mentions_hashtags_fixture(http: &Http, token: &str) -> Result<String> {
+    let status = mastodon_create_status(
+        http,
+        token,
+        json!({
+            "status": format!("dais Mastodon mentions @social@social.dais.social #daisconformance {}", Utc::now().to_rfc3339()),
+            "visibility": "public"
+        }),
+    )?;
+    let status_json = json(&status, "mentions hashtags status")?;
+    let status_id = mastodon_status_id(status_json)?;
+    let result = (|| {
+        let mentions = status_json
+            .get("mentions")
+            .and_then(Value::as_array)
+            .ok_or("status omitted mentions")?;
+        if !mentions
+            .iter()
+            .any(|mention| str_field(mention, "acct") == Some("social@social.dais.social"))
+        {
+            return Err("status omitted @social@social.dais.social mention".to_string());
+        }
+        let tags = status_json
+            .get("tags")
+            .and_then(Value::as_array)
+            .ok_or("status omitted tags")?;
+        if !tags
+            .iter()
+            .any(|tag| str_field(tag, "name") == Some("daisconformance"))
+        {
+            return Err("status omitted #daisconformance tag".to_string());
+        }
+        Ok("mentions and hashtags round-tripped through status JSON".to_string())
+    })();
+    mastodon_delete_status_quiet(http, token, &status_id);
+    result
+}
+
+fn mastodon_relationship_actions_fixture(
+    http: &Http,
+    token: &str,
+    auth: &[(&str, String)],
+) -> Result<String> {
+    let actor_id = format!(
+        "https://social.dais.social/__dais-fixtures/activitypub/actor?name=relationship-{}",
+        Utc::now().timestamp_millis()
+    );
+    let block = http.request(
+        "POST",
+        &format!("/api/v1/accounts/{}/block", encode(&actor_id)),
+        auth,
+        None,
+    )?;
+    expect_status(&block, 200, "account block")?;
+    if json(&block, "account block")?
+        .get("blocking")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("account block did not return blocking=true".to_string());
+    }
+    let mute = http.request(
+        "POST",
+        &format!("/api/v1/accounts/{}/mute", encode(&actor_id)),
+        auth,
+        None,
+    )?;
+    expect_status(&mute, 200, "account mute")?;
+    if json(&mute, "account mute")?.get("muting").is_none() {
+        return Err("account mute response omitted muting state".to_string());
+    }
+    let domain = "conformance.invalid";
+    let domain_block = http.post_json(
+        "/api/v1/domain_blocks",
+        json!({ "domain": domain }),
+        Some(token),
+    )?;
+    expect_status(&domain_block, 200, "domain block")?;
+    let domain_blocks = http.request("GET", "/api/v1/domain_blocks?limit=20", auth, None)?;
+    expect_status(&domain_blocks, 200, "domain blocks")?;
+    if !expect_array(json(&domain_blocks, "domain blocks")?, "domain blocks")?
+        .iter()
+        .any(|value| value.as_str() == Some(domain))
+    {
+        return Err("domain_blocks did not include blocked domain".to_string());
+    }
+    let _ = http.request(
+        "POST",
+        &format!("/api/v1/accounts/{}/unblock", encode(&actor_id)),
+        auth,
+        None,
+    );
+    let _ = http.request(
+        "POST",
+        &format!("/api/v1/accounts/{}/unmute", encode(&actor_id)),
+        auth,
+        None,
+    );
+    let _ = http.request(
+        "DELETE",
+        &format!("/api/v1/domain_blocks?domain={}", encode(domain)),
+        auth,
+        None,
+    );
+    Ok("relationship block, mute, and domain block actions returned compatible state".to_string())
 }
 
 fn run_mastodon_client_smoke(http: &Http) -> Result<()> {
