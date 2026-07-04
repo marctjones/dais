@@ -1055,6 +1055,7 @@ type RepoRecordBlock = core_atproto::RepoRecordBlock;
 #[cfg(test)]
 type CarBlock = core_atproto::CarBlock;
 type RepoSnapshot = core_atproto::RepoSnapshot;
+type MediaAttachment = core_atproto::MediaAttachment;
 
 struct ProfileCounts {
     posts: u64,
@@ -1071,25 +1072,6 @@ struct ActorProfile {
 struct Page {
     limit: u32,
     offset: u32,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-struct MediaAttachment {
-    #[serde(default = "default_image_attachment_type", rename = "type")]
-    attachment_type: String,
-    url: String,
-    #[serde(default, rename = "mediaType")]
-    media_type: String,
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    cid: String,
-    #[serde(default)]
-    size: u64,
-}
-
-fn default_image_attachment_type() -> String {
-    "Image".to_string()
 }
 
 struct PublicMediaBlob {
@@ -2040,28 +2022,7 @@ async fn delete_record_response(env: &Env, identity: &Identity, _rkey: &str) -> 
 }
 
 fn post_view(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
-    let uri = at_uri(identity, &row);
-    let record = record_value(row.clone());
-    let cid = repo_record_block(
-        repo_path_from_at_uri(&uri).unwrap_or_default(),
-        record.clone(),
-    )
-    .map(|block| block.cid.to_string())
-    .unwrap_or_else(|_| stable_cid(&uri));
-    serde_json::json!({
-        "uri": uri,
-        "cid": cid,
-        "author": {
-            "did": identity.did,
-            "handle": identity.handle,
-            "displayName": "dais"
-        },
-        "record": record,
-        "replyCount": u64_field(&row, "reply_count"),
-        "repostCount": u64_field(&row, "repost_count"),
-        "likeCount": u64_field(&row, "like_count"),
-        "indexedAt": row.get("published_at").and_then(Value::as_str).unwrap_or("")
-    })
+    core_atproto::post_view(identity, core_atproto::AppViewPost::from_row(row))
 }
 
 fn thread_view_post(
@@ -2069,11 +2030,7 @@ fn thread_view_post(
     row: serde_json::Map<String, Value>,
     replies: Vec<Value>,
 ) -> Value {
-    serde_json::json!({
-        "$type": "app.bsky.feed.defs#threadViewPost",
-        "post": post_view(identity, row),
-        "replies": replies
-    })
+    core_atproto::thread_view_post(identity, core_atproto::AppViewPost::from_row(row), replies)
 }
 
 fn profile_view(identity: &Identity, actor_id: &str, handle: &str, display_name: &str) -> Value {
@@ -2195,111 +2152,11 @@ fn is_public_atproto_actor_id(value: &str) -> bool {
 }
 
 fn record_value(row: serde_json::Map<String, Value>) -> Value {
-    let text = row.get("content").and_then(Value::as_str).unwrap_or("");
-    let (facets, tags) = feed_post_facets(text);
-    let mut record = serde_json::json!({
-        "$type": "app.bsky.feed.post",
-        "text": text,
-        "createdAt": row.get("published_at").and_then(Value::as_str).unwrap_or("")
-    });
-    if let Some(object) = record.as_object_mut() {
-        if !text.trim().is_empty() {
-            object.insert("langs".to_string(), serde_json::json!(["en"]));
-        }
-        if !facets.is_empty() {
-            object.insert("facets".to_string(), Value::Array(facets));
-        }
-        if !tags.is_empty() {
-            object.insert(
-                "tags".to_string(),
-                Value::Array(tags.into_iter().map(Value::String).collect()),
-            );
-        }
-        if row
-            .get("summary")
-            .and_then(Value::as_str)
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-        {
-            object.insert(
-                "labels".to_string(),
-                serde_json::json!({
-                    "$type": "com.atproto.label.defs#selfLabels",
-                    "values": [{ "val": "!warn" }]
-                }),
-            );
-        }
-    }
-    if let Some(reply) = row
-        .get("atproto_reply_json")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| serde_json::from_str::<Value>(value).ok())
-    {
-        if let Some(object) = record.as_object_mut() {
-            object.insert("reply".to_string(), reply);
-        }
-    } else if let Some(in_reply_to) = row
-        .get("in_reply_to")
-        .and_then(Value::as_str)
-        .filter(|value| value.starts_with("at://"))
-    {
-        let cid = stable_cid(in_reply_to);
-        if let Some(object) = record.as_object_mut() {
-            object.insert(
-                "reply".to_string(),
-                serde_json::json!({
-                    "root": {
-                        "uri": in_reply_to,
-                        "cid": cid
-                    },
-                    "parent": {
-                        "uri": in_reply_to,
-                        "cid": cid
-                    }
-                }),
-            );
-        }
-    }
-    let images: Vec<Value> = media_attachments(&row)
-        .into_iter()
-        .filter(|attachment| attachment.media_type.starts_with("image/"))
-        .map(|attachment| {
-            let cid = media_attachment_cid(&attachment);
-            serde_json::json!({
-                "alt": attachment.name,
-                "image": {
-                    "$type": "blob",
-                    "ref": { "$link": cid },
-                    "mimeType": attachment.media_type,
-                    "size": attachment.size
-                }
-            })
-        })
-        .collect();
-    if !images.is_empty() {
-        if let Some(object) = record.as_object_mut() {
-            object.insert(
-                "embed".to_string(),
-                serde_json::json!({
-                    "$type": "app.bsky.embed.images",
-                    "images": images
-                }),
-            );
-        }
-    }
-    record
+    core_atproto::post_record_value(&core_atproto::AppViewPost::from_row(row))
 }
 
 fn at_uri(identity: &Identity, row: &serde_json::Map<String, Value>) -> String {
-    row.get("atproto_uri")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| {
-            let id = row.get("id").and_then(Value::as_str).unwrap_or("");
-            let rkey = id.rsplit('/').next().unwrap_or(id);
-            format!("at://{}/app.bsky.feed.post/{rkey}", identity.did)
-        })
+    core_atproto::post_at_uri(identity, &core_atproto::AppViewPost::from_row(row.clone()))
 }
 
 fn local_actor_id(identity: &Identity) -> String {
@@ -2336,118 +2193,6 @@ fn atproto_self_label_summary(record: &Value) -> String {
     } else {
         String::new()
     }
-}
-
-fn feed_post_facets(text: &str) -> (Vec<Value>, Vec<String>) {
-    let mut facets = Vec::new();
-    let mut tags = Vec::new();
-    let mut link_ranges = Vec::new();
-
-    for (start, _) in text
-        .match_indices("http://")
-        .chain(text.match_indices("https://"))
-    {
-        let end = start + trimmed_url_len(&text[start..]);
-        if end <= start {
-            continue;
-        }
-        let uri = &text[start..end];
-        link_ranges.push((start, end));
-        facets.push(facet(
-            start,
-            end,
-            "app.bsky.richtext.facet#link",
-            "uri",
-            uri,
-        ));
-    }
-
-    for (start, _) in text.match_indices('#') {
-        if link_ranges
-            .iter()
-            .any(|(link_start, link_end)| start >= *link_start && start < *link_end)
-        {
-            continue;
-        }
-        let end = scan_tag_end(text, start + 1);
-        if end <= start + 1 {
-            continue;
-        }
-        let tag = &text[start + 1..end];
-        if tag.len() > 640 {
-            continue;
-        }
-        facets.push(facet(start, end, "app.bsky.richtext.facet#tag", "tag", tag));
-        push_unique_tag(&mut tags, tag);
-    }
-
-    facets.sort_by_key(|value| {
-        value
-            .get("index")
-            .and_then(|index| index.get("byteStart"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    });
-    (facets, tags)
-}
-
-fn facet(start: usize, end: usize, feature_type: &str, field: &str, value: &str) -> Value {
-    serde_json::json!({
-        "index": {
-            "byteStart": start,
-            "byteEnd": end
-        },
-        "features": [{
-            "$type": feature_type,
-            field: value
-        }]
-    })
-}
-
-fn trimmed_url_len(value: &str) -> usize {
-    let mut end = value.len();
-    for (index, ch) in value.char_indices() {
-        if ch.is_whitespace() || matches!(ch, '<' | '>' | '"' | '\'') {
-            end = index;
-            break;
-        }
-    }
-    while end > 0 {
-        let Some((index, ch)) = value[..end].char_indices().next_back() else {
-            break;
-        };
-        if matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']') {
-            end = index;
-        } else {
-            break;
-        }
-    }
-    end
-}
-
-fn scan_tag_end(text: &str, start: usize) -> usize {
-    let mut end = start;
-    for (offset, ch) in text[start..].char_indices() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            end = start + offset + ch.len_utf8();
-        } else {
-            break;
-        }
-    }
-    end
-}
-
-fn push_unique_tag(tags: &mut Vec<String>, tag: &str) {
-    if tags.len() >= 8 {
-        return;
-    }
-    if tags
-        .iter()
-        .any(|existing| existing.eq_ignore_ascii_case(tag))
-    {
-        return;
-    }
-    tags.push(tag.to_string());
 }
 
 fn generated_rkey(created_at: &str, seed: &str) -> String {
@@ -2650,11 +2395,11 @@ fn repo_path_from_at_uri(uri: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        at_uri, atproto_media_attachments, encode_car, follow_record_value,
-        is_public_atproto_actor_id, mst_subtree, post_view, r2_key_from_media_url, record_value,
-        repo_key_depth, repo_record_block, stable_cid, thread_view_post, Identity,
+        atproto_media_attachments, encode_car, follow_record_value, is_public_atproto_actor_id,
+        mst_subtree, r2_key_from_media_url, repo_key_depth, repo_record_block, stable_cid,
+        Identity,
     };
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     #[test]
     fn stable_cid_is_real_cidv1() {
@@ -2788,116 +2533,6 @@ mod tests {
     }
 
     #[test]
-    fn post_view_exposes_appview_counts_record_facets_and_reply_ref() {
-        let identity = Identity {
-            did: "did:web:social.dais.social".into(),
-            handle: "social.dais.social".into(),
-            pds_hostname: "pds.dais.social".into(),
-        };
-        let mut row = serde_json::Map::new();
-        row.insert(
-            "id".into(),
-            json!("https://social.dais.social/users/social/posts/local1"),
-        );
-        row.insert("content".into(), json!("Hello @ada.example #space"));
-        row.insert("summary".into(), json!("science"));
-        row.insert("published_at".into(), json!("2026-07-04T12:00:00.000Z"));
-        row.insert("reply_count".into(), json!(2));
-        row.insert("repost_count".into(), json!(3));
-        row.insert("like_count".into(), json!(5));
-        row.insert(
-            "in_reply_to".into(),
-            json!("at://did:web:social.dais.social/app.bsky.feed.post/root1"),
-        );
-
-        let view = post_view(&identity, row.clone());
-        assert_eq!(
-            view.get("uri").and_then(Value::as_str),
-            Some("at://did:web:social.dais.social/app.bsky.feed.post/local1")
-        );
-        assert_eq!(view.get("replyCount").and_then(Value::as_u64), Some(2));
-        assert_eq!(view.get("repostCount").and_then(Value::as_u64), Some(3));
-        assert_eq!(view.get("likeCount").and_then(Value::as_u64), Some(5));
-        assert!(view.get("cid").and_then(Value::as_str).is_some());
-
-        let record = view.get("record").expect("record");
-        assert_eq!(
-            record.get("$type").and_then(Value::as_str),
-            Some("app.bsky.feed.post")
-        );
-        assert_eq!(
-            record.get("text").and_then(Value::as_str),
-            Some("Hello @ada.example #space")
-        );
-        assert!(record.get("facets").and_then(Value::as_array).is_some());
-        assert!(record.get("tags").and_then(Value::as_array).is_some());
-        assert!(record.get("labels").is_some());
-        assert_eq!(
-            record
-                .get("reply")
-                .and_then(|reply| reply.get("parent"))
-                .and_then(|parent| parent.get("uri"))
-                .and_then(Value::as_str),
-            Some("at://did:web:social.dais.social/app.bsky.feed.post/root1")
-        );
-
-        assert_eq!(
-            at_uri(&identity, &row),
-            "at://did:web:social.dais.social/app.bsky.feed.post/local1"
-        );
-        assert_eq!(
-            record_value(row)
-                .get("langs")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn thread_view_post_preserves_nested_reply_shape() {
-        let identity = Identity {
-            did: "did:web:social.dais.social".into(),
-            handle: "social.dais.social".into(),
-            pds_hostname: "pds.dais.social".into(),
-        };
-        let mut parent = serde_json::Map::new();
-        parent.insert(
-            "id".into(),
-            json!("https://social.dais.social/users/social/posts/root"),
-        );
-        parent.insert("content".into(), json!("root"));
-        parent.insert("published_at".into(), json!("2026-07-04T12:00:00.000Z"));
-        let mut child = serde_json::Map::new();
-        child.insert(
-            "id".into(),
-            json!("https://social.dais.social/users/social/posts/reply"),
-        );
-        child.insert("content".into(), json!("reply"));
-        child.insert("published_at".into(), json!("2026-07-04T12:01:00.000Z"));
-
-        let child_thread = thread_view_post(&identity, child, Vec::new());
-        let parent_thread = thread_view_post(&identity, parent, vec![child_thread]);
-        assert_eq!(
-            parent_thread.get("$type").and_then(Value::as_str),
-            Some("app.bsky.feed.defs#threadViewPost")
-        );
-        let replies = parent_thread
-            .get("replies")
-            .and_then(Value::as_array)
-            .expect("replies");
-        assert_eq!(replies.len(), 1);
-        assert_eq!(
-            replies[0]
-                .get("post")
-                .and_then(|post| post.get("record"))
-                .and_then(|record| record.get("text"))
-                .and_then(Value::as_str),
-            Some("reply")
-        );
-    }
-
-    #[test]
     fn mst_subtree_handles_multi_level_ranges() {
         let mut records = vec![
             repo_record_block(
@@ -2959,11 +2594,7 @@ fn html_escape(value: &str) -> String {
 }
 
 fn media_attachments(row: &serde_json::Map<String, Value>) -> Vec<MediaAttachment> {
-    let raw = row
-        .get("media_attachments")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    serde_json::from_str::<Vec<MediaAttachment>>(raw).unwrap_or_default()
+    core_atproto::media_attachments_from_row(row)
 }
 
 fn atproto_media_attachments(record: &Value) -> Result<Vec<MediaAttachment>> {
@@ -3077,11 +2708,7 @@ fn r2_key_from_media_url(url: &str) -> Option<String> {
 }
 
 fn media_attachment_cid(attachment: &MediaAttachment) -> String {
-    if attachment.cid.is_empty() {
-        stable_cid(&attachment.url)
-    } else {
-        attachment.cid.clone()
-    }
+    core_atproto::media_attachment_cid(attachment)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -3126,10 +2753,6 @@ fn string_field(row: &serde_json::Map<String, Value>, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
-}
-
-fn u64_field(row: &serde_json::Map<String, Value>, key: &str) -> u64 {
-    row.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
 fn bool_field(row: &serde_json::Map<String, Value>, key: &str) -> bool {

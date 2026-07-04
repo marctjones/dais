@@ -1,3 +1,4 @@
+pub mod appview;
 pub mod records;
 pub mod repo;
 /// AT Protocol implementation
@@ -8,6 +9,7 @@ pub mod repo;
 /// GitHub issue #275.
 pub mod sync;
 
+pub use appview::*;
 pub use records::*;
 pub use repo::*;
 pub use sync::*;
