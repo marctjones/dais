@@ -14,7 +14,9 @@ mod media;
 #[cfg(test)]
 pub(crate) use media::sha256_hex;
 pub(crate) use media::{
-    media_custom_metadata, media_metadata_is_expired, media_type_for_filename, MediaMetadataInput,
+    is_private_media_attachment, is_public_atproto_image_attachment, media_custom_metadata,
+    media_metadata_is_expired, media_r2_key_from_path, media_r2_key_from_url,
+    media_type_for_filename, MediaMetadataInput,
 };
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
@@ -1978,17 +1980,6 @@ async fn handle_media(req: Request, env: Env, url: &worker::Url) -> Result<Respo
     headers.set("Cache-Control", "private, max-age=300")?;
     response = response.with_headers(headers);
     Ok(response)
-}
-
-fn media_r2_key_from_path(path: &str) -> Option<String> {
-    path.strip_prefix("/media/_private_signed/")
-        .or_else(|| path.strip_prefix("/media/_private/"))
-        .map(|rest| format!("private/{}", decode_component(rest)))
-        .or_else(|| {
-            path.strip_prefix("/media/uploads/")
-                .map(|rest| decode_component(&format!("uploads/{rest}")))
-        })
-        .filter(|key| !key.trim().is_empty() && !key.contains(".."))
 }
 
 async fn private_media_attached_post(
@@ -11443,24 +11434,6 @@ fn optional_url_field(
     Ok(Some(value))
 }
 
-fn media_r2_key_from_url(value: &str) -> Option<String> {
-    let parsed = worker::Url::parse(value).ok()?;
-    if !is_known_activitypub_host(parsed.host_str()) {
-        return None;
-    }
-    let path = parsed.path();
-    if let Some(rest) = path.strip_prefix("/media/_private/") {
-        return Some(format!("private/{}", decode_component(rest)));
-    }
-    if let Some(rest) = path.strip_prefix("/media/_private_signed/") {
-        return Some(format!("private/{}", decode_component(rest)));
-    }
-    if let Some(rest) = path.strip_prefix("/media/uploads/") {
-        return Some(decode_component(&format!("uploads/{rest}")));
-    }
-    None
-}
-
 #[derive(Clone)]
 struct SourcePolicy {
     private_reader_only: bool,
@@ -12264,40 +12237,6 @@ fn optional_https_url(
     Ok(Some(value))
 }
 
-fn is_private_media_attachment(value: &Value) -> bool {
-    value
-        .as_object()
-        .and_then(|object| object.get("url"))
-        .and_then(Value::as_str)
-        .and_then(|url| worker::Url::parse(url).ok())
-        .map(|url| {
-            is_known_activitypub_host(url.host_str())
-                && (url.path().starts_with("/media/_private/")
-                    || url.path().starts_with("/media/_private_signed/"))
-        })
-        .unwrap_or(false)
-}
-
-fn is_public_atproto_image_attachment(value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    let media_type_is_image = object
-        .get("mediaType")
-        .and_then(Value::as_str)
-        .map(|value| value.starts_with("image/"))
-        .unwrap_or(false);
-    if !media_type_is_image {
-        return false;
-    }
-    !is_private_media_attachment(value)
-        && object
-            .get("url")
-            .and_then(Value::as_str)
-            .and_then(|url| worker::Url::parse(url).ok())
-            .is_some_and(|url| url.scheme() == "https")
-}
-
 fn is_local_object_url(value: &str, local_host: &str) -> bool {
     worker::Url::parse(value)
         .ok()
@@ -12320,10 +12259,6 @@ fn canonical_mastodon_status_id(value: &str) -> String {
             })
         })
         .unwrap_or_else(|| value.to_string())
-}
-
-fn is_known_activitypub_host(host: Option<&str>) -> bool {
-    matches!(host, Some("social.dais.social") | Some("social.skpt.cl"))
 }
 
 fn timestamp_for_local_id(iso: &str) -> String {
