@@ -352,11 +352,40 @@ fn print_report(title: &str, target: &str, rows: &[Row]) -> Result<()> {
     let info = rows.iter().filter(|row| row.status == "INFO").count();
     let skip = rows.iter().filter(|row| row.status == "SKIP").count();
     println!("\nSummary: PASS={pass} FAIL={fail} MISSING={missing} INFO={info} SKIP={skip}");
+    let strict_blockers: Vec<&Row> = rows
+        .iter()
+        .filter(|row| row.status == "INFO" || row.status == "SKIP")
+        .collect();
+    if strict_conformance() && !strict_blockers.is_empty() {
+        println!("\nStrict conformance blockers:");
+        for row in &strict_blockers {
+            println!(
+                "- {} {}: {} ({})",
+                row.status, row.id, row.title, row.detail
+            );
+        }
+        return Err(format!(
+            "{title} strict mode failed: INFO/SKIP={}",
+            strict_blockers.len()
+        ));
+    }
     if fail > 0 || missing > 0 {
         Err(format!("{title} failed: FAIL={fail} MISSING={missing}"))
     } else {
         Ok(())
     }
+}
+
+fn strict_conformance() -> bool {
+    env_flag("DAIS_CONFORMANCE_STRICT")
+        || env_flag("REQUIRE_FULL_RELEASE_GATES")
+        || env_flag("REQUIRE_FULL")
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
 }
 
 fn expect_status(res: &HttpResponse, expected: u16, context: &str) -> Result<()> {

@@ -22,6 +22,8 @@
 #
 # Environment:
 #   REQUIRE_FULL_RELEASE_GATES=1  Same as --strict
+#   DAIS_CONFORMANCE_STRICT=1     Fail conformance runs when credential-gated
+#                                  fixtures report INFO/SKIP
 #
 set -euo pipefail
 
@@ -72,6 +74,19 @@ add_gate() {
   ENVS+=("${3:-}")
 }
 
+conformance_env() {
+  local base="${1:-}"
+  if [ "$STRICT" = "1" ]; then
+    if [ -n "$base" ]; then
+      printf "%s DAIS_CONFORMANCE_STRICT=1" "$base"
+    else
+      printf "DAIS_CONFORMANCE_STRICT=1"
+    fi
+  else
+    printf "%s" "$base"
+  fi
+}
+
 add_gate "core tests" "cargo test --manifest-path core/Cargo.toml"
 add_gate "router tests" "cargo test --manifest-path platforms/cloudflare/workers/router/Cargo.toml"
 add_gate "bindings tests" "cargo test --manifest-path platforms/cloudflare/bindings/Cargo.toml"
@@ -79,13 +94,13 @@ add_gate "production worker build" "scripts/deploy.sh build --env production"
 add_gate "skpt worker build" "scripts/deploy.sh build --env skpt"
 
 if [ "$RUN_CONFORMANCE" = "true" ]; then
-  add_gate "all conformance tests" "cargo test --manifest-path conformance/Cargo.toml -- --nocapture"
+  add_gate "all conformance tests" "cargo test --manifest-path conformance/Cargo.toml -- --nocapture" "$(conformance_env)"
 fi
 if [ "$RUN_BLUESKY_CONFORMANCE" = "true" ]; then
-  add_gate "Bluesky conformance tests" "cargo test --manifest-path conformance/Cargo.toml -- --nocapture" "DAIS_CONFORMANCE_ONLY=bluesky"
+  add_gate "Bluesky conformance tests" "cargo test --manifest-path conformance/Cargo.toml -- --nocapture" "$(conformance_env "DAIS_CONFORMANCE_ONLY=bluesky")"
 fi
 if [ "$RUN_MASTODON_CONFORMANCE" = "true" ]; then
-  add_gate "Mastodon API conformance tests" "cargo test --manifest-path conformance/Cargo.toml -- --nocapture" "DAIS_CONFORMANCE_ONLY=mastodon-api"
+  add_gate "Mastodon API conformance tests" "cargo test --manifest-path conformance/Cargo.toml -- --nocapture" "$(conformance_env "DAIS_CONFORMANCE_ONLY=mastodon-api")"
 fi
 
 if [ "$DEPLOY" = "true" ]; then

@@ -128,6 +128,11 @@ visibility is rejected before persistence. Blob/profile/social write probes are
 tracked in the same report as credential-gated follow-up coverage until they are
 promoted to executable checks.
 
+Strict release runs should set `DAIS_CONFORMANCE_STRICT=1` or use
+`scripts/release-server.sh --strict --bluesky-conformance`. In strict mode any
+`INFO` or `SKIP` rows fail the conformance command, so missing credentials or
+unpromoted credential-gated fixtures cannot be mistaken for release evidence.
+
 #### Federation Matrix
 
 Runs a compatibility matrix for the current dais deployment and optional remote
