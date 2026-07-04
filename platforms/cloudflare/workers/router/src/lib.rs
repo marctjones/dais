@@ -10,7 +10,20 @@ use worker::{
     Response, Result, ScheduleContext, ScheduledEvent,
 };
 
+mod mastodon;
 mod media;
+use mastodon::{
+    account_action_path as mastodon_account_action_path,
+    account_followers_path as mastodon_account_followers_path,
+    account_following_path as mastodon_account_following_path,
+    account_path as mastodon_account_path, account_statuses_path as mastodon_account_statuses_path,
+    follow_request_action as mastodon_follow_request_action, media_path as mastodon_media_path,
+    notification_dismiss_path as mastodon_notification_dismiss_path,
+    status_action_path as mastodon_status_action_path,
+    status_context_path as mastodon_status_context_path, status_path as mastodon_status_path,
+    status_source_path as mastodon_status_source_path,
+    suggestion_dismiss as mastodon_suggestion_dismiss, visibility as mastodon_visibility,
+};
 #[cfg(test)]
 pub(crate) use media::sha256_hex;
 pub(crate) use media::{
@@ -3648,123 +3661,6 @@ fn parse_actor_acct(actor_url: &str) -> (String, String) {
         }
         Err(_) => (actor_url.to_string(), actor_url.to_string()),
     }
-}
-
-fn mastodon_visibility(value: &str) -> &'static str {
-    match value {
-        "public" => "public",
-        "unlisted" => "unlisted",
-        "direct" => "direct",
-        _ => "private",
-    }
-}
-
-fn mastodon_follow_request_action(path: &str) -> bool {
-    let Some(rest) = path.strip_prefix("/api/v1/follow_requests/") else {
-        return false;
-    };
-    let mut parts = rest.split('/');
-    let Some(id) = parts.next() else {
-        return false;
-    };
-    !id.is_empty() && matches!(parts.next(), Some("authorize" | "reject")) && parts.next().is_none()
-}
-
-fn mastodon_suggestion_dismiss(path: &str) -> bool {
-    path.strip_prefix("/api/v1/suggestions/")
-        .map(|rest| !rest.is_empty() && !rest.contains('/'))
-        .unwrap_or(false)
-}
-
-fn mastodon_account_statuses_path(path: &str) -> bool {
-    mastodon_account_collection_path(path, "statuses")
-}
-
-fn mastodon_account_followers_path(path: &str) -> bool {
-    mastodon_account_collection_path(path, "followers")
-}
-
-fn mastodon_account_following_path(path: &str) -> bool {
-    mastodon_account_collection_path(path, "following")
-}
-
-fn mastodon_account_collection_path(path: &str, collection: &str) -> bool {
-    let Some(rest) = path.strip_prefix("/api/v1/accounts/") else {
-        return false;
-    };
-    let mut parts = rest.split('/');
-    let Some(id) = parts.next() else {
-        return false;
-    };
-    !id.is_empty() && parts.next() == Some(collection) && parts.next().is_none()
-}
-
-fn mastodon_account_path(path: &str) -> bool {
-    let Some(rest) = path.strip_prefix("/api/v1/accounts/") else {
-        return false;
-    };
-    !rest.is_empty() && !rest.contains('/')
-}
-
-fn mastodon_account_action_path(path: &str) -> Option<(String, String)> {
-    let rest = path.strip_prefix("/api/v1/accounts/")?;
-    let mut parts = rest.split('/');
-    let id = parts.next()?;
-    let action = parts.next()?;
-    if id.is_empty()
-        || parts.next().is_some()
-        || !matches!(
-            action,
-            "follow" | "unfollow" | "block" | "unblock" | "mute" | "unmute"
-        )
-    {
-        return None;
-    }
-    Some((id.to_string(), action.to_string()))
-}
-
-fn mastodon_status_context_path(path: &str) -> Option<String> {
-    mastodon_status_subpath(path, "context")
-}
-
-fn mastodon_status_source_path(path: &str) -> Option<String> {
-    mastodon_status_subpath(path, "source")
-}
-
-fn mastodon_status_action_path(path: &str) -> Option<(String, String)> {
-    let rest = path.strip_prefix("/api/v1/statuses/")?;
-    for action in ["favourite", "unfavourite", "reblog", "unreblog"] {
-        let suffix = format!("/{action}");
-        if let Some(id) = rest.strip_suffix(&suffix).filter(|id| !id.is_empty()) {
-            return Some((id.to_string(), action.to_string()));
-        }
-    }
-    None
-}
-
-fn mastodon_status_subpath(path: &str, suffix: &str) -> Option<String> {
-    let rest = path.strip_prefix("/api/v1/statuses/")?;
-    let needle = format!("/{suffix}");
-    let id = rest.strip_suffix(&needle)?;
-    (!id.is_empty()).then(|| id.to_string())
-}
-
-fn mastodon_status_path(path: &str) -> Option<String> {
-    let rest = path.strip_prefix("/api/v1/statuses/")?;
-    (!rest.is_empty() && !rest.contains('/')).then(|| rest.to_string())
-}
-
-fn mastodon_media_path(path: &str) -> Option<String> {
-    path.strip_prefix("/api/v1/media/")
-        .or_else(|| path.strip_prefix("/api/v2/media/"))
-        .filter(|rest| !rest.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn mastodon_notification_dismiss_path(path: &str) -> Option<String> {
-    let rest = path.strip_prefix("/api/v1/notifications/")?;
-    let id = rest.strip_suffix("/dismiss")?;
-    (!id.is_empty()).then(|| id.to_string())
 }
 
 async fn public_status_count(env: &Env) -> Result<i64> {
