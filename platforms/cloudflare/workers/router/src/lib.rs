@@ -2077,6 +2077,7 @@ fn mastodon_oauth_token(body: &Value) -> Result<Response> {
             "token_type": "Bearer",
             "scope": "read write follow push",
             "created_at": created_at,
+            "dais_authentication": "owner_token_required",
             "dais_owner_token_required": true,
         }),
         200,

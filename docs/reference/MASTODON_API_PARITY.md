@@ -13,7 +13,7 @@ must not publish followers-only, direct, or E2EE content as public data.
 | Area | Endpoints | Status |
 | --- | --- | --- |
 | Instance | `GET /api/v1/instance`, `GET /api/v2/instance` | Implemented |
-| Apps/OAuth | `POST /api/v1/apps`, `GET /oauth/authorize`, `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server`, `GET /.well-known/openid-configuration` | Compatibility shape; `/oauth/token` returns an explicit non-authenticating placeholder until a local owner consent flow exists, and production access requires an owner-provisioned bearer token |
+| Apps/OAuth | `POST /api/v1/apps`, `GET /oauth/authorize`, `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server`, `GET /.well-known/openid-configuration` | Compatibility shape only; `/oauth/token` returns an explicit non-authenticating `owner-token-required` placeholder with `dais_authentication: "owner_token_required"` until a local owner consent flow exists, and production access requires an owner-provisioned bearer token |
 | Discovery | `GET /.well-known/nodeinfo`, `GET /nodeinfo/2.0` | Implemented for client/server metadata discovery |
 | Account | `GET /api/v1/accounts/verify_credentials`, `PATCH /api/v1/accounts/update_credentials`, `GET /api/v1/accounts/:id` | Implemented for single local account |
 | Graph | `GET /api/v1/accounts/:id/followers`, `GET /api/v1/accounts/:id/following`, `GET /api/v1/accounts/relationships` | Implemented |
@@ -38,7 +38,8 @@ must not publish followers-only, direct, or E2EE content as public data.
 - The OAuth token endpoint intentionally does not reveal or mint the production
   owner token. Until a real local consent screen exists, third-party clients need
   an owner-provisioned bearer token. The placeholder `owner-token-required`
-  response is covered by conformance and must not authenticate.
+  response is covered by conformance, includes
+  `dais_authentication: "owner_token_required"`, and must not authenticate.
 - Private, direct, and E2EE posts are not exposed through public Mastodon
   timelines or public status reads.
 - Mute/unmute return relationship-compatible state but do not yet maintain a

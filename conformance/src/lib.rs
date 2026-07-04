@@ -1191,7 +1191,7 @@ fn run_mastodon_api(http: &Http) -> Result<()> {
         &mut rows,
         "MASTODON-API-APPS-01",
         "mastodon-api",
-        "App registration and OAuth token compatibility flow works",
+        "App registration exposes a non-authenticating OAuth compatibility shape",
         || {
             let app = http.post_json(
             "/api/v1/apps",
@@ -1247,7 +1247,7 @@ fn run_mastodon_api(http: &Http) -> Result<()> {
                         .to_string(),
                 );
             }
-            Ok("placeholder OAuth flow works".to_string())
+            Ok("placeholder OAuth compatibility shape verified; real owner bearer token still required".to_string())
         },
     );
 
@@ -1543,6 +1543,18 @@ fn run_mastodon_client_smoke(http: &Http) -> Result<()> {
         ])),
     )?;
     expect_status(&token_res, 200, "oauth token")?;
+    let token_json = json(&token_res, "oauth token")?;
+    if str_field(token_json, "access_token") != Some("owner-token-required")
+        || token_json
+            .get("dais_owner_token_required")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err(
+            "oauth token smoke must return only the non-authenticating owner-token-required placeholder"
+                .to_string(),
+        );
+    }
     let account = http.request(
         "GET",
         "/api/v1/accounts/verify_credentials",
