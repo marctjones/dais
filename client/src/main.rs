@@ -808,7 +808,9 @@ async fn handle_sources(command: cli::SourcesCommand) -> Result<()> {
                 let db = D1Client::new(args.remote)?;
                 let id = sources::add_source(&db, "api", args).await?;
                 println!("Registered API source {id}");
-                println!("API refresh adapters are policy/config placeholders in v0.20.");
+                println!(
+                    "API refresh expects JSON with articles[] or items[] and stores normalized reader items."
+                );
             }
         },
         cli::SourcesCommand::List { limit, remote } => {

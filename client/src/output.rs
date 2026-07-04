@@ -464,6 +464,7 @@ pub fn print_sources(sources: &[D1SourceSubscription]) {
             "{} [{} / {}] {}",
             source.id, source.source_type, source.status, source.url
         );
+        println!("ingestion={}", source_ingestion_status(&source.source_type));
         if let Some(title) = source.title.as_deref().filter(|value| !value.is_empty()) {
             println!("title={title}");
         }
@@ -485,6 +486,38 @@ pub fn print_sources(sources: &[D1SourceSubscription]) {
         }
         println!("policy={}", source.policy_json);
         println!();
+    }
+}
+
+fn source_ingestion_status(source_type: &str) -> &'static str {
+    match source_type {
+        "rss"
+        | "atom"
+        | "api"
+        | "watch_rss"
+        | "watch_atom"
+        | "watch_activitypub_actor"
+        | "watch_activitypub_object"
+        | "watch_bluesky_actor"
+        | "watch_bluesky_post" => "refreshable",
+        _ => "registration-only",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_ingestion_status;
+
+    #[test]
+    fn source_ingestion_status_distinguishes_refreshable_types() {
+        assert_eq!(source_ingestion_status("rss"), "refreshable");
+        assert_eq!(source_ingestion_status("atom"), "refreshable");
+        assert_eq!(source_ingestion_status("api"), "refreshable");
+        assert_eq!(
+            source_ingestion_status("watch_activitypub_actor"),
+            "refreshable"
+        );
+        assert_eq!(source_ingestion_status("custom_api"), "registration-only");
     }
 }
 

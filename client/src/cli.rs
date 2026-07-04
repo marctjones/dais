@@ -506,7 +506,7 @@ pub enum SourceAddCommand {
     Rss(SourceAddArgs),
     /// Subscribe to an Atom feed URL.
     Atom(SourceAddArgs),
-    /// Register an official or licensed API source placeholder.
+    /// Subscribe to a JSON API source with articles[] or items[].
     Api(SourceAddArgs),
 }
 

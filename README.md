@@ -66,9 +66,10 @@ client and the core-based Cloudflare worker tree.
   owner reads and compose for GUI/mobile clients. Dais Desk uses the same owner
   API and now prioritizes replies/mentions as conversational rows while keeping
   likes and boosts as lightweight activity.
-- Public source subscriptions can ingest standards-based RSS/Atom feeds into a
-  private reader item model with rights-policy metadata; scheduled Cloudflare
-  refresh stores metadata/excerpts only and never reposts automatically.
+- Public source subscriptions can ingest standards-based RSS/Atom feeds and
+  JSON API sources with `articles[]` or `items[]` into a private reader item
+  model with rights-policy metadata; scheduled Cloudflare refresh stores
+  metadata/excerpts only and never reposts automatically.
 
 Mastodon parity is not complete. Dais is currently best described as
 Mastodon-readable with a growing compatibility API, not a full Mastodon server
@@ -108,6 +109,7 @@ cargo run --manifest-path client/Cargo.toml -- actors update --display-name "dai
 cargo run --manifest-path client/Cargo.toml -- moderation status --remote
 cargo run --manifest-path client/Cargo.toml -- reports summary --remote
 cargo run --manifest-path client/Cargo.toml -- sources add rss https://www.w3.org/blog/news/feed/ --title "W3C News" --remote
+cargo run --manifest-path client/Cargo.toml -- sources add api https://api.example.com/articles --title "Licensed API" --api-secret-name EXAMPLE_API_TOKEN --remote
 cargo run --manifest-path client/Cargo.toml -- sources refresh --remote
 cargo run --manifest-path client/Cargo.toml -- sources items --remote
 cargo run --manifest-path client/Cargo.toml -- timeline home --remote
