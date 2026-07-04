@@ -251,7 +251,7 @@ impl ProtocolAdapter for AtprotoAdapter {
 
 fn not_wired(protocol: ProtocolId, operation: &str) -> CoreError {
     CoreError::Internal(format!(
-        "{} adapter operation '{}' is not wired through dais-core yet",
+        "{} adapter operation '{}' requires a platform adapter implementation",
         protocol.as_str(),
         operation
     ))

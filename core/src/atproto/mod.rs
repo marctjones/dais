@@ -4,9 +4,9 @@ pub mod repo;
 /// AT Protocol implementation
 ///
 /// This module contains platform-agnostic AT Protocol (Bluesky) logic
-/// shared by core and the Cloudflare PDS surface. Moving the remaining DB/R2
-/// repo materialization and sync transport into this module is tracked in
-/// GitHub issue #275.
+/// shared by core and the Cloudflare PDS surface. Cloudflare Workers still own
+/// D1/R2 reads, route auth, and WebSocket transport; this module owns the
+/// protocol semantics those surfaces call into.
 pub mod sync;
 
 pub use appview::*;
