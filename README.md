@@ -175,6 +175,8 @@ scripts/release-server.sh --strict
 Use `scripts/release-server.sh --plan` to print the exact gate plan without
 running it. Use `scripts/release-server.sh --strict --conformance --deploy` only
 when preparing a production/skpt release after the build and smoke gates pass.
+Deploy mode applies the selected idempotent D1 schema updates through
+`scripts/apply-release-d1-migrations.sh` before uploading Workers.
 
 Live independent-instance smoke:
 
@@ -199,6 +201,8 @@ devices, discovers and trusts peers, sends encrypted messages in both
 directions, and decrypts them with the retained private keys. Without both
 owner tokens it reports the missing prerequisite and skips the send/decrypt
 path. Set `REQUIRE_FULL=1` to make missing prerequisites fail a release gate.
+Strict mode also requires both delivery admin tokens so queued delivery
+processing cannot silently degrade into exploratory skip behavior.
 `scripts/smoke-cross-instance-mls.sh` runs the live MLS v2 gate between
 `social.dais.social` and `social.skpt.cl`: actor fetch, MLS device publication,
 mutual discovery/trust, bidirectional 1:1 send/decrypt, audience-list group
@@ -207,7 +211,7 @@ decrypt failure after peer revocation, and delivery queue processing when
 delivery admin tokens are available. This is the live equivalent topology for
 broader MLS lifecycle coverage until a third independently managed actor is
 available. Set `REQUIRE_FULL=1` for release gates that must fail if either owner
-token is unavailable.
+token or either delivery admin token is unavailable.
 
 Worker builds use current `worker-build` with the rustup toolchain path set in
 each worker `wrangler.toml`.

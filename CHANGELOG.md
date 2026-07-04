@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.133] - 2026-07-04
+
+### Added
+- Added a selected D1 schema-update gate for server deploys so the current
+  idempotent release migrations are applied before production/skpt Worker
+  uploads without replaying the historical migration tree.
+- Added router support for scoped owner tokens stored as Worker secrets, plus
+  strict live-smoke checks for missing delivery admin tokens.
+
+### Changed
+- Deployed production and the independent skpt instance through the strict server
+  release gate, including D1 schema updates, active Worker deploys, skpt smoke,
+  bidirectional E2EE smoke, and cross-instance MLS smoke.
+- Updated the dais.social homepage and README to reflect the July 4 strict
+  production/skpt release evidence.
+
+### Fixed
+- Moved Bluesky AppView post/thread JSON shaping into `dais-core` so PDS,
+  conformance, and future clients share the same protocol serialization.
+- Refreshed `client/Cargo.lock` for the current `dais-core` dependency graph.
+
 ## [1.28.131] - 2026-06-29
 
 ### Added

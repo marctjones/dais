@@ -288,7 +288,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <div class="tile">
                     <span class="status">verified</span>
                     <h3>E2EE</h3>
-                    <p>The encryptedMessage v1 fallback and MLS v2 owner-device paths are implemented. The independent skpt.cl deployment passes MLS device publication, bidirectional owner-DM delivery/decrypt, audience-list group delivery/decrypt, two-device recipient decrypt, removed-device decrypt failure, and encrypted media attachment smoke tests with dais.social.</p>
+                    <p>The encryptedMessage v1 fallback and MLS v2 owner-device paths are implemented. The independent skpt.cl deployment passed the 2026-07-04 strict production release gate with dais.social: bidirectional owner-DM delivery/decrypt, MLS direct messages, audience-list group delivery/decrypt, two-device recipient decrypt, removed-device decrypt failure, and delivery-worker processing.</p>
                 </div>
                 <div class="tile">
                     <span class="status partial">in progress</span>
@@ -312,7 +312,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
     </main>
 
     <div class="footer">
-        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-07-03 encrypted media and MLS multi-device smoke work.</p>
+        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-07-04 strict production/skpt server release gate.</p>
     </div>
 </body>
 </html>"#,
