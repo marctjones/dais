@@ -4,16 +4,18 @@ use dais_client_core::{
     e2ee, ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate,
     ModerationState, OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost,
     OwnerDeletedPost, OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice,
-    OwnerE2eeMessage, OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef, OwnerE2eePeerTrustRequest,
-    OwnerFollowResult, OwnerFollower, OwnerFollowing, OwnerFriend, OwnerInteraction,
-    OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification, OwnerPost,
-    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerPublicSearchActor,
+    OwnerE2eeMessage, OwnerE2eeMessageSend, OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef,
+    OwnerE2eePeerTrustRequest, OwnerFollowResult, OwnerFollower, OwnerFollowing, OwnerFriend,
+    OwnerInteraction, OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification,
+    OwnerPost, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerPublicSearchActor,
     OwnerPublicSearchPost, OwnerSavePost, OwnerSavedPost, OwnerSearchQuery, OwnerSearchResult,
     OwnerSection, OwnerSettings, OwnerSettingsUpdate, OwnerSourceAdd, OwnerSourceAddResult,
     OwnerSourceRefreshResult, OwnerSources, OwnerStats, OwnerTimelinePost, OwnerWatchAdd,
     ProtocolRoute, SourceItem, SourceSubscription, Visibility,
 };
-use dais_core::e2ee_mls::{DaisMlsEnvelope, MlsDevice, MlsDevicePrivateState, MlsDeviceState};
+use dais_core::e2ee_mls::{
+    DaisMlsEnvelope, MlsDevice, MlsDeviceMaterial, MlsDevicePrivateState, MlsDeviceState,
+};
 use rand::rngs::OsRng;
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::{RsaPrivateKey, RsaPublicKey};
@@ -58,11 +60,27 @@ pub struct StoredOwnerAccount {
 
 #[derive(Clone, Debug, Deserialize)]
 struct StoredMlsGroupStateFile {
+    #[allow(dead_code)]
+    version: Option<u8>,
+    #[allow(dead_code)]
+    instance_url: Option<String>,
+    #[allow(dead_code)]
+    device_id: Option<String>,
+    #[allow(dead_code)]
+    group_id: Option<String>,
     serialized_group_state: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 struct StoredMlsDeviceStateFile {
+    #[allow(dead_code)]
+    version: Option<u8>,
+    #[allow(dead_code)]
+    instance_url: Option<String>,
+    #[allow(dead_code)]
+    local_actor_id: Option<String>,
+    #[allow(dead_code)]
+    device_id: Option<String>,
     serialized_device_state: String,
 }
 
@@ -3281,6 +3299,9 @@ impl DeskController {
             recipients: split_list(&self.compose.recipients),
             attachments: self.compose.attachments.clone(),
         };
+        if draft.encrypt {
+            return self.compose_send_encrypted_direct_mls(&draft);
+        }
         if self
             .settings
             .owner_token
@@ -3307,6 +3328,177 @@ impl DeskController {
             result.protocol,
             result.delivery_ids.len()
         ))
+    }
+
+    fn compose_send_encrypted_direct_mls(
+        &mut self,
+        draft: &ComposeDraft,
+    ) -> Result<String, String> {
+        if !matches!(draft.visibility, Visibility::Direct) {
+            return Err("Encrypted Desk messages currently require Direct visibility.".into());
+        }
+        if draft.audience_list_id.is_some() {
+            return Err(
+                "Encrypted audience groups are not sent from Desk yet; use one direct recipient or the MLS CLI group sender."
+                    .into(),
+            );
+        }
+        if draft.recipients.len() != 1 {
+            return Err(
+                "Encrypted Desk messages currently require exactly one direct recipient.".into(),
+            );
+        }
+        if !draft.attachments.is_empty() {
+            return Err("Encrypted media messages are not sent from Desk yet.".into());
+        }
+        if self
+            .settings
+            .owner_token
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Ok("Preview encrypted direct message prepared for MLS delivery.".into());
+        }
+
+        let recipient_actor_id = draft.recipients[0].clone();
+        let roots = dais_state_roots();
+        let (sender_device, private_state) =
+            self.active_local_mls_device_state(&roots)
+                .ok_or_else(|| {
+                    format!(
+                        "No active local MLS device state found for {}. Initialize or restore an MLS device before sending encrypted messages.",
+                        self.settings.instance_url
+                    )
+                })?;
+        let peer = self
+            .trusted_mls_peer_for_actor(&recipient_actor_id)
+            .ok_or_else(|| {
+                format!(
+                    "No trusted MLS peer device found for {recipient_actor_id}. Discover and trust the peer device before sending."
+                )
+            })?;
+
+        let raw_group_id = format!(
+            "desk-mls-dm:{}:{}:{}",
+            sender_device.device_id, recipient_actor_id, peer.device_id
+        );
+        let wire_group_id = BASE64.encode(raw_group_id.as_bytes());
+        let mut state_report = MlsStateLoadReport::new(roots.clone());
+        let mut sender = if let Some(state) = load_local_mls_group_states(
+            &roots,
+            &self.settings.instance_url,
+            &wire_group_id,
+            &mut state_report,
+        )
+        .into_iter()
+        .find(|candidate| candidate.state.device_id == sender_device.device_id)
+        {
+            MlsDevice::from_state(&state.state).map_err(|error| error.to_string())?
+        } else {
+            MlsDevice::from_private_state(&private_state).map_err(|error| error.to_string())?
+        };
+
+        let welcome = if sender.current_epoch().is_ok() {
+            None
+        } else {
+            let recipient = MlsDeviceMaterial {
+                account_id: peer.actor_id.clone(),
+                device_id: peer.device_id.clone(),
+                ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_string(),
+                signature_scheme: "ED25519".to_string(),
+                credential_identity: peer.credential.clone(),
+                key_package: peer.key_package.clone(),
+            };
+            let recipient = dais_core::e2ee_mls::MlsPublicDevice::from_material(recipient)
+                .map_err(|error| error.to_string())?;
+            Some(
+                sender
+                    .create_group(raw_group_id.as_bytes(), &recipient)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let mut envelope = sender
+            .encrypt_application_message(draft.text.as_bytes())
+            .map_err(|error| error.to_string())?;
+        envelope.welcome = welcome
+            .map(|welcome| welcome.to_wire().map_err(|error| error.to_string()))
+            .transpose()?;
+        let sender_state = sender.export_state().map_err(|error| error.to_string())?;
+        persist_local_mls_group_state_for_device(
+            &roots,
+            &self.settings.instance_url,
+            &self.data.snapshot.profile.actor_url,
+            &sender_device.device_id,
+            &sender_state,
+        )?;
+
+        let client = self.client()?;
+        let plaintext = draft.text.clone();
+        let instance_url = self.settings.instance_url.clone();
+        let result = self.runtime.block_on(async move {
+            client
+                .send_e2ee_message(&OwnerE2eeMessageSend {
+                    recipient_actor_id,
+                    recipient_device_id: Some(peer.device_id),
+                    sender_device_id: sender_device.device_id,
+                    dais_encrypted_message: Some(
+                        serde_json::to_value(&envelope).map_err(|error| error.to_string())?,
+                    ),
+                    encrypted_message: None,
+                    fallback_content: Some(
+                        "Encrypted MLS message. Open in a dais client to decrypt.".to_string(),
+                    ),
+                    attachments: Vec::new(),
+                })
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        persist_cached_decrypted_message(
+            &roots,
+            &instance_url,
+            &result.message.id,
+            &plaintext,
+            "mls-rfc9420",
+        )?;
+
+        Ok(format!(
+            "Sent encrypted direct message via MLS; {} delivery record(s) queued.",
+            result.delivery_ids.len()
+        ))
+    }
+
+    fn active_local_mls_device_state(
+        &self,
+        roots: &[PathBuf],
+    ) -> Option<(OwnerE2eeDevice, MlsDevicePrivateState)> {
+        let mut report = MlsStateLoadReport::new(roots.to_vec());
+        let local_states =
+            load_local_mls_device_states(roots, &self.settings.instance_url, &mut report);
+        self.data
+            .e2ee_devices
+            .iter()
+            .filter(|device| device.protocol == "mls-rfc9420" && device.status == "active")
+            .find_map(|device| {
+                local_states
+                    .iter()
+                    .find(|(_path, state)| {
+                        state.device_id == device.device_id && state.account_id == device.actor_id
+                    })
+                    .map(|(_path, state)| (device.clone(), state.clone()))
+            })
+    }
+
+    fn trusted_mls_peer_for_actor(&self, actor_id: &str) -> Option<OwnerE2eePeerDevice> {
+        self.data
+            .e2ee_peer_devices
+            .iter()
+            .find(|peer| {
+                peer.actor_id == actor_id
+                    && peer.protocol == "mls-rfc9420"
+                    && peer.trust_state == "trusted"
+            })
+            .cloned()
     }
 
     fn active_account_id(&self) -> String {
@@ -6810,26 +7002,103 @@ struct E2eeMessageRenderState {
     locked: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+struct MlsStateLoadReport {
+    roots: Vec<PathBuf>,
+    group_state_files: Vec<PathBuf>,
+    device_state_files: Vec<PathBuf>,
+    unreadable_state_files: Vec<String>,
+    invalid_state_files: Vec<String>,
+}
+
+impl MlsStateLoadReport {
+    fn new(roots: Vec<PathBuf>) -> Self {
+        Self {
+            roots,
+            ..Self::default()
+        }
+    }
+
+    fn checked_roots_summary(&self) -> String {
+        if self.roots.is_empty() {
+            "no state roots were configured".into()
+        } else {
+            self.roots
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    }
+
+    fn found_state_summary(&self) -> String {
+        format!(
+            "{} MLS group state file(s), {} MLS device state file(s)",
+            self.group_state_files.len(),
+            self.device_state_files.len()
+        )
+    }
+
+    fn diagnostics_summary(&self) -> String {
+        let mut details = Vec::new();
+        if !self.unreadable_state_files.is_empty() {
+            details.push(format!(
+                "unreadable files: {}",
+                self.unreadable_state_files.join("; ")
+            ));
+        }
+        if !self.invalid_state_files.is_empty() {
+            details.push(format!(
+                "invalid files: {}",
+                self.invalid_state_files.join("; ")
+            ));
+        }
+        if details.is_empty() {
+            "no state-file read errors".into()
+        } else {
+            details.join("; ")
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MlsGroupStateCandidate {
+    path: PathBuf,
+    state: MlsDeviceState,
+}
+
 fn e2ee_message_render_state(
     settings: &StoredOwnerSettings,
     message: &OwnerE2eeMessage,
+) -> E2eeMessageRenderState {
+    let roots = dais_state_roots();
+    e2ee_message_render_state_with_roots(settings, message, &roots)
+}
+
+fn e2ee_message_render_state_with_roots(
+    settings: &StoredOwnerSettings,
+    message: &OwnerE2eeMessage,
+    roots: &[PathBuf],
 ) -> E2eeMessageRenderState {
     let protocol = if message.e2ee_protocol == "mls-rfc9420" {
         "MLS"
     } else {
         "E2EE"
     };
-    if let Some(plaintext) = load_cached_decrypted_message(&settings.instance_url, &message.id) {
+    if let Some(plaintext) =
+        load_cached_decrypted_message_from_roots(roots, &settings.instance_url, &message.id)
+    {
         return E2eeMessageRenderState {
             preview: preview_markdown_safe(&plaintext),
             meta: format!("{protocol} encrypted. Decrypted earlier on this device."),
             locked: false,
         };
     }
-    match decrypt_e2ee_message_for_desk(settings, message) {
+    match decrypt_e2ee_message_for_desk(settings, message, roots) {
         Ok(plaintext) => {
             if !is_fixture_e2ee_message(message) {
                 let _ = persist_cached_decrypted_message(
+                    roots,
                     &settings.instance_url,
                     &message.id,
                     &plaintext,
@@ -6848,10 +7117,12 @@ fn e2ee_message_render_state(
                 .fallback_content
                 .as_deref()
                 .map(preview_markdown_safe)
-                .unwrap_or_else(|| "This private message is encrypted.".into());
+                .unwrap_or_else(|| {
+                    "Encrypted message could not be decrypted on this device.".into()
+                });
             E2eeMessageRenderState {
-                preview: format!("{fallback} {repair}"),
-                meta: format!("{protocol} private message. {error}"),
+                preview: format!("{fallback} Decryption failed: {error} {repair}"),
+                meta: format!("{protocol} private message decryption failed. {error}"),
                 locked: true,
             }
         }
@@ -6877,16 +7148,20 @@ fn decrypt_repair_hint(error: &str) -> &'static str {
     } else if error.contains("No local private key") {
         "Restore the matching device key to read it here."
     } else if error.contains("No local MLS state") {
-        "Restore this account's encrypted-message state or open it on a trusted device."
+        "Restore or import this account's MLS state, then reload the message."
     } else if error.contains("could not be decrypted") {
-        "This account has encrypted-message state, but it does not match this message."
+        "This account has MLS state, but it does not match this message/group/epoch."
     } else {
         "Check this account's encrypted-message keys."
     }
 }
 
-fn load_cached_decrypted_message(instance_url: &str, message_id: &str) -> Option<String> {
-    for root in dais_state_roots() {
+fn load_cached_decrypted_message_from_roots(
+    roots: &[PathBuf],
+    instance_url: &str,
+    message_id: &str,
+) -> Option<String> {
+    for root in roots {
         let path = decrypted_message_cache_path(&root, instance_url, message_id);
         let Ok(content) = fs::read_to_string(path) else {
             continue;
@@ -6902,14 +7177,16 @@ fn load_cached_decrypted_message(instance_url: &str, message_id: &str) -> Option
 }
 
 fn persist_cached_decrypted_message(
+    roots: &[PathBuf],
     instance_url: &str,
     message_id: &str,
     plaintext: &str,
     protocol: &str,
 ) -> Result<(), String> {
-    let root = dais_state_roots()
-        .into_iter()
+    let root = roots
+        .iter()
         .next()
+        .cloned()
         .unwrap_or_else(|| PathBuf::from(".dais"));
     let path = decrypted_message_cache_path(&root, instance_url, message_id);
     if let Some(parent) = path.parent() {
@@ -7106,16 +7383,17 @@ fn group_id_looks_group(group_id: &str) -> bool {
 fn decrypt_e2ee_message_for_desk(
     settings: &StoredOwnerSettings,
     message: &OwnerE2eeMessage,
+    roots: &[PathBuf],
 ) -> Result<String, String> {
     if message.e2ee_protocol == "mls-rfc9420" {
-        return decrypt_mls_message_for_desk(settings, message);
+        return decrypt_mls_message_for_desk(settings, message, roots);
     }
     let encrypted = e2ee::encrypted_message_from_json(message.encrypted_message.clone())?;
     let mut attempted = Vec::new();
     for recipient in &encrypted.recipients {
         attempted.push(recipient.key_id.clone());
         let Some(private_key) =
-            load_local_e2ee_private_key(&settings.instance_url, &recipient.key_id)
+            load_local_e2ee_private_key(roots, &settings.instance_url, &recipient.key_id)
         else {
             continue;
         };
@@ -7142,56 +7420,111 @@ fn decrypt_e2ee_message_for_desk(
 fn decrypt_mls_message_for_desk(
     settings: &StoredOwnerSettings,
     message: &OwnerE2eeMessage,
+    roots: &[PathBuf],
 ) -> Result<String, String> {
     let envelope: DaisMlsEnvelope = serde_json::from_value(message.dais_encrypted_message.clone())
         .map_err(|error| format!("Could not read MLS envelope: {error}"))?;
     let mut attempted_state = false;
-    let mut last_error = None;
+    let mut decrypt_errors = Vec::new();
+    let mut report = MlsStateLoadReport::new(roots.to_vec());
+    let state_roots = report.roots.clone();
 
-    for (path, state) in load_local_mls_group_states(&settings.instance_url, &envelope.group_id) {
+    for candidate in load_local_mls_group_states(
+        &state_roots,
+        &settings.instance_url,
+        &envelope.group_id,
+        &mut report,
+    ) {
         attempted_state = true;
-        let mut device =
-            MlsDevice::from_state(&state).map_err(|error| format!("MLS state failed: {error}"))?;
+        let mut device = match MlsDevice::from_state(&candidate.state) {
+            Ok(device) => device,
+            Err(error) => {
+                decrypt_errors.push(format!(
+                    "{} could not be opened as MLS group state: {error}",
+                    candidate.path.display()
+                ));
+                continue;
+            }
+        };
         match device.decrypt_application_message(&envelope) {
             Ok(plaintext) => {
                 if let Ok(updated_state) = device.export_state() {
-                    let _ = persist_local_mls_group_state(&path, &updated_state);
+                    let _ = persist_local_mls_group_state(&candidate.path, &updated_state);
                 }
                 return String::from_utf8(plaintext)
                     .map_err(|error| format!("MLS plaintext is not valid UTF-8: {error}"));
             }
-            Err(error) => last_error = Some(error.to_string()),
+            Err(error) => decrypt_errors.push(format!(
+                "{} could not decrypt group {} epoch {}: {error}",
+                candidate.path.display(),
+                compact_mls_group_id(&envelope.group_id),
+                envelope.epoch
+            )),
         }
     }
 
-    for private_state in load_local_mls_device_states(&settings.instance_url) {
+    for (path, private_state) in
+        load_local_mls_device_states(&state_roots, &settings.instance_url, &mut report)
+    {
         attempted_state = true;
-        let mut device = MlsDevice::from_private_state(&private_state)
-            .map_err(|error| format!("MLS device state failed: {error}"))?;
+        let mut device = match MlsDevice::from_private_state(&private_state) {
+            Ok(device) => device,
+            Err(error) => {
+                decrypt_errors.push(format!(
+                    "{} could not be opened as MLS device state: {error}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
         match device.decrypt_application_message(&envelope) {
             Ok(plaintext) => {
                 return String::from_utf8(plaintext)
                     .map_err(|error| format!("MLS plaintext is not valid UTF-8: {error}"));
             }
-            Err(error) => last_error = Some(error.to_string()),
+            Err(error) => decrypt_errors.push(format!(
+                "{} could not decrypt group {} epoch {}: {error}",
+                path.display(),
+                compact_mls_group_id(&envelope.group_id),
+                envelope.epoch
+            )),
         }
     }
 
     if attempted_state {
         return Err(format!(
-            "Local MLS state exists, but this message could not be decrypted: {}.",
-            last_error.unwrap_or_else(|| "unknown MLS decrypt error".into())
+            "Local MLS state exists for {}, but this message could not be decrypted. Group: {}; epoch: {}; found: {}; checked roots: {}; errors: {}; state diagnostics: {}.",
+            settings.instance_url,
+            compact_mls_group_id(&envelope.group_id),
+            envelope.epoch,
+            report.found_state_summary(),
+            report.checked_roots_summary(),
+            if decrypt_errors.is_empty() {
+                "unknown MLS decrypt error".into()
+            } else {
+                decrypt_errors.join(" | ")
+            },
+            report.diagnostics_summary()
         ));
     }
 
     Err(format!(
-        "No local MLS state could decrypt group {}.",
-        compact_mls_group_id(&envelope.group_id)
+        "No local MLS state found for {} group {} epoch {}. Found: {}; checked roots: {}; state diagnostics: {}.",
+        settings.instance_url,
+        compact_mls_group_id(&envelope.group_id),
+        envelope.epoch,
+        report.found_state_summary(),
+        report.checked_roots_summary(),
+        report.diagnostics_summary()
     ))
 }
 
-fn load_local_e2ee_private_key(instance_url: &str, device_id: &str) -> Option<String> {
-    for root in dais_state_roots() {
+fn load_local_e2ee_private_key(
+    roots: &[PathBuf],
+    instance_url: &str,
+    device_id: &str,
+) -> Option<String> {
+    for root in roots {
         let path = root
             .join("e2ee")
             .join(safe_path_component(instance_url))
@@ -7242,11 +7575,13 @@ fn fixture_e2ee_encrypted_message() -> serde_json::Value {
 }
 
 fn load_local_mls_group_states(
+    roots: &[PathBuf],
     instance_url: &str,
     group_id: &str,
-) -> Vec<(PathBuf, MlsDeviceState)> {
+    report: &mut MlsStateLoadReport,
+) -> Vec<MlsGroupStateCandidate> {
     let mut states = Vec::new();
-    for root in dais_state_roots() {
+    for root in roots {
         let instance_root = root.join("mls").join(safe_path_component(instance_url));
         let Ok(device_entries) = fs::read_dir(instance_root) else {
             continue;
@@ -7255,15 +7590,34 @@ fn load_local_mls_group_states(
             let path = device_entry
                 .path()
                 .join(format!("{}.json", safe_path_component(group_id)));
-            let Ok(content) = fs::read_to_string(&path) else {
+            if !path.exists() {
                 continue;
+            }
+            report.group_state_files.push(path.clone());
+            let content = match fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(error) => {
+                    report
+                        .unreadable_state_files
+                        .push(format!("{} ({error})", path.display()));
+                    continue;
+                }
             };
-            let Ok(file) = serde_json::from_str::<StoredMlsGroupStateFile>(&content) else {
-                continue;
+            let file = match serde_json::from_str::<StoredMlsGroupStateFile>(&content) {
+                Ok(file) => file,
+                Err(error) => {
+                    report
+                        .invalid_state_files
+                        .push(format!("{} (invalid state file: {error})", path.display()));
+                    continue;
+                }
             };
-            if let Ok(state) = serde_json::from_str::<MlsDeviceState>(&file.serialized_group_state)
-            {
-                states.push((path, state));
+            match serde_json::from_str::<MlsDeviceState>(&file.serialized_group_state) {
+                Ok(state) => states.push(MlsGroupStateCandidate { path, state }),
+                Err(error) => report.invalid_state_files.push(format!(
+                    "{} (invalid serialized MLS group state: {error})",
+                    path.display()
+                )),
             }
         }
     }
@@ -7287,9 +7641,49 @@ fn persist_local_mls_group_state(path: &Path, state: &MlsDeviceState) -> Result<
     fs::write(path, json).map_err(|error| error.to_string())
 }
 
-fn load_local_mls_device_states(instance_url: &str) -> Vec<MlsDevicePrivateState> {
+fn persist_local_mls_group_state_for_device(
+    roots: &[PathBuf],
+    instance_url: &str,
+    local_actor_id: &str,
+    device_id: &str,
+    state: &MlsDeviceState,
+) -> Result<PathBuf, String> {
+    let root = roots
+        .iter()
+        .next()
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(".dais"));
+    let path = root
+        .join("mls")
+        .join(safe_path_component(instance_url))
+        .join(safe_path_component(device_id))
+        .join(format!("{}.json", safe_path_component(&state.group_id)));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let wrapper = serde_json::json!({
+        "version": 1,
+        "instance_url": instance_url,
+        "local_actor_id": local_actor_id,
+        "device_id": device_id,
+        "group_id": state.group_id,
+        "epoch": state.epoch,
+        "serialized_group_state": serde_json::to_string(state).map_err(|error| error.to_string())?,
+        "recovery_status": "active",
+        "updated_at": unix_timestamp_label(),
+    });
+    let json = serde_json::to_string_pretty(&wrapper).map_err(|error| error.to_string())?;
+    fs::write(&path, json).map_err(|error| error.to_string())?;
+    Ok(path)
+}
+
+fn load_local_mls_device_states(
+    roots: &[PathBuf],
+    instance_url: &str,
+    report: &mut MlsStateLoadReport,
+) -> Vec<(PathBuf, MlsDevicePrivateState)> {
     let mut states = Vec::new();
-    for root in dais_state_roots() {
+    for root in roots {
         let instance_root = root
             .join("mls-devices")
             .join(safe_path_component(instance_url));
@@ -7301,16 +7695,31 @@ fn load_local_mls_device_states(instance_url: &str) -> Vec<MlsDevicePrivateState
             if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
                 continue;
             }
-            let Ok(content) = fs::read_to_string(path) else {
-                continue;
+            report.device_state_files.push(path.clone());
+            let content = match fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(error) => {
+                    report
+                        .unreadable_state_files
+                        .push(format!("{} ({error})", path.display()));
+                    continue;
+                }
             };
-            let Ok(file) = serde_json::from_str::<StoredMlsDeviceStateFile>(&content) else {
-                continue;
+            let file = match serde_json::from_str::<StoredMlsDeviceStateFile>(&content) {
+                Ok(file) => file,
+                Err(error) => {
+                    report
+                        .invalid_state_files
+                        .push(format!("{} (invalid state file: {error})", path.display()));
+                    continue;
+                }
             };
-            if let Ok(state) =
-                serde_json::from_str::<MlsDevicePrivateState>(&file.serialized_device_state)
-            {
-                states.push(state);
+            match serde_json::from_str::<MlsDevicePrivateState>(&file.serialized_device_state) {
+                Ok(state) => states.push((path, state)),
+                Err(error) => report.invalid_state_files.push(format!(
+                    "{} (invalid serialized MLS device state: {error})",
+                    path.display()
+                )),
             }
         }
     }
@@ -7321,6 +7730,9 @@ fn dais_state_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(path) = std::env::var_os("DAIS_HOME") {
         roots.push(PathBuf::from(path));
+    }
+    if let Some(path) = platform_default_state_root() {
+        roots.push(path);
     }
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd.join(".dais"));
@@ -7335,6 +7747,25 @@ fn dais_state_roots() -> Vec<PathBuf> {
     }
     roots.dedup();
     roots
+}
+
+fn platform_default_state_root() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(target_os = "macos")]
+    {
+        Some(
+            home.join("Library")
+                .join("Application Support")
+                .join("social.dais.desk")
+                .join("state"),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Some(home.join(".local").join("share").join("dais-desk"))
+    }
 }
 
 fn safe_path_component(value: &str) -> String {
@@ -8843,8 +9274,11 @@ fn compose_warning(compose: &ComposeState) -> String {
     {
         return "Direct posts require named recipients or an audience group.".into();
     }
+    if compose.encrypt && !matches!(compose.visibility, Visibility::Direct) {
+        return "Encrypted messages currently require Direct visibility.".into();
+    }
     if compose.encrypt && !matches!(compose.protocol, ProtocolRoute::ActivityPub) {
-        return "Encrypted posts can only be sent to ActivityPub.".into();
+        return "Encrypted direct messages use ActivityPub MLS delivery.".into();
     }
     if compose.encrypt && !compose.attachments.is_empty() {
         if compose
@@ -8897,6 +9331,7 @@ fn compose_can_send(compose: &ComposeState) -> bool {
         && (!matches!(compose.visibility, Visibility::Direct)
             || !split_list(&compose.recipients).is_empty()
             || !compose.audience_list_id.as_deref().unwrap_or("").is_empty())
+        && (!compose.encrypt || matches!(compose.visibility, Visibility::Direct))
         && (!compose.encrypt || matches!(compose.protocol, ProtocolRoute::ActivityPub))
         && !(compose.encrypt && !compose.attachments.is_empty())
         && (compose.attachments.is_empty()
@@ -9350,6 +9785,7 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 mls_group_id: None,
                 mls_epoch: None,
                 fallback_content: None,
+                attachments: Vec::new(),
                 delivery_ids: vec!["delivery-e2ee-queued".into()],
                 delivery_statuses: vec![OwnerDelivery {
                     id: "delivery-e2ee-queued".into(),
@@ -10059,6 +10495,245 @@ fn legacy_settings_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_test_mls_group_state(
+        root: &Path,
+        instance_url: &str,
+        device_id: &str,
+        state: &MlsDeviceState,
+    ) -> PathBuf {
+        let path = root
+            .join("mls")
+            .join(safe_path_component(instance_url))
+            .join(safe_path_component(device_id))
+            .join(format!("{}.json", safe_path_component(&state.group_id)));
+        fs::create_dir_all(path.parent().expect("state parent")).expect("create MLS state dir");
+        let wrapper = serde_json::json!({
+            "version": 1,
+            "instance_url": instance_url,
+            "device_id": device_id,
+            "group_id": state.group_id,
+            "serialized_group_state": serde_json::to_string(state).expect("serialize MLS state"),
+            "updated_at": "test",
+        });
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&wrapper).expect("serialize MLS state wrapper"),
+        )
+        .expect("write MLS state");
+        path
+    }
+
+    fn write_test_decrypted_message_cache(
+        root: &Path,
+        instance_url: &str,
+        message_id: &str,
+        plaintext: &str,
+        protocol: &str,
+    ) -> PathBuf {
+        let path = decrypted_message_cache_path(root, instance_url, message_id);
+        fs::create_dir_all(path.parent().expect("cache parent"))
+            .expect("create decrypted cache dir");
+        let wrapper = serde_json::json!({
+            "instance_url": instance_url,
+            "message_id": message_id,
+            "plaintext": plaintext,
+            "protocol": protocol,
+            "cached_at": "test",
+        });
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&wrapper).expect("serialize decrypted cache"),
+        )
+        .expect("write decrypted cache");
+        path
+    }
+
+    fn write_test_mls_device_state(
+        root: &Path,
+        instance_url: &str,
+        device_id: &str,
+        state: &MlsDevicePrivateState,
+    ) -> PathBuf {
+        let path = root
+            .join("mls-devices")
+            .join(safe_path_component(instance_url))
+            .join(format!("{}.json", safe_path_component(device_id)));
+        fs::create_dir_all(path.parent().expect("device state parent"))
+            .expect("create MLS device state dir");
+        let wrapper = serde_json::json!({
+            "version": 1,
+            "instance_url": instance_url,
+            "local_actor_id": state.account_id,
+            "device_id": device_id,
+            "serialized_device_state": serde_json::to_string(state).expect("serialize MLS private state"),
+            "updated_at": "test",
+        });
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&wrapper).expect("serialize MLS device state wrapper"),
+        )
+        .expect("write MLS device state");
+        path
+    }
+
+    fn test_mls_message(
+        message_id: &str,
+        _instance_url: &str,
+        envelope: &DaisMlsEnvelope,
+    ) -> OwnerE2eeMessage {
+        OwnerE2eeMessage {
+            id: message_id.into(),
+            conversation_id: "test-mls-conversation".into(),
+            sender_actor_id: envelope.sender_account_id.clone(),
+            sender_device_id: envelope.sender_device_id.clone(),
+            recipient_actor_id: Some("https://social.skpt.cl/users/social".into()),
+            e2ee_protocol: "mls-rfc9420".into(),
+            dais_encrypted_message: serde_json::to_value(envelope).expect("MLS envelope JSON"),
+            encrypted_message: serde_json::Value::Null,
+            mls_group_id: Some(envelope.group_id.clone()),
+            mls_epoch: Some(envelope.epoch),
+            fallback_content: None,
+            attachments: Vec::new(),
+            delivery_ids: Vec::new(),
+            delivery_statuses: Vec::new(),
+            created_at: Some("test".into()),
+        }
+    }
+
+    fn build_test_mls_envelope(plaintext: &[u8]) -> (DaisMlsEnvelope, MlsDeviceState) {
+        let mut sender = MlsDevice::new(
+            "https://social.dais.social/users/social",
+            "dais-test-device",
+        )
+        .expect("sender device");
+        let mut recipient =
+            MlsDevice::new("https://social.skpt.cl/users/social", "skpt-test-device")
+                .expect("recipient device");
+        let recipient_public = recipient.public_device().expect("recipient public device");
+        let welcome = sender
+            .create_group("desk-regression-mls-group", &recipient_public)
+            .expect("create MLS group");
+        recipient
+            .join_group(welcome)
+            .expect("recipient joins group");
+        let envelope = sender
+            .encrypt_application_message(plaintext)
+            .expect("encrypt MLS message");
+        let recipient_state = recipient.export_state().expect("recipient group state");
+        (envelope, recipient_state)
+    }
+
+    #[test]
+    fn mls_messages_render_decrypted_plaintext_when_group_state_exists() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let state_root = temp_dir.path().join("state");
+        let instance_url = "https://social.skpt.cl";
+        let plaintext = b"Ada says the meteor shower starts after midnight.";
+        let (envelope, recipient_state) = build_test_mls_envelope(plaintext);
+        write_test_mls_group_state(
+            &state_root,
+            instance_url,
+            &recipient_state.device_id,
+            &recipient_state,
+        );
+
+        let settings = StoredOwnerSettings {
+            instance_url: instance_url.into(),
+            owner_token: None,
+            active_account_id: None,
+            accounts: Vec::new(),
+        };
+        let message = test_mls_message("test-mls-decrypt-success", instance_url, &envelope);
+
+        let rendered = e2ee_message_render_state_with_roots(&settings, &message, &[state_root]);
+
+        assert!(!rendered.locked, "MLS message should render unlocked");
+        assert_eq!(
+            rendered.preview,
+            "Ada says the meteor shower starts after midnight."
+        );
+        assert!(rendered.meta.contains("MLS encrypted. Decrypted"));
+    }
+
+    #[test]
+    fn mls_messages_render_cached_plaintext_without_redecrypting_old_ciphertext() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let state_root = temp_dir.path().join("state");
+        let instance_url = "https://social.skpt.cl";
+        let message_id = "https://social.skpt.cl/users/social/e2ee/messages/cached";
+        write_test_decrypted_message_cache(
+            &state_root,
+            instance_url,
+            message_id,
+            "Cached sender-side MLS plaintext",
+            "mls-rfc9420",
+        );
+        let settings = StoredOwnerSettings {
+            instance_url: instance_url.into(),
+            owner_token: None,
+            active_account_id: None,
+            accounts: Vec::new(),
+        };
+        let message = OwnerE2eeMessage {
+            id: message_id.into(),
+            conversation_id: "cached-conversation".into(),
+            sender_actor_id: "https://social.skpt.cl/users/social".into(),
+            sender_device_id: "skpt-test-device".into(),
+            recipient_actor_id: Some("https://social.dais.social/users/social".into()),
+            e2ee_protocol: "mls-rfc9420".into(),
+            dais_encrypted_message: serde_json::json!({"not": "a decryptable MLS envelope"}),
+            encrypted_message: serde_json::Value::Null,
+            mls_group_id: None,
+            mls_epoch: None,
+            fallback_content: None,
+            attachments: Vec::new(),
+            delivery_ids: Vec::new(),
+            delivery_statuses: Vec::new(),
+            created_at: Some("test".into()),
+        };
+
+        let rendered = e2ee_message_render_state_with_roots(&settings, &message, &[state_root]);
+
+        assert!(
+            !rendered.locked,
+            "cached MLS plaintext should render unlocked"
+        );
+        assert_eq!(rendered.preview, "Cached sender-side MLS plaintext");
+        assert!(rendered.meta.contains("Decrypted earlier"));
+    }
+
+    #[test]
+    fn mls_decrypt_failure_reports_missing_state_and_checked_roots() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let state_root = temp_dir.path().join("empty-state");
+        let instance_url = "https://social.skpt.cl";
+        let (envelope, _recipient_state) = build_test_mls_envelope(b"hidden text");
+        let settings = StoredOwnerSettings {
+            instance_url: instance_url.into(),
+            owner_token: None,
+            active_account_id: None,
+            accounts: Vec::new(),
+        };
+        let message = test_mls_message("test-mls-decrypt-missing-state", instance_url, &envelope);
+
+        let rendered =
+            e2ee_message_render_state_with_roots(&settings, &message, &[state_root.clone()]);
+
+        assert!(
+            rendered.locked,
+            "MLS message should remain locked without state"
+        );
+        assert!(rendered
+            .preview
+            .contains("Decryption failed: No local MLS state found"));
+        assert!(rendered.preview.contains("social.skpt.cl"));
+        assert!(rendered.preview.contains("checked roots"));
+        assert!(rendered.preview.contains(&state_root.display().to_string()));
+        assert!(rendered
+            .meta
+            .contains("MLS private message decryption failed"));
+    }
 
     fn is_supported_row_action(action: &str) -> bool {
         matches!(
@@ -11416,6 +12091,71 @@ mod tests {
         };
         assert!(compose_can_send(&compose));
         assert_eq!(compose_warning(&compose), "Ready to send privately.");
+    }
+
+    #[test]
+    fn compose_encrypted_direct_preview_uses_mls_message_path() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.compose = ComposeState {
+            text: "secret note".into(),
+            visibility: Visibility::Direct,
+            protocol: ProtocolRoute::ActivityPub,
+            encrypt: true,
+            recipients: "https://friend.example/users/ada".into(),
+            ..ComposeState::default()
+        };
+
+        let message = controller.compose_send_inner().expect("preview send");
+
+        assert_eq!(
+            message,
+            "Preview encrypted direct message prepared for MLS delivery."
+        );
+    }
+
+    #[test]
+    fn compose_encrypted_audience_groups_fail_clearly_in_desk() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.compose = ComposeState {
+            text: "group secret".into(),
+            visibility: Visibility::Direct,
+            protocol: ProtocolRoute::ActivityPub,
+            encrypt: true,
+            audience_list_id: Some("close-friends".into()),
+            ..ComposeState::default()
+        };
+
+        let error = controller
+            .compose_send_inner()
+            .expect_err("Desk does not send MLS audience groups yet");
+
+        assert_eq!(
+            error,
+            "Encrypted audience groups are not sent from Desk yet; use one direct recipient or the MLS CLI group sender."
+        );
+    }
+
+    #[test]
+    fn desk_selects_only_matching_active_local_mls_device_state() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let state_root = temp_dir.path().join("state");
+        let instance_url = "https://social.dais.social";
+        let device = MlsDevice::new("https://social.dais.social/users/social", "macbook-mls")
+            .expect("MLS device");
+        let private_state = device.export_private_state().expect("private MLS state");
+        write_test_mls_device_state(&state_root, instance_url, "macbook-mls", &private_state);
+        let mut controller = DeskController::fixture_for_tests();
+        controller.settings.instance_url = instance_url.into();
+
+        let selected = controller
+            .active_local_mls_device_state(&[state_root])
+            .expect("matching MLS device state");
+
+        assert_eq!(selected.0.device_id, "macbook-mls");
+        assert_eq!(
+            selected.1.account_id,
+            "https://social.dais.social/users/social"
+        );
     }
 
     #[test]
