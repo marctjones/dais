@@ -672,6 +672,633 @@ fn signed_private_media_fixture(http: &Http) -> Result<String> {
     ))
 }
 
+fn run_owner_activitypub_authenticated(http: &Http, rows: &mut Vec<Row>) {
+    run_case(
+        rows,
+        "MASTODON-SECURITY-02",
+        "MASTODON",
+        "Authorized fetch for private posts is implemented",
+        || signed_private_post_authorized_fetch_fixture(http),
+    );
+    run_case(
+        rows,
+        "MASTODON-SYNC-01",
+        "MASTODON",
+        "Signed partial follower synchronization collection is available",
+        || signed_followers_sync_fixture(http),
+    );
+    run_case(
+        rows,
+        "MASTODON-CONTENT-03",
+        "MASTODON",
+        "Live public Question exposes media, tags, summary, and poll shape",
+        || mastodon_rich_public_question_fixture(http),
+    );
+    run_case(
+        rows,
+        "OWNER-DISCOVERY-01",
+        "DAIS-OWNER",
+        "Actor discovery returns recent public post previews when available",
+        || owner_actor_discovery_fixture(http),
+    );
+    run_case(
+        rows,
+        "OWNER-DISCOVERY-02",
+        "DAIS-OWNER",
+        "Pasted public post URL discovery previews the post and resolves its author",
+        || owner_post_discovery_fixture(http),
+    );
+    run_case(
+        rows,
+        "OWNER-SEARCH-01",
+        "DAIS-OWNER",
+        "Owner search exposes explicit public provider result buckets",
+        || owner_public_search_fixture(http),
+    );
+    run_case(
+        rows,
+        "OWNER-SEARCH-02",
+        "DAIS-OWNER",
+        "Owner public search blocks sensitive queries before external provider calls",
+        || owner_sensitive_public_search_guard_fixture(http),
+    );
+    run_case(
+        rows,
+        "OWNER-READER-01",
+        "DAIS-OWNER",
+        "Reader like and boost actions enqueue ActivityPub deliveries and update detail counts",
+        || owner_reader_interaction_fixture(http),
+    );
+    run_case(
+        rows,
+        "OWNER-READER-02",
+        "DAIS-OWNER",
+        "Follow acceptance and inbound Create populate the owner home timeline",
+        || owner_reader_lifecycle_fixture(http),
+    );
+    run_case(
+        rows,
+        "OWNER-FEED-01",
+        "DAIS-OWNER",
+        "Owner home timeline hides replies by default and exposes an explicit reply toggle",
+        || owner_feed_controls_fixture(http),
+    );
+    run_case(
+        rows,
+        "OWNER-READER-03",
+        "DAIS-OWNER",
+        "Reader reply compose generates an ActivityPub reply object",
+        || owner_reader_reply_fixture(http),
+    );
+}
+
+fn owner_get_auth(http: &Http, path: &str) -> Result<HttpResponse> {
+    http.request(
+        "GET",
+        path,
+        &[
+            ("Accept", "application/json".to_string()),
+            (
+                "Authorization",
+                format!("Bearer {}", http.config.owner_token),
+            ),
+        ],
+        None,
+    )
+}
+
+fn owner_post_auth(http: &Http, path: &str, body: Value) -> Result<HttpResponse> {
+    http.post_json(path, body, Some(&http.config.owner_token))
+}
+
+fn owner_delete_auth(http: &Http, path: &str) -> Result<HttpResponse> {
+    http.delete_auth(path, &http.config.owner_token)
+}
+
+fn owner_items<'a>(res: &'a HttpResponse, label: &str) -> Result<&'a Vec<Value>> {
+    expect_array(
+        json(res, label)?
+            .get("items")
+            .ok_or_else(|| format!("{label} missing items"))?,
+        label,
+    )
+}
+
+fn owner_created_post_id(value: &Value) -> Result<String> {
+    str_field(value, "id")
+        .filter(|id| !id.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| "owner post response omitted id".to_string())
+}
+
+fn owner_delete_post(http: &Http, id: &str) -> Result<HttpResponse> {
+    owner_delete_auth(http, &format!("/api/dais/owner/posts/{}", encode(id)))
+}
+
+fn fixture_public_post_url(fixture: &FixtureActor) -> Result<String> {
+    let mut url = reqwest::Url::parse(&fixture.actor_url).map_err(|error| error.to_string())?;
+    url.set_path("/__dais-fixtures/activitypub/posts/public-preview");
+    Ok(url.to_string())
+}
+
+fn fixture_actor_domain(fixture: &FixtureActor) -> Result<String> {
+    reqwest::Url::parse(&fixture.actor_url)
+        .map_err(|error| error.to_string())?
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| "fixture actor URL has no host".to_string())
+}
+
+fn signed_follow_and_approve_fixture(
+    http: &Http,
+    fixture: &FixtureActor,
+    label: &str,
+) -> Result<()> {
+    let follow = json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!("{}#follow/{}-{label}", fixture.actor_url, Utc::now().timestamp_millis()),
+        "type": "Follow",
+        "actor": fixture.actor_url,
+        "object": http.config.actor_url()
+    })
+    .to_string();
+    let follow_res = signed_activity_post(http, fixture, &follow)?;
+    expect_status_any(&follow_res, &[200, 201, 202, 204], label)?;
+    let status = owner_post_auth(
+        http,
+        "/api/dais/owner/followers/status",
+        json!({
+            "follower_actor_id": fixture.actor_url,
+            "status": "approved"
+        }),
+    )?;
+    expect_status_any(&status, &[200, 201], "approve fixture follower")?;
+    Ok(())
+}
+
+fn signed_fixture_create(
+    http: &Http,
+    fixture: &FixtureActor,
+    label: &str,
+    content: &str,
+    in_reply_to: Option<&str>,
+) -> Result<String> {
+    let object_id = format!(
+        "{}#posts/{}-{}",
+        fixture.actor_url,
+        label,
+        Utc::now().timestamp_millis()
+    );
+    let mut object = json!({
+        "id": object_id.clone(),
+        "type": "Note",
+        "attributedTo": fixture.actor_url,
+        "to": [PUBLIC_COLLECTION],
+        "content": content,
+        "published": Utc::now().to_rfc3339()
+    });
+    if let Some(in_reply_to) = in_reply_to {
+        object["inReplyTo"] = Value::String(in_reply_to.to_string());
+    }
+    let create = json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!("{}#creates/{}-{}", fixture.actor_url, label, Utc::now().timestamp_millis()),
+        "type": "Create",
+        "actor": fixture.actor_url,
+        "to": [PUBLIC_COLLECTION],
+        "object": object
+    })
+    .to_string();
+    let res = signed_activity_post(http, fixture, &create)?;
+    expect_status_any(&res, &[200, 201, 202, 204], label)?;
+    Ok(object_id)
+}
+
+fn signed_private_post_authorized_fetch_fixture(http: &Http) -> Result<String> {
+    let fixture = fixture_actor(&http.config)?;
+    signed_follow_and_approve_fixture(http, &fixture, "private-post-follow")?;
+    let text = format!(
+        "Private authorized-fetch conformance fixture {}",
+        Utc::now().to_rfc3339()
+    );
+    let post = owner_post_auth(
+        http,
+        "/api/dais/owner/posts",
+        json!({
+            "text": text,
+            "visibility": "followers",
+            "protocol": "activitypub",
+            "encrypt": false
+        }),
+    )?;
+    expect_status_any(&post, &[200, 201], "owner private post")?;
+    let post_id = owner_created_post_id(json(&post, "owner private post")?)?;
+    let result = (|| {
+        let anonymous = http.get_accept(&post_id, "application/activity+json")?;
+        expect_status_any(
+            &anonymous,
+            &[401, 403, 404],
+            "anonymous private post ActivityPub fetch",
+        )?;
+        let signed = signed_activity_get(http, &fixture, &post_id, "application/activity+json")?;
+        expect_status(&signed, 200, "signed private post ActivityPub fetch")?;
+        let object = json(&signed, "signed private post")?;
+        if str_field(object, "type") != Some("Note")
+            || !str_field(object, "content")
+                .unwrap_or_default()
+                .contains("Private authorized-fetch conformance fixture")
+        {
+            return Err("signed private post did not return the expected Note".to_string());
+        }
+        Ok(format!(
+            "anonymous fetch rejected with {}; signed fetch returned Note",
+            anonymous.status
+        ))
+    })();
+    let _ = owner_delete_post(http, &post_id);
+    result
+}
+
+fn signed_followers_sync_fixture(http: &Http) -> Result<String> {
+    let fixture = fixture_actor(&http.config)?;
+    signed_follow_and_approve_fixture(http, &fixture, "followers-sync-follow")?;
+    let domain = fixture_actor_domain(&fixture)?;
+    let res = signed_activity_get(
+        http,
+        &fixture,
+        &format!(
+            "{}/followers_synchronization?domain={}",
+            http.config.actor_path(),
+            encode(&domain)
+        ),
+        "application/activity+json",
+    )?;
+    expect_status(&res, 200, "followers_synchronization")?;
+    let items = expect_array(
+        json(&res, "followers_synchronization")?
+            .get("orderedItems")
+            .ok_or("followers_synchronization missing orderedItems")?,
+        "followers_synchronization orderedItems",
+    )?;
+    if !items
+        .iter()
+        .any(|item| item.as_str() == Some(fixture.actor_url.as_str()))
+    {
+        return Err("followers_synchronization omitted approved fixture actor".to_string());
+    }
+    Ok(format!(
+        "followers_synchronization exposed approved follower for {domain}"
+    ))
+}
+
+fn mastodon_rich_public_question_fixture(http: &Http) -> Result<String> {
+    let media = http.post_json(
+        "/api/v1/media",
+        json!({
+            "filename": "conformance-question.png",
+            "media_type": "image/png",
+            "description": "conformance public question image",
+            "data_base64": TINY_PNG
+        }),
+        Some(&http.config.owner_token),
+    )?;
+    expect_status(&media, 200, "Mastodon media upload")?;
+    let media_id = str_field(json(&media, "Mastodon media upload")?, "id")
+        .ok_or("Mastodon media upload omitted id")?
+        .to_string();
+    let status = http.post_json(
+        "/api/v1/statuses",
+        json!({
+            "status": format!("dais rich Question conformance #daisconformance {}", Utc::now().to_rfc3339()),
+            "visibility": "public",
+            "spoiler_text": "Conformance summary",
+            "media_ids": [media_id],
+            "poll": {
+                "options": ["Yes", "No"],
+                "multiple": false,
+                "expires_in": 300
+            }
+        }),
+        Some(&http.config.owner_token),
+    )?;
+    expect_status(&status, 201, "Mastodon rich Question create")?;
+    let status_json = json(&status, "Mastodon rich Question")?;
+    let status_id = str_field(status_json, "id")
+        .ok_or("Mastodon rich Question omitted id")?
+        .to_string();
+    let status_url = str_field(status_json, "url")
+        .unwrap_or(&status_id)
+        .to_string();
+    let result = (|| {
+        if status_json.get("poll").map(Value::is_null).unwrap_or(true) {
+            return Err("Mastodon Question status omitted poll".to_string());
+        }
+        if status_json
+            .get("media_attachments")
+            .and_then(Value::as_array)
+            .map(Vec::is_empty)
+            .unwrap_or(true)
+        {
+            return Err("Mastodon Question status omitted media attachment".to_string());
+        }
+        if !status_json
+            .get("tags")
+            .and_then(Value::as_array)
+            .map(|tags| {
+                tags.iter()
+                    .any(|tag| tag.get("name").and_then(Value::as_str) == Some("daisconformance"))
+            })
+            .unwrap_or(false)
+        {
+            return Err("Mastodon Question status omitted #daisconformance tag".to_string());
+        }
+        let object = http.get_accept(&status_url, "application/activity+json")?;
+        expect_status(&object, 200, "ActivityPub Question object")?;
+        let object_json = json(&object, "ActivityPub Question object")?;
+        if str_field(object_json, "type") != Some("Question")
+            || str_field(object_json, "summary") != Some("Conformance summary")
+            || object_json
+                .get("attachment")
+                .and_then(Value::as_array)
+                .map(Vec::is_empty)
+                .unwrap_or(true)
+            || object_json
+                .get("tag")
+                .and_then(Value::as_array)
+                .map(Vec::is_empty)
+                .unwrap_or(true)
+            || object_json
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .map(|options| options.len() < 2)
+                .unwrap_or(true)
+        {
+            return Err(
+                "ActivityPub Question did not expose summary/media/tag/poll shape".to_string(),
+            );
+        }
+        Ok("public Question exposed media, tags, summary, and poll".to_string())
+    })();
+    let _ = http.delete_auth(
+        &format!("/api/v1/statuses/{}", encode(&status_id)),
+        &http.config.owner_token,
+    );
+    result
+}
+
+fn owner_actor_discovery_fixture(http: &Http) -> Result<String> {
+    let fixture = fixture_actor(&http.config)?;
+    let res = owner_post_auth(
+        http,
+        "/api/dais/owner/discovery/actor",
+        json!({ "target": fixture.actor_url }),
+    )?;
+    expect_status(&res, 200, "owner actor discovery")?;
+    let value = json(&res, "owner actor discovery")?;
+    if str_field(value, "id") != Some(fixture.actor_url.as_str())
+        || value
+            .get("recent_public_posts")
+            .and_then(Value::as_array)
+            .map(Vec::is_empty)
+            .unwrap_or(true)
+    {
+        return Err(
+            "owner actor discovery did not include fixture actor and public preview".to_string(),
+        );
+    }
+    Ok("owner actor discovery returned fixture actor preview".to_string())
+}
+
+fn owner_post_discovery_fixture(http: &Http) -> Result<String> {
+    let fixture = fixture_actor(&http.config)?;
+    let post_url = fixture_public_post_url(&fixture)?;
+    let res = owner_post_auth(
+        http,
+        "/api/dais/owner/discovery/actor",
+        json!({ "target": post_url.clone() }),
+    )?;
+    expect_status(&res, 200, "owner post discovery")?;
+    let value = json(&res, "owner post discovery")?;
+    if str_field(value, "id") != Some(fixture.actor_url.as_str())
+        || value
+            .pointer("/target_public_post/id")
+            .and_then(Value::as_str)
+            != Some(post_url.as_str())
+    {
+        return Err("owner post discovery did not resolve fixture post and author".to_string());
+    }
+    Ok("owner post discovery resolved fixture public post and author".to_string())
+}
+
+fn owner_public_search_fixture(http: &Http) -> Result<String> {
+    let fixture = fixture_actor(&http.config)?;
+    let post_url = fixture_public_post_url(&fixture)?;
+    let res = owner_get_auth(
+        http,
+        &format!(
+            "/api/dais/owner/search?q={}&scope=public&provider=activitypub&type=posts&limit=3",
+            encode(&post_url)
+        ),
+    )?;
+    expect_status(&res, 200, "owner public search")?;
+    let public_posts = expect_array(
+        json(&res, "owner public search")?
+            .get("public_posts")
+            .ok_or("owner public search missing public_posts")?,
+        "owner public search public_posts",
+    )?;
+    if !public_posts
+        .iter()
+        .any(|post| str_field(post, "id") == Some(post_url.as_str()))
+    {
+        return Err(
+            "owner public search did not return direct ActivityPub fixture post".to_string(),
+        );
+    }
+    Ok("owner public search returned ActivityPub provider bucket".to_string())
+}
+
+fn owner_sensitive_public_search_guard_fixture(http: &Http) -> Result<String> {
+    let res = owner_get_auth(
+        http,
+        &format!(
+            "/api/dais/owner/search?q={}&scope=public&provider=all&type=posts&limit=3",
+            encode("medical privacy")
+        ),
+    )?;
+    expect_status(&res, 200, "owner sensitive public search")?;
+    let guard = json(&res, "owner sensitive public search")?
+        .get("public_search_guard")
+        .ok_or("owner search missing public_search_guard")?;
+    if guard.get("blocked").and_then(Value::as_bool) != Some(true)
+        || guard.get("requires_confirmation").and_then(Value::as_bool) != Some(true)
+    {
+        return Err("sensitive public search was not blocked for confirmation".to_string());
+    }
+    Ok("sensitive public search blocked until confirmation".to_string())
+}
+
+fn owner_reader_interaction_fixture(http: &Http) -> Result<String> {
+    let post = owner_post_auth(
+        http,
+        "/api/dais/owner/posts",
+        json!({
+            "text": format!("Reader interaction conformance fixture {}", Utc::now().to_rfc3339()),
+            "visibility": "public",
+            "protocol": "activitypub"
+        }),
+    )?;
+    expect_status_any(&post, &[200, 201], "owner interaction subject post")?;
+    let post_id = owner_created_post_id(json(&post, "owner interaction subject post")?)?;
+    let result = (|| {
+        for action in ["like", "boost"] {
+            let res = owner_post_auth(
+                http,
+                "/api/dais/owner/interactions",
+                json!({ "object_id": post_id.clone(), "interaction": action }),
+            )?;
+            expect_status(&res, 201, action)?;
+            if json(&res, action)?
+                .get("delivery_ids")
+                .and_then(Value::as_array)
+                .map(Vec::is_empty)
+                .unwrap_or(true)
+            {
+                return Err(format!("{action} did not enqueue a delivery"));
+            }
+        }
+        let detail = owner_get_auth(http, &format!("/api/dais/owner/posts/{}", encode(&post_id)))?;
+        expect_status(&detail, 200, "owner post detail after interactions")?;
+        let detail_json = json(&detail, "owner post detail after interactions")?;
+        if detail_json
+            .get("like_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            < 1
+            || detail_json
+                .get("boost_count")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                < 1
+        {
+            return Err("owner post detail counts did not reflect like and boost".to_string());
+        }
+        Ok("like and boost enqueued deliveries and updated detail counts".to_string())
+    })();
+    for action in ["unlike", "unboost"] {
+        let _ = owner_post_auth(
+            http,
+            "/api/dais/owner/interactions",
+            json!({ "object_id": post_id.clone(), "interaction": action }),
+        );
+    }
+    let _ = owner_delete_post(http, &post_id);
+    result
+}
+
+fn owner_reader_lifecycle_fixture(http: &Http) -> Result<String> {
+    let fixture = fixture_actor(&http.config)?;
+    signed_follow_and_approve_fixture(http, &fixture, "reader-lifecycle-follow")?;
+    let content = format!(
+        "Reader lifecycle conformance fixture {}",
+        Utc::now().to_rfc3339()
+    );
+    let object_id = signed_fixture_create(http, &fixture, "reader-lifecycle", &content, None)?;
+    let home = owner_get_auth(http, "/api/dais/owner/timeline/home?limit=50")?;
+    expect_status(&home, 200, "owner home timeline lifecycle")?;
+    if !owner_items(&home, "owner home timeline lifecycle")?
+        .iter()
+        .any(|item| {
+            str_field(item, "object_id") == Some(object_id.as_str())
+                || str_field(item, "content")
+                    .map(|value| value.contains("Reader lifecycle conformance fixture"))
+                    .unwrap_or(false)
+        })
+    {
+        return Err("owner home timeline did not include signed fixture Create".to_string());
+    }
+    Ok("approved fixture follower Create populated owner home timeline".to_string())
+}
+
+fn owner_feed_controls_fixture(http: &Http) -> Result<String> {
+    let fixture = fixture_actor(&http.config)?;
+    let root_content = format!(
+        "Feed controls root conformance fixture {}",
+        Utc::now().to_rfc3339()
+    );
+    let root_id = signed_fixture_create(http, &fixture, "feed-root", &root_content, None)?;
+    let reply_content = format!(
+        "Feed controls reply conformance fixture {}",
+        Utc::now().to_rfc3339()
+    );
+    let reply_id =
+        signed_fixture_create(http, &fixture, "feed-reply", &reply_content, Some(&root_id))?;
+    let default_home = owner_get_auth(http, "/api/dais/owner/timeline/home?limit=80")?;
+    expect_status(&default_home, 200, "owner home timeline without replies")?;
+    if owner_items(&default_home, "owner home timeline without replies")?
+        .iter()
+        .any(|item| str_field(item, "object_id") == Some(reply_id.as_str()))
+    {
+        return Err("owner home timeline included reply without include_replies=true".to_string());
+    }
+    let with_replies = owner_get_auth(
+        http,
+        "/api/dais/owner/timeline/home?limit=80&include_replies=true",
+    )?;
+    expect_status(&with_replies, 200, "owner home timeline with replies")?;
+    if !owner_items(&with_replies, "owner home timeline with replies")?
+        .iter()
+        .any(|item| str_field(item, "object_id") == Some(reply_id.as_str()))
+    {
+        return Err(
+            "owner home timeline did not include reply with include_replies=true".to_string(),
+        );
+    }
+    Ok("owner home timeline reply toggle behaved correctly".to_string())
+}
+
+fn owner_reader_reply_fixture(http: &Http) -> Result<String> {
+    let fixture = fixture_actor(&http.config)?;
+    let target = fixture_public_post_url(&fixture)?;
+    let post = owner_post_auth(
+        http,
+        "/api/dais/owner/posts",
+        json!({
+            "text": format!("Owner reply conformance fixture {}", Utc::now().to_rfc3339()),
+            "visibility": "public",
+            "protocol": "activitypub",
+            "in_reply_to": target.clone()
+        }),
+    )?;
+    expect_status_any(&post, &[200, 201], "owner reply post")?;
+    let post_json = json(&post, "owner reply post")?;
+    let post_id = owner_created_post_id(post_json)?;
+    let result = (|| {
+        if post_json
+            .get("delivery_ids")
+            .and_then(Value::as_array)
+            .map(Vec::is_empty)
+            .unwrap_or(true)
+            || str_field(post_json, "in_reply_to") != Some(target.as_str())
+        {
+            return Err("owner reply did not retain target or enqueue delivery".to_string());
+        }
+        let object = http.get_accept(&post_id, "application/activity+json")?;
+        expect_status(&object, 200, "owner reply ActivityPub object")?;
+        if json(&object, "owner reply ActivityPub object")?
+            .get("inReplyTo")
+            .and_then(Value::as_str)
+            != Some(target.as_str())
+        {
+            return Err("owner reply ActivityPub object omitted inReplyTo".to_string());
+        }
+        Ok("owner reply generated ActivityPub object with inReplyTo".to_string())
+    })();
+    let _ = owner_delete_post(http, &post_id);
+    result
+}
+
 fn run_activitypub(http: &Http) -> Result<()> {
     let config = &http.config;
     let actor_path = config.actor_path();
@@ -1029,7 +1656,7 @@ fn run_activitypub(http: &Http) -> Result<()> {
         },
     );
 
-    let owner_optional = [
+    let owner_required = [
         ("MASTODON-SECURITY-02", "MASTODON", "Authorized fetch for private posts is implemented", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live authorized-fetch fixture"),
         ("MASTODON-SYNC-01", "MASTODON", "Signed partial follower synchronization collection is available", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live follower synchronization fixture"),
         ("MASTODON-CONTENT-03", "MASTODON", "Live public Question exposes media, tags, summary, and poll shape", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live rich content fixture"),
@@ -1041,22 +1668,38 @@ fn run_activitypub(http: &Http) -> Result<()> {
         ("OWNER-READER-02", "DAIS-OWNER", "Follow acceptance and inbound Create populate the owner home timeline", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner reader lifecycle fixture"),
         ("OWNER-FEED-01", "DAIS-OWNER", "Owner home timeline hides replies by default and exposes an explicit reply toggle", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner feed controls fixture"),
         ("OWNER-READER-03", "DAIS-OWNER", "Reader reply compose generates an ActivityPub reply object", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live owner reader reply fixture"),
-        ("AP-SOFTWARE-FAMILIES-01", "INTEROP", "Inbound Create supports major ActivityPub software object families", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live software-family S2S fixtures"),
-        ("AP-SOFTWARE-FAMILIES-02", "INTEROP", "Owner discovery previews non-Note public objects from other servers", "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live software-family discovery fixtures"),
     ];
-    for (id, group, title, detail) in owner_optional {
-        if config.owner_token.is_empty() {
-            rows.push(Row::new(id, group, title, "INFO", detail));
-        } else {
-            rows.push(Row::new(id, group, title, "INFO", "Rust conformance preserves this authenticated fixture as credential-gated follow-up coverage"));
+    if config.owner_token.is_empty() {
+        for (id, group, title, detail) in owner_required {
+            rows.push(Row::new(id, group, title, "SKIP", detail));
         }
+    } else {
+        run_owner_activitypub_authenticated(http, &mut rows);
+    }
+    for (id, title) in [
+        (
+            "AP-SOFTWARE-FAMILIES-01",
+            "Inbound Create supports major ActivityPub software object families",
+        ),
+        (
+            "AP-SOFTWARE-FAMILIES-02",
+            "Owner discovery previews non-Note public objects from other servers",
+        ),
+    ] {
+        rows.push(Row::new(
+            id,
+            "INTEROP",
+            title,
+            "INFO",
+            "requires federation-lab software-family fixtures; tracked outside the default single-instance conformance run",
+        ));
     }
     if config.owner_token.is_empty() {
         rows.push(Row::new(
             "MASTODON-SECURITY-03",
             "MASTODON",
             "Private media supports signed authorized fetch",
-            "INFO",
+            "SKIP",
             "set DAIS_OWNER_TOKEN or DAIS_OWNER_TOKEN_FILE to run live signed private media fixture",
         ));
     } else {
