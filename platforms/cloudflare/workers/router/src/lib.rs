@@ -18,11 +18,13 @@ use mastodon::{
     account_following_path as mastodon_account_following_path,
     account_path as mastodon_account_path, account_statuses_path as mastodon_account_statuses_path,
     follow_request_action as mastodon_follow_request_action, media_path as mastodon_media_path,
-    notification_dismiss_path as mastodon_notification_dismiss_path,
-    status_action_path as mastodon_status_action_path,
-    status_context_path as mastodon_status_context_path, status_path as mastodon_status_path,
-    status_source_path as mastodon_status_source_path,
-    suggestion_dismiss as mastodon_suggestion_dismiss, visibility as mastodon_visibility,
+    mentions as mastodon_mentions, notification_dismiss_path as mastodon_notification_dismiss_path,
+    notification_type as mastodon_notification_type, parse_actor_acct, remote_account_json,
+    status_action_path as mastodon_status_action_path, status_content as mastodon_status_content,
+    status_context_path as mastodon_status_context_path, status_json as mastodon_status_json,
+    status_path as mastodon_status_path, status_source_path as mastodon_status_source_path,
+    suggestion_dismiss as mastodon_suggestion_dismiss, tags as mastodon_tags,
+    visibility as mastodon_visibility,
 };
 #[cfg(test)]
 pub(crate) use media::sha256_hex;
@@ -3257,207 +3259,6 @@ fn mastodon_status_list_where(
     conditions.join("\n       AND ")
 }
 
-fn mastodon_status_json(row: &Map<String, Value>, account: &Value) -> Value {
-    serde_json::json!({
-        "id": row_value_or_null(row, "id"),
-        "uri": row_value_or_null(row, "id"),
-        "url": row_value_or_null(row, "id"),
-        "account": account,
-        "in_reply_to_id": row_value_or_null(row, "in_reply_to"),
-        "in_reply_to_account_id": Value::Null,
-        "reblog": Value::Null,
-        "content": mastodon_status_content(row),
-        "plain_text": mastodon_plain_text(row),
-        "created_at": row_value_or_null(row, "published_at"),
-        "edited_at": Value::Null,
-        "emojis": [],
-        "replies_count": integer_field(Some(row), "reply_count"),
-        "reblogs_count": integer_field(Some(row), "boost_count"),
-        "favourites_count": integer_field(Some(row), "like_count"),
-        "reblogged": bool_field(Some(row), "reblogged"),
-        "favourited": bool_field(Some(row), "favourited"),
-        "muted": false,
-        "sensitive": false,
-        "spoiler_text": "",
-        "visibility": mastodon_visibility(&string_field(Some(row), "visibility").unwrap_or_default()),
-        "media_attachments": mastodon_media_attachments(row),
-        "mentions": mastodon_mentions(row),
-        "tags": mastodon_tags(row),
-        "card": Value::Null,
-        "poll": mastodon_poll_json(row),
-    })
-}
-
-fn mastodon_plain_text(row: &Map<String, Value>) -> String {
-    ["name", "summary", "content"]
-        .iter()
-        .filter_map(|key| string_field(Some(row), key))
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-fn mastodon_status_content(row: &Map<String, Value>) -> String {
-    let mut parts = Vec::new();
-    if let Some(name) = string_field(Some(row), "name") {
-        parts.push(format!("<p><strong>{}</strong></p>", escape_html(&name)));
-    }
-    if let Some(summary) = string_field(Some(row), "summary") {
-        parts.push(format!("<p>{}</p>", escape_html(&summary)));
-    }
-    parts.push(
-        string_field(Some(row), "content_html").unwrap_or_else(|| {
-            escape_html(&string_field(Some(row), "content").unwrap_or_default())
-        }),
-    );
-    parts.join("")
-}
-
-fn mastodon_poll_json(row: &Map<String, Value>) -> Value {
-    if string_field(Some(row), "object_type").as_deref() != Some("Question") {
-        return Value::Null;
-    }
-    let Some(raw) = row.get("poll_options") else {
-        return Value::Null;
-    };
-    let parsed = match raw {
-        Value::String(text) => serde_json::from_str::<Value>(text).ok(),
-        value => Some(value.clone()),
-    };
-    let Some(parsed) = parsed else {
-        return Value::Null;
-    };
-    let options = parsed
-        .get("options")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| item.as_str().unwrap_or_default().to_string())
-                .filter(|item| !item.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if options.is_empty() {
-        return Value::Null;
-    }
-    serde_json::json!({
-        "id": format!("{}#poll", string_field(Some(row), "id").unwrap_or_default()),
-        "expires_at": Value::Null,
-        "expired": false,
-        "multiple": parsed.get("multiple").and_then(Value::as_bool).unwrap_or(false),
-        "votes_count": 0,
-        "voters_count": 0,
-        "voted": false,
-        "own_votes": [],
-        "options": options.into_iter().map(|title| serde_json::json!({ "title": title, "votes_count": 0 })).collect::<Vec<_>>(),
-        "emojis": [],
-    })
-}
-
-fn mastodon_media_attachments(row: &Map<String, Value>) -> Value {
-    Value::Array(
-        parse_attachment_array(row.get("media_attachments"))
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, attachment)| {
-                let object = attachment.as_object()?;
-                let url = string_field(Some(object), "url").unwrap_or_default();
-                if url.is_empty() {
-                    return None;
-                }
-                let media_type = string_field(Some(object), "mediaType").unwrap_or_default();
-                let attachment_type = if media_type.starts_with("image/") {
-                    "image"
-                } else if media_type.starts_with("video/") {
-                    "video"
-                } else {
-                    "unknown"
-                };
-                Some(serde_json::json!({
-                    "id": format!("{}#media-{}", string_field(Some(row), "id").unwrap_or_default(), index + 1),
-                    "type": attachment_type,
-                    "url": url,
-                    "preview_url": url,
-                    "remote_url": Value::Null,
-                    "preview_remote_url": Value::Null,
-                    "text_url": Value::Null,
-                    "meta": {},
-                    "description": string_field(Some(object), "name").map(Value::String).unwrap_or(Value::Null),
-                    "blurhash": Value::Null,
-                }))
-            })
-            .collect(),
-    )
-}
-
-fn mastodon_mentions(row: &Map<String, Value>) -> Value {
-    let mut seen = Vec::new();
-    let mut mentions = Vec::new();
-    for token in mastodon_plain_text(row).split_whitespace() {
-        let trimmed = token.trim_matches(|ch: char| {
-            matches!(
-                ch,
-                '(' | ')' | '[' | ']' | ',' | '.' | ':' | ';' | '!' | '?'
-            )
-        });
-        let Some(rest) = trimmed.strip_prefix('@') else {
-            continue;
-        };
-        let Some((username, host)) = rest.split_once('@') else {
-            continue;
-        };
-        if username.is_empty() || !host.contains('.') {
-            continue;
-        }
-        let host = host.to_ascii_lowercase();
-        let acct = format!("{username}@{host}");
-        if seen.iter().any(|value: &String| value == &acct) {
-            continue;
-        }
-        seen.push(acct.clone());
-        mentions.push(serde_json::json!({
-            "id": format!("https://{host}/@{username}"),
-            "username": username,
-            "acct": acct,
-            "url": format!("https://{host}/@{username}"),
-        }));
-    }
-    Value::Array(mentions)
-}
-
-fn mastodon_tags(row: &Map<String, Value>) -> Value {
-    let mut seen = Vec::new();
-    let mut tags = Vec::new();
-    for token in mastodon_plain_text(row).split_whitespace() {
-        let trimmed = token.trim_matches(|ch: char| {
-            matches!(
-                ch,
-                '(' | ')' | '[' | ']' | ',' | '.' | ':' | ';' | '!' | '?'
-            )
-        });
-        let Some(name) = trimmed.strip_prefix('#') else {
-            continue;
-        };
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-')
-        {
-            continue;
-        }
-        let key = name.to_ascii_lowercase();
-        if seen.iter().any(|value: &String| value == &key) {
-            continue;
-        }
-        seen.push(key);
-        tags.push(serde_json::json!({
-            "name": name,
-            "url": format!("https://social.dais.social/tags/{name}"),
-        }));
-    }
-    Value::Array(tags)
-}
-
 async fn mastodon_relationships(env: &Env, url: &worker::Url) -> Result<Value> {
     let mut ids = Vec::new();
     for (key, value) in url.query_pairs() {
@@ -3570,15 +3371,6 @@ async fn mastodon_notifications(env: &Env, limit: i32) -> Result<Value> {
     ))
 }
 
-fn mastodon_notification_type(value: Option<&str>) -> String {
-    match value {
-        Some("like") => "favourite".to_string(),
-        Some("boost") => "reblog".to_string(),
-        Some(value) if !value.is_empty() => value.to_string(),
-        _ => "mention".to_string(),
-    }
-}
-
 async fn mastodon_followers(env: &Env, limit: i32) -> Result<Value> {
     let db = env.d1("DB")?;
     let limit_arg = D1Type::Integer(limit);
@@ -3617,50 +3409,6 @@ async fn mastodon_following(env: &Env, limit: i32) -> Result<Value> {
         .await?
         .results::<Map<String, Value>>()?;
     Ok(Value::Array(rows.iter().map(remote_account_json).collect()))
-}
-
-fn remote_account_json(row: &Map<String, Value>) -> Value {
-    let url = string_field(Some(row), "url")
-        .or_else(|| string_field(Some(row), "actor_id"))
-        .unwrap_or_default();
-    let (username, acct) = parse_actor_acct(&url);
-    serde_json::json!({
-        "id": url,
-        "username": username,
-        "acct": acct,
-        "display_name": username,
-        "locked": false,
-        "bot": false,
-        "discoverable": false,
-        "group": false,
-        "created_at": string_field(Some(row), "created_at").unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string()),
-        "note": "",
-        "url": url,
-        "avatar": "",
-        "avatar_static": "",
-        "header": "",
-        "header_static": "",
-        "followers_count": 0,
-        "following_count": 0,
-        "statuses_count": 0,
-        "fields": [],
-        "emojis": [],
-    })
-}
-
-fn parse_actor_acct(actor_url: &str) -> (String, String) {
-    match worker::Url::parse(actor_url) {
-        Ok(url) => {
-            let username = url
-                .path_segments()
-                .and_then(|mut segments| segments.next_back().map(ToOwned::to_owned))
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| url.host_str().unwrap_or(actor_url).to_string());
-            let host = url.host_str().unwrap_or_default();
-            (username.clone(), format!("{username}@{host}"))
-        }
-        Err(_) => (actor_url.to_string(), actor_url.to_string()),
-    }
 }
 
 async fn public_status_count(env: &Env) -> Result<i64> {
