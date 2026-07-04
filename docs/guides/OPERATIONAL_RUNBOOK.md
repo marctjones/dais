@@ -27,11 +27,8 @@ dais doctor
 # Expected: ✓ All checks passed (9/9)
 # If failures: See "Common Issues" section
 
-# 2. Check Bluesky consumer
-ps aux | grep bluesky_reply_consumer
-
-# Expected: One running process
-# If not running: tmux attach -t bluesky-consumer to check logs
+# 2. Check active worker health
+scripts/verify-deployment.sh
 
 # 3. Check recent activity
 dais followers list | head -10
@@ -96,14 +93,10 @@ echo
 echo "[1/6] Running dais doctor..."
 dais doctor || echo "⚠ Health check failed"
 
-# 2. Consumer status
+# 2. Active deployment status
 echo
-echo "[2/6] Checking Bluesky consumer..."
-if ps aux | grep -q "[b]luesky_reply_consumer"; then
-    echo "  ✓ Consumer running"
-else
-    echo "  ✗ Consumer NOT running"
-fi
+echo "[2/6] Checking active deployment..."
+scripts/verify-deployment.sh || echo "  ✗ Deployment verification failed"
 
 # 3. Database connectivity
 echo
@@ -223,8 +216,7 @@ echo "Resolution: ..." >> ~/incident.log
 
 ```bash
 # Step 1: STOP ALL WRITES immediately
-# - Stop consumer: pkill -f bluesky_reply_consumer
-# - Pause post creation
+# - Pause post creation and owner API write actions
 # - Document what data is missing
 
 # Step 2: Identify backup to restore
@@ -310,26 +302,20 @@ cat platforms/cloudflare/workers/webfinger/wrangler.toml
 
 ---
 
-### Issue 2: "Bluesky Consumer Not Capturing Replies"
+### Issue 2: "Bluesky Replies Not Appearing"
 
 **Symptoms:**
-- Consumer running but no replies stored
-- Stats show commits processed but 0 replies
 - Bluesky replies not appearing in TUI
+- AT Protocol posts exist but reply/thread parity is incomplete
 
 **Diagnosis:**
 ```bash
-# Check consumer logs
-tmux attach -t bluesky-consumer
-
-# Look for:
-# - Connection errors
-# - Parse errors
-# - Database write errors
-
 # Check database for posts with AT Protocol URIs
 wrangler d1 execute DB --remote --command \
   "SELECT id, atproto_uri FROM posts WHERE atproto_uri IS NOT NULL"
+
+# Check the active tracker item
+gh issue view 332
 ```
 
 **Solutions:**
@@ -344,28 +330,11 @@ wrangler d1 execute DB --remote --command \
   "SELECT atproto_uri FROM posts ORDER BY published_at DESC LIMIT 1"
 ```
 
-**Solution B: Consumer connection issues**
+**Solution B: Bluesky reply ingestion status**
 ```bash
-# Restart consumer
-tmux kill-session -t bluesky-consumer
-tmux new-session -d -s bluesky-consumer \
-  "cd services && python bluesky_reply_consumer.py --remote"
-
-# Check for connection
-sleep 5
-tmux capture-pane -t bluesky-consumer -p | tail -20
-```
-
-**Solution C: Database permissions**
-```bash
-# Test database write
-wrangler d1 execute DB --remote --command \
-  "INSERT INTO replies (id, post_id, actor_id, actor_username, content, published_at) \
-   VALUES ('test123', 'post123', 'actor123', '@test', 'test content', '2026-01-01T00:00:00Z')"
-
-# Clean up test
-wrangler d1 execute DB --remote --command \
-  "DELETE FROM replies WHERE id = 'test123'"
+# The former Python Bluesky reply consumer is retired.
+# Track active Bluesky read/reply parity in GitHub issues #275, #277, and #332.
+gh issue view 332
 ```
 
 ---
@@ -552,11 +521,9 @@ echo "=== EMERGENCY SHUTDOWN ==="
 echo "Initiated at $(date)"
 echo
 
-# 1. Stop consumer
-echo "[1/3] Stopping Bluesky consumer..."
-pkill -f bluesky_reply_consumer
-tmux kill-session -t bluesky-consumer 2>/dev/null
-echo "  ✓ Consumer stopped"
+# 1. Pause owner writes
+echo "[1/3] Pausing owner writes..."
+echo "  Disable owner write tokens or rotate OWNER_API_TOKEN before continuing."
 
 # 2. Disable workers (set to maintenance mode)
 echo "[2/3] Disabling workers..."
@@ -591,10 +558,9 @@ echo "[1/4] Restoring from: $LATEST_BACKUP"
 echo "[2/4] Redeploying workers..."
 dais deploy workers
 
-# 3. Restart consumer
-echo "[3/4] Starting consumer..."
-tmux new-session -d -s bluesky-consumer \
-  "cd services && python bluesky_reply_consumer.py --remote"
+# 3. Verify active workers
+echo "[3/4] Verifying active workers..."
+scripts/verify-deployment.sh
 
 # 4. Verify health
 echo "[4/4] Verifying health..."

@@ -68,12 +68,7 @@ dais doctor
    dais post create "Hello from both worlds! 🌐" --protocol both
    ```
 
-2. **Start the Bluesky reply consumer:**
-   ```bash
-   tmux new-session -d -s bluesky-consumer "cd services && python bluesky_reply_consumer.py --remote"
-   ```
-
-3. **Launch the TUI:**
+2. **Launch the TUI:**
    ```bash
    dais tui
    ```
@@ -449,7 +444,7 @@ dais block unblock @user@example.com
 2. **Enable manual follower approval** - Review requests before accepting
 3. **Review moderation queue** - Check replies before they appear
 4. **Block suspicious domains** - Prevent spam from entire servers
-5. **Monitor consumer logs** - Check Bluesky reply consumer for errors
+5. **Run release gates before deploys** - Use `scripts/release-server.sh --strict`
 
 ### Data Storage
 
@@ -479,17 +474,11 @@ cat ~/.dais/pds-password.txt
 dais setup init --regenerate-password
 ```
 
-**Issue:** "Bluesky reply consumer not capturing replies"
+**Issue:** "Bluesky replies are not appearing"
 ```bash
-# Solution 1: Check consumer is running
-ps aux | grep bluesky_reply_consumer
-
-# Solution 2: Restart consumer
-tmux kill-session -t bluesky-consumer
-tmux new-session -d -s bluesky-consumer "cd services && python bluesky_reply_consumer.py --remote"
-
-# Solution 3: Check logs
-tmux attach -t bluesky-consumer
+# The old Python Bluesky reply consumer is retired.
+# Use GitHub issue #332 / #277 to track the current Rust ATProto reply path.
+gh issue view 332
 ```
 
 **Issue:** "WebFinger endpoint not responding"
@@ -513,10 +502,9 @@ dais doctor
 
 ### Logs & Debugging
 
-**Consumer logs:**
+**ATProto reply status:**
 ```bash
-tmux attach -t bluesky-consumer
-# Press Ctrl+B, D to detach
+gh issue view 332
 ```
 
 **Worker logs:**

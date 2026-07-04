@@ -575,7 +575,9 @@ A: Yes! Dais implements standard ActivityPub and federates with all compatible s
 A: No. If `dais doctor` shows all checks passing, federation works automatically.
 
 **Q: Can I federate with Bluesky?**
-A: Partially. Dais can POST to Bluesky via AT Protocol, but Bluesky doesn't federate back to ActivityPub. The consumer captures Bluesky replies for unified thread viewing.
+A: Partially. Dais has AT Protocol public read/write surfaces, but Bluesky
+doesn't federate back to ActivityPub. Unified Bluesky reply ingestion is active
+v1.31 work tracked in GitHub issues #275, #277, and #332.
 
 **Q: Are my posts cached by remote servers?**
 A: Yes. Public posts are cached indefinitely by follower servers. Deletion sends a Delete activity, but caching is up to remote servers.
