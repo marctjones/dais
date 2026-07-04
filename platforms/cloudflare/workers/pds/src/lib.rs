@@ -1,4 +1,5 @@
 use cid::Cid;
+use dais_core::atproto as core_atproto;
 use ipld_core::ipld::Ipld;
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -9,8 +10,9 @@ use std::collections::{BTreeMap, HashMap};
 ///
 /// This worker implements the AT Protocol endpoints for Bluesky compatibility.
 ///
-/// NOTE: AT Protocol implementation is currently minimal. Full implementation
-/// will be migrated to dais-core in a future update.
+/// NOTE: shared AT Protocol response shapes and stable helpers live in
+/// dais-core; DB/R2-backed repo materialization still lives in this worker
+/// until the rest of issue #275 is migrated.
 ///
 /// Endpoints:
 /// - GET /xrpc/com.atproto.server.describeServer
@@ -311,10 +313,7 @@ async fn handle_get_latest_commit(req: Request, ctx: RouteContext<()>) -> Result
         return Response::error("Repo not found", 404);
     }
     let stats = repo_stats(&ctx.env, &identity).await?;
-    json_response(serde_json::json!({
-        "cid": stats.head,
-        "rev": stats.rev
-    }))
+    typed_json_response(&core_atproto::latest_commit(&stats))
 }
 
 async fn handle_get_blob(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -367,27 +366,13 @@ async fn handle_get_repo_status(req: Request, ctx: RouteContext<()>) -> Result<R
     let did = required_query(&url, "did")?;
     let identity = identity(&ctx.env);
     let stats = repo_stats(&ctx.env, &identity).await?;
-    json_response(serde_json::json!({
-        "did": did,
-        "active": true,
-        "status": "active",
-        "rev": stats.rev,
-        "head": stats.head
-    }))
+    typed_json_response(&core_atproto::repo_status(&did, &stats))
 }
 
 async fn handle_list_repos(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let identity = identity(&ctx.env);
     let stats = repo_stats(&ctx.env, &identity).await?;
-    json_response(serde_json::json!({
-        "repos": [{
-            "did": identity.did,
-            "head": stats.head,
-            "rev": stats.rev,
-            "active": true,
-            "status": "active"
-        }]
-    }))
+    typed_json_response(&core_atproto::list_repos(&identity, &stats))
 }
 
 async fn handle_describe_repo(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -397,26 +382,7 @@ async fn handle_describe_repo(req: Request, ctx: RouteContext<()>) -> Result<Res
     if repo != identity.did && repo != identity.handle {
         return Response::error("Repo not found", 404);
     }
-    json_response(serde_json::json!({
-        "handle": identity.handle,
-        "did": identity.did,
-        "didDoc": {
-            "id": identity.did,
-            "service": [{
-                "id": "#atproto_pds",
-                "type": "AtprotoPersonalDataServer",
-                "serviceEndpoint": format!("https://{}", identity.pds_hostname)
-            }]
-        },
-        "collections": [
-            "app.bsky.actor.profile",
-            "app.bsky.feed.post",
-            "app.bsky.feed.like",
-            "app.bsky.feed.repost",
-            "app.bsky.graph.follow"
-        ],
-        "handleIsCorrect": true
-    }))
+    typed_json_response(&core_atproto::describe_repo(&identity))
 }
 
 async fn handle_get_record(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -552,21 +518,9 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
                 .as_string()
                 .unwrap_or_default()
         });
-    let rkey = body.rkey.unwrap_or_else(|| {
-        format!(
-            "{}-{}",
-            created_at
-                .chars()
-                .filter(|c| c.is_ascii_digit())
-                .take(14)
-                .collect::<String>(),
-            stable_cid(&format!("{}\n{}", created_at, text))
-                .chars()
-                .skip(4)
-                .take(8)
-                .collect::<String>()
-        )
-    });
+    let rkey = body
+        .rkey
+        .unwrap_or_else(|| generated_rkey(&created_at, text));
     let actor_id = local_actor_id(&identity);
     let post_id = format!("{actor_id}/posts/{rkey}");
     let atproto_uri = format!("at://{}/app.bsky.feed.post/{rkey}", identity.did);
@@ -1024,11 +978,16 @@ async fn handle_websocket(ws: WebSocket, _env: Env) -> Result<()> {
         },
     )
     .await?;
-    let mut ops = vec![serde_json::json!({
-        "action": "update",
-        "path": "app.bsky.actor.profile/self",
-        "cid": { "$link": profile_record_response(&_env, &identity).await?.get("cid").cloned().unwrap_or(Value::String(String::new())) }
-    })];
+    let profile_cid = profile_record_response(&_env, &identity)
+        .await?
+        .get("cid")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut operations = vec![core_atproto::RepoOperation::update(
+        "app.bsky.actor.profile/self",
+        profile_cid,
+    )];
     for row in posts.into_iter().take(99) {
         let uri = at_uri(&identity, &row);
         let rkey = uri.rsplit('/').next().unwrap_or("");
@@ -1040,26 +999,55 @@ async fn handle_websocket(ws: WebSocket, _env: Env) -> Result<()> {
             .and_then(Value::as_str)
             .map(ToString::to_string)
             .unwrap_or_else(|| stable_cid(&uri));
-        ops.push(serde_json::json!({
-            "action": "update",
-            "path": format!("app.bsky.feed.post/{rkey}"),
-            "cid": { "$link": cid }
-        }));
+        operations.push(core_atproto::RepoOperation::update(
+            format!("app.bsky.feed.post/{rkey}"),
+            cid,
+        ));
     }
+    let stats = core_atproto::RepoStats {
+        head: snapshot.commit_cid.to_string(),
+        rev: snapshot.rev.clone(),
+    };
+    let event = core_atproto::commit_event(
+        &identity,
+        &stats,
+        core_atproto::sequence_from_stable_value(&snapshot.rev),
+        js_sys::Date::new_0()
+            .to_iso_string()
+            .as_string()
+            .unwrap_or_default(),
+        operations,
+    );
+    let ops: Vec<Value> = event
+        .ops
+        .into_iter()
+        .map(|op| match op.cid {
+            Some(cid) => serde_json::json!({
+                "action": op.action,
+                "path": op.path,
+                "cid": { "$link": cid }
+            }),
+            None => serde_json::json!({
+                "action": op.action,
+                "path": op.path,
+                "cid": null
+            }),
+        })
+        .collect();
     let commit_msg = serde_json::json!({
         "t": "#commit",
         "commit": {
-            "seq": repo_seq(&snapshot.rev),
+            "seq": event.seq,
             "rebase": false,
             "tooBig": false,
-            "repo": identity.did,
-            "commit": { "$link": snapshot.commit_cid.to_string() },
-            "rev": snapshot.rev,
+            "repo": event.repo,
+            "commit": { "$link": event.commit },
+            "rev": event.rev,
             "since": null,
             "blocks": "",
             "ops": ops,
             "blobs": [],
-            "time": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
+            "time": event.time
         }
     });
     ws.send_with_str(&commit_msg.to_string())?;
@@ -1067,17 +1055,8 @@ async fn handle_websocket(ws: WebSocket, _env: Env) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone)]
-struct Identity {
-    did: String,
-    handle: String,
-    pds_hostname: String,
-}
-
-struct RepoStats {
-    head: String,
-    rev: String,
-}
+type Identity = core_atproto::AtprotoIdentity;
+type RepoStats = core_atproto::RepoStats;
 
 #[derive(Clone)]
 struct RepoRecord {
@@ -2042,24 +2021,24 @@ async fn create_record_response(
 ) -> Result<Response> {
     let block = repo_record_block(repo_path_from_at_uri(uri)?, record.clone())?;
     let snapshot = repo_snapshot(env, identity).await?;
-    json_response(serde_json::json!({
-        "uri": uri,
-        "cid": block.cid.to_string(),
-        "commit": {
-            "cid": snapshot.commit_cid.to_string(),
-            "rev": snapshot.rev
-        }
-    }))
+    typed_json_response(&core_atproto::CreateRecordResponse {
+        uri: uri.to_string(),
+        cid: block.cid.to_string(),
+        commit: core_atproto::CommitRef {
+            cid: snapshot.commit_cid.to_string(),
+            rev: snapshot.rev,
+        },
+    })
 }
 
 async fn delete_record_response(env: &Env, identity: &Identity, _rkey: &str) -> Result<Response> {
     let snapshot = repo_snapshot(env, identity).await?;
-    json_response(serde_json::json!({
-        "commit": {
-            "cid": snapshot.commit_cid.to_string(),
-            "rev": snapshot.rev
-        }
-    }))
+    typed_json_response(&core_atproto::DeleteRecordResponse {
+        commit: core_atproto::CommitRef {
+            cid: snapshot.commit_cid.to_string(),
+            rev: snapshot.rev,
+        },
+    })
 }
 
 fn post_view(identity: &Identity, row: serde_json::Map<String, Value>) -> Value {
@@ -2469,23 +2448,11 @@ fn push_unique_tag(tags: &mut Vec<String>, tag: &str) {
 }
 
 fn generated_rkey(created_at: &str, seed: &str) -> String {
-    format!(
-        "{}-{}",
-        created_at
-            .chars()
-            .filter(|c| c.is_ascii_digit())
-            .take(14)
-            .collect::<String>(),
-        stable_cid(&format!("{created_at}\n{seed}"))
-            .chars()
-            .skip(4)
-            .take(8)
-            .collect::<String>()
-    )
+    core_atproto::generated_rkey(created_at, seed)
 }
 
 fn record_uri(identity: &Identity, collection: &str, rkey: &str) -> String {
-    format!("at://{}/{collection}/{rkey}", identity.did)
+    core_atproto::record_uri(&identity.did, collection, rkey)
 }
 
 fn record_uri_from_row(
@@ -2502,17 +2469,7 @@ fn record_uri_from_row(
 }
 
 fn stable_cid(value: &str) -> String {
-    use multihash_codetable::{Code, MultihashDigest};
-
-    cid::Cid::new_v1(0x55, Code::Sha2_256.digest(value.as_bytes())).to_string()
-}
-
-fn repo_seq(value: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish().max(1)
+    core_atproto::stable_cid(value)
 }
 
 fn dag_cbor_cid(bytes: &[u8]) -> Cid {
@@ -3210,19 +3167,8 @@ async fn repo_revision(env: &Env, identity: &Identity) -> Result<String> {
 }
 
 fn repo_path_from_at_uri(uri: &str) -> Result<String> {
-    let without_prefix = uri
-        .strip_prefix("at://")
-        .ok_or_else(|| worker::Error::RustError(format!("invalid at-uri: {uri}")))?;
-    let mut parts = without_prefix.splitn(3, '/');
-    let _repo = parts.next();
-    let collection = parts.next().unwrap_or_default();
-    let rkey = parts.next().unwrap_or_default();
-    if collection.is_empty() || rkey.is_empty() {
-        return Err(worker::Error::RustError(format!(
-            "invalid at-uri path: {uri}"
-        )));
-    }
-    Ok(format!("{collection}/{rkey}"))
+    core_atproto::repo_path_from_at_uri(uri)
+        .map_err(|error| worker::Error::RustError(error.to_string()))
 }
 
 impl From<RepoRecordBlock> for CarBlock {
@@ -3578,6 +3524,12 @@ fn json_response(value: Value) -> Result<Response> {
         .headers_mut()
         .set("Content-Type", "application/json")?;
     Ok(response)
+}
+
+fn typed_json_response<T: Serialize>(value: &T) -> Result<Response> {
+    json_response(
+        serde_json::to_value(value).map_err(|error| worker::Error::RustError(error.to_string()))?,
+    )
 }
 
 fn string_field(row: &serde_json::Map<String, Value>, key: &str) -> String {

@@ -305,13 +305,24 @@ impl DaisCore {
     // AT Protocol methods whose platform-agnostic core migration is tracked in issue #275.
 
     /// Handle AT Protocol commit
-    pub async fn handle_commit(&self, _did: String, _commit_cid: String) -> CoreResult<()> {
-        crate::atproto::repo::core_repo_migration_required("handle_commit")
+    pub async fn handle_commit(&self, did: String, commit_cid: String) -> CoreResult<()> {
+        if did.trim().is_empty() || commit_cid.trim().is_empty() {
+            return Err(CoreError::InvalidAtProto(
+                "handle_commit requires a DID and commit CID".to_string(),
+            ));
+        }
+        Err(CoreError::InvalidAtProto(
+            "DaisCore::handle_commit has core ATProto repo primitives but is not yet wired to persist/apply commits; finish the caller migration under GitHub issue #275"
+                .to_string(),
+        ))
     }
 
     /// Subscribe to repo changes
     pub async fn subscribe_repos(&self) -> CoreResult<()> {
-        crate::atproto::sync::core_sync_migration_required("subscribe_repos")
+        Err(CoreError::InvalidAtProto(
+            "DaisCore::subscribe_repos has core ATProto sync event primitives but is not yet wired to a transport; finish the caller migration under GitHub issue #275"
+                .to_string(),
+        ))
     }
 
     async fn default_post_visibility(&self) -> String {
@@ -431,24 +442,40 @@ mod tests {
         assert!(resolve_post_visibility("not-valid", Some("followers")).is_err());
     }
 
-    #[tokio::test]
-    async fn atproto_core_guards_reference_migration_issue() {
-        let repo_error = crate::atproto::get_repo()
-            .await
-            .expect_err("repo migration should be explicit");
-        assert!(matches!(repo_error, CoreError::InvalidAtProto(_)));
-        assert!(repo_error.to_string().contains("#275"));
+    #[test]
+    fn atproto_core_primitives_are_available() {
+        let identity = crate::atproto::AtprotoIdentity::new(
+            "did:web:pds.example",
+            "social.example",
+            "pds.example",
+        );
+        let snapshot = crate::atproto::RepoSnapshot {
+            rev: "3lxyz".to_string(),
+            commit_cid: "bafycommit".to_string(),
+            car_bytes: vec![1, 2, 3],
+        };
+        let stats = crate::atproto::repo_stats(&snapshot);
+        let uri =
+            crate::atproto::record_uri(&identity.did, "app.bsky.feed.post", "20260704120000-test");
+        let value = serde_json::json!({
+            "$type": "app.bsky.feed.post",
+            "text": "hello"
+        });
+        let record = crate::atproto::create_record_response(&uri, &value, &stats);
+        let event = crate::atproto::commit_event(
+            &identity,
+            &stats,
+            1,
+            "2026-07-04T12:00:00Z",
+            vec![crate::atproto::RepoOperation::create(
+                crate::atproto::repo_path_from_at_uri(&uri).unwrap(),
+                record.cid.clone(),
+            )],
+        );
 
-        let record_error = crate::atproto::create_record()
-            .await
-            .expect_err("record migration should be explicit");
-        assert!(matches!(record_error, CoreError::InvalidAtProto(_)));
-        assert!(record_error.to_string().contains("#275"));
-
-        let sync_error = crate::atproto::handle_sync()
-            .await
-            .expect_err("sync migration should be explicit");
-        assert!(matches!(sync_error, CoreError::InvalidAtProto(_)));
-        assert!(sync_error.to_string().contains("#275"));
+        assert_eq!(crate::atproto::get_repo(&snapshot).unwrap(), vec![1, 2, 3]);
+        assert_eq!(record.commit.cid, "bafycommit");
+        assert_eq!(event.repo, identity.did);
+        assert_eq!(event.ops[0].cid.as_deref(), Some(record.cid.as_str()));
     }
 }
