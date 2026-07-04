@@ -1348,7 +1348,11 @@ async fn search_public_posts(
         WHERE visibility = 'public'
           AND encrypted_message IS NULL
           AND content NOT LIKE '%End-to-end encrypted message%'
-          AND instr(LOWER(content), LOWER(?1)) > 0
+          AND (
+            instr(LOWER(content), LOWER(?1)) > 0
+            OR instr(LOWER(COALESCE(summary, '')), LOWER(?1)) > 0
+            OR instr(LOWER(COALESCE(atproto_uri, '')), LOWER(?1)) > 0
+          )
         ORDER BY published_at DESC
         LIMIT ?2 OFFSET ?3
         "#,
@@ -1505,8 +1509,11 @@ async fn direct_public_replies(
     env: &Env,
     identity: &Identity,
     parent: &serde_json::Map<String, Value>,
-    _depth: u32,
+    depth: u32,
 ) -> Result<Vec<Value>> {
+    if depth == 0 {
+        return Ok(Vec::new());
+    }
     let parent_id = string_field(parent, "id");
     let parent_uri = at_uri(identity, parent);
     let rows = env
@@ -1565,10 +1572,18 @@ async fn direct_public_replies(
         .await?
         .results::<serde_json::Map<String, Value>>()?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| thread_view_post(identity, row, Vec::new()))
-        .collect())
+    let mut replies = Vec::new();
+    for row in rows {
+        let nested = Box::pin(direct_public_replies(
+            env,
+            identity,
+            &row,
+            depth.saturating_sub(1),
+        ))
+        .await?;
+        replies.push(thread_view_post(identity, row, nested));
+    }
+    Ok(replies)
 }
 
 async fn public_media_by_cid(env: &Env, cid: &str) -> Result<Option<PublicMediaBlob>> {
@@ -2619,10 +2634,11 @@ fn repo_path_from_at_uri(uri: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        atproto_media_attachments, encode_car, follow_record_value, mst_subtree,
-        r2_key_from_media_url, repo_key_depth, repo_record_block, stable_cid, Identity,
+        at_uri, atproto_media_attachments, encode_car, follow_record_value, mst_subtree, post_view,
+        r2_key_from_media_url, record_value, repo_key_depth, repo_record_block, stable_cid,
+        thread_view_post, Identity,
     };
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[test]
     fn stable_cid_is_real_cidv1() {
@@ -2742,6 +2758,116 @@ mod tests {
             .get("cid")
             .and_then(serde_json::Value::as_str)
             .is_some());
+    }
+
+    #[test]
+    fn post_view_exposes_appview_counts_record_facets_and_reply_ref() {
+        let identity = Identity {
+            did: "did:web:social.dais.social".into(),
+            handle: "social.dais.social".into(),
+            pds_hostname: "pds.dais.social".into(),
+        };
+        let mut row = serde_json::Map::new();
+        row.insert(
+            "id".into(),
+            json!("https://social.dais.social/users/social/posts/local1"),
+        );
+        row.insert("content".into(), json!("Hello @ada.example #space"));
+        row.insert("summary".into(), json!("science"));
+        row.insert("published_at".into(), json!("2026-07-04T12:00:00.000Z"));
+        row.insert("reply_count".into(), json!(2));
+        row.insert("repost_count".into(), json!(3));
+        row.insert("like_count".into(), json!(5));
+        row.insert(
+            "in_reply_to".into(),
+            json!("at://did:web:social.dais.social/app.bsky.feed.post/root1"),
+        );
+
+        let view = post_view(&identity, row.clone());
+        assert_eq!(
+            view.get("uri").and_then(Value::as_str),
+            Some("at://did:web:social.dais.social/app.bsky.feed.post/local1")
+        );
+        assert_eq!(view.get("replyCount").and_then(Value::as_u64), Some(2));
+        assert_eq!(view.get("repostCount").and_then(Value::as_u64), Some(3));
+        assert_eq!(view.get("likeCount").and_then(Value::as_u64), Some(5));
+        assert!(view.get("cid").and_then(Value::as_str).is_some());
+
+        let record = view.get("record").expect("record");
+        assert_eq!(
+            record.get("$type").and_then(Value::as_str),
+            Some("app.bsky.feed.post")
+        );
+        assert_eq!(
+            record.get("text").and_then(Value::as_str),
+            Some("Hello @ada.example #space")
+        );
+        assert!(record.get("facets").and_then(Value::as_array).is_some());
+        assert!(record.get("tags").and_then(Value::as_array).is_some());
+        assert!(record.get("labels").is_some());
+        assert_eq!(
+            record
+                .get("reply")
+                .and_then(|reply| reply.get("parent"))
+                .and_then(|parent| parent.get("uri"))
+                .and_then(Value::as_str),
+            Some("at://did:web:social.dais.social/app.bsky.feed.post/root1")
+        );
+
+        assert_eq!(
+            at_uri(&identity, &row),
+            "at://did:web:social.dais.social/app.bsky.feed.post/local1"
+        );
+        assert_eq!(
+            record_value(row)
+                .get("langs")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn thread_view_post_preserves_nested_reply_shape() {
+        let identity = Identity {
+            did: "did:web:social.dais.social".into(),
+            handle: "social.dais.social".into(),
+            pds_hostname: "pds.dais.social".into(),
+        };
+        let mut parent = serde_json::Map::new();
+        parent.insert(
+            "id".into(),
+            json!("https://social.dais.social/users/social/posts/root"),
+        );
+        parent.insert("content".into(), json!("root"));
+        parent.insert("published_at".into(), json!("2026-07-04T12:00:00.000Z"));
+        let mut child = serde_json::Map::new();
+        child.insert(
+            "id".into(),
+            json!("https://social.dais.social/users/social/posts/reply"),
+        );
+        child.insert("content".into(), json!("reply"));
+        child.insert("published_at".into(), json!("2026-07-04T12:01:00.000Z"));
+
+        let child_thread = thread_view_post(&identity, child, Vec::new());
+        let parent_thread = thread_view_post(&identity, parent, vec![child_thread]);
+        assert_eq!(
+            parent_thread.get("$type").and_then(Value::as_str),
+            Some("app.bsky.feed.defs#threadViewPost")
+        );
+        let replies = parent_thread
+            .get("replies")
+            .and_then(Value::as_array)
+            .expect("replies");
+        assert_eq!(replies.len(), 1);
+        assert_eq!(
+            replies[0]
+                .get("post")
+                .and_then(|post| post.get("record"))
+                .and_then(|record| record.get("text"))
+                .and_then(Value::as_str),
+            Some("reply")
+        );
     }
 
     #[test]
