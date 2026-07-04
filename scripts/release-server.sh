@@ -12,6 +12,7 @@
 # Options:
 #   --plan                 Print the gate plan without running commands
 #   --deploy               Deploy production and skpt after build gates pass
+#                          (also applies selected remote D1 SQL updates first)
 #   --skip-live            Skip live smoke tests unless strict mode is enabled
 #   --conformance          Run all conformance suites
 #   --bluesky-conformance  Run only Bluesky conformance
@@ -24,6 +25,9 @@
 #   REQUIRE_FULL_RELEASE_GATES=1  Same as --strict
 #   DAIS_CONFORMANCE_STRICT=1     Fail conformance runs when credential-gated
 #                                  fixtures report INFO/SKIP
+#   D1_RELEASE_MIGRATIONS         Space-separated SQL files for deploy-time D1
+#                                  schema updates; defaults to current release
+#                                  migrations in apply-release-d1-migrations.sh
 #
 set -euo pipefail
 
@@ -104,6 +108,8 @@ if [ "$RUN_MASTODON_CONFORMANCE" = "true" ]; then
 fi
 
 if [ "$DEPLOY" = "true" ]; then
+  add_gate "production D1 schema updates" "scripts/apply-release-d1-migrations.sh --env production"
+  add_gate "skpt D1 schema updates" "scripts/apply-release-d1-migrations.sh --env skpt"
   add_gate "production deploy" "scripts/deploy.sh deploy --env production --yes"
   add_gate "skpt deploy" "scripts/deploy.sh deploy --env skpt --yes"
 fi
