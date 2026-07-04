@@ -9,8 +9,8 @@ order or release policy changes.
 
 | Order | Milestone | Focus | Open work |
 | --- | --- | --- | --- |
-| 4 | `v1.31 - Bluesky and public protocol completion` | First-class public ATProto/Bluesky surface, core repo/record/sync migration, public posting/reading/search/follow parity, server architecture cleanup, and protocol release gates. | #274, #275, #276, #277, #278, #332, #333, #334, #335 |
-| 5 | `v1.32 - Discovery, watches, sources, and communities` | Intentional discovery and reading: RSS/website watches, ActivityPub/Bluesky watches, public search, source provenance, and private community/group primitives. | #280, #281, #282, #283, #286, #331 |
+| 4 | `v1.31 - Bluesky and public protocol completion` | First-class public ATProto/Bluesky surface, core repo/record/sync migration, public posting/reading/search/follow parity, server architecture cleanup, and protocol release gates. | #274, #275, #276, #277, #278, #334 |
+| 5 | `v1.32 - Discovery, watches, sources, and communities` | Intentional discovery and reading: RSS/website watches, ActivityPub/Bluesky watches, public search, source provenance, and private community/group primitives. | #280, #281, #282, #283, #286 |
 | 7 | `v1.34 - Managed hosting and operations` | Productized managed hosting and operations: provisioning, backups, migration/import, observability, runbooks, support, and account policy. | #294, #295, #296, #297, #298, #299, #300 |
 
 Recently completed foundations:
@@ -21,6 +21,12 @@ Recently completed foundations:
 - `v1.30`: media foundations including public/private ActivityPub media,
   ATProto public image upload, and encrypted media attachment validation.
 - `v1.33`: Desk owner workflow polish and release-gate foundation.
+- `v1.31` cleanup: server release gate matrix (#335), retired unfinished
+  Bluesky reply sidecar (#332), and clarified Mastodon OAuth compatibility-only
+  auth behavior (#333).
+- `v1.32` cleanup: JSON API source ingestion/status language (#331).
+- `v1.34` progress: verifiable backup archive format and production/skpt
+  encrypted backup smoke (#297 remains open for fresh-environment restore).
 
 ## Immediate Priorities
 
@@ -30,14 +36,16 @@ Recently completed foundations:
    Track router decomposition in #334 so the active router does not absorb more
    protocol code while v1.31 expands.
 
-2. **Make release gates explicit.**
-   #335 owns the server release gate matrix and issue-closure coverage policy.
-   This should land before closing major v1.31 server/protocol issues.
-
-3. **Then continue v1.32 reader/discovery work.**
+2. **Continue v1.32 reader/discovery work.**
    #281, #282, and #283 should be implemented with source provenance and
    explicit public-search guardrails. #286 is higher risk because private groups
    intersect with audience semantics, delivery, and E2EE.
+
+3. **Complete v1.34 restore/provisioning gates.**
+   #297 now has a verifiable backup archive and production/skpt backup smoke,
+   but still needs a fresh-environment restore test before closure. #296 and
+   #299 should build on that evidence instead of adding separate ad hoc ops
+   scripts.
 
 ## Coverage Policy
 
