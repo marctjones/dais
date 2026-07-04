@@ -3786,10 +3786,8 @@ fn run_bluesky_authenticated(http: &Http, rows: &mut Vec<Row>, did: &str, token:
                     atproto_create_record(http, did, "app.bsky.feed.post", &rkey, record, token)?;
                 expect_status(&created, 200, "createRecord repo metadata fixture")?;
                 let after = atproto_latest_commit(http, did)?;
-                if after.pointer("/commit/rev").and_then(Value::as_str)
-                    == before.pointer("/commit/rev").and_then(Value::as_str)
-                    && after.pointer("/commit/cid").and_then(Value::as_str)
-                        == before.pointer("/commit/cid").and_then(Value::as_str)
+                if atproto_latest_rev(&after) == atproto_latest_rev(&before)
+                    && atproto_latest_cid(&after) == atproto_latest_cid(&before)
                 {
                     return Err(
                         "repo commit metadata did not change after createRecord".to_string()
@@ -3797,10 +3795,7 @@ fn run_bluesky_authenticated(http: &Http, rows: &mut Vec<Row>, did: &str, token:
                 }
                 Ok(format!(
                     "repo rev advanced to {}",
-                    after
-                        .pointer("/commit/rev")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
+                    atproto_latest_rev(&after).unwrap_or_default()
                 ))
             })();
             let _ = atproto_delete_record(http, did, "app.bsky.feed.post", &rkey, token);
@@ -4622,6 +4617,20 @@ fn atproto_latest_commit(http: &Http, did: &str) -> Result<Value> {
     ))?;
     expect_status(&res, 200, "getLatestCommit")?;
     Ok(json(&res, "getLatestCommit")?.clone())
+}
+
+fn atproto_latest_rev(value: &Value) -> Option<&str> {
+    value
+        .get("rev")
+        .or_else(|| value.pointer("/commit/rev"))
+        .and_then(Value::as_str)
+}
+
+fn atproto_latest_cid(value: &Value) -> Option<&str> {
+    value
+        .get("cid")
+        .or_else(|| value.pointer("/commit/cid"))
+        .and_then(Value::as_str)
 }
 
 fn atproto_list_records(
