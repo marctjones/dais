@@ -443,6 +443,13 @@ if [ -z "$SKPT_TOKEN" ]; then
   exit 0
 fi
 
+if [ "$REQUIRE_FULL" = "1" ]; then
+  [ -n "$DAIS_DELIVERY_ADMIN_TOKEN" ] \
+    || fail "dais.social delivery admin token unavailable; set DAIS_DELIVERY_ADMIN_TOKEN or DAIS_DELIVERY_ADMIN_TOKEN_FILE=$DAIS_DELIVERY_ADMIN_TOKEN_FILE"
+  [ -n "$SKPT_DELIVERY_ADMIN_TOKEN" ] \
+    || fail "skpt delivery admin token unavailable; set SKPT_DELIVERY_ADMIN_TOKEN or SKPT_DELIVERY_ADMIN_TOKEN_FILE=$SKPT_DELIVERY_ADMIN_TOKEN_FILE"
+fi
+
 ensure_mls_device "dais.social" "$DAIS_URL" "$DAIS_TOKEN" "$DAIS_ACTOR" "$DAIS_DEVICE_ID"
 ensure_mls_device "skpt" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_ACTOR" "$SKPT_DEVICE_ID"
 ensure_mls_device "skpt secondary" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_ACTOR" "$SKPT_SECOND_DEVICE_ID"

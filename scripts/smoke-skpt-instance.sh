@@ -2,6 +2,7 @@
 set -euo pipefail
 
 OWNER_TOKEN_FILE="${OWNER_TOKEN_FILE:-/private/tmp/dais-skpt-owner-token.txt}"
+REQUIRE_FULL="${REQUIRE_FULL:-0}"
 
 check_contains() {
   local label="$1" url="$2" needle="$3"
@@ -74,6 +75,10 @@ if [ -f "$OWNER_TOKEN_FILE" ]; then
   fi
   echo "OK   skpt owner token auth"
 else
+  if [ "$REQUIRE_FULL" = "1" ]; then
+    echo "FAIL skpt owner token auth: $OWNER_TOKEN_FILE not found" >&2
+    exit 1
+  fi
   echo "SKIP skpt owner token auth: $OWNER_TOKEN_FILE not found"
 fi
 

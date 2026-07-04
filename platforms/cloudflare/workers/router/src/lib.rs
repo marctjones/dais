@@ -12735,11 +12735,27 @@ fn remote_environment(env: &Env) -> bool {
 }
 
 fn scoped_owner_tokens(env: &Env) -> Vec<OwnerToken> {
-    let raw = env
-        .var("OWNER_API_SCOPED_TOKENS")
-        .or_else(|_| env.var("DAIS_OWNER_SCOPED_TOKENS"))
+    let mut tokens = Vec::new();
+    for raw in [
+        optional_env_secret_or_var(env, "OWNER_API_SCOPED_TOKENS"),
+        optional_env_secret_or_var(env, "DAIS_OWNER_SCOPED_TOKENS"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        tokens.extend(parse_scoped_owner_tokens(&raw));
+    }
+    tokens
+}
+
+fn optional_env_secret_or_var(env: &Env, name: &str) -> Option<String> {
+    env.secret(name)
         .map(|value| value.to_string())
-        .unwrap_or_default();
+        .or_else(|_| env.var(name).map(|value| value.to_string()))
+        .ok()
+}
+
+fn parse_scoped_owner_tokens(raw: &str) -> Vec<OwnerToken> {
     if raw.trim().is_empty() {
         return Vec::new();
     }

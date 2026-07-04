@@ -7,10 +7,10 @@ use super::{
     normalize_e2ee_fingerprint, normalize_e2ee_protocol, normalize_encrypted_media_attachments,
     normalize_owner_post_attachments, owner_normalize_bluesky_post,
     owner_normalize_tootfinder_status, owner_public_post_row_from_discovered,
-    owner_public_search_mastodon_query_params, parse_lenient_json_body,
-    parse_workers_ai_moderation, peer_trust_state_after_material_update, sha256_hex,
-    source_type_for_watch_kind, strip_json_fence, tootfinder_search_items, tootfinder_search_url,
-    validate_dais_encrypted_message_v2, validate_e2ee_device_material,
+    owner_public_search_mastodon_query_params, owner_token_has_scopes, parse_lenient_json_body,
+    parse_scoped_owner_tokens, parse_workers_ai_moderation, peer_trust_state_after_material_update,
+    sha256_hex, source_type_for_watch_kind, strip_json_fence, tootfinder_search_items,
+    tootfinder_search_url, validate_dais_encrypted_message_v2, validate_e2ee_device_material,
     validate_encrypted_media_payload, validate_encrypted_message_envelope,
     validate_owner_e2ee_payload, MediaMetadataInput, OwnerProfile, OwnerPublicSearchOptions,
     OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
@@ -102,6 +102,42 @@ fn validates_mls_device_material_shape() {
     assert!(validate_e2ee_device_material("mls-rfc9420", "not base64", &key_package).is_err());
     assert!(validate_e2ee_device_material("mls-rfc9420", &credential, "").is_err());
     assert!(validate_e2ee_device_material("dais-mls-v1", "legacy", "legacy").is_ok());
+}
+
+#[test]
+fn parses_scoped_owner_tokens_from_secret_json_shapes() {
+    let object_tokens = parse_scoped_owner_tokens(
+        r#"{
+            "release-smoke-token": "owner",
+            "read-only-token": ["read", "profile"]
+        }"#,
+    );
+    assert_eq!(object_tokens.len(), 2);
+    assert!(object_tokens
+        .iter()
+        .any(|token| token.token == "release-smoke-token"
+            && owner_token_has_scopes(&token.scopes, &["owner"])));
+    assert!(object_tokens
+        .iter()
+        .any(|token| token.token == "read-only-token"
+            && owner_token_has_scopes(&token.scopes, &["read", "profile"])
+            && !owner_token_has_scopes(&token.scopes, &["write"])));
+
+    let array_tokens = parse_scoped_owner_tokens(
+        r#"[
+            { "token": "write-token", "scopes": "write media" },
+            { "value": "admin-token", "scope": "*" }
+        ]"#,
+    );
+    assert_eq!(array_tokens.len(), 2);
+    assert!(array_tokens
+        .iter()
+        .any(|token| token.token == "write-token"
+            && owner_token_has_scopes(&token.scopes, &["write"])));
+    assert!(array_tokens
+        .iter()
+        .any(|token| token.token == "admin-token"
+            && owner_token_has_scopes(&token.scopes, &["owner"])));
 }
 
 #[test]
