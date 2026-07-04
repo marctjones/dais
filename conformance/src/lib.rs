@@ -2669,8 +2669,20 @@ fn mastodon_relationship_actions_fixture(
         None,
     )?;
     expect_status(&mute, 200, "account mute")?;
-    if json(&mute, "account mute")?.get("muting").is_none() {
-        return Err("account mute response omitted muting state".to_string());
+    if json(&mute, "account mute")?
+        .get("muting")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("account mute did not return muting=true".to_string());
+    }
+    let mutes = http.request("GET", "/api/v1/mutes?limit=20", auth, None)?;
+    expect_status(&mutes, 200, "mutes")?;
+    if !expect_array(json(&mutes, "mutes")?, "mutes")?
+        .iter()
+        .any(|value| str_field(value, "id") == Some(actor_id.as_str()))
+    {
+        return Err("mutes did not include muted actor".to_string());
     }
     let domain = "conformance.invalid";
     let domain_block = http.post_json(

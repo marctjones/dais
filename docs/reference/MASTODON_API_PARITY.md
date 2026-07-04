@@ -18,7 +18,7 @@ must not publish followers-only, direct, or E2EE content as public data.
 | Account | `GET /api/v1/accounts/verify_credentials`, `PATCH /api/v1/accounts/update_credentials`, `GET /api/v1/accounts/:id` | Implemented for single local account |
 | Graph | `GET /api/v1/accounts/:id/followers`, `GET /api/v1/accounts/:id/following`, `GET /api/v1/accounts/relationships` | Implemented |
 | Account/client probes | `GET /api/v1/follow_requests`, `POST /api/v1/follow_requests/:id/authorize`, `POST /api/v1/follow_requests/:id/reject`, `GET /api/v1/suggestions`, `DELETE /api/v1/suggestions/:id`, `GET /api/v1/endorsements`, `GET /api/v1/featured_tags`, `GET /api/v1/followed_tags` | Implemented as empty/safe single-user compatibility surfaces |
-| Relationship writes | `POST /api/v1/accounts/:id/follow`, `unfollow`, `block`, `unblock`, `mute`, `unmute` | Implemented; mute/unmute are compatibility no-ops |
+| Relationship writes | `POST /api/v1/accounts/:id/follow`, `unfollow`, `block`, `unblock`, `mute`, `unmute` | Implemented; mute/unmute persist local relationship state |
 | Timelines | `GET /api/v1/timelines/public`, `GET /api/v1/timelines/home`, `GET /api/v1/accounts/:id/statuses` | Implemented with privacy filtering and `max_id`/`since_id`/`min_id` cursors |
 | Status reads | `GET /api/v1/statuses/:id`, `GET /api/v1/statuses/:id/context`, `GET /api/v1/statuses/:id/source` | Implemented; context includes local public ancestors and direct reply descendants, source supports edit-capable clients, and status JSON includes mention/tag arrays |
 | Status writes | `POST /api/v1/statuses`, `PUT/PATCH /api/v1/statuses/:id`, `DELETE /api/v1/statuses/:id` | Implemented; deletes queue ActivityPub `Delete` to followers |
@@ -42,8 +42,9 @@ must not publish followers-only, direct, or E2EE content as public data.
   `dais_authentication: "owner_token_required"`, and must not authenticate.
 - Private, direct, and E2EE posts are not exposed through public Mastodon
   timelines or public status reads.
-- Mute/unmute return relationship-compatible state but do not yet maintain a
-  separate mute table.
+- Mute/unmute persist local owner-side account mute state, and
+  `GET /api/v1/mutes` lists those muted accounts for Mastodon-compatible
+  clients.
 - Follow requests, suggestions, endorsements, featured tags, followed tags,
   scheduled statuses, announcements, directory, and trends return empty shapes
   because dais is a single-user private-by-default server without global

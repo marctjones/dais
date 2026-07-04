@@ -224,7 +224,6 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
         | (worker::Method::Get, "/api/v1/featured_tags")
         | (worker::Method::Get, "/api/v1/followed_tags")
         | (worker::Method::Get, "/api/v1/scheduled_statuses")
-        | (worker::Method::Get, "/api/v1/mutes")
         | (worker::Method::Get, "/api/v1/bookmarks")
         | (worker::Method::Get, "/api/v1/filters")
         | (worker::Method::Get, "/api/v2/filters")
@@ -274,6 +273,15 @@ async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> R
             }
             api_json(
                 &mastodon_blocks(&env, clamp_limit(query_param(url, "limit"))).await?,
+                200,
+            )
+        }
+        (worker::Method::Get, "/api/v1/mutes") => {
+            if let Some(response) = require_mastodon_bearer(&req, &env)? {
+                return Ok(response);
+            }
+            api_json(
+                &mastodon_mutes(&env, clamp_limit(query_param(url, "limit"))).await?,
                 200,
             )
         }
@@ -2863,6 +2871,26 @@ async fn mastodon_blocks(env: &Env, limit: i32) -> Result<Value> {
     Ok(Value::Array(rows.iter().map(remote_account_json).collect()))
 }
 
+async fn mastodon_mutes(env: &Env, limit: i32) -> Result<Value> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT actor_id, actor_id AS url, created_at
+            FROM mutes
+            WHERE actor_id IS NOT NULL AND actor_id != ''
+            ORDER BY created_at DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(Value::Array(rows.iter().map(remote_account_json).collect()))
+}
+
 async fn mastodon_domain_blocks(env: &Env, limit: i32) -> Result<Value> {
     let db = env.d1("DB")?;
     let limit_arg = D1Type::Integer(limit);
@@ -2942,7 +2970,12 @@ async fn mastodon_account_action(env: &Env, id: &str, action: &str) -> Result<Re
         "unblock" => {
             mastodon_set_account_block(env, id, false).await?;
         }
-        "mute" | "unmute" => {}
+        "mute" => {
+            mastodon_set_account_mute(env, id, true).await?;
+        }
+        "unmute" => {
+            mastodon_set_account_mute(env, id, false).await?;
+        }
         _ => {}
     }
     let relationship = mastodon_relationship(env, id).await?;
@@ -2966,6 +2999,30 @@ async fn mastodon_set_account_block(env: &Env, actor_id: &str, enabled: bool) ->
         .await?;
     } else {
         db.prepare("DELETE FROM blocks WHERE actor_id = ?1")
+            .bind_refs(&actor_arg)?
+            .run()
+            .await?;
+    }
+    Ok(())
+}
+
+async fn mastodon_set_account_mute(env: &Env, actor_id: &str, enabled: bool) -> Result<()> {
+    let db = env.d1("DB")?;
+    let actor_arg = D1Type::Text(actor_id);
+    if enabled {
+        let id = format!("mute-{}", stable_id(actor_id));
+        let id_arg = D1Type::Text(&id);
+        db.prepare(
+            r#"
+            INSERT OR REPLACE INTO mutes (id, actor_id, reason, created_at)
+            VALUES (?1, ?2, 'Mastodon API mute', CURRENT_TIMESTAMP)
+            "#,
+        )
+        .bind_refs([&id_arg, &actor_arg])?
+        .run()
+        .await?;
+    } else {
+        db.prepare("DELETE FROM mutes WHERE actor_id = ?1")
             .bind_refs(&actor_arg)?
             .run()
             .await?;
@@ -3424,6 +3481,12 @@ async fn mastodon_relationship(env: &Env, id: &str) -> Result<Value> {
         .first::<Map<String, Value>>(None)
         .await?
         .is_some();
+    let muted = db
+        .prepare("SELECT 1 FROM mutes WHERE actor_id = ?1 LIMIT 1")
+        .bind_refs(&id_arg)?
+        .first::<Map<String, Value>>(None)
+        .await?
+        .is_some();
     Ok(serde_json::json!({
         "id": id,
         "following": string_field(following.as_ref(), "status").as_deref() == Some("accepted"),
@@ -3432,8 +3495,8 @@ async fn mastodon_relationship(env: &Env, id: &str) -> Result<Value> {
         "followed_by": string_field(followed_by.as_ref(), "status").as_deref() == Some("approved"),
         "blocking": blocked,
         "blocked_by": false,
-        "muting": false,
-        "muting_notifications": false,
+        "muting": muted,
+        "muting_notifications": muted,
         "requested": string_field(following.as_ref(), "status").as_deref() == Some("pending"),
         "domain_blocking": false,
         "endorsed": false,
