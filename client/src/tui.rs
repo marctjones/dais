@@ -22,8 +22,8 @@ use crate::atproto::AtprotoClient;
 use crate::config::{ConfigStore, MlsGroupStateFile};
 use crate::routing::{Protocol, Visibility};
 use dais_client_core::{
-    ComposeDraft as OwnerComposeDraft, ModerationBlockRow, OwnerApiClient, OwnerDelivery,
-    OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eeMessage,
+    ComposeDraft as OwnerComposeDraft, ModerationBlockRow, OwnerApiClient, OwnerAudienceList,
+    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eeMessage,
     OwnerE2eeMessageSend, OwnerE2eePeerDevice, OwnerFollower, OwnerFollowing, OwnerFriend,
     OwnerInteraction, OwnerNotification, OwnerPost, OwnerPostDetail, OwnerProfile,
     OwnerProfileUpdate, OwnerSearchPost, OwnerSearchSourceItem, OwnerSearchUser, OwnerSourceAdd,
@@ -1056,10 +1056,21 @@ impl App {
                 self.status = "Encrypted MLS replies are not supported in the TUI yet".to_string();
                 return;
             }
-            let recipients = direct_recipient_actor_ids(&self.compose.direct_recipients.text());
-            if recipients.len() != 1 {
-                self.status = "Encrypted MLS messages need exactly one direct actor URL recipient"
-                    .to_string();
+            let target = match encrypted_recipient_target(&self.compose.direct_recipients.text()) {
+                Ok(target) => target,
+                Err(error) => {
+                    self.status = error.to_string();
+                    return;
+                }
+            };
+            let target_label = target.label();
+            let target_status = target.status_label();
+            let target_for_task = target.clone();
+            if matches!(target, EncryptedRecipientTarget::Audience(_))
+                && !self.compose.recipients.text().trim().is_empty()
+            {
+                self.status =
+                    "Encrypted MLS groups use audience:<id>; clear legacy E2EE keys".to_string();
                 return;
             }
             let client = match owner_api_from_env() {
@@ -1072,28 +1083,20 @@ impl App {
             let instance_url = owner_instance_from_env();
             let store = self.store.clone();
             let tx = self.tx.clone();
-            let recipient_actor_id = recipients[0].clone();
 
-            self.status = format!("Sending encrypted MLS message to {recipient_actor_id}");
+            self.status = format!("Sending encrypted MLS {target_status} to {target_label}");
             self.mode = Mode::Normal;
             self.compose.reset();
             self.loading.insert(Tab::DMs);
             self.loading.insert(Tab::Deliveries);
 
             tokio::spawn(async move {
-                match send_tui_mls_direct_message(
-                    client,
-                    store,
-                    instance_url,
-                    recipient_actor_id,
-                    text,
-                )
-                .await
+                match send_tui_mls_message(client, store, instance_url, target_for_task, text).await
                 {
                     Ok(report) => {
                         let _ = tx.send(Message::Status(format!(
-                            "Sent encrypted MLS message {}; {} delivery record(s) queued",
-                            report.message_id,
+                            "{}; {} delivery record(s) queued",
+                            report.summary,
                             report.delivery_ids.len()
                         )));
                         let _ = tx.send(Message::Refresh(Tab::DMs));
@@ -2651,8 +2654,48 @@ struct LocalMlsDeviceState {
 
 #[derive(Clone, Debug)]
 struct TuiMlsSendReport {
-    message_id: String,
+    summary: String,
     delivery_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+enum EncryptedRecipientTarget {
+    Direct(String),
+    Audience(String),
+}
+
+impl EncryptedRecipientTarget {
+    fn label(&self) -> &str {
+        match self {
+            Self::Direct(actor_id) | Self::Audience(actor_id) => actor_id,
+        }
+    }
+
+    fn status_label(&self) -> &'static str {
+        match self {
+            Self::Direct(_) => "message",
+            Self::Audience(_) => "group message",
+        }
+    }
+}
+
+async fn send_tui_mls_message(
+    client: OwnerApiClient,
+    store: ConfigStore,
+    instance_url: String,
+    target: EncryptedRecipientTarget,
+    plaintext: String,
+) -> Result<TuiMlsSendReport> {
+    match target {
+        EncryptedRecipientTarget::Direct(recipient_actor_id) => {
+            send_tui_mls_direct_message(client, store, instance_url, recipient_actor_id, plaintext)
+                .await
+        }
+        EncryptedRecipientTarget::Audience(audience_list_id) => {
+            send_tui_mls_group_message(client, store, instance_url, audience_list_id, plaintext)
+                .await
+        }
+    }
 }
 
 async fn send_tui_mls_direct_message(
@@ -2747,8 +2790,86 @@ async fn send_tui_mls_direct_message(
         .map_err(|error| anyhow!(error.to_string()))?;
     store.save_decrypted_message(&instance_url, &result.message.id, &plaintext, "mls-rfc9420")?;
     Ok(TuiMlsSendReport {
-        message_id: result.message.id,
+        summary: format!("Sent encrypted MLS message {}", result.message.id),
         delivery_ids: result.delivery_ids,
+    })
+}
+
+async fn send_tui_mls_group_message(
+    client: OwnerApiClient,
+    store: ConfigStore,
+    instance_url: String,
+    audience_list_id: String,
+    plaintext: String,
+) -> Result<TuiMlsSendReport> {
+    let devices = client
+        .e2ee_devices()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let sender_state = select_active_local_mls_device_state(&store, &instance_url, &devices)?;
+    let audiences = client
+        .audience_lists()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let audience = audiences
+        .into_iter()
+        .find(|list| list.id == audience_list_id)
+        .ok_or_else(|| anyhow!("audience group {audience_list_id} not found"))?;
+    let peers = client
+        .e2ee_peer_devices()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let plan = plan_tui_mls_group_recipients(&audience, &peers)?;
+    let group_id = tui_mls_audience_group_id(&audience, &plan);
+    let prepared = prepare_tui_mls_group_message(
+        &sender_state.private_state,
+        &group_id,
+        &plan.devices,
+        &plaintext,
+    )?;
+    save_tui_mls_group_state(
+        &store,
+        &instance_url,
+        &sender_state.local_actor_id,
+        &sender_state.owner_device.device_id,
+        &prepared.sender_state,
+    )?;
+
+    let encrypted_message = serde_json::to_value(&prepared.envelope)?;
+    let mut message_ids = Vec::new();
+    let mut delivery_ids = Vec::new();
+    for delivery in &plan.deliveries {
+        let result = client
+            .send_e2ee_message(&OwnerE2eeMessageSend {
+                recipient_actor_id: delivery.actor_id.clone(),
+                recipient_device_id: Some(delivery.validation_device_id.clone()),
+                sender_device_id: sender_state.owner_device.device_id.clone(),
+                dais_encrypted_message: Some(encrypted_message.clone()),
+                encrypted_message: None,
+                fallback_content: Some(
+                    "Encrypted MLS group message. Open in a dais client to decrypt.".to_string(),
+                ),
+                attachments: Vec::new(),
+            })
+            .await
+            .map_err(|error| anyhow!(error.to_string()))?;
+        store.save_decrypted_message(
+            &instance_url,
+            &result.message.id,
+            &plaintext,
+            "mls-rfc9420",
+        )?;
+        message_ids.push(result.message.id);
+        delivery_ids.extend(result.delivery_ids);
+    }
+
+    Ok(TuiMlsSendReport {
+        summary: format!(
+            "Sent encrypted MLS group message to {} member(s); {} message row(s)",
+            plan.member_count,
+            message_ids.len()
+        ),
+        delivery_ids,
     })
 }
 
@@ -2832,6 +2953,126 @@ fn select_trusted_mls_peer_device<'a>(
     })
 }
 
+#[derive(Clone, Debug)]
+struct TuiMlsGroupDelivery {
+    actor_id: String,
+    validation_device_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct TuiMlsGroupPlan {
+    member_count: usize,
+    devices: Vec<OwnerE2eePeerDevice>,
+    deliveries: Vec<TuiMlsGroupDelivery>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedTuiMlsGroupMessage {
+    envelope: DaisMlsEnvelope,
+    sender_state: MlsDeviceState,
+}
+
+fn plan_tui_mls_group_recipients(
+    audience: &OwnerAudienceList,
+    peers: &[OwnerE2eePeerDevice],
+) -> Result<TuiMlsGroupPlan> {
+    let members: Vec<String> = audience
+        .member_actor_ids
+        .iter()
+        .map(|member| member.trim())
+        .filter(|member| !member.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if members.is_empty() {
+        return Err(anyhow!("audience group {} has no members", audience.id));
+    }
+
+    let mut devices = Vec::new();
+    let mut deliveries = Vec::new();
+    for actor_id in &members {
+        let member_devices: Vec<OwnerE2eePeerDevice> = peers
+            .iter()
+            .filter(|peer| {
+                peer.actor_id == *actor_id
+                    && peer.protocol == "mls-rfc9420"
+                    && peer.trust_state == "trusted"
+                    && peer.revoked_at.is_none()
+            })
+            .cloned()
+            .collect();
+        if member_devices.is_empty() {
+            return Err(anyhow!(
+                "audience member {} has no trusted MLS peer device; run e2ee-peer-discover and e2ee-peer-trust first",
+                actor_id
+            ));
+        }
+        deliveries.push(TuiMlsGroupDelivery {
+            actor_id: actor_id.clone(),
+            validation_device_id: member_devices[0].device_id.clone(),
+        });
+        devices.extend(member_devices);
+    }
+
+    Ok(TuiMlsGroupPlan {
+        member_count: members.len(),
+        devices,
+        deliveries,
+    })
+}
+
+fn tui_mls_audience_group_id(audience: &OwnerAudienceList, plan: &TuiMlsGroupPlan) -> String {
+    let mut members: Vec<String> = plan
+        .devices
+        .iter()
+        .map(|device| format!("{}#{}", device.actor_id, device.device_id))
+        .collect();
+    members.sort();
+    format!("dais-mls-audience:{}:{}", audience.id, members.join(","))
+}
+
+fn prepare_tui_mls_group_message(
+    private_state: &MlsDevicePrivateState,
+    raw_group_id: &str,
+    devices: &[OwnerE2eePeerDevice],
+    plaintext: &str,
+) -> Result<PreparedTuiMlsGroupMessage> {
+    let mut sender = MlsDevice::from_private_state(private_state)
+        .context("failed to restore local MLS private state")?;
+    let invitees: Vec<MlsPublicDevice> = devices
+        .iter()
+        .map(|device| {
+            MlsPublicDevice::from_material(MlsDeviceMaterial {
+                account_id: device.actor_id.clone(),
+                device_id: device.device_id.clone(),
+                ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_string(),
+                signature_scheme: "ED25519".to_string(),
+                credential_identity: device.credential.clone(),
+                key_package: device.key_package.clone(),
+            })
+            .with_context(|| {
+                format!(
+                    "trusted MLS peer device {} for {} has invalid key material",
+                    device.device_id, device.actor_id
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let welcome = sender
+        .create_group_with_members(raw_group_id.as_bytes(), &invitees)
+        .context("failed to create MLS audience group")?;
+    let mut envelope = sender
+        .encrypt_application_message(plaintext.as_bytes())
+        .context("failed to encrypt MLS group message")?;
+    envelope.welcome = Some(welcome.to_wire()?);
+    let sender_state = sender
+        .export_state()
+        .context("failed to export MLS group state")?;
+    Ok(PreparedTuiMlsGroupMessage {
+        envelope,
+        sender_state,
+    })
+}
+
 fn save_tui_mls_group_state(
     store: &ConfigStore,
     instance_url: &str,
@@ -2863,6 +3104,25 @@ fn direct_recipient_actor_ids(input: &str) -> Vec<String> {
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn encrypted_recipient_target(input: &str) -> Result<EncryptedRecipientTarget> {
+    let recipients = direct_recipient_actor_ids(input);
+    if recipients.len() != 1 {
+        return Err(anyhow!(
+            "Encrypted MLS messages need exactly one actor URL or audience:<id> group target"
+        ));
+    }
+    let value = recipients[0].trim();
+    if let Some(id) = value
+        .strip_prefix("audience:")
+        .or_else(|| value.strip_prefix("group:"))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        return Ok(EncryptedRecipientTarget::Audience(id.to_string()));
+    }
+    Ok(EncryptedRecipientTarget::Direct(value.to_string()))
 }
 
 fn dm_entries(
@@ -3481,6 +3741,42 @@ mod tests {
         }
     }
 
+    fn audience(id: &str, members: &[&str]) -> OwnerAudienceList {
+        OwnerAudienceList {
+            id: id.to_string(),
+            name: "Close Friends".to_string(),
+            description: None,
+            allowed_categories: Vec::new(),
+            member_actor_ids: members.iter().map(|member| member.to_string()).collect(),
+            member_count: members.len() as u64,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    fn mls_peer_from_device(device: &MlsDevice, trust_state: &str) -> OwnerE2eePeerDevice {
+        let material = device.public_device().unwrap().material().clone();
+        OwnerE2eePeerDevice {
+            id: format!("{}#{}", material.account_id, material.device_id),
+            actor_id: material.account_id,
+            device_id: material.device_id,
+            display_name: None,
+            protocol: "mls-rfc9420".to_string(),
+            credential: material.credential_identity,
+            key_package: material.key_package,
+            fingerprint: "fingerprint".to_string(),
+            trust_state: trust_state.to_string(),
+            first_seen_at: None,
+            last_seen_at: None,
+            trusted_at: if trust_state == "trusted" {
+                Some("2026-07-04T12:00:00Z".to_string())
+            } else {
+                None
+            },
+            revoked_at: None,
+        }
+    }
+
     #[test]
     fn parse_source_add_input_accepts_type_url_and_title() {
         let source =
@@ -3528,6 +3824,21 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_recipient_target_accepts_actor_or_audience_group() {
+        match encrypted_recipient_target("https://social.example/users/alice").unwrap() {
+            EncryptedRecipientTarget::Direct(actor_id) => {
+                assert_eq!(actor_id, "https://social.example/users/alice");
+            }
+            EncryptedRecipientTarget::Audience(_) => panic!("expected direct target"),
+        }
+        match encrypted_recipient_target("audience:close-friends").unwrap() {
+            EncryptedRecipientTarget::Audience(id) => assert_eq!(id, "close-friends"),
+            EncryptedRecipientTarget::Direct(_) => panic!("expected audience target"),
+        }
+        assert!(encrypted_recipient_target("audience:close\nhttps://example/users/a").is_err());
+    }
+
+    #[test]
     fn select_trusted_mls_peer_device_ignores_untrusted_and_non_mls_devices() {
         let actor = "https://social.example/users/alice";
         let peers = vec![
@@ -3539,6 +3850,31 @@ mod tests {
         let peer = select_trusted_mls_peer_device(&peers, actor).unwrap();
 
         assert_eq!(peer.device_id, "trusted-mls");
+    }
+
+    #[test]
+    fn plan_tui_mls_group_recipients_requires_trusted_mls_devices() {
+        let alice_actor = "https://alice.example/users/alice";
+        let bob_actor = "https://bob.example/users/bob";
+        let alice = MlsDevice::new(alice_actor, "alice-phone").unwrap();
+        let bob = MlsDevice::new(bob_actor, "bob-laptop").unwrap();
+        let peers = vec![
+            mls_peer_from_device(&alice, "trusted"),
+            mls_peer_from_device(&bob, "untrusted"),
+        ];
+
+        assert!(plan_tui_mls_group_recipients(
+            &audience("close-friends", &[alice_actor, bob_actor]),
+            &peers,
+        )
+        .is_err());
+        let plan =
+            plan_tui_mls_group_recipients(&audience("close-friends", &[alice_actor]), &peers)
+                .unwrap();
+
+        assert_eq!(plan.member_count, 1);
+        assert_eq!(plan.devices.len(), 1);
+        assert_eq!(plan.deliveries[0].actor_id, alice_actor);
     }
 
     #[test]
@@ -3663,6 +3999,51 @@ mod tests {
                 .plaintext,
             "freshly decrypted MLS body"
         );
+    }
+
+    #[test]
+    fn prepare_tui_mls_group_message_decrypts_for_invited_members() {
+        let sender = MlsDevice::new("https://social.example/users/bob", "bob-device").unwrap();
+        let sender_private = sender.export_private_state().unwrap();
+        let mut alice = MlsDevice::new("https://alice.example/users/alice", "alice-phone").unwrap();
+        let mut casey =
+            MlsDevice::new("https://casey.example/users/casey", "casey-laptop").unwrap();
+        let audience = audience(
+            "close-friends",
+            &[
+                "https://alice.example/users/alice",
+                "https://casey.example/users/casey",
+            ],
+        );
+        let peers = vec![
+            mls_peer_from_device(&alice, "trusted"),
+            mls_peer_from_device(&casey, "trusted"),
+        ];
+        let plan = plan_tui_mls_group_recipients(&audience, &peers).unwrap();
+        let prepared = prepare_tui_mls_group_message(
+            &sender_private,
+            &tui_mls_audience_group_id(&audience, &plan),
+            &plan.devices,
+            "group body",
+        )
+        .unwrap();
+
+        let alice_plaintext = String::from_utf8(
+            alice
+                .decrypt_application_message(&prepared.envelope)
+                .unwrap(),
+        )
+        .unwrap();
+        let casey_plaintext = String::from_utf8(
+            casey
+                .decrypt_application_message(&prepared.envelope)
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(alice_plaintext, "group body");
+        assert_eq!(casey_plaintext, "group body");
+        assert_eq!(prepared.sender_state.group_id, prepared.envelope.group_id);
     }
 
     #[test]
