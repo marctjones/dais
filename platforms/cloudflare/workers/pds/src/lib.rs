@@ -196,10 +196,9 @@ async fn handle_create_session(mut req: Request, ctx: RouteContext<()>) -> Resul
     if body.identifier != identity.did && body.identifier != identity.handle {
         return Response::error("Account not found", 401);
     }
-    let owner_token = owner_api_token(&ctx.env)?;
-    if body.password != owner_token {
+    let Some(owner_token) = owner_session_token(&ctx.env, &body.password)? else {
         return Response::error("Invalid identifier or password", 401);
-    }
+    };
     json_response(serde_json::json!({
         "accessJwt": owner_token,
         "refreshJwt": stable_cid(&format!("{}:refresh", identity.did)),
@@ -1085,6 +1084,11 @@ struct CreateSessionRequest {
     password: String,
 }
 
+struct OwnerToken {
+    token: String,
+    scopes: Vec<String>,
+}
+
 #[derive(Deserialize)]
 struct CreateRecordRequest {
     repo: String,
@@ -1130,13 +1134,130 @@ fn owner_api_token(env: &Env) -> Result<String> {
         .map_err(|_| worker::Error::RustError("OWNER_API_TOKEN is not configured".to_string()))
 }
 
+fn owner_session_token(env: &Env, password: &str) -> Result<Option<String>> {
+    let provided = password.trim();
+    if provided.is_empty() {
+        return Ok(None);
+    }
+    let tokens = owner_bearer_tokens(env)?;
+    Ok(tokens
+        .into_iter()
+        .find(|entry| entry.token == provided && owner_token_has_scopes(&entry.scopes, &["owner"]))
+        .map(|entry| entry.token))
+}
+
 fn owner_bearer_matches(req: &Request, env: &Env) -> Result<bool> {
-    let expected = owner_api_token(env)?;
     let header = req.headers().get("Authorization")?.unwrap_or_default();
     let Some(token) = header.strip_prefix("Bearer ") else {
         return Ok(false);
     };
-    Ok(token == expected)
+    let provided = token.trim();
+    Ok(owner_bearer_tokens(env)?
+        .into_iter()
+        .any(|entry| entry.token == provided && owner_token_has_scopes(&entry.scopes, &["owner"])))
+}
+
+fn owner_bearer_tokens(env: &Env) -> Result<Vec<OwnerToken>> {
+    let mut tokens = vec![OwnerToken {
+        token: owner_api_token(env)?,
+        scopes: vec!["owner".to_string()],
+    }];
+    tokens.extend(scoped_owner_tokens(env));
+    Ok(tokens)
+}
+
+fn scoped_owner_tokens(env: &Env) -> Vec<OwnerToken> {
+    let mut tokens = Vec::new();
+    for raw in [
+        optional_env_secret_or_var(env, "OWNER_API_SCOPED_TOKENS"),
+        optional_env_secret_or_var(env, "DAIS_OWNER_SCOPED_TOKENS"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        tokens.extend(parse_scoped_owner_tokens(&raw));
+    }
+    tokens
+}
+
+fn optional_env_secret_or_var(env: &Env, name: &str) -> Option<String> {
+    env.secret(name)
+        .map(|value| value.to_string())
+        .or_else(|_| env.var(name).map(|value| value.to_string()))
+        .ok()
+}
+
+fn parse_scoped_owner_tokens(raw: &str) -> Vec<OwnerToken> {
+    if raw.trim().is_empty() {
+        return Vec::new();
+    }
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Object(map)) => map
+            .into_iter()
+            .filter_map(|(token, scopes)| {
+                let scopes = normalize_scopes(scopes);
+                if token.trim().is_empty() || scopes.is_empty() {
+                    None
+                } else {
+                    Some(OwnerToken { token, scopes })
+                }
+            })
+            .collect(),
+        Ok(Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| {
+                let token = value
+                    .get("token")
+                    .or_else(|| value.get("value"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let scopes = normalize_scopes(
+                    value
+                        .get("scopes")
+                        .or_else(|| value.get("scope"))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+                if token.is_empty() || scopes.is_empty() {
+                    None
+                } else {
+                    Some(OwnerToken { token, scopes })
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn normalize_scopes(value: Value) -> Vec<String> {
+    match value {
+        Value::Array(values) => values
+            .into_iter()
+            .filter_map(|value| value.as_str().map(normalize_scope))
+            .filter(|scope| !scope.is_empty())
+            .collect(),
+        Value::String(scopes) => scopes
+            .split(|character: char| character == ',' || character.is_whitespace())
+            .map(normalize_scope)
+            .filter(|scope| !scope.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn normalize_scope(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn owner_token_has_scopes(scopes: &[String], required_scopes: &[&str]) -> bool {
+    scopes
+        .iter()
+        .any(|scope| scope == "owner" || scope == "admin" || scope == "*")
+        || required_scopes
+            .iter()
+            .all(|required| scopes.iter().any(|scope| scope == required))
 }
 
 fn query_limit(url: &Url) -> u32 {
@@ -2396,8 +2517,8 @@ fn repo_path_from_at_uri(uri: &str) -> Result<String> {
 mod tests {
     use super::{
         atproto_media_attachments, encode_car, follow_record_value, is_public_atproto_actor_id,
-        mst_subtree, r2_key_from_media_url, repo_key_depth, repo_record_block, stable_cid,
-        Identity,
+        mst_subtree, owner_token_has_scopes, parse_scoped_owner_tokens, r2_key_from_media_url,
+        repo_key_depth, repo_record_block, stable_cid, Identity,
     };
     use serde_json::json;
 
@@ -2530,6 +2651,58 @@ mod tests {
         ));
         assert!(!is_public_atproto_actor_id("@alice@example.com"));
         assert!(!is_public_atproto_actor_id("did:plc:bad value"));
+    }
+
+    #[test]
+    fn scoped_owner_token_object_supports_owner_scope() {
+        let tokens = parse_scoped_owner_tokens(
+            r#"{
+                "full-token": ["owner"],
+                "read-only-token": "read:atproto",
+                "admin-token": "admin"
+            }"#,
+        );
+        assert_eq!(tokens.len(), 3);
+        let full = tokens
+            .iter()
+            .find(|entry| entry.token == "full-token")
+            .expect("full token");
+        assert!(owner_token_has_scopes(&full.scopes, &["owner"]));
+        let admin = tokens
+            .iter()
+            .find(|entry| entry.token == "admin-token")
+            .expect("admin token");
+        assert!(owner_token_has_scopes(&admin.scopes, &["owner"]));
+        let read_only = tokens
+            .iter()
+            .find(|entry| entry.token == "read-only-token")
+            .expect("read-only token");
+        assert!(!owner_token_has_scopes(&read_only.scopes, &["owner"]));
+    }
+
+    #[test]
+    fn scoped_owner_token_array_supports_token_and_value_fields() {
+        let tokens = parse_scoped_owner_tokens(
+            r#"[
+                {"token": "array-token", "scopes": ["owner"]},
+                {"value": "value-token", "scope": "read:atproto write:atproto"},
+                {"token": "", "scopes": ["owner"]},
+                {"token": "no-scope"}
+            ]"#,
+        );
+        assert_eq!(tokens.len(), 2);
+        assert!(tokens.iter().any(|entry| {
+            entry.token == "array-token" && owner_token_has_scopes(&entry.scopes, &["owner"])
+        }));
+        let value_token = tokens
+            .iter()
+            .find(|entry| entry.token == "value-token")
+            .expect("value token");
+        assert!(owner_token_has_scopes(
+            &value_token.scopes,
+            &["read:atproto", "write:atproto"]
+        ));
+        assert!(!owner_token_has_scopes(&value_token.scopes, &["owner"]));
     }
 
     #[test]
