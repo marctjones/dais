@@ -3,8 +3,8 @@
 # dais deployment tool — reusable across the development lifecycle.
 #
 # Deploys the active Cloudflare Worker tree (platforms/cloudflare/workers).
-# Router and landing are the default deploy targets. Legacy split workers remain
-# available for compatibility/emergency rollback, but must be requested
+# Landing, router, and PDS are the default deploy targets. Other split workers
+# remain available for compatibility/emergency rollback, but must be requested
 # explicitly.
 #
 # Usage:
@@ -47,11 +47,12 @@ if command -v rustup >/dev/null 2>&1; then
 fi
 
 # Active deploy order.
-WORKERS=(landing router)
+WORKERS=(landing router pds)
 
-# Legacy split workers. The router owns the production API surface now; these are
-# retained for compatibility, historical configs, and emergency rollback.
-LEGACY_WORKERS=(webfinger actor inbox outbox pds delivery-queue auth)
+# Legacy split workers. Router owns the ActivityPub/owner API surface, and PDS
+# owns pds.dais.social; the rest are retained for compatibility, historical
+# configs, and emergency rollback.
+LEGACY_WORKERS=(webfinger actor inbox outbox delivery-queue auth)
 
 # --- defaults ----------------------------------------------------------------
 ACTION="deploy"

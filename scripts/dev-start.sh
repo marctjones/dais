@@ -39,24 +39,31 @@ tmux new-window -t "$SESSION_NAME:1" -n "router" -c "$WORKERS_ROOT/router"
 tmux send-keys -t "$SESSION_NAME:1" "echo -e '${GREEN}Starting active Router worker on port 8788...${NC}'" C-m
 tmux send-keys -t "$SESSION_NAME:1" "wrangler dev --local --port 8788 --var DOMAIN=localhost --var ACTIVITYPUB_DOMAIN=localhost" C-m
 
-# Window 2: Shell for running commands
-tmux new-window -t "$SESSION_NAME:2" -n "shell" -c "$PROJECT_ROOT"
-tmux send-keys -t "$SESSION_NAME:2" "echo -e '${BLUE}Welcome to dais development shell${NC}'" C-m
-tmux send-keys -t "$SESSION_NAME:2" "echo -e 'Active workers running on:'" C-m
-tmux send-keys -t "$SESSION_NAME:2" "echo -e '  Landing: http://localhost:8787'" C-m
-tmux send-keys -t "$SESSION_NAME:2" "echo -e '  Router:  http://localhost:8788'" C-m
-tmux send-keys -t "$SESSION_NAME:2" "echo ''" C-m
-tmux send-keys -t "$SESSION_NAME:2" "echo -e 'Run ${GREEN}./scripts/deploy.sh list${NC} to see active and legacy worker status'" C-m
-tmux send-keys -t "$SESSION_NAME:2" "echo -e 'Run ${GREEN}./scripts/deploy.sh build${NC} to validate active workers'" C-m
+# Window 2: PDS worker (port 8789)
+tmux new-window -t "$SESSION_NAME:2" -n "pds" -c "$WORKERS_ROOT/pds"
+tmux send-keys -t "$SESSION_NAME:2" "echo -e '${GREEN}Starting active PDS worker on port 8789...${NC}'" C-m
+tmux send-keys -t "$SESSION_NAME:2" "wrangler dev --local --port 8789 --var DOMAIN=localhost --var PDS_HOSTNAME=localhost" C-m
+
+# Window 3: Shell for running commands
+tmux new-window -t "$SESSION_NAME:3" -n "shell" -c "$PROJECT_ROOT"
+tmux send-keys -t "$SESSION_NAME:3" "echo -e '${BLUE}Welcome to dais development shell${NC}'" C-m
+tmux send-keys -t "$SESSION_NAME:3" "echo -e 'Active workers running on:'" C-m
+tmux send-keys -t "$SESSION_NAME:3" "echo -e '  Landing: http://localhost:8787'" C-m
+tmux send-keys -t "$SESSION_NAME:3" "echo -e '  Router:  http://localhost:8788'" C-m
+tmux send-keys -t "$SESSION_NAME:3" "echo -e '  PDS:     http://localhost:8789'" C-m
+tmux send-keys -t "$SESSION_NAME:3" "echo ''" C-m
+tmux send-keys -t "$SESSION_NAME:3" "echo -e 'Run ${GREEN}./scripts/deploy.sh list${NC} to see active and legacy worker status'" C-m
+tmux send-keys -t "$SESSION_NAME:3" "echo -e 'Run ${GREEN}./scripts/deploy.sh build${NC} to validate active workers'" C-m
 
 # Select the shell window
-tmux select-window -t "$SESSION_NAME:2"
+tmux select-window -t "$SESSION_NAME:3"
 
 echo -e "${GREEN}✓ Tmux session '$SESSION_NAME' created successfully${NC}"
 echo ""
 echo "Workers starting on:"
 echo "  Landing: http://localhost:8787"
 echo "  Router:  http://localhost:8788"
+echo "  PDS:     http://localhost:8789"
 echo ""
 echo "Attach to session with:"
 echo -e "  ${BLUE}tmux attach -t $SESSION_NAME${NC}"
