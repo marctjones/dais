@@ -88,6 +88,11 @@ if [ "$RUN_MASTODON_CONFORMANCE" = "true" ]; then
   add_gate "Mastodon API conformance tests" "cargo test --manifest-path conformance/Cargo.toml -- --nocapture" "DAIS_CONFORMANCE_ONLY=mastodon-api"
 fi
 
+if [ "$DEPLOY" = "true" ]; then
+  add_gate "production deploy" "scripts/deploy.sh deploy --env production --yes"
+  add_gate "skpt deploy" "scripts/deploy.sh deploy --env skpt --yes"
+fi
+
 if [ "$SKIP_LIVE" != "true" ]; then
   if [ "$STRICT" = "1" ]; then
     add_gate "skpt live smoke" "scripts/smoke-skpt-instance.sh" "REQUIRE_FULL=1"
@@ -98,11 +103,6 @@ if [ "$SKIP_LIVE" != "true" ]; then
     add_gate "cross-instance E2EE live smoke" "scripts/smoke-cross-instance-e2ee.sh"
     add_gate "cross-instance MLS live smoke" "scripts/smoke-cross-instance-mls.sh"
   fi
-fi
-
-if [ "$DEPLOY" = "true" ]; then
-  add_gate "production deploy" "scripts/deploy.sh deploy --env production --yes"
-  add_gate "skpt deploy" "scripts/deploy.sh deploy --env skpt --yes"
 fi
 
 print_plan() {
