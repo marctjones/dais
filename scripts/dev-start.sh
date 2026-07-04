@@ -28,50 +28,35 @@ echo -e "${GREEN}Project root: $PROJECT_ROOT${NC}"
 # Create new tmux session in detached mode
 tmux new-session -d -s "$SESSION_NAME" -c "$PROJECT_ROOT"
 
-# Window 0: WebFinger worker (port 8787)
-tmux rename-window -t "$SESSION_NAME:0" "webfinger"
-tmux send-keys -t "$SESSION_NAME:0" "cd $WORKERS_ROOT/webfinger" C-m
-tmux send-keys -t "$SESSION_NAME:0" "echo -e '${GREEN}Starting WebFinger worker on port 8787...${NC}'" C-m
+# Window 0: Landing worker (port 8787)
+tmux rename-window -t "$SESSION_NAME:0" "landing"
+tmux send-keys -t "$SESSION_NAME:0" "cd $WORKERS_ROOT/landing" C-m
+tmux send-keys -t "$SESSION_NAME:0" "echo -e '${GREEN}Starting active Landing worker on port 8787...${NC}'" C-m
 tmux send-keys -t "$SESSION_NAME:0" "wrangler dev --local --port 8787 --var DOMAIN=localhost --var ACTIVITYPUB_DOMAIN=localhost" C-m
 
-# Window 1: Actor worker (port 8788)
-tmux new-window -t "$SESSION_NAME:1" -n "actor" -c "$WORKERS_ROOT/actor"
-tmux send-keys -t "$SESSION_NAME:1" "echo -e '${GREEN}Starting Actor worker on port 8788...${NC}'" C-m
+# Window 1: Router worker (port 8788)
+tmux new-window -t "$SESSION_NAME:1" -n "router" -c "$WORKERS_ROOT/router"
+tmux send-keys -t "$SESSION_NAME:1" "echo -e '${GREEN}Starting active Router worker on port 8788...${NC}'" C-m
 tmux send-keys -t "$SESSION_NAME:1" "wrangler dev --local --port 8788 --var DOMAIN=localhost --var ACTIVITYPUB_DOMAIN=localhost" C-m
 
-# Window 2: Inbox worker (port 8789)
-tmux new-window -t "$SESSION_NAME:2" -n "inbox" -c "$WORKERS_ROOT/inbox"
-tmux send-keys -t "$SESSION_NAME:2" "echo -e '${GREEN}Starting Inbox worker on port 8789...${NC}'" C-m
-tmux send-keys -t "$SESSION_NAME:2" "wrangler dev --local --port 8789 --var DOMAIN=localhost --var ACTIVITYPUB_DOMAIN=localhost" C-m
-
-# Window 3: Outbox worker (port 8790)
-tmux new-window -t "$SESSION_NAME:3" -n "outbox" -c "$WORKERS_ROOT/outbox"
-tmux send-keys -t "$SESSION_NAME:3" "echo -e '${GREEN}Starting Outbox worker on port 8790...${NC}'" C-m
-tmux send-keys -t "$SESSION_NAME:3" "wrangler dev --local --port 8790 --var DOMAIN=localhost --var ACTIVITYPUB_DOMAIN=localhost" C-m
-
-# Window 4: Shell for running commands
-tmux new-window -t "$SESSION_NAME:4" -n "shell" -c "$PROJECT_ROOT"
-tmux send-keys -t "$SESSION_NAME:4" "echo -e '${BLUE}Welcome to dais development shell${NC}'" C-m
-tmux send-keys -t "$SESSION_NAME:4" "echo -e 'Workers running on:'" C-m
-tmux send-keys -t "$SESSION_NAME:4" "echo -e '  WebFinger: http://localhost:8787'" C-m
-tmux send-keys -t "$SESSION_NAME:4" "echo -e '  Actor:     http://localhost:8788'" C-m
-tmux send-keys -t "$SESSION_NAME:4" "echo -e '  Inbox:     http://localhost:8789'" C-m
-tmux send-keys -t "$SESSION_NAME:4" "echo -e '  Outbox:    http://localhost:8790'" C-m
-tmux send-keys -t "$SESSION_NAME:4" "echo ''" C-m
-tmux send-keys -t "$SESSION_NAME:4" "echo -e 'Run ${GREEN}./scripts/seed-local-db.sh${NC} to seed the database'" C-m
-tmux send-keys -t "$SESSION_NAME:4" "echo -e 'Run ${GREEN}./scripts/test-phase1-local.sh${NC} to test Phase 1'" C-m
-tmux send-keys -t "$SESSION_NAME:4" "echo -e 'Run ${GREEN}./scripts/test-phase2-local.sh${NC} to test Phase 2'" C-m
+# Window 2: Shell for running commands
+tmux new-window -t "$SESSION_NAME:2" -n "shell" -c "$PROJECT_ROOT"
+tmux send-keys -t "$SESSION_NAME:2" "echo -e '${BLUE}Welcome to dais development shell${NC}'" C-m
+tmux send-keys -t "$SESSION_NAME:2" "echo -e 'Active workers running on:'" C-m
+tmux send-keys -t "$SESSION_NAME:2" "echo -e '  Landing: http://localhost:8787'" C-m
+tmux send-keys -t "$SESSION_NAME:2" "echo -e '  Router:  http://localhost:8788'" C-m
+tmux send-keys -t "$SESSION_NAME:2" "echo ''" C-m
+tmux send-keys -t "$SESSION_NAME:2" "echo -e 'Run ${GREEN}./scripts/deploy.sh list${NC} to see active and legacy worker status'" C-m
+tmux send-keys -t "$SESSION_NAME:2" "echo -e 'Run ${GREEN}./scripts/deploy.sh build${NC} to validate active workers'" C-m
 
 # Select the shell window
-tmux select-window -t "$SESSION_NAME:4"
+tmux select-window -t "$SESSION_NAME:2"
 
 echo -e "${GREEN}✓ Tmux session '$SESSION_NAME' created successfully${NC}"
 echo ""
 echo "Workers starting on:"
-echo "  WebFinger: http://localhost:8787"
-echo "  Actor:     http://localhost:8788"
-echo "  Inbox:     http://localhost:8789"
-echo "  Outbox:    http://localhost:8790"
+echo "  Landing: http://localhost:8787"
+echo "  Router:  http://localhost:8788"
 echo ""
 echo "Attach to session with:"
 echo -e "  ${BLUE}tmux attach -t $SESSION_NAME${NC}"

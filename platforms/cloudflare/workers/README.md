@@ -6,6 +6,12 @@ The active deploy surface is:
 - `router` - ActivityPub, owner API, media, E2EE, search, Mastodon-compatible
   read surfaces, and AT Protocol/PDS endpoints.
 
+The default local launcher mirrors that active surface:
+
+```bash
+scripts/dev-start.sh
+```
+
 The split workers below are legacy compatibility sources:
 
 - `actor`
