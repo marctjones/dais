@@ -9,9 +9,9 @@ order or release policy changes.
 
 | Order | Milestone | Focus | Open work |
 | --- | --- | --- | --- |
-| 4 | `v1.31 - Bluesky and public protocol completion` | First-class public ATProto/Bluesky surface, core repo/record/sync migration, public posting/reading/search/follow parity, server architecture cleanup, and protocol release gates. | #274, #275, #276, #277, #278, #334 |
+| 4 | `v1.31 - Bluesky and public protocol completion` | First-class public ATProto/Bluesky surface, core repo/record/sync migration, public posting/reading/search/follow parity, server architecture cleanup, and protocol release gates. | #274, #275, #276, #277, #278, #334, #336, #337, #339 |
 | 5 | `v1.32 - Discovery, watches, sources, and communities` | Intentional discovery and reading: RSS/website watches, ActivityPub/Bluesky watches, public search, source provenance, and private community/group primitives. | #280, #281, #282, #283, #286 |
-| 7 | `v1.34 - Managed hosting and operations` | Productized managed hosting and operations: provisioning, backups, migration/import, observability, runbooks, support, and account policy. | #294, #295, #296, #297, #298, #299, #300 |
+| 7 | `v1.34 - Managed hosting and operations` | Productized managed hosting and operations: provisioning, backups, migration/import, observability, runbooks, support, and account policy. | #294, #295, #296, #297, #298, #299, #300, #338 |
 
 Recently completed foundations:
 
@@ -34,7 +34,9 @@ Recently completed foundations:
    Start with #275 because moving ATProto repo, record, and sync operations into
    core is the main architecture dependency for the rest of the Bluesky work.
    Track router decomposition in #334 so the active router does not absorb more
-   protocol code while v1.31 expands.
+   protocol code while v1.31 expands. #336 and #337 harden the release evidence
+   and compatibility-surface policy; #339 removes or archives legacy split
+   workers after active-router decomposition.
 
 2. **Continue v1.32 reader/discovery work.**
    #281, #282, and #283 should be implemented with source provenance and
@@ -45,7 +47,8 @@ Recently completed foundations:
    #297 now has a verifiable backup archive and production/skpt backup smoke,
    but still needs a fresh-environment restore test before closure. #296 and
    #299 should build on that evidence instead of adding separate ad hoc ops
-   scripts.
+   scripts. #338 makes E2EE/MLS live-smoke prerequisites fail closed outside the
+   normal release gate.
 
 ## Coverage Policy
 
