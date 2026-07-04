@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::JsValue;
 use worker::{
     event, Context, D1Type, Env, Fetch, FormData, FormEntry, Headers, Request, RequestInit,
     Response, Result, ScheduleContext, ScheduledEvent,
@@ -14,9 +14,11 @@ mod media;
 #[cfg(test)]
 pub(crate) use media::sha256_hex;
 pub(crate) use media::{
+    allowed_media_type, current_media_created_at, current_media_timestamp,
     is_private_media_attachment, is_public_atproto_image_attachment, media_custom_metadata,
     media_metadata_is_expired, media_r2_key_from_path, media_r2_key_from_url,
-    media_type_for_filename, MediaMetadataInput,
+    media_type_for_filename, private_media_expires_at, random_token, safe_media_filename,
+    MediaMetadataInput,
 };
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
@@ -12306,70 +12308,6 @@ fn strip_html(value: &str) -> String {
     output.trim().to_string()
 }
 
-fn allowed_media_type(value: &str) -> bool {
-    matches!(
-        value,
-        "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "video/mp4" | "video/webm"
-    )
-}
-
-fn safe_media_filename(value: &str) -> std::result::Result<String, String> {
-    let basename = value.rsplit(['/', '\\']).next().unwrap_or_default().trim();
-    let mut safe = String::new();
-    let mut previous_dash = false;
-    for ch in basename.chars() {
-        let replacement = if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-            ch
-        } else {
-            '-'
-        };
-        if replacement == '-' {
-            if previous_dash {
-                continue;
-            }
-            previous_dash = true;
-        } else {
-            previous_dash = false;
-        }
-        safe.push(replacement);
-    }
-    let safe = safe
-        .trim_start_matches('.')
-        .chars()
-        .take(96)
-        .collect::<String>();
-    if safe.is_empty() {
-        return Err("filename is invalid".to_string());
-    }
-    Ok(safe)
-}
-
-fn private_media_expires_at(value: Option<&Value>) -> std::result::Result<Option<String>, String> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value.is_null() || matches!(value, Value::String(text) if text.is_empty()) {
-        return Ok(None);
-    }
-    let seconds = match value {
-        Value::Number(number) => number.as_f64(),
-        Value::String(text) => text.parse::<f64>().ok(),
-        Value::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
-        _ => None,
-    }
-    .ok_or_else(|| "expires_in_seconds must be a positive number".to_string())?;
-    if !seconds.is_finite() || seconds <= 0.0 {
-        return Err("expires_in_seconds must be a positive number".to_string());
-    }
-    if seconds > 30.0 * 24.0 * 60.0 * 60.0 {
-        return Err("expires_in_seconds must be 30 days or less".to_string());
-    }
-    let expires_ms = js_sys::Date::now() + seconds.floor() * 1000.0;
-    Ok(js_sys::Date::new(&JsValue::from_f64(expires_ms))
-        .to_iso_string()
-        .as_string())
-}
-
 fn js_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
@@ -12378,40 +12316,6 @@ fn js_truthy(value: &Value) -> bool {
         Value::String(text) => !text.is_empty(),
         Value::Array(_) | Value::Object(_) => true,
     }
-}
-
-fn current_media_timestamp() -> String {
-    js_sys::Date::new_0()
-        .to_iso_string()
-        .as_string()
-        .unwrap_or_default()
-        .chars()
-        .filter(|ch| !matches!(ch, '-' | ':' | 'T' | 'Z' | '.'))
-        .take(14)
-        .collect()
-}
-
-fn current_media_created_at() -> String {
-    js_sys::Date::new_0()
-        .to_iso_string()
-        .as_string()
-        .unwrap_or_default()
-}
-
-fn random_token() -> std::result::Result<String, String> {
-    let crypto = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
-        .map_err(|_| "crypto is unavailable".to_string())?;
-    let get_random_values = js_sys::Reflect::get(&crypto, &JsValue::from_str("getRandomValues"))
-        .map_err(|_| "crypto.getRandomValues is unavailable".to_string())?
-        .dyn_into::<js_sys::Function>()
-        .map_err(|_| "crypto.getRandomValues is unavailable".to_string())?;
-    let array = js_sys::Uint8Array::new_with_length(24);
-    get_random_values
-        .call1(&crypto, &array)
-        .map_err(|_| "crypto.getRandomValues failed".to_string())?;
-    let mut bytes = vec![0; 24];
-    array.copy_to(&mut bytes);
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn clamp_cadence_minutes(value: Option<String>) -> i32 {
