@@ -302,27 +302,62 @@ impl DaisCore {
         webfinger::handle_webfinger(&*self.db, &resource, base_domain, ap).await
     }
 
-    // AT Protocol methods whose platform-agnostic core migration is tracked in issue #275.
-
     /// Handle AT Protocol commit
     pub async fn handle_commit(&self, did: String, commit_cid: String) -> CoreResult<()> {
-        if did.trim().is_empty() || commit_cid.trim().is_empty() {
+        let did = did.trim();
+        let commit_cid = commit_cid.trim();
+        if did.is_empty() || commit_cid.is_empty() {
             return Err(CoreError::InvalidAtProto(
                 "handle_commit requires a DID and commit CID".to_string(),
             ));
         }
-        Err(CoreError::InvalidAtProto(
-            "DaisCore::handle_commit has core ATProto repo primitives but is not yet wired to persist/apply commits; finish the caller migration under GitHub issue #275"
-                .to_string(),
-        ))
+        let sequence = atproto::sequence_from_stable_value(&format!("{did}:{commit_cid}"));
+        let sequence_i64 = i64::try_from(sequence).unwrap_or(i64::MAX);
+        let id = format!("{did}:{commit_cid}");
+        self.db
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO atproto_sync_commits
+                    (id, repo_did, commit_cid, sequence, status, created_at, updated_at)
+                VALUES (?1, ?2, ?3, ?4, 'received', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                "#,
+                &[
+                    Value::String(id),
+                    Value::String(did.to_string()),
+                    Value::String(commit_cid.to_string()),
+                    Value::Number(sequence_i64.into()),
+                ],
+            )
+            .await?;
+
+        let message = crate::traits::SyncMessage {
+            pds_url: format!("https://{}", self.config.pds_domain),
+            commit_cid: commit_cid.to_string(),
+            repo_did: did.to_string(),
+        };
+        self.queue.send(&serde_json::to_string(&message)?).await?;
+
+        self.db
+            .execute(
+                r#"
+                UPDATE atproto_sync_commits
+                SET status = 'queued', updated_at = CURRENT_TIMESTAMP
+                WHERE repo_did = ?1 AND commit_cid = ?2
+                "#,
+                &[
+                    Value::String(did.to_string()),
+                    Value::String(commit_cid.to_string()),
+                ],
+            )
+            .await?;
+        Ok(())
     }
 
     /// Subscribe to repo changes
     pub async fn subscribe_repos(&self) -> CoreResult<()> {
-        Err(CoreError::InvalidAtProto(
-            "DaisCore::subscribe_repos has core ATProto sync event primitives but is not yet wired to a transport; finish the caller migration under GitHub issue #275"
-                .to_string(),
-        ))
+        let request = atproto::subscribe_repos_request(&self.atproto_identity());
+        self.queue.send(&serde_json::to_string(&request)?).await?;
+        Ok(())
     }
 
     async fn default_post_visibility(&self) -> String {
@@ -337,6 +372,14 @@ impl DaisCore {
                 .to_string(),
             Err(_) => "followers".to_string(),
         }
+    }
+
+    fn atproto_identity(&self) -> atproto::AtprotoIdentity {
+        atproto::AtprotoIdentity::new(
+            format!("did:web:{}", self.config.activitypub_domain),
+            self.config.activitypub_domain.clone(),
+            self.config.pds_domain.clone(),
+        )
     }
 }
 
@@ -394,6 +437,152 @@ impl DaisCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::{
+        DatabaseDialect, DatabaseProvider, HttpProvider, ListOptions, ListResult, ObjectInfo,
+        PlatformError, PlatformResult, QueueProvider, Request, Response, Statement,
+        StorageMetadata, StorageProvider,
+    };
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct RecordingDb {
+        calls: Arc<Mutex<Vec<(String, Vec<Value>)>>>,
+    }
+
+    #[async_trait(?Send)]
+    impl DatabaseProvider for RecordingDb {
+        async fn execute(&self, sql: &str, params: &[Value]) -> PlatformResult<Vec<crate::Row>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((sql.to_string(), params.to_vec()));
+            Ok(Vec::new())
+        }
+
+        async fn batch(&self, _statements: Vec<Statement>) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        fn dialect(&self) -> DatabaseDialect {
+            DatabaseDialect::SQLite
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingQueue {
+        messages: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait(?Send)]
+    impl QueueProvider for RecordingQueue {
+        async fn send(&self, message: &str) -> PlatformResult<()> {
+            self.messages.lock().unwrap().push(message.to_string());
+            Ok(())
+        }
+
+        async fn send_batch(&self, messages: Vec<String>) -> PlatformResult<()> {
+            self.messages.lock().unwrap().extend(messages);
+            Ok(())
+        }
+
+        async fn send_delayed(&self, message: &str, _delay_seconds: u32) -> PlatformResult<()> {
+            self.messages.lock().unwrap().push(message.to_string());
+            Ok(())
+        }
+
+        async fn depth(&self) -> PlatformResult<u64> {
+            Ok(self.messages.lock().unwrap().len() as u64)
+        }
+    }
+
+    #[derive(Default)]
+    struct NoopStorage;
+
+    #[async_trait(?Send)]
+    impl StorageProvider for NoopStorage {
+        async fn put(
+            &self,
+            _key: &str,
+            _data: Vec<u8>,
+            _content_type: &str,
+        ) -> PlatformResult<String> {
+            Err(PlatformError::Storage("not used in core tests".to_string()))
+        }
+
+        async fn put_with_metadata(
+            &self,
+            _key: &str,
+            _data: Vec<u8>,
+            _content_type: &str,
+            _metadata: StorageMetadata,
+        ) -> PlatformResult<String> {
+            Err(PlatformError::Storage("not used in core tests".to_string()))
+        }
+
+        async fn get(&self, _key: &str) -> PlatformResult<Vec<u8>> {
+            Err(PlatformError::Storage("not used in core tests".to_string()))
+        }
+
+        async fn head(&self, _key: &str) -> PlatformResult<ObjectInfo> {
+            Err(PlatformError::Storage("not used in core tests".to_string()))
+        }
+
+        async fn delete(&self, _key: &str) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        async fn list(&self, _prefix: &str) -> PlatformResult<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        async fn list_detailed(&self, _options: ListOptions) -> PlatformResult<ListResult> {
+            Ok(ListResult {
+                objects: Vec::new(),
+                cursor: None,
+                has_more: false,
+            })
+        }
+
+        async fn copy(&self, _from: &str, _to: &str) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        fn public_url(&self, key: &str) -> String {
+            format!("https://media.example/{key}")
+        }
+
+        async fn signed_url(&self, key: &str, _expires_in: u32) -> PlatformResult<String> {
+            Ok(self.public_url(key))
+        }
+    }
+
+    #[derive(Default)]
+    struct NoopHttp;
+
+    #[async_trait(?Send)]
+    impl HttpProvider for NoopHttp {
+        async fn fetch(&self, _request: Request) -> PlatformResult<Response> {
+            Err(PlatformError::Http("not used in core tests".to_string()))
+        }
+    }
+
+    fn test_core(db: RecordingDb, queue: RecordingQueue) -> DaisCore {
+        DaisCore::new(
+            Box::new(db),
+            Box::new(NoopStorage),
+            Box::new(queue),
+            Box::new(NoopHttp),
+            CoreConfig {
+                activitypub_domain: "social.example.com".to_string(),
+                pds_domain: "pds.example.com".to_string(),
+                username: "social".to_string(),
+                private_key: "PRIVATE_KEY".to_string(),
+                public_key: "PUBLIC_KEY".to_string(),
+                media_url: "https://media.example.com".to_string(),
+            },
+        )
+    }
 
     #[test]
     fn test_core_config_serialization() {
@@ -477,5 +666,54 @@ mod tests {
         assert_eq!(record.commit.cid, "bafycommit");
         assert_eq!(event.repo, identity.did);
         assert_eq!(event.ops[0].cid.as_deref(), Some(record.cid.as_str()));
+    }
+
+    #[tokio::test]
+    async fn handle_commit_persists_metadata_and_queues_sync_message() {
+        let db = RecordingDb::default();
+        let queue = RecordingQueue::default();
+        let core = test_core(db.clone(), queue.clone());
+
+        core.handle_commit(
+            "did:web:social.example.com".to_string(),
+            "bafycommit".to_string(),
+        )
+        .await
+        .unwrap();
+
+        let calls = db.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0]
+            .0
+            .contains("INSERT OR IGNORE INTO atproto_sync_commits"));
+        assert_eq!(calls[0].1[1].as_str(), Some("did:web:social.example.com"));
+        assert_eq!(calls[0].1[2].as_str(), Some("bafycommit"));
+        assert!(calls[1].0.contains("UPDATE atproto_sync_commits"));
+
+        let messages = queue.messages.lock().unwrap().clone();
+        assert_eq!(messages.len(), 1);
+        let message: crate::traits::SyncMessage = serde_json::from_str(&messages[0]).unwrap();
+        assert_eq!(message.pds_url, "https://pds.example.com");
+        assert_eq!(message.repo_did, "did:web:social.example.com");
+        assert_eq!(message.commit_cid, "bafycommit");
+    }
+
+    #[tokio::test]
+    async fn subscribe_repos_queues_typed_core_request() {
+        let db = RecordingDb::default();
+        let queue = RecordingQueue::default();
+        let core = test_core(db, queue.clone());
+
+        core.subscribe_repos().await.unwrap();
+
+        let messages = queue.messages.lock().unwrap().clone();
+        assert_eq!(messages.len(), 1);
+        let request: crate::atproto::SubscribeReposRequest =
+            serde_json::from_str(&messages[0]).unwrap();
+        assert_eq!(request.message_type, "atproto.sync.subscribeRepos");
+        assert_eq!(request.pds_url, "https://pds.example.com");
+        assert_eq!(request.repo_did, "did:web:social.example.com");
+        assert_eq!(request.handle, "social.example.com");
+        assert!(request.sequence_hint > 0);
     }
 }

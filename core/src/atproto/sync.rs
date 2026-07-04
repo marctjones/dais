@@ -49,6 +49,16 @@ pub struct RepoCommitEvent {
     pub blobs: Vec<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SubscribeReposRequest {
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub pds_url: String,
+    pub repo_did: String,
+    pub handle: String,
+    pub sequence_hint: u64,
+}
+
 pub fn commit_event(
     identity: &AtprotoIdentity,
     stats: &RepoStats,
@@ -64,6 +74,16 @@ pub fn commit_event(
         commit: stats.head.clone(),
         ops,
         blobs: Vec::new(),
+    }
+}
+
+pub fn subscribe_repos_request(identity: &AtprotoIdentity) -> SubscribeReposRequest {
+    SubscribeReposRequest {
+        message_type: "atproto.sync.subscribeRepos".to_string(),
+        pds_url: format!("https://{}", identity.pds_hostname),
+        repo_did: identity.did.clone(),
+        handle: identity.handle.clone(),
+        sequence_hint: sequence_from_stable_value(&identity.did),
     }
 }
 
@@ -113,5 +133,20 @@ mod tests {
 
         assert_eq!(first, second);
         assert!(first > 0);
+    }
+
+    #[test]
+    fn subscribe_repos_request_uses_identity_and_stable_sequence() {
+        let identity = AtprotoIdentity::new("did:web:pds.example", "social.example", "pds.example");
+        let request = subscribe_repos_request(&identity);
+
+        assert_eq!(request.message_type, "atproto.sync.subscribeRepos");
+        assert_eq!(request.pds_url, "https://pds.example");
+        assert_eq!(request.repo_did, "did:web:pds.example");
+        assert_eq!(request.handle, "social.example");
+        assert_eq!(
+            request.sequence_hint,
+            sequence_from_stable_value("did:web:pds.example")
+        );
     }
 }
