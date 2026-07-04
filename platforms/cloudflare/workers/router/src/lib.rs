@@ -14,11 +14,10 @@ mod media;
 #[cfg(test)]
 pub(crate) use media::sha256_hex;
 pub(crate) use media::{
-    allowed_media_type, current_media_created_at, current_media_timestamp,
+    allowed_media_type, current_media_created_at, current_media_timestamp, handle_media,
     is_private_media_attachment, is_public_atproto_image_attachment, media_custom_metadata,
-    media_metadata_is_expired, media_r2_key_from_path, media_r2_key_from_url,
-    media_type_for_filename, private_media_expires_at, random_token, safe_media_filename,
-    MediaMetadataInput,
+    media_r2_key_from_url, media_type_for_filename, private_media_expires_at, random_token,
+    safe_media_filename, MediaMetadataInput,
 };
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
@@ -1936,87 +1935,6 @@ async fn mastodon_instance(env: &Env, v2: bool) -> Result<Value> {
         }
     }
     Ok(instance)
-}
-
-async fn handle_media(req: Request, env: Env, url: &worker::Url) -> Result<Response> {
-    let path = url.path();
-    let Some(key) = media_r2_key_from_path(path) else {
-        return Response::error("Not found", 404);
-    };
-    if path.starts_with("/media/_private_signed/") {
-        if req.headers().get("Signature")?.is_none() {
-            return Response::error("HTTP Signature required", 401);
-        }
-        if !signed_approved_follower(&env, &req).await? {
-            return Response::error("Signed media fetch requires an approved follower", 403);
-        }
-        if !private_media_attached_post(&env, &origin(&url), path).await? {
-            return Response::error("Not found", 404);
-        }
-    } else if path.starts_with("/media/_private/") {
-        return Response::error("HTTP Signature required", 401);
-    }
-
-    let bucket = env.bucket("MEDIA_BUCKET")?;
-    let Some(object) = bucket.get(key.clone()).execute().await? else {
-        return Response::error("Not found", 404);
-    };
-    let custom_metadata = object.custom_metadata()?;
-    if media_metadata_is_expired(&custom_metadata, js_sys::Date::now()) {
-        bucket.delete(key).await?;
-        return Response::error("Not found", 404);
-    }
-    let bytes = match object.body() {
-        Some(body) => body.bytes().await?,
-        None => Vec::new(),
-    };
-    let mut response = Response::from_bytes(bytes)?;
-    let headers = Headers::new();
-    headers.set(
-        "Content-Type",
-        &object
-            .http_metadata()
-            .content_type
-            .unwrap_or_else(|| media_type_for_filename(&key)),
-    )?;
-    headers.set("Cache-Control", "private, max-age=300")?;
-    response = response.with_headers(headers);
-    Ok(response)
-}
-
-async fn private_media_attached_post(
-    env: &Env,
-    request_origin: &str,
-    media_path: &str,
-) -> Result<bool> {
-    let media_url = format!("{request_origin}{media_path}");
-    let rows = env
-        .d1("DB")?
-        .prepare(
-            r#"
-            SELECT media_attachments
-            FROM posts
-            WHERE visibility IN ('followers', 'direct')
-              AND media_attachments IS NOT NULL
-              AND media_attachments != ''
-            ORDER BY published_at DESC
-            LIMIT 250
-            "#,
-        )
-        .all()
-        .await?
-        .results::<Map<String, Value>>()?;
-    for row in rows {
-        for attachment in parse_attachment_array(row.get("media_attachments")) {
-            let Some(object) = attachment.as_object() else {
-                continue;
-            };
-            if string_field(Some(object), "url").as_deref() == Some(media_url.as_str()) {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }
 
 fn mastodon_create_app(body: &Value) -> Value {

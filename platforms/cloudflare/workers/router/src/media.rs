@@ -1,8 +1,9 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
+use worker::{Env, Headers, Request, Response, Result};
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 pub(crate) struct MediaMetadataInput<'a> {
     pub(crate) owner: &'a str,
@@ -13,6 +14,52 @@ pub(crate) struct MediaMetadataInput<'a> {
     pub(crate) description: Option<&'a str>,
     pub(crate) expires_at: Option<&'a str>,
     pub(crate) require_authorized_fetch: bool,
+}
+
+pub(crate) async fn handle_media(req: Request, env: Env, url: &worker::Url) -> Result<Response> {
+    let path = url.path();
+    let Some(key) = media_r2_key_from_path(path) else {
+        return Response::error("Not found", 404);
+    };
+    if path.starts_with("/media/_private_signed/") {
+        if req.headers().get("Signature")?.is_none() {
+            return Response::error("HTTP Signature required", 401);
+        }
+        if !crate::signed_approved_follower(&env, &req).await? {
+            return Response::error("Signed media fetch requires an approved follower", 403);
+        }
+        if !private_media_attached_post(&env, &crate::origin(url), path).await? {
+            return Response::error("Not found", 404);
+        }
+    } else if path.starts_with("/media/_private/") {
+        return Response::error("HTTP Signature required", 401);
+    }
+
+    let bucket = env.bucket("MEDIA_BUCKET")?;
+    let Some(object) = bucket.get(key.clone()).execute().await? else {
+        return Response::error("Not found", 404);
+    };
+    let custom_metadata = object.custom_metadata()?;
+    if media_metadata_is_expired(&custom_metadata, js_sys::Date::now()) {
+        bucket.delete(key).await?;
+        return Response::error("Not found", 404);
+    }
+    let bytes = match object.body() {
+        Some(body) => body.bytes().await?,
+        None => Vec::new(),
+    };
+    let mut response = Response::from_bytes(bytes)?;
+    let headers = Headers::new();
+    headers.set(
+        "Content-Type",
+        &object
+            .http_metadata()
+            .content_type
+            .unwrap_or_else(|| media_type_for_filename(&key)),
+    )?;
+    headers.set("Cache-Control", "private, max-age=300")?;
+    response = response.with_headers(headers);
+    Ok(response)
 }
 
 pub(crate) fn media_type_for_filename(filename: &str) -> String {
@@ -230,6 +277,41 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+async fn private_media_attached_post(
+    env: &Env,
+    request_origin: &str,
+    media_path: &str,
+) -> Result<bool> {
+    let media_url = format!("{request_origin}{media_path}");
+    let rows = env
+        .d1("DB")?
+        .prepare(
+            r#"
+            SELECT media_attachments
+            FROM posts
+            WHERE visibility IN ('followers', 'direct')
+              AND media_attachments IS NOT NULL
+              AND media_attachments != ''
+            ORDER BY published_at DESC
+            LIMIT 250
+            "#,
+        )
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    for row in rows {
+        for attachment in crate::parse_attachment_array(row.get("media_attachments")) {
+            let Some(object) = attachment.as_object() else {
+                continue;
+            };
+            if crate::string_field(Some(object), "url").as_deref() == Some(media_url.as_str()) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn decode_component(value: &str) -> String {
