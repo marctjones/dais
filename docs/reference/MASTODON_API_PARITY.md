@@ -1,8 +1,9 @@
 # Mastodon API Parity Matrix
 
-Status: v0.27 working matrix. This tracks the practical third-party Mastodon
-client compatibility surface for single-user dais. The ActivityPub server-to-
-server surface is tracked separately in v0.26.
+Status: v1.31 strict compatibility matrix. This tracks the practical
+third-party Mastodon client compatibility surface for single-user dais. The
+ActivityPub server-to-server surface is tracked separately from this
+client-shaped API.
 
 Private-by-default rule: public Mastodon API endpoints expose only public,
 non-encrypted dais posts. Authenticated endpoints may operate on owner state, but
@@ -32,6 +33,18 @@ must not publish followers-only, direct, or E2EE content as public data.
 | Discovery/probes | `GET /api/v1/custom_emojis`, `GET /api/v1/announcements`, `GET /api/v1/directory`, `GET /api/v1/trends`, `GET /api/v1/trends/statuses`, `GET /api/v1/trends/tags`, `GET /api/v1/trends/links` | Implemented as empty/safe compatibility surfaces |
 | Streaming | `GET /api/v1/streaming/*` | SSE-compatible fallback stream with reconnect guidance; clients should still poll for new data |
 
+## Compatibility-Only Policy Decisions
+
+These endpoints are intentionally supported as client-safe compatibility shapes,
+not as claims that dais is a complete multi-user Mastodon server:
+
+| Surface | Decision | Release evidence |
+| --- | --- | --- |
+| OAuth token exchange | Keep the non-authenticating `owner-token-required` placeholder until a real local owner consent flow exists. It must never mint, echo, or reveal the production owner token. | `MASTODON-API-APPS-01` verifies the placeholder and rejects treating it as an authenticated owner token. |
+| Client probe lists | Keep empty arrays for follow requests, suggestions, endorsements, featured/followed tags, filters, lists, bookmarks, scheduled statuses, announcements, directory, and trends. | `MASTODON-API-READ-01`, `MASTODON-API-READ-04`, and unauthenticated fail-closed checks verify safe shapes. |
+| Relationship state | Persist owner-side follow, block, mute, and domain-block state where a single-user dais server can represent it. | `MASTODON-API-WRITE-07` verifies block/mute/domain-block state and readback. |
+| Streaming | Return a valid SSE-compatible fallback with reconnect guidance, without promising push delivery yet. Clients should poll timelines/search/status reads for fresh data. | `MASTODON-API-READ-02` verifies the streaming response shape and content type. |
+
 ## Intentional Limits
 
 - Full multi-user admin APIs are out of scope for single-user dais.
@@ -54,19 +67,22 @@ must not publish followers-only, direct, or E2EE content as public data.
 
 ## Release Gates
 
-Run before closing v0.27 slices:
+Run before closing Mastodon API compatibility slices:
 
 ```bash
 cd platforms/cloudflare/workers/router
 cargo check --target wasm32-unknown-unknown
 cd ../../../..
-DAIS_CONFORMANCE_ONLY=mastodon-api cargo test --manifest-path conformance/Cargo.toml -- --nocapture
+DAIS_CONFORMANCE_STRICT=1 \
+DAIS_CONFORMANCE_ONLY=mastodon-api \
+cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 For authenticated production checks:
 
 ```bash
-DAIS_MASTODON_BEARER_TOKEN="$OWNER_API_TOKEN" \
+DAIS_MASTODON_BEARER_TOKEN="$OWNER_OR_SCOPED_SMOKE_TOKEN" \
+DAIS_CONFORMANCE_STRICT=1 \
 DAIS_CONFORMANCE_ONLY=mastodon-api \
 cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
@@ -75,7 +91,15 @@ For a third-party-client-shaped smoke that uses form-encoded OAuth/status
 requests and multipart media upload:
 
 ```bash
-DAIS_MASTODON_BEARER_TOKEN="$OWNER_API_TOKEN" \
+DAIS_MASTODON_BEARER_TOKEN="$OWNER_OR_SCOPED_SMOKE_TOKEN" \
 DAIS_CONFORMANCE_ONLY=mastodon-client-smoke \
 cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
+
+Current production evidence from the v1.31 gate:
+
+- `DAIS_CONFORMANCE_STRICT=1 DAIS_CONFORMANCE_ONLY=mastodon-api cargo test --manifest-path conformance/Cargo.toml -- --nocapture`
+  passed with `PASS=17 FAIL=0 MISSING=0 INFO=0 SKIP=0`.
+- Router unit tests passed with 39 tests, including explicit coverage for
+  scoped owner tokens, safe compatibility probes, persisted mute/block state,
+  and media MIME-type round trips.
