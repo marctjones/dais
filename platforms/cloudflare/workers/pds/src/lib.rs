@@ -1228,8 +1228,12 @@ async fn profile_counts(env: &Env) -> Result<ProfileCounts> {
                WHERE visibility = 'public'
                  AND encrypted_message IS NULL
                  AND content NOT LIKE '%End-to-end encrypted message%') AS posts,
-              (SELECT COUNT(*) FROM followers WHERE status = 'approved') AS followers,
-              (SELECT COUNT(*) FROM following WHERE status = 'accepted') AS follows
+              (SELECT COUNT(*) FROM followers
+               WHERE status = 'approved'
+                 AND follower_actor_id LIKE 'did:%') AS followers,
+              (SELECT COUNT(*) FROM following
+               WHERE status = 'accepted'
+                 AND target_actor_id LIKE 'did:%') AS follows
             "#,
         )
         .first::<serde_json::Map<String, Value>>(None)
@@ -1414,6 +1418,7 @@ async fn follower_rows(env: &Env, page: Page) -> Result<Vec<serde_json::Map<Stri
         SELECT follower_actor_id AS actor_id, created_at
         FROM followers
         WHERE status = 'approved'
+          AND follower_actor_id LIKE 'did:%'
         ORDER BY created_at DESC
         LIMIT ?1 OFFSET ?2
         "#,
@@ -1431,6 +1436,7 @@ async fn follows_rows(env: &Env, page: Page) -> Result<Vec<serde_json::Map<Strin
         SELECT target_actor_id AS actor_id, created_at
         FROM following
         WHERE status = 'accepted'
+          AND target_actor_id LIKE 'did:%'
         ORDER BY created_at DESC
         LIMIT ?1 OFFSET ?2
         "#,
@@ -1727,6 +1733,9 @@ async fn create_follow_record(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| worker::Error::RustError("subject DID is required".to_string()))?;
+    if !is_public_atproto_actor_id(subject_did) {
+        return Response::error("ATProto follow subject must be a DID", 400);
+    }
     if subject_did == identity.did {
         return Response::error("Cannot follow the local DID", 400);
     }
@@ -1908,6 +1917,7 @@ async fn follow_records(env: &Env, identity: &Identity, page: Page) -> Result<Ve
             FROM following
             WHERE actor_id = ?1
               AND status IN ('accepted', 'pending')
+              AND target_actor_id LIKE 'did:%'
             ORDER BY created_at DESC
             LIMIT ?2 OFFSET ?3
             "#,
@@ -1937,6 +1947,7 @@ async fn find_follow_record(env: &Env, identity: &Identity, rkey: &str) -> Resul
             FROM following
             WHERE actor_id = ?1
               AND status IN ('accepted', 'pending')
+              AND target_actor_id LIKE 'did:%'
               AND (id = ?2 OR id LIKE ?3)
             ORDER BY created_at DESC
             LIMIT 1
@@ -2176,6 +2187,11 @@ fn actor_handle(actor_id: &str) -> String {
         }
     }
     actor_id.to_string()
+}
+
+fn is_public_atproto_actor_id(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with("did:") && !value.contains(char::is_whitespace)
 }
 
 fn record_value(row: serde_json::Map<String, Value>) -> Value {
@@ -2634,9 +2650,9 @@ fn repo_path_from_at_uri(uri: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        at_uri, atproto_media_attachments, encode_car, follow_record_value, mst_subtree, post_view,
-        r2_key_from_media_url, record_value, repo_key_depth, repo_record_block, stable_cid,
-        thread_view_post, Identity,
+        at_uri, atproto_media_attachments, encode_car, follow_record_value,
+        is_public_atproto_actor_id, mst_subtree, post_view, r2_key_from_media_url, record_value,
+        repo_key_depth, repo_record_block, stable_cid, thread_view_post, Identity,
     };
     use serde_json::{json, Value};
 
@@ -2758,6 +2774,17 @@ mod tests {
             .get("cid")
             .and_then(serde_json::Value::as_str)
             .is_some());
+    }
+
+    #[test]
+    fn public_atproto_actor_ids_are_dids_only() {
+        assert!(is_public_atproto_actor_id("did:plc:alicebsky"));
+        assert!(is_public_atproto_actor_id("did:web:social.example"));
+        assert!(!is_public_atproto_actor_id(
+            "https://mastodon.example/users/alice"
+        ));
+        assert!(!is_public_atproto_actor_id("@alice@example.com"));
+        assert!(!is_public_atproto_actor_id("did:plc:bad value"));
     }
 
     #[test]
