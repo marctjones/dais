@@ -129,7 +129,7 @@ fi
 # 6. Backup freshness
 echo
 echo "[6/6] Checking backup freshness..."
-LATEST_BACKUP=$(find ~/.dais/backups -name "dais_backup_*.tar.gz*" -type f -mtime -2 | head -1)
+LATEST_BACKUP=$(find ~/.dais/backups -name "dais_*_backup_*.tar.gz*" -type f -mtime -2 | head -1)
 if [ -n "$LATEST_BACKUP" ]; then
     echo "  ✓ Backup within last 48 hours"
     echo "    $(basename $LATEST_BACKUP)"
@@ -550,7 +550,7 @@ echo "Started at $(date)"
 echo
 
 # 1. Restore from latest backup
-LATEST_BACKUP=$(find ~/.dais/backups -name "dais_backup_*.tar.gz*" -type f | sort -r | head -1)
+LATEST_BACKUP=$(find ~/.dais/backups -name "dais_*_backup_*.tar.gz*" -type f | sort -r | head -1)
 echo "[1/4] Restoring from: $LATEST_BACKUP"
 # Follow BACKUP_RESTORE.md procedures
 

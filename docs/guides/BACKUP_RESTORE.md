@@ -49,89 +49,22 @@
 
 **File:** `scripts/backup.sh`
 
-```bash
-#!/bin/bash
-# Daily backup script for Dais instance
-
-set -e  # Exit on error
-
-# Configuration
-BACKUP_DIR="${HOME}/.dais/backups"
-DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="${BACKUP_DIR}/dais_backup_${DATE}.tar.gz"
-
-# Create backup directory
-mkdir -p "${BACKUP_DIR}"
-
-# Temporary directory for backup
-TEMP_DIR=$(mktemp -d)
-trap "rm -rf ${TEMP_DIR}" EXIT
-
-echo "=== Dais Backup - ${DATE} ==="
-echo
-
-# 1. Backup D1 Database
-echo "[1/5] Backing up D1 database..."
-cd platforms/cloudflare/workers/actor
-wrangler d1 backup create DB --remote > "${TEMP_DIR}/db_backup_id.txt"
-BACKUP_ID=$(cat "${TEMP_DIR}/db_backup_id.txt" | grep -oP 'Backup ID: \K[a-f0-9-]+')
-wrangler d1 backup download DB "${BACKUP_ID}" --remote --output "${TEMP_DIR}/database.sql"
-echo "  ✓ Database backed up (${BACKUP_ID})"
-
-# 2. Backup Keys
-echo "[2/5] Backing up cryptographic keys..."
-cp ~/.dais/keys/private.pem "${TEMP_DIR}/private.pem"
-cp ~/.dais/keys/public.pem "${TEMP_DIR}/public.pem"
-echo "  ✓ Keys backed up"
-
-# 3. Backup PDS Password
-echo "[3/5] Backing up PDS password..."
-cp ~/.dais/pds-password.txt "${TEMP_DIR}/pds-password.txt"
-echo "  ✓ PDS password backed up"
-
-# 4. Backup Configuration
-echo "[4/5] Backing up configuration..."
-cp ~/.dais/config.toml "${TEMP_DIR}/config.toml"
-echo "  ✓ Configuration backed up"
-
-# 5. Create encrypted archive
-echo "[5/5] Creating encrypted backup archive..."
-tar -czf "${TEMP_DIR}/backup.tar.gz" -C "${TEMP_DIR}" \
-    database.sql \
-    private.pem \
-    public.pem \
-    pds-password.txt \
-    config.toml \
-    db_backup_id.txt
-
-# Encrypt with GPG (optional - recommended for cloud storage)
-if command -v gpg &> /dev/null; then
-    gpg --symmetric --cipher-algo AES256 \
-        --output "${BACKUP_FILE}.gpg" \
-        "${TEMP_DIR}/backup.tar.gz"
-    echo "  ✓ Backup encrypted: ${BACKUP_FILE}.gpg"
-else
-    mv "${TEMP_DIR}/backup.tar.gz" "${BACKUP_FILE}"
-    echo "  ⚠ Backup NOT encrypted (install gpg for encryption): ${BACKUP_FILE}"
-fi
-
-echo
-echo "✓ Backup complete!"
-echo "  File: ${BACKUP_FILE}$([ -f ${BACKUP_FILE}.gpg ] && echo .gpg || echo '')"
-echo "  Size: $(du -h ${BACKUP_FILE}$([ -f ${BACKUP_FILE}.gpg ] && echo .gpg || echo '') | cut -f1)"
-
-# Cleanup old backups (keep last 30 days)
-echo
-echo "Cleaning up old backups (keeping last 30 days)..."
-find "${BACKUP_DIR}" -name "dais_backup_*.tar.gz*" -mtime +30 -delete
-echo "✓ Cleanup complete"
-```
+`scripts/backup.sh` is the current backup entry point. It uses the active router
+worker configuration, writes a `dais-backup-v1` manifest, exports D1 SQL,
+records Cloudflare backup/R2 inventory metadata when available, includes local
+owner/key material when present, and verifies the final archive with
+`scripts/verify-backup-archive.sh`.
 
 **Usage:**
 ```bash
-chmod +x scripts/backup.sh
-./scripts/backup.sh
+DAIS_BACKUP_PASSPHRASE='use-a-real-secret' scripts/backup.sh --env production
+DAIS_BACKUP_PASSPHRASE='use-a-real-secret' scripts/backup.sh --env skpt
+scripts/backup.sh --skip-cloud --no-encrypt --output-dir tmp/backup-test
+scripts/verify-backup-archive.sh ~/.dais/backups/dais_production_backup_YYYYMMDDTHHMMSSZ.tar.gz.gpg
 ```
+
+Use `--no-encrypt` only for local tests with non-secret fixture data. Production
+backups contain owner tokens, private keys, and recovery material when available.
 
 ### Automated Backup with Cron
 
@@ -142,7 +75,7 @@ chmod +x scripts/backup.sh
 crontab -e
 
 # Add this line:
-0 2 * * * /home/user/Projects/dais/scripts/backup.sh >> /home/user/.dais/backups/backup.log 2>&1
+0 2 * * * cd /home/user/Projects/dais && DAIS_BACKUP_PASSPHRASE_FILE=/home/user/.dais/backup-passphrase scripts/backup.sh --env production >> /home/user/.dais/backups/backup.log 2>&1
 ```
 
 ---
@@ -155,14 +88,14 @@ crontab -e
 
 ```bash
 # Create backup
-cd platforms/cloudflare/workers/actor
-wrangler d1 backup create DB --remote
+cd platforms/cloudflare/workers/router
+wrangler d1 backup create DB --remote --env production
 
 # List backups
-wrangler d1 backup list DB --remote
+wrangler d1 backup list DB --remote --env production
 
 # Download specific backup
-wrangler d1 backup download DB <backup-id> --remote --output database.sql
+wrangler d1 backup download DB <backup-id> --remote --env production --output database.sql
 ```
 
 **Method B: Export to SQL**
@@ -257,11 +190,15 @@ wrangler r2 object list dais-media --remote
    ```bash
    mkdir -p ~/.dais
 
-   # Extract backup
-   gpg --decrypt ~/dais-backup.tar.gz.gpg | tar -xzf - -C /tmp/
+   # Verify and extract backup
+   DAIS_BACKUP_PASSPHRASE_FILE=~/.dais/backup-passphrase \
+     scripts/verify-backup-archive.sh ~/.dais/backups/dais_production_backup_YYYYMMDDTHHMMSSZ.tar.gz.gpg
+   mkdir -p /tmp/dais-restore
+   DAIS_BACKUP_PASSPHRASE_FILE=~/.dais/backup-passphrase \
+     gpg --decrypt ~/.dais/backups/dais_production_backup_YYYYMMDDTHHMMSSZ.tar.gz.gpg | tar -xzf - -C /tmp/dais-restore
 
    # Restore config
-   cp /tmp/config.toml ~/.dais/
+   cp /tmp/dais-restore/local/dais/config.toml ~/.dais/
    ```
 
 3. **Restore Keys**
@@ -269,8 +206,8 @@ wrangler r2 object list dais-media --remote
    mkdir -p ~/.dais/keys
 
    # Restore private key
-   cp /tmp/private.pem ~/.dais/keys/
-   cp /tmp/public.pem ~/.dais/keys/
+   cp /tmp/dais-restore/local/dais/keys/private.pem ~/.dais/keys/
+   cp /tmp/dais-restore/local/dais/keys/public.pem ~/.dais/keys/
 
    # Set permissions
    chmod 600 ~/.dais/keys/private.pem
@@ -279,7 +216,7 @@ wrangler r2 object list dais-media --remote
 
 4. **Restore PDS Password**
    ```bash
-   cp /tmp/pds-password.txt ~/.dais/
+   cp /tmp/dais-restore/local/dais/pds-password.txt ~/.dais/
    chmod 600 ~/.dais/pds-password.txt
    ```
 
@@ -295,11 +232,11 @@ wrangler r2 object list dais-media --remote
 6. **Restore Database Data**
    ```bash
    # Import SQL backup to new D1 database
-   cd platforms/cloudflare/workers/actor
-   wrangler d1 execute DB --remote --file=/tmp/database.sql
+   cd platforms/cloudflare/workers/router
+   wrangler d1 execute DB --remote --env production --file=/tmp/dais-restore/database.sql
 
    # Verify import
-   wrangler d1 execute DB --remote --command "SELECT COUNT(*) FROM posts"
+   wrangler d1 execute DB --remote --env production --command "SELECT COUNT(*) FROM posts"
    ```
 
 7. **Deploy Workers**
@@ -333,11 +270,11 @@ wrangler r2 object list dais-media --remote
 
 ```bash
 # Download backup
-wrangler d1 backup download DB <backup-id> --remote --output restore.sql
+cd platforms/cloudflare/workers/router
+wrangler d1 backup download DB <backup-id> --remote --env production --output restore.sql
 
 # Import to existing database
-cd platforms/cloudflare/workers/actor
-wrangler d1 execute DB --remote --file=restore.sql
+wrangler d1 execute DB --remote --env production --file=restore.sql
 ```
 
 **Scenario 2: Restore Lost Private Key**
@@ -592,34 +529,7 @@ git push origin main
 
 BACKUP_FILE="$1"
 
-# Decrypt
-gpg --decrypt "${BACKUP_FILE}.gpg" > /tmp/test_backup.tar.gz
-
-# Extract
-tar -tzf /tmp/test_backup.tar.gz
-
-# Check required files
-REQUIRED_FILES=(
-    "database.sql"
-    "private.pem"
-    "public.pem"
-    "pds-password.txt"
-    "config.toml"
-)
-
-for file in "${REQUIRED_FILES[@]}"; do
-    if tar -tzf /tmp/test_backup.tar.gz | grep -q "$file"; then
-        echo "✓ $file present"
-    else
-        echo "✗ $file MISSING"
-        exit 1
-    fi
-done
-
-# Cleanup
-rm /tmp/test_backup.tar.gz
-
-echo "✓ Backup verification complete"
+scripts/verify-backup-archive.sh "$BACKUP_FILE"
 ```
 
 ---
