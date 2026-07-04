@@ -2293,19 +2293,9 @@ fn run_bluesky(http: &Http) -> Result<()> {
             "set DAIS_MASTODON_BEARER_TOKEN for media fixture",
         ),
         (
-            "BLUESKY-WRITE-01",
-            "Owner-token ATProto session can create and delete a public feed post",
-            "set DAIS_MASTODON_BEARER_TOKEN for write fixture",
-        ),
-        (
             "BLUESKY-RECORD-SHAPE-01",
             "feed.post records expose facets, tags, language, and self-label metadata",
             "set DAIS_MASTODON_BEARER_TOKEN for feed.post shape fixture",
-        ),
-        (
-            "BLUESKY-REPLY-01",
-            "Owner-token ATProto feed replies preserve root and parent refs",
-            "set DAIS_MASTODON_BEARER_TOKEN for reply fixture",
         ),
         (
             "BLUESKY-UPLOAD-01",
@@ -2326,6 +2316,23 @@ fn run_bluesky(http: &Http) -> Result<()> {
             "BLUESKY-THREAD-01",
             "AppView getPostThread returns public post replies",
             "set DAIS_MASTODON_BEARER_TOKEN for thread fixture",
+        ),
+    ];
+    let token_required = [
+        (
+            "BLUESKY-WRITE-01",
+            "Owner-token ATProto session can create and delete a public feed post",
+            "set DAIS_MASTODON_BEARER_TOKEN for write fixture",
+        ),
+        (
+            "BLUESKY-REPLY-01",
+            "Owner-token ATProto feed replies preserve root and parent refs",
+            "set DAIS_MASTODON_BEARER_TOKEN for reply fixture",
+        ),
+        (
+            "BLUESKY-RECORD-VALIDATION-01",
+            "Owner-token ATProto createRecord rejects private visibility",
+            "set DAIS_MASTODON_BEARER_TOKEN for invalid-visibility fixture",
         ),
     ];
 
@@ -2445,10 +2452,17 @@ fn run_bluesky(http: &Http) -> Result<()> {
                 id,
                 "bluesky",
                 title,
-                "PASS",
-                "covered by Rust authenticated Bluesky smoke",
+                "INFO",
+                "authenticated Bluesky fixture is tracked separately and not exercised by this conformance case yet",
             ));
         }
+    }
+    if config.mastodon_token.is_empty() {
+        for (id, title, detail) in token_required {
+            rows.push(Row::new(id, "bluesky", title, "SKIP", detail));
+        }
+    } else {
+        run_bluesky_authenticated(http, &mut rows, &did, &config.mastodon_token);
     }
 
     run_case(
@@ -2537,6 +2551,221 @@ fn run_bluesky(http: &Http) -> Result<()> {
     );
 
     print_report("Bluesky compatibility report", &config.pds_base_url, &rows)
+}
+
+fn run_bluesky_authenticated(http: &Http, rows: &mut Vec<Row>, did: &str, token: &str) {
+    run_case(
+        rows,
+        "BLUESKY-WRITE-01",
+        "bluesky",
+        "Owner-token ATProto session can create and delete a public feed post",
+        || {
+            let rkey = atproto_fixture_rkey("write");
+            let record = json!({
+                "$type": "app.bsky.feed.post",
+                "text": format!("dais ATProto conformance create/delete {}", Utc::now().to_rfc3339()),
+                "createdAt": Utc::now().to_rfc3339(),
+                "langs": ["en"]
+            });
+            let create =
+                atproto_create_record(http, did, "app.bsky.feed.post", &rkey, record, token)?;
+            let result = (|| {
+                expect_status(&create, 200, "createRecord public post")?;
+                let created = json(&create, "createRecord public post")?;
+                let uri = str_field(created, "uri").unwrap_or_default();
+                if !uri.ends_with(&format!("/app.bsky.feed.post/{rkey}")) {
+                    return Err(format!("created URI did not include rkey {rkey}: {uri}"));
+                }
+                let read = atproto_get_record(http, did, "app.bsky.feed.post", &rkey)?;
+                expect_status(&read, 200, "getRecord created public post")?;
+                let value = json(&read, "created public post")?
+                    .get("value")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                if !str_field(&value, "text")
+                    .unwrap_or_default()
+                    .contains("create/delete")
+                {
+                    return Err("created feed.post text did not round-trip".to_string());
+                }
+                Ok(format!("created and read back {uri}"))
+            })();
+            let delete = atproto_delete_record(http, did, "app.bsky.feed.post", &rkey, token);
+            result?;
+            expect_status(&delete?, 200, "deleteRecord public post")?;
+            let deleted = atproto_get_record(http, did, "app.bsky.feed.post", &rkey)?;
+            if deleted.status < 400 {
+                return Err("deleted feed.post was still readable".to_string());
+            }
+            Ok(format!("created and deleted app.bsky.feed.post/{rkey}"))
+        },
+    );
+
+    run_case(
+        rows,
+        "BLUESKY-REPLY-01",
+        "bluesky",
+        "Owner-token ATProto feed replies preserve root and parent refs",
+        || {
+            let root_rkey = atproto_fixture_rkey("reply-root");
+            let reply_rkey = atproto_fixture_rkey("reply");
+            let root_record = json!({
+                "$type": "app.bsky.feed.post",
+                "text": format!("dais ATProto conformance reply root {}", Utc::now().to_rfc3339()),
+                "createdAt": Utc::now().to_rfc3339()
+            });
+            let mut cleanup = Vec::new();
+            let result = (|| {
+                let root = atproto_create_record(
+                    http,
+                    did,
+                    "app.bsky.feed.post",
+                    &root_rkey,
+                    root_record,
+                    token,
+                )?;
+                expect_status(&root, 200, "createRecord reply root")?;
+                cleanup.push(root_rkey.clone());
+                let root_json = json(&root, "reply root create")?;
+                let root_uri = str_field(root_json, "uri")
+                    .ok_or("reply root create did not return uri")?
+                    .to_string();
+                let root_cid = str_field(root_json, "cid")
+                    .ok_or("reply root create did not return cid")?
+                    .to_string();
+                let reply_record = json!({
+                    "$type": "app.bsky.feed.post",
+                    "text": format!("dais ATProto conformance reply {}", Utc::now().to_rfc3339()),
+                    "createdAt": Utc::now().to_rfc3339(),
+                    "reply": {
+                        "root": {"uri": root_uri, "cid": root_cid},
+                        "parent": {"uri": root_uri, "cid": root_cid}
+                    }
+                });
+                let reply = atproto_create_record(
+                    http,
+                    did,
+                    "app.bsky.feed.post",
+                    &reply_rkey,
+                    reply_record,
+                    token,
+                )?;
+                expect_status(&reply, 200, "createRecord reply")?;
+                cleanup.push(reply_rkey.clone());
+                let read = atproto_get_record(http, did, "app.bsky.feed.post", &reply_rkey)?;
+                expect_status(&read, 200, "getRecord reply")?;
+                let value = json(&read, "reply getRecord")?
+                    .get("value")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                if value.pointer("/reply/root/uri").and_then(Value::as_str)
+                    != Some(root_uri.as_str())
+                    || value.pointer("/reply/parent/uri").and_then(Value::as_str)
+                        != Some(root_uri.as_str())
+                {
+                    return Err("reply.root or reply.parent did not round-trip".to_string());
+                }
+                Ok(format!(
+                    "reply preserved root and parent refs for {root_uri}"
+                ))
+            })();
+            for rkey in cleanup.iter().rev() {
+                let _ = atproto_delete_record(http, did, "app.bsky.feed.post", rkey, token);
+            }
+            result
+        },
+    );
+
+    run_case(
+        rows,
+        "BLUESKY-RECORD-VALIDATION-01",
+        "bluesky",
+        "Owner-token ATProto createRecord rejects private visibility",
+        || {
+            let rkey = atproto_fixture_rkey("private-visibility");
+            let record = json!({
+                "$type": "app.bsky.feed.post",
+                "text": "this must not be accepted as an ATProto public post",
+                "createdAt": Utc::now().to_rfc3339(),
+                "visibility": "followers"
+            });
+            let res = atproto_create_record(http, did, "app.bsky.feed.post", &rkey, record, token)?;
+            if res.status < 400 {
+                let _ = atproto_delete_record(http, did, "app.bsky.feed.post", &rkey, token);
+                return Err("private-visibility feed.post was accepted".to_string());
+            }
+            if res.status != 400 || !res.text.contains("only supports public posts") {
+                return Err(format!(
+                    "expected clear 400 private-visibility error, got {} {}",
+                    res.status, res.text
+                ));
+            }
+            Ok("private visibility rejected before persistence".to_string())
+        },
+    );
+}
+
+fn atproto_fixture_rkey(kind: &str) -> String {
+    format!("dais-conformance-{kind}-{}", Utc::now().timestamp_millis())
+}
+
+fn atproto_create_record(
+    http: &Http,
+    repo: &str,
+    collection: &str,
+    rkey: &str,
+    record: Value,
+    token: &str,
+) -> Result<HttpResponse> {
+    http.post_json(
+        &format!(
+            "{}/xrpc/com.atproto.repo.createRecord",
+            http.config.pds_base_url
+        ),
+        json!({
+            "repo": repo,
+            "collection": collection,
+            "rkey": rkey,
+            "record": record
+        }),
+        Some(token),
+    )
+}
+
+fn atproto_delete_record(
+    http: &Http,
+    repo: &str,
+    collection: &str,
+    rkey: &str,
+    token: &str,
+) -> Result<HttpResponse> {
+    http.post_json(
+        &format!(
+            "{}/xrpc/com.atproto.repo.deleteRecord",
+            http.config.pds_base_url
+        ),
+        json!({
+            "repo": repo,
+            "collection": collection,
+            "rkey": rkey
+        }),
+        Some(token),
+    )
+}
+
+fn atproto_get_record(
+    http: &Http,
+    repo: &str,
+    collection: &str,
+    rkey: &str,
+) -> Result<HttpResponse> {
+    http.get(&format!(
+        "{}/xrpc/com.atproto.repo.getRecord?repo={}&collection={}&rkey={}",
+        http.config.pds_base_url,
+        encode(repo),
+        encode(collection),
+        encode(rkey)
+    ))
 }
 
 fn read_uvarint(bytes: &[u8], offset: usize) -> Result<(usize, usize)> {

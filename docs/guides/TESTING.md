@@ -121,14 +121,12 @@ DAIS_MASTODON_BEARER_TOKEN=... DAIS_CONFORMANCE_ONLY=bluesky cargo test --manife
 ```
 
 `FAIL` exits non-zero. Without `DAIS_MASTODON_BEARER_TOKEN`, the script is
-read-only and skips the blob/write fixtures. With the token, it creates one
-temporary public image upload fixture, fetches the resulting PDS blob, creates
-one temporary `app.bsky.actor.profile` record update and restores the previous
-profile, creates one ATProto public feed post with an uploaded image through the
-PDS, creates a temporary ATProto reply post and verifies
-`reply.root`/`reply.parent` readback, creates like/repost/follow records,
-verifies `listRecords`, and deletes all post and social-record fixtures before
-exit. Uploaded R2 blobs may remain after the fixture post is deleted.
+read-only and skips the write fixtures. With the token, it creates and deletes a
+temporary public `app.bsky.feed.post`, creates a temporary ATProto reply post and
+verifies `reply.root`/`reply.parent` readback, and verifies that explicit private
+visibility is rejected before persistence. Blob/profile/social write probes are
+tracked in the same report as credential-gated follow-up coverage until they are
+promoted to executable checks.
 
 #### Federation Matrix
 

@@ -495,37 +495,33 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
             400,
         );
     }
-    let text = body
-        .record
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    if text.is_empty() {
-        return Response::error("Post text is required", 400);
-    }
+    let post_record = match core_atproto::validate_feed_post_record(&body.record) {
+        Ok(record) => record,
+        Err(error) => return Response::error(error.to_string(), 400),
+    };
 
-    let created_at = body
-        .record
-        .get("createdAt")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| {
-            js_sys::Date::new_0()
-                .to_iso_string()
-                .as_string()
-                .unwrap_or_default()
-        });
+    let created_at = post_record.created_at.unwrap_or_else(|| {
+        js_sys::Date::new_0()
+            .to_iso_string()
+            .as_string()
+            .unwrap_or_default()
+    });
     let rkey = body
         .rkey
-        .unwrap_or_else(|| generated_rkey(&created_at, text));
+        .unwrap_or_else(|| generated_rkey(&created_at, &post_record.text));
+    if let Err(error) = core_atproto::validate_record_key("app.bsky.feed.post", &rkey) {
+        return Response::error(error.to_string(), 400);
+    }
     let actor_id = local_actor_id(&identity);
     let post_id = format!("{actor_id}/posts/{rkey}");
     let atproto_uri = format!("at://{}/app.bsky.feed.post/{rkey}", identity.did);
     let record_json = serde_json::to_string(&body.record)
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
     let cid = stable_cid(&record_json);
-    let content_html = format!("<p>{}</p>", html_escape(text).replace('\n', "<br>"));
+    let content_html = format!(
+        "<p>{}</p>",
+        html_escape(&post_record.text).replace('\n', "<br>")
+    );
     let media_attachments = match atproto_media_attachments(&body.record) {
         Ok(attachments) => attachments,
         Err(error) => return Response::error(format!("Invalid image embed: {error}"), 400),
@@ -539,21 +535,8 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
         serde_json::to_string(&media_attachments)
             .map_err(|error| worker::Error::RustError(error.to_string()))?
     };
-    let in_reply_to = body
-        .record
-        .get("reply")
-        .and_then(|reply| reply.get("parent"))
-        .and_then(|parent| parent.get("uri"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let atproto_reply_json = body
-        .record
-        .get("reply")
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|error| worker::Error::RustError(error.to_string()))?
-        .unwrap_or_default();
+    let in_reply_to = post_record.in_reply_to.unwrap_or_default();
+    let atproto_reply_json = post_record.reply_json.unwrap_or_default();
     let summary = atproto_self_label_summary(&body.record);
 
     ctx.env
@@ -570,7 +553,7 @@ async fn handle_create_record(mut req: Request, ctx: RouteContext<()>) -> Result
         .bind(&[
             post_id.clone().into(),
             actor_id.into(),
-            text.into(),
+            post_record.text.into(),
             content_html.into(),
             summary.into(),
             created_at.into(),
@@ -596,6 +579,9 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
         return Response::error("Repo not found", 404);
     }
     if body.collection == "app.bsky.feed.like" || body.collection == "app.bsky.feed.repost" {
+        if let Err(error) = core_atproto::validate_record_key(&body.collection, &body.rkey) {
+            return Response::error(error.to_string(), 400);
+        }
         let atproto_uri = record_uri(&identity, &body.collection, &body.rkey);
         let id_suffix = format!("/{}", body.rkey);
         ctx.env
@@ -607,6 +593,9 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
         return delete_record_response(&ctx.env, &identity, &body.rkey).await;
     }
     if body.collection == "app.bsky.graph.follow" {
+        if let Err(error) = core_atproto::validate_record_key(&body.collection, &body.rkey) {
+            return Response::error(error.to_string(), 400);
+        }
         let atproto_uri = record_uri(&identity, &body.collection, &body.rkey);
         let id_suffix = format!("/{}", body.rkey);
         ctx.env
@@ -618,6 +607,9 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
         return delete_record_response(&ctx.env, &identity, &body.rkey).await;
     }
     if body.collection == "app.bsky.actor.profile" {
+        if let Err(error) = core_atproto::validate_record_key(&body.collection, &body.rkey) {
+            return Response::error(error.to_string(), 400);
+        }
         if body.rkey != "self" {
             return Response::error("Record not found", 404);
         }
@@ -642,6 +634,9 @@ async fn handle_delete_record(mut req: Request, ctx: RouteContext<()>) -> Result
             "Collection not writable in dais PDS compatibility mode",
             400,
         );
+    }
+    if let Err(error) = core_atproto::validate_record_key("app.bsky.feed.post", &body.rkey) {
+        return Response::error(error.to_string(), 400);
     }
     let atproto_uri = format!("at://{}/app.bsky.feed.post/{}", identity.did, body.rkey);
     let id_suffix = format!("/{}", body.rkey);
