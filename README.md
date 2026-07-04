@@ -164,6 +164,16 @@ cargo check --manifest-path platforms/cloudflare/workers/landing/Cargo.toml
 cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
+Run the active server release gate:
+
+```bash
+scripts/release-server.sh --strict
+```
+
+Use `scripts/release-server.sh --plan` to print the exact gate plan without
+running it. Use `scripts/release-server.sh --strict --conformance --deploy` only
+when preparing a production/skpt release after the build and smoke gates pass.
+
 Live independent-instance smoke:
 
 ```bash

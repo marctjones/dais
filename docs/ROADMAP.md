@@ -57,22 +57,26 @@ must state the evidence needed to close it. The default evidence is:
 Minimum server release gate:
 
 ```bash
-cargo test --manifest-path core/Cargo.toml
-cargo test --manifest-path platforms/cloudflare/workers/router/Cargo.toml
-cargo test --manifest-path platforms/cloudflare/bindings/Cargo.toml
-scripts/deploy.sh build --env production
-scripts/deploy.sh build --env skpt
-scripts/smoke-skpt-instance.sh
-scripts/smoke-cross-instance-e2ee.sh
-scripts/smoke-cross-instance-mls.sh
+scripts/release-server.sh --strict
 ```
+
+The script records pass/fail evidence under `tmp/server-release-*/` and runs:
+
+- `cargo test --manifest-path core/Cargo.toml`
+- `cargo test --manifest-path platforms/cloudflare/workers/router/Cargo.toml`
+- `cargo test --manifest-path platforms/cloudflare/bindings/Cargo.toml`
+- `scripts/deploy.sh build --env production`
+- `scripts/deploy.sh build --env skpt`
+- `scripts/smoke-skpt-instance.sh`
+- `scripts/smoke-cross-instance-e2ee.sh`
+- `scripts/smoke-cross-instance-mls.sh`
 
 Run conformance gates when protocol compatibility changes:
 
 ```bash
-cargo test --manifest-path conformance/Cargo.toml -- --nocapture
-DAIS_CONFORMANCE_ONLY=bluesky cargo test --manifest-path conformance/Cargo.toml -- --nocapture
-DAIS_CONFORMANCE_ONLY=mastodon-api cargo test --manifest-path conformance/Cargo.toml -- --nocapture
+scripts/release-server.sh --strict --conformance
+scripts/release-server.sh --strict --bluesky-conformance
+scripts/release-server.sh --strict --mastodon-conformance
 ```
 
 For release-critical privacy, protocol, or E2EE changes, live gates should fail
