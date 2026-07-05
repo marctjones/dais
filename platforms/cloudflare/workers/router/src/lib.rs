@@ -14,6 +14,7 @@ mod mastodon;
 mod media;
 mod owner_auth;
 mod request;
+mod response;
 use mastodon::{
     account_action_path as mastodon_account_action_path,
     account_followers_path as mastodon_account_followers_path,
@@ -44,6 +45,7 @@ use request::{
     read_json, read_mastodon_body, request_content_type, required_body_string, string_like_any,
     string_like_field,
 };
+use response::{activity_json, activitypub_error, api_json, jrd_json, text_response};
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
 const SOURCE_TYPES: &[&str] = &[
@@ -1896,19 +1898,6 @@ fn activitypub_location_label(value: &Value) -> Option<String> {
             .and_then(optional_body_string),
         _ => None,
     }
-}
-
-fn activitypub_error(message: &str, status: u16) -> Result<Response> {
-    api_json(&serde_json::json!({ "error": message }), status)
-}
-
-fn jrd_json<T: Serialize>(value: &T, status: u16) -> Result<Response> {
-    let headers = Headers::new();
-    headers.set("Content-Type", "application/jrd+json; charset=utf-8")?;
-    headers.set("Access-Control-Allow-Origin", "*")?;
-    Ok(Response::from_json(value)?
-        .with_status(status)
-        .with_headers(headers))
 }
 
 async fn mastodon_instance(env: &Env, v2: bool) -> Result<Value> {
@@ -12573,36 +12562,6 @@ fn require_mastodon_bearer(req: &Request, env: &Env) -> Result<Option<Response>>
     )?))
 }
 
-fn api_json<T: Serialize>(value: &T, status: u16) -> Result<Response> {
-    let headers = Headers::new();
-    headers.set("Content-Type", "application/json; charset=utf-8")?;
-    headers.set("Access-Control-Allow-Origin", "*")?;
-    headers.set(
-        "Access-Control-Allow-Headers",
-        "Authorization, Content-Type",
-    )?;
-    headers.set(
-        "Access-Control-Allow-Methods",
-        "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    )?;
-    headers.set("Cache-Control", "no-store")?;
-    headers.set("Vary", "Authorization, Accept")?;
-    let mut response = if status == 204 {
-        Response::empty()?.with_status(status)
-    } else {
-        Response::from_json(value)?.with_status(status)
-    };
-    response = response.with_headers(headers);
-    Ok(response)
-}
-
-fn text_response(body: &str, content_type: &str) -> Result<Response> {
-    let headers = Headers::new();
-    headers.set("Content-Type", content_type)?;
-    headers.set("Access-Control-Allow-Origin", "*")?;
-    Ok(Response::ok(body.to_string())?.with_headers(headers))
-}
-
 fn fixture_actor_response(url: &worker::Url) -> Result<Response> {
     let public_key = match fixture_public_key(url) {
         Some(value) => value,
@@ -12713,13 +12672,6 @@ fn fixture_post(url: &worker::Url) -> FixturePost {
         published: "2026-06-16T00:00:00Z",
         url: post_id,
     }
-}
-
-fn activity_json<T: Serialize>(value: &T) -> Result<Response> {
-    let headers = Headers::new();
-    headers.set("Content-Type", "application/activity+json; charset=utf-8")?;
-    headers.set("Cache-Control", "no-store")?;
-    Ok(Response::from_json(value)?.with_headers(headers))
 }
 
 fn fixture_public_key(url: &worker::Url) -> Option<String> {
