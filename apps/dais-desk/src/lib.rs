@@ -332,13 +332,31 @@ pub struct ProfileFormState {
     pub image: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct AudienceFormState {
     pub id: String,
     pub name: String,
     pub description: String,
+    pub group_type: String,
+    pub membership_visibility: String,
+    pub posting_policy: String,
     pub categories: String,
     pub members: String,
+}
+
+impl Default for AudienceFormState {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            description: String::new(),
+            group_type: "audience".into(),
+            membership_visibility: "private".into(),
+            posting_policy: "owner".into(),
+            categories: String::new(),
+            members: String::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -502,6 +520,9 @@ pub struct UiProjection {
     pub audience_id: String,
     pub audience_name: String,
     pub audience_description: String,
+    pub audience_group_type: String,
+    pub audience_membership_visibility: String,
+    pub audience_posting_policy: String,
     pub audience_categories: String,
     pub audience_members: String,
     pub moderation_reply_policy: String,
@@ -1345,6 +1366,9 @@ impl DeskController {
         id: &str,
         name: &str,
         description: &str,
+        group_type: &str,
+        membership_visibility: &str,
+        posting_policy: &str,
         categories: &str,
         members: &str,
     ) {
@@ -1352,6 +1376,10 @@ impl DeskController {
             id: id.trim().to_string(),
             name: name.trim().to_string(),
             description: description.trim().to_string(),
+            group_type: normalized_audience_group_type(group_type).to_string(),
+            membership_visibility: normalized_audience_membership_visibility(membership_visibility)
+                .to_string(),
+            posting_policy: normalized_audience_posting_policy(posting_policy).to_string(),
             categories: categories.trim().to_string(),
             members: members.trim().to_string(),
         };
@@ -1637,6 +1665,9 @@ impl DeskController {
             audience_id: self.audience_form.id.clone(),
             audience_name: self.audience_form.name.clone(),
             audience_description: self.audience_form.description.clone(),
+            audience_group_type: self.audience_form.group_type.clone(),
+            audience_membership_visibility: self.audience_form.membership_visibility.clone(),
+            audience_posting_policy: self.audience_form.posting_policy.clone(),
             audience_categories: self.audience_form.categories.clone(),
             audience_members: self.audience_form.members.clone(),
             moderation_reply_policy: self.moderation_form.reply_policy.clone(),
@@ -2156,6 +2187,13 @@ impl DeskController {
             id: optional_trimmed(&self.audience_form.id),
             name: self.audience_form.name.trim().to_string(),
             description: optional_trimmed(&self.audience_form.description),
+            group_type: normalized_audience_group_type(&self.audience_form.group_type).to_string(),
+            membership_visibility: normalized_audience_membership_visibility(
+                &self.audience_form.membership_visibility,
+            )
+            .to_string(),
+            posting_policy: normalized_audience_posting_policy(&self.audience_form.posting_policy)
+                .to_string(),
             allowed_categories: split_list(&self.audience_form.categories),
             member_actor_ids: split_list(&self.audience_form.members),
         };
@@ -2166,8 +2204,11 @@ impl DeskController {
                 .map_err(|error| error.to_string())
         })?;
         Ok(format!(
-            "Saved audience group {} with {} member(s).",
-            result.name, result.member_count
+            "Saved {} {} with {} member(s); membership is {}.",
+            audience_group_label(&result),
+            result.name,
+            result.member_count,
+            result.membership_visibility
         ))
     }
 
@@ -5617,18 +5658,30 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
 
     let weak = window.as_weak();
     let ctrl = controller.clone();
-    window.on_save_audience(move |id, name, description, categories, members| {
-        if let Some(window) = weak.upgrade() {
-            ctrl.borrow_mut().save_audience_from_form(
-                id.as_str(),
-                name.as_str(),
-                description.as_str(),
-                categories.as_str(),
-                members.as_str(),
-            );
-            apply_controller_projection(&window, &ctrl);
-        }
-    });
+    window.on_save_audience(
+        move |id,
+              name,
+              description,
+              group_type,
+              membership_visibility,
+              posting_policy,
+              categories,
+              members| {
+            if let Some(window) = weak.upgrade() {
+                ctrl.borrow_mut().save_audience_from_form(
+                    id.as_str(),
+                    name.as_str(),
+                    description.as_str(),
+                    group_type.as_str(),
+                    membership_visibility.as_str(),
+                    posting_policy.as_str(),
+                    categories.as_str(),
+                    members.as_str(),
+                );
+                apply_controller_projection(&window, &ctrl);
+            }
+        },
+    );
 
     let weak = window.as_weak();
     let ctrl = controller.clone();
@@ -5984,6 +6037,9 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_audience_id(s(&projection.audience_id));
     window.set_audience_name(s(&projection.audience_name));
     window.set_audience_description(s(&projection.audience_description));
+    window.set_audience_group_type(s(&projection.audience_group_type));
+    window.set_audience_membership_visibility(s(&projection.audience_membership_visibility));
+    window.set_audience_posting_policy(s(&projection.audience_posting_policy));
     window.set_audience_categories(s(&projection.audience_categories));
     window.set_audience_members(s(&projection.audience_members));
     window.set_moderation_reply_policy(s(&projection.moderation_reply_policy));
@@ -6593,9 +6649,11 @@ fn compose_audience_summary(compose: &ComposeState, snapshot: &OwnerSnapshotBund
                 if let Some(list) = snapshot.audience_lists.iter().find(|list| list.id == list_id)
                 {
                     format!(
-                        "Visible only to audience group {} ({} member(s)): {}.",
+                        "Visible only to {} {} ({} member(s), {}): {}.",
+                        audience_group_label(list).to_lowercase(),
                         list.name,
                         list.member_count,
+                        audience_membership_label(list),
                         audience_members_preview(list)
                     )
                 } else {
@@ -8687,17 +8745,49 @@ fn json_bool_field_opt(value: &serde_json::Value, key: &str) -> Option<bool> {
 }
 
 fn audience_row(list: &OwnerAudienceList) -> UiRow {
+    let label = audience_group_label(list);
+    let membership = audience_membership_label(list);
     row(
         &format!("audience:{}", list.id),
         &list.name,
-        &format!("{} members", list.member_count),
-        list.description
-            .as_deref()
-            .unwrap_or("Audience groups are owner-controlled sharing sets."),
-        "Audience",
+        &format!(
+            "{} members, {}, {} posting",
+            list.member_count, membership, list.posting_policy
+        ),
+        &audience_group_detail(list),
+        label,
         "ok",
         "Use in compose",
         "Remove",
+    )
+}
+
+fn audience_group_label(list: &OwnerAudienceList) -> &'static str {
+    match normalized_audience_group_type(&list.group_type) {
+        "private_group" => "Private group",
+        _ => "Audience list",
+    }
+}
+
+fn audience_membership_label(list: &OwnerAudienceList) -> &'static str {
+    match normalized_audience_membership_visibility(&list.membership_visibility) {
+        "members" => "membership visible to members",
+        "public" => "public membership",
+        _ => "private membership",
+    }
+}
+
+fn audience_group_detail(list: &OwnerAudienceList) -> String {
+    let description = list
+        .description
+        .as_deref()
+        .unwrap_or("Owner-controlled sharing set.");
+    format!(
+        "{} {}. Posting policy: {}. Members: {}.",
+        description,
+        audience_membership_label(list),
+        list.posting_policy,
+        audience_members_preview(list)
     )
 }
 
@@ -9807,11 +9897,39 @@ fn optional_filter(value: &str, ignored: &str) -> Option<String> {
     }
 }
 
+fn normalized_audience_group_type(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "private_group" | "private" | "group" | "community" => "private_group",
+        _ => "audience",
+    }
+}
+
+fn normalized_audience_membership_visibility(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "members" | "member" | "group" => "members",
+        "public" | "visible" => "public",
+        _ => "private",
+    }
+}
+
+fn normalized_audience_posting_policy(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "members" | "member" | "group" => "members",
+        _ => "owner",
+    }
+}
+
 fn audience_form_from_list(list: &OwnerAudienceList) -> AudienceFormState {
     AudienceFormState {
         id: list.id.clone(),
         name: list.name.clone(),
         description: list.description.clone().unwrap_or_default(),
+        group_type: normalized_audience_group_type(&list.group_type).to_string(),
+        membership_visibility: normalized_audience_membership_visibility(
+            &list.membership_visibility,
+        )
+        .to_string(),
+        posting_policy: normalized_audience_posting_policy(&list.posting_policy).to_string(),
         categories: list.allowed_categories.join(", "),
         members: list.member_actor_ids.join(", "),
     }
@@ -10407,6 +10525,11 @@ fn local_snapshot(
             name: "Close Friends".into(),
             description: Some("Small group for sensitive personal posts.".into()),
             allowed_categories: vec!["personal".into(), "medical".into()],
+            group_type: "private_group".into(),
+            membership_visibility: "private".into(),
+            posting_policy: "owner".into(),
+            purpose_label: "Private group".into(),
+            membership_label: "Membership private".into(),
             member_actor_ids: vec!["https://friend.example/users/ada".into()],
             member_count: 1,
             created_at: Some("today".into()),
@@ -10904,6 +11027,11 @@ mod tests {
             name: "Close Friends".into(),
             description: None,
             allowed_categories: Vec::new(),
+            group_type: "private_group".into(),
+            membership_visibility: "private".into(),
+            posting_policy: "owner".into(),
+            purpose_label: "Private group".into(),
+            membership_label: "Membership private".into(),
             member_actor_ids: members.iter().map(|member| member.to_string()).collect(),
             member_count: members.len() as u64,
             created_at: None,

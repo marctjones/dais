@@ -62,6 +62,7 @@ if [ "${#MIGRATIONS[@]}" -eq 0 ]; then
     MIGRATIONS=(
       "cli/migrations/030_mutes.sql"
       "cli/migrations/031_atproto_sync_commits.sql"
+      "cli/migrations/032_private_groups.sql"
     )
   fi
 fi
@@ -79,9 +80,23 @@ for migration in "${MIGRATIONS[@]}"; do
   echo "  - $migration"
 done
 
+migration_already_applied() {
+  local migration="$1"
+  case "$migration" in
+    cli/migrations/032_private_groups.sql)
+      (cd "$ROOT" && "$WRANGLER" d1 execute "$DATABASE" --remote --config "$CONFIG" --env "$ENVIRONMENT" --command "SELECT group_type, membership_visibility, posting_policy FROM audience_lists LIMIT 0") >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 for migration in "${MIGRATIONS[@]}"; do
   if [ "$DRY_RUN" = "true" ]; then
     echo "DRY RUN: $WRANGLER d1 execute $DATABASE --remote --config $CONFIG --env $ENVIRONMENT --file $migration"
+  elif migration_already_applied "$migration"; then
+    echo "Already applied: $migration"
   else
     (cd "$ROOT" && "$WRANGLER" d1 execute "$DATABASE" --remote --config "$CONFIG" --env "$ENVIRONMENT" --file "$migration")
   fi

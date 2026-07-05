@@ -1,9 +1,11 @@
 use super::{
-    activitypub_actor_profile_html, activitypub_watch_item, bluesky_actor_target,
-    bluesky_appview_xrpc_url, bluesky_post_uri, bluesky_watch_item, display_local_url,
-    e2ee_device_fingerprint, encrypted_media_attachments_from_activitypub_object,
-    is_local_object_url, is_public_atproto_image_attachment, media_custom_metadata,
-    normalize_ai_categories, normalize_discovered_public_post, normalize_e2ee_device_id,
+    activitypub_actor_profile_html, activitypub_watch_item, audience_group_purpose_label,
+    audience_membership_label, bluesky_actor_target, bluesky_appview_xrpc_url, bluesky_post_uri,
+    bluesky_watch_item, display_local_url, e2ee_device_fingerprint,
+    encrypted_media_attachments_from_activitypub_object, is_local_object_url,
+    is_public_atproto_image_attachment, media_custom_metadata, normalize_ai_categories,
+    normalize_audience_group_type, normalize_audience_membership_visibility,
+    normalize_audience_posting_policy, normalize_discovered_public_post, normalize_e2ee_device_id,
     normalize_e2ee_fingerprint, normalize_e2ee_protocol, normalize_encrypted_media_attachments,
     normalize_owner_post_attachments, normalized_source_target, owner_normalize_bluesky_post,
     owner_normalize_tootfinder_status, owner_public_post_row_from_discovered,
@@ -561,6 +563,31 @@ fn private_watch_policy_forces_no_remote_relationship() {
         source_policy.get("no_remote_relationship"),
         Some(&Value::Bool(false))
     );
+}
+
+#[test]
+fn audience_group_metadata_defaults_private_and_distinguishes_purpose() {
+    assert_eq!(normalize_audience_group_type("audience"), "audience");
+    assert_eq!(
+        normalize_audience_group_type("private-group"),
+        "private_group"
+    );
+    assert_eq!(normalize_audience_group_type("community"), "private_group");
+
+    assert_eq!(normalize_audience_membership_visibility(""), "private");
+    assert_eq!(
+        normalize_audience_membership_visibility("members"),
+        "members"
+    );
+    assert_eq!(normalize_audience_membership_visibility("public"), "public");
+
+    assert_eq!(normalize_audience_posting_policy(""), "owner");
+    assert_eq!(normalize_audience_posting_policy("members"), "members");
+    assert_eq!(
+        audience_group_purpose_label("private_group"),
+        "Private group"
+    );
+    assert_eq!(audience_membership_label("private"), "Membership private");
 }
 
 #[test]

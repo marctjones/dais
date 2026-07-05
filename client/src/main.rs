@@ -26,13 +26,14 @@ use config::{ConfigStore, MlsDeviceStateFile, MlsGroupStateFile};
 use d1::D1Client;
 use dais_client_core::{
     ComposeDraft as OwnerComposeDraft, DiagnosticStatus, ModerationState, OwnerApiClient,
-    OwnerAudienceList, OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice,
-    OwnerE2eeDeviceRef, OwnerE2eeDeviceUpsert, OwnerE2eeMessage, OwnerE2eeMessageSend,
-    OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef, OwnerE2eePeerDiscoverRequest,
-    OwnerE2eePeerTrustRequest, OwnerFollower, OwnerFollowing, OwnerFriend, OwnerInteraction,
-    OwnerMediaUpload, OwnerNotification, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate,
-    OwnerSearchQuery, OwnerSearchResult, OwnerSnapshot, OwnerSourceAdd, OwnerSources, OwnerStats,
-    OwnerWatchAdd, ProtocolRoute as OwnerProtocolRoute, Visibility as OwnerVisibility,
+    OwnerAudienceList, OwnerAudienceListUpsert, OwnerDelivery, OwnerDirectMessage,
+    OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eeDeviceRef, OwnerE2eeDeviceUpsert,
+    OwnerE2eeMessage, OwnerE2eeMessageSend, OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef,
+    OwnerE2eePeerDiscoverRequest, OwnerE2eePeerTrustRequest, OwnerFollower, OwnerFollowing,
+    OwnerFriend, OwnerInteraction, OwnerMediaUpload, OwnerNotification, OwnerPostDetail,
+    OwnerProfile, OwnerProfileUpdate, OwnerSearchQuery, OwnerSearchResult, OwnerSnapshot,
+    OwnerSourceAdd, OwnerSources, OwnerStats, OwnerWatchAdd, ProtocolRoute as OwnerProtocolRoute,
+    Visibility as OwnerVisibility,
 };
 use dais_core::e2ee_mls::{
     DaisMlsEnvelope, MlsDevice, MlsDeviceMaterial, MlsDevicePrivateState, MlsDeviceState,
@@ -1064,6 +1065,37 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_friends(&friends);
         }
+        OwnerCommand::AudienceLists(args) => {
+            let lists = owner_api(&args)
+                .audience_lists()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            print_owner_audience_lists(&lists);
+        }
+        OwnerCommand::AudienceSave(args) => {
+            let list = owner_api(&args.api)
+                .upsert_audience_list(&OwnerAudienceListUpsert {
+                    id: args.id,
+                    name: args.name,
+                    description: args.description,
+                    group_type: args.group_type,
+                    membership_visibility: args.membership_visibility,
+                    posting_policy: args.posting_policy,
+                    allowed_categories: args.allowed_categories,
+                    member_actor_ids: args.member_actor_ids,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Saved owner API audience group");
+            print_owner_audience_lists(&[list]);
+        }
+        OwnerCommand::AudienceDelete(args) => {
+            owner_api(&args.api)
+                .delete_audience_list(&args.id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("Deleted audience group {}", args.id);
+        }
         OwnerCommand::Notifications(args) => {
             let notifications = owner_api(&args)
                 .notifications()
@@ -1239,7 +1271,7 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
                     protocol: owner_protocol(args.protocol),
                     encrypt: args.encrypt,
                     in_reply_to: args.reply_to,
-                    audience_list_id: None,
+                    audience_list_id: args.audience_list_id,
                     recipients: args.recipients,
                     attachments: args.attachments,
                 })
@@ -2682,6 +2714,35 @@ fn print_owner_friends(friends: &[OwnerFriend]) {
     }
 }
 
+fn print_owner_audience_lists(lists: &[OwnerAudienceList]) {
+    println!("group_model=audience/private_group");
+    println!("membership_default=private");
+    if lists.is_empty() {
+        println!("No audience groups found");
+        return;
+    }
+    for row in lists {
+        println!(
+            "{} [{}] membership={} posting={} members={} categories={}",
+            row.id,
+            row.group_type,
+            row.membership_visibility,
+            row.posting_policy,
+            row.member_count,
+            row.allowed_categories.join(",")
+        );
+        if !row.purpose_label.is_empty() || !row.membership_label.is_empty() {
+            println!("labels={} / {}", row.purpose_label, row.membership_label);
+        }
+        if let Some(description) = row.description.as_deref().filter(|value| !value.is_empty()) {
+            println!("description={description}");
+        }
+        if !row.member_actor_ids.is_empty() {
+            println!("members={}", row.member_actor_ids.join(","));
+        }
+    }
+}
+
 fn print_owner_followers(followers: &[OwnerFollower]) {
     println!("graph_visibility=operator-only");
     println!("graph_note=Followers are not advertised publicly by Dais by default.");
@@ -3365,6 +3426,11 @@ mod tests {
             name: "Close Friends".to_string(),
             description: None,
             allowed_categories: Vec::new(),
+            group_type: "private_group".to_string(),
+            membership_visibility: "private".to_string(),
+            posting_policy: "owner".to_string(),
+            purpose_label: "Private group".to_string(),
+            membership_label: "Membership private".to_string(),
             member_actor_ids: members.iter().map(|member| member.to_string()).collect(),
             member_count: members.len() as u64,
             created_at: None,

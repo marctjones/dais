@@ -825,6 +825,16 @@ pub struct OwnerAudienceList {
     pub description: Option<String>,
     #[serde(default)]
     pub allowed_categories: Vec<String>,
+    #[serde(default = "default_audience_group_type")]
+    pub group_type: String,
+    #[serde(default = "default_audience_membership_visibility")]
+    pub membership_visibility: String,
+    #[serde(default = "default_audience_posting_policy")]
+    pub posting_policy: String,
+    #[serde(default)]
+    pub purpose_label: String,
+    #[serde(default)]
+    pub membership_label: String,
     #[serde(default)]
     pub member_actor_ids: Vec<String>,
     #[serde(default)]
@@ -838,10 +848,28 @@ pub struct OwnerAudienceListUpsert {
     pub id: Option<String>,
     pub name: String,
     pub description: Option<String>,
+    #[serde(default = "default_audience_group_type")]
+    pub group_type: String,
+    #[serde(default = "default_audience_membership_visibility")]
+    pub membership_visibility: String,
+    #[serde(default = "default_audience_posting_policy")]
+    pub posting_policy: String,
     #[serde(default)]
     pub allowed_categories: Vec<String>,
     #[serde(default)]
     pub member_actor_ids: Vec<String>,
+}
+
+fn default_audience_group_type() -> String {
+    "audience".to_string()
+}
+
+fn default_audience_membership_visibility() -> String {
+    "private".to_string()
+}
+
+fn default_audience_posting_policy() -> String {
+    "owner".to_string()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

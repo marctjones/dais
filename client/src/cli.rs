@@ -799,6 +799,12 @@ pub enum OwnerCommand {
     Following(OwnerListArgs),
     /// List mutual friend relationships through the live owner API.
     Friends(OwnerApiArgs),
+    /// List live owner API audience and private groups.
+    AudienceLists(OwnerApiArgs),
+    /// Create or update an audience/private group through the live owner API.
+    AudienceSave(OwnerAudienceSaveArgs),
+    /// Delete an audience/private group through the live owner API.
+    AudienceDelete(OwnerAudienceDeleteArgs),
     /// List live owner API notifications.
     Notifications(OwnerApiArgs),
     /// Mark one live owner API notification as read.
@@ -1261,6 +1267,40 @@ pub struct OwnerListArgs {
 }
 
 #[derive(Args, Clone, Debug)]
+pub struct OwnerAudienceSaveArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    #[arg(long)]
+    pub id: Option<String>,
+    #[arg(long)]
+    pub name: String,
+    #[arg(long)]
+    pub description: Option<String>,
+    /// audience | private_group. Aliases such as private-group and community are accepted by the server.
+    #[arg(long, default_value = "audience")]
+    pub group_type: String,
+    /// private | members | public. Defaults to private.
+    #[arg(long, default_value = "private")]
+    pub membership_visibility: String,
+    /// owner | members. Defaults to owner.
+    #[arg(long, default_value = "owner")]
+    pub posting_policy: String,
+    /// Sensitive category allowed for this group. Repeat for multiple categories.
+    #[arg(long = "category")]
+    pub allowed_categories: Vec<String>,
+    /// ActivityPub actor URL in the group. Repeat for multiple members.
+    #[arg(long = "member")]
+    pub member_actor_ids: Vec<String>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct OwnerAudienceDeleteArgs {
+    #[command(flatten)]
+    pub api: OwnerApiArgs,
+    pub id: String,
+}
+
+#[derive(Args, Clone, Debug)]
 pub struct OwnerPostCreateArgs {
     #[command(flatten)]
     pub api: OwnerApiArgs,
@@ -1280,6 +1320,9 @@ pub struct OwnerPostCreateArgs {
     /// Direct ActivityPub recipient actor URL. Repeat for multiple recipients.
     #[arg(long = "to")]
     pub recipients: Vec<String>,
+    /// Audience/private group id for a direct post.
+    #[arg(long)]
+    pub audience_list_id: Option<String>,
     /// ActivityStreams attachment URL or JSON object. Repeat for multiple attachments.
     #[arg(long = "attachment")]
     pub attachments: Vec<String>,

@@ -594,6 +594,9 @@ export component MainWindow inherits Window {
     in-out property <string> audience-id;
     in-out property <string> audience-name;
     in-out property <string> audience-description;
+    in-out property <string> audience-group-type;
+    in-out property <string> audience-membership-visibility;
+    in-out property <string> audience-posting-policy;
     in-out property <string> audience-categories;
     in-out property <string> audience-members;
     in-out property <string> moderation-reply-policy;
@@ -630,7 +633,7 @@ export component MainWindow inherits Window {
     callback save-source-bundle(string, string, string, string, string, string, string);
     callback preview-profile(string, string, string, string, string);
     callback save-profile(string, string, string, string, string);
-    callback save-audience(string, string, string, string, string);
+    callback save-audience(string, string, string, string, string, string, string, string);
     callback delete-audience(string);
     callback save-moderation(string, bool, string, string);
     callback save-settings(string, string, bool, bool, bool);
@@ -1379,6 +1382,30 @@ export component MainWindow inherits Window {
                                 LineEdit { text <=> root.audience-id; placeholder-text: "id, blank for new"; }
                                 LineEdit { text <=> root.audience-name; placeholder-text: "name"; }
                                 LineEdit { text <=> root.audience-description; placeholder-text: "description"; }
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    ComboBox {
+                                        model: ["audience", "private_group"];
+                                        current-index: root.audience-group-type == "private_group" ? 1 : 0;
+                                        selected(option) => {
+                                            root.audience-group-type = option;
+                                        }
+                                    }
+                                    ComboBox {
+                                        model: ["private", "members", "public"];
+                                        current-index: root.audience-membership-visibility == "public" ? 2 : root.audience-membership-visibility == "members" ? 1 : 0;
+                                        selected(option) => {
+                                            root.audience-membership-visibility = option;
+                                        }
+                                    }
+                                    ComboBox {
+                                        model: ["owner", "members"];
+                                        current-index: root.audience-posting-policy == "members" ? 1 : 0;
+                                        selected(option) => {
+                                            root.audience-posting-policy = option;
+                                        }
+                                    }
+                                }
                                 LineEdit { text <=> root.audience-categories; placeholder-text: "sensitive categories"; }
                                 TextEdit { text <=> root.audience-members; height: 58px; }
                                 HorizontalLayout {
@@ -1386,7 +1413,7 @@ export component MainWindow inherits Window {
                                     Button {
                                         text: "Save group";
                                         clicked => {
-                                            root.save-audience(root.audience-id, root.audience-name, root.audience-description, root.audience-categories, root.audience-members);
+                                            root.save-audience(root.audience-id, root.audience-name, root.audience-description, root.audience-group-type, root.audience-membership-visibility, root.audience-posting-policy, root.audience-categories, root.audience-members);
                                         }
                                     }
                                     Button {

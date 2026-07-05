@@ -6110,7 +6110,8 @@ async fn owner_audience_lists(env: &Env) -> Result<Vec<Map<String, Value>>> {
     let lists = db
         .prepare(
             r#"
-            SELECT id, name, description, allowed_categories, created_at, updated_at
+            SELECT id, name, description, allowed_categories, group_type,
+                   membership_visibility, posting_policy, created_at, updated_at
             FROM audience_lists
             ORDER BY name COLLATE NOCASE ASC, created_at DESC
             "#,
@@ -6133,6 +6134,41 @@ async fn owner_audience_lists(env: &Env) -> Result<Vec<Map<String, Value>>> {
         item.insert(
             "allowed_categories".to_string(),
             Value::Array(allowed_categories.into_iter().map(Value::String).collect()),
+        );
+        let group_type = normalize_audience_group_type(
+            row.get("group_type")
+                .and_then(Value::as_str)
+                .unwrap_or("audience"),
+        );
+        let membership_visibility = normalize_audience_membership_visibility(
+            row.get("membership_visibility")
+                .and_then(Value::as_str)
+                .unwrap_or("private"),
+        );
+        let posting_policy = normalize_audience_posting_policy(
+            row.get("posting_policy")
+                .and_then(Value::as_str)
+                .unwrap_or("owner"),
+        );
+        item.insert(
+            "group_type".to_string(),
+            Value::String(group_type.to_string()),
+        );
+        item.insert(
+            "membership_visibility".to_string(),
+            Value::String(membership_visibility.to_string()),
+        );
+        item.insert(
+            "posting_policy".to_string(),
+            Value::String(posting_policy.to_string()),
+        );
+        item.insert(
+            "purpose_label".to_string(),
+            Value::String(audience_group_purpose_label(group_type).to_string()),
+        );
+        item.insert(
+            "membership_label".to_string(),
+            Value::String(audience_membership_label(membership_visibility).to_string()),
         );
         item.insert(
             "member_actor_ids".to_string(),
@@ -6176,6 +6212,16 @@ async fn owner_upsert_audience_list(
 ) -> std::result::Result<Map<String, Value>, String> {
     let name = body_string_any(body, &["name"]).ok_or_else(|| "name is required".to_string())?;
     let description = body.get("description").and_then(optional_body_string);
+    let group_type = body_string_any(body, &["group_type", "groupType", "purpose"])
+        .map(|value| normalize_audience_group_type(&value).to_string())
+        .unwrap_or_else(|| "audience".to_string());
+    let membership_visibility =
+        body_string_any(body, &["membership_visibility", "membershipVisibility"])
+            .map(|value| normalize_audience_membership_visibility(&value).to_string())
+            .unwrap_or_else(|| "private".to_string());
+    let posting_policy = body_string_any(body, &["posting_policy", "postingPolicy"])
+        .map(|value| normalize_audience_posting_policy(&value).to_string())
+        .unwrap_or_else(|| "owner".to_string());
     let allowed_categories = normalize_sensitive_categories(body_string_array_any(
         body,
         &["allowed_categories", "allowedCategories"],
@@ -6208,22 +6254,39 @@ async fn owner_upsert_audience_list(
         .as_deref()
         .map(D1Type::Text)
         .unwrap_or(D1Type::Null);
+    let group_type_arg = D1Type::Text(group_type.as_str());
+    let membership_visibility_arg = D1Type::Text(membership_visibility.as_str());
+    let posting_policy_arg = D1Type::Text(posting_policy.as_str());
     let allowed_categories_json =
         serde_json::to_string(&allowed_categories).map_err(|error| error.to_string())?;
     let categories_arg = D1Type::Text(allowed_categories_json.as_str());
 
     db.prepare(
         r#"
-        INSERT INTO audience_lists (id, name, description, allowed_categories, created_at, updated_at)
-        VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO audience_lists (
+          id, name, description, allowed_categories, group_type,
+          membership_visibility, posting_policy, created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           description = excluded.description,
           allowed_categories = excluded.allowed_categories,
+          group_type = excluded.group_type,
+          membership_visibility = excluded.membership_visibility,
+          posting_policy = excluded.posting_policy,
           updated_at = CURRENT_TIMESTAMP
         "#,
     )
-    .bind_refs([&id_arg, &name_arg, &description_arg, &categories_arg])
+    .bind_refs([
+        &id_arg,
+        &name_arg,
+        &description_arg,
+        &categories_arg,
+        &group_type_arg,
+        &membership_visibility_arg,
+        &posting_policy_arg,
+    ])
     .map_err(|error| error.to_string())?
     .run()
     .await
@@ -11812,6 +11875,43 @@ fn source_policy_bool(body: &Value, snake: &str, camel: &str) -> bool {
         body.get(snake).or_else(|| body.get(camel)),
         Some(Value::Bool(true))
     )
+}
+
+fn normalize_audience_group_type(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "private_group" | "private" | "group" | "community" => "private_group",
+        _ => "audience",
+    }
+}
+
+fn normalize_audience_membership_visibility(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "members" | "member" | "group" => "members",
+        "public" | "visible" => "public",
+        _ => "private",
+    }
+}
+
+fn normalize_audience_posting_policy(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "members" | "member" | "group" => "members",
+        _ => "owner",
+    }
+}
+
+fn audience_group_purpose_label(group_type: &str) -> &'static str {
+    match normalize_audience_group_type(group_type) {
+        "private_group" => "Private group",
+        _ => "Audience list",
+    }
+}
+
+fn audience_membership_label(membership_visibility: &str) -> &'static str {
+    match normalize_audience_membership_visibility(membership_visibility) {
+        "members" => "Membership visible to members",
+        "public" => "Membership public",
+        _ => "Membership private",
+    }
 }
 
 fn normalize_source_type(value: &str) -> String {
