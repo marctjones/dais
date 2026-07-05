@@ -173,10 +173,13 @@ scripts/release-server.sh --strict
 ```
 
 Use `scripts/release-server.sh --plan` to print the exact gate plan without
-running it. Use `scripts/release-server.sh --strict --conformance --deploy` only
+running it. Use
+`scripts/release-server.sh --deploy --strict --bluesky-conformance --mastodon-conformance`
 when preparing a production/skpt release after the build and smoke gates pass.
 Deploy mode applies the selected idempotent D1 schema updates through
-`scripts/apply-release-d1-migrations.sh` before uploading Workers.
+`scripts/apply-release-d1-migrations.sh` before uploading Workers and runs the
+required independent-instance, cross-instance E2EE, and cross-instance MLS live
+smokes.
 
 Live independent-instance smoke:
 

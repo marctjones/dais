@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.134] - 2026-07-05
+
+### Added
+- Added scoped owner-token authentication to the PDS and Mastodon-compatible
+  router API so live clients can use the same per-scope owner tokens across the
+  protocol surfaces.
+- Added deterministic federation-lab coverage for non-Note ActivityStreams
+  object families instead of carrying those checks as generic ActivityPub INFO
+  rows.
+
+### Changed
+- Deployed production and the independent skpt instance through the strict
+  server release gate with core/router/bindings tests, production and skpt
+  Worker builds, strict Bluesky and Mastodon API conformance, D1 schema updates,
+  production/skpt deploys, skpt live smoke, cross-instance E2EE live smoke, and
+  cross-instance MLS live smoke.
+- Updated AT Protocol core ownership docs to match the current PDS/AppView
+  implementation boundary and documented the current Mastodon compatibility
+  policy.
+
+### Fixed
+- Preserved Mastodon media attachment MIME types in status JSON.
+- Prevented stale PDS protocol metadata responses with no-store cache headers.
+- Corrected the Bluesky latest-commit conformance assertion to match the
+  `com.atproto.sync.getLatestCommit` response shape.
+
 ## [1.28.133] - 2026-07-04
 
 ### Added
