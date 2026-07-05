@@ -10,12 +10,17 @@ use worker::{
     Response, Result, ScheduleContext, ScheduledEvent,
 };
 
+mod config;
 mod fixtures;
 mod mastodon;
 mod media;
 mod owner_auth;
 mod request;
 mod response;
+use config::{
+    activitypub_domain, activitypub_user_prefix, handle_domain, local_actor_url,
+    local_actor_url_for_request, local_username, origin, owner_instance_url,
+};
 use fixtures::{
     fixture_actor_response, fixture_outbox_response, fixture_post_response, fixture_public_key,
     fixture_rss_response, fixture_url_with_public_key,
@@ -151,42 +156,6 @@ async fn scheduled(_event: ScheduledEvent, env: Env, ctx: ScheduleContext) {
     ctx.wait_until(async move {
         let _ = refresh_due_sources(&env).await;
     });
-}
-
-fn env_string(env: &Env, name: &str, fallback: &str) -> String {
-    env.var(name)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|_| fallback.to_string())
-}
-
-fn local_username(env: &Env) -> String {
-    env_string(env, "USERNAME", "social")
-}
-
-fn handle_domain(env: &Env) -> String {
-    env_string(env, "DOMAIN", "dais.social")
-}
-
-fn activitypub_domain(env: &Env) -> String {
-    env.var("ACTIVITYPUB_DOMAIN")
-        .map(|value| value.to_string())
-        .unwrap_or_else(|_| format!("social.{}", handle_domain(env)))
-}
-
-fn local_actor_url(env: &Env) -> String {
-    format!(
-        "https://{}/users/{}",
-        activitypub_domain(env),
-        local_username(env)
-    )
-}
-
-fn local_actor_url_for_request(env: &Env, url: &worker::Url) -> String {
-    format!("{}/users/{}", origin(url), local_username(env))
-}
-
-fn activitypub_user_prefix(env: &Env) -> String {
-    format!("/users/{}", local_username(env))
 }
 
 async fn handle_mastodon_api(mut req: Request, env: Env, url: &worker::Url) -> Result<Response> {
@@ -3434,22 +3403,6 @@ async fn public_status_count(env: &Env) -> Result<i64> {
         .as_ref()
         .map(|fields| integer_field(Some(fields), "count"))
         .unwrap_or(0))
-}
-
-fn origin(url: &worker::Url) -> String {
-    format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default())
-}
-
-fn owner_instance_url(env: &Env) -> String {
-    let domain = env
-        .var("DOMAIN")
-        .map(|value| value.to_string())
-        .unwrap_or_else(|_| "social.dais.social".to_string());
-    if domain.starts_with("http://") || domain.starts_with("https://") {
-        domain.trim_end_matches('/').to_string()
-    } else {
-        format!("https://{}", domain.trim_end_matches('/'))
-    }
 }
 
 async fn column_exists(env: &Env, table: &str, column: &str) -> Result<bool> {
