@@ -9327,6 +9327,14 @@ async fn fetch_source(
     env_source: &Map<String, Value>,
     url: &str,
 ) -> std::result::Result<worker::Response, String> {
+    if let Ok(parsed) = worker::Url::parse(url) {
+        if parsed.host_str() == Some(activitypub_domain(env).as_str())
+            && parsed.path() == "/__dais-fixtures/sources/rss"
+        {
+            return fixture_rss_response(&parsed).map_err(|error| error.to_string());
+        }
+    }
+
     let headers = Headers::new();
     headers
         .set("User-Agent", "dais-source-refresh/1.0")
