@@ -11040,9 +11040,12 @@ async fn watch_bluesky_actor_items(
     let target =
         string_field(Some(source), "url").ok_or_else(|| "watch target is missing".to_string())?;
     let actor = bluesky_actor_target(&target)?;
-    let url = format!(
-        "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor={}&limit=50&filter=posts_no_replies",
-        urlencoding::encode(&actor)
+    let url = bluesky_appview_xrpc_url(
+        "app.bsky.feed.getAuthorFeed",
+        &format!(
+            "actor={}&limit=50&filter=posts_no_replies",
+            urlencoding::encode(&actor)
+        ),
     );
     let body = fetch_json_with_accept(&url, "application/json", "bluesky author feed").await?;
     let feed = body
@@ -11064,9 +11067,9 @@ async fn watch_bluesky_post_items(
     let target =
         string_field(Some(source), "url").ok_or_else(|| "watch target is missing".to_string())?;
     let uri = bluesky_post_uri(&target)?;
-    let url = format!(
-        "https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri={}&depth=1&parentHeight=0",
-        urlencoding::encode(&uri)
+    let url = bluesky_appview_xrpc_url(
+        "app.bsky.feed.getPostThread",
+        &format!("uri={}&depth=1&parentHeight=0", urlencoding::encode(&uri)),
     );
     let body = fetch_json_with_accept(&url, "application/json", "bluesky post thread").await?;
     let mut posts = Vec::new();

@@ -662,6 +662,13 @@ fn bluesky_public_search_uses_appview_host() {
         bluesky_appview_xrpc_url("app.bsky.feed.searchPosts", "q=science&limit=3"),
         "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=science&limit=3"
     );
+    assert_eq!(
+        bluesky_appview_xrpc_url(
+            "app.bsky.feed.getAuthorFeed",
+            "actor=nasa.gov&limit=50&filter=posts_no_replies"
+        ),
+        "https://api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor=nasa.gov&limit=50&filter=posts_no_replies"
+    );
 }
 
 #[test]

@@ -8,6 +8,8 @@ use sha2::{Digest, Sha256};
 use crate::cli::SourceAddArgs;
 use crate::d1::{D1Client, D1SourceSubscription, SourceItemInsert, SourceSubscriptionInsert};
 
+const BLUESKY_APPVIEW_BASE_URL: &str = "https://api.bsky.app";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourcePolicy {
     pub private_reader_only: bool,
@@ -488,8 +490,7 @@ async fn bluesky_actor_watch_items(
     policy: &SourcePolicy,
 ) -> Result<Vec<NormalizedItem>> {
     let actor = bluesky_actor_target(&source.url)?;
-    let mut url =
-        reqwest::Url::parse("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed")?;
+    let mut url = bluesky_appview_url("app.bsky.feed.getAuthorFeed")?;
     url.query_pairs_mut()
         .append_pair("actor", &actor)
         .append_pair("limit", "50")
@@ -512,8 +513,7 @@ async fn bluesky_post_watch_items(
     policy: &SourcePolicy,
 ) -> Result<Vec<NormalizedItem>> {
     let uri = bluesky_post_uri(&source.url)?;
-    let mut url =
-        reqwest::Url::parse("https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread")?;
+    let mut url = bluesky_appview_url("app.bsky.feed.getPostThread")?;
     url.query_pairs_mut()
         .append_pair("uri", &uri)
         .append_pair("depth", "1")
@@ -525,6 +525,11 @@ async fn bluesky_post_watch_items(
         .iter()
         .filter_map(|post| bluesky_watch_item(source, post, policy))
         .collect())
+}
+
+fn bluesky_appview_url(method: &str) -> Result<reqwest::Url> {
+    reqwest::Url::parse(&format!("{BLUESKY_APPVIEW_BASE_URL}/xrpc/{method}"))
+        .with_context(|| format!("invalid Bluesky AppView method URL: {method}"))
 }
 
 async fn fetch_json(client: &reqwest::Client, url: &str, accept: &str) -> Result<Value> {
