@@ -5,12 +5,13 @@ use super::{
     is_local_object_url, is_public_atproto_image_attachment, media_custom_metadata,
     normalize_ai_categories, normalize_discovered_public_post, normalize_e2ee_device_id,
     normalize_e2ee_fingerprint, normalize_e2ee_protocol, normalize_encrypted_media_attachments,
-    normalize_owner_post_attachments, owner_normalize_bluesky_post,
+    normalize_owner_post_attachments, normalized_source_target, owner_normalize_bluesky_post,
     owner_normalize_tootfinder_status, owner_public_post_row_from_discovered,
     owner_public_search_mastodon_query_params, owner_token_has_scopes, parse_lenient_json_body,
     parse_scoped_owner_tokens, parse_workers_ai_moderation, peer_trust_state_after_material_update,
-    sha256_hex, source_type_for_watch_kind, strip_json_fence, tootfinder_search_items,
-    tootfinder_search_url, validate_dais_encrypted_message_v2, validate_e2ee_device_material,
+    sha256_hex, source_id, source_policy_json_for_type, source_type_for_watch_kind,
+    strip_json_fence, tootfinder_search_items, tootfinder_search_url,
+    validate_dais_encrypted_message_v2, validate_e2ee_device_material,
     validate_encrypted_media_payload, validate_encrypted_message_envelope,
     validate_owner_e2ee_payload, MediaMetadataInput, OwnerProfile, OwnerPublicSearchOptions,
     OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
@@ -532,6 +533,80 @@ fn maps_watch_kinds_to_explicit_source_types() {
         source_type_for_watch_kind("bluesky_actor"),
         Some("watch_bluesky_actor")
     );
+}
+
+#[test]
+fn private_watch_policy_forces_no_remote_relationship() {
+    let body = serde_json::json!({
+        "private_reader_only": false,
+        "excerpt_only": true,
+        "image_allowed": true,
+        "full_text_allowed": true
+    });
+
+    let policy: Value =
+        serde_json::from_str(&source_policy_json_for_type(&body, "watch_bluesky_actor")).unwrap();
+    assert_eq!(policy.get("private_reader_only"), Some(&Value::Bool(true)));
+    assert_eq!(policy.get("watch"), Some(&Value::Bool(true)));
+    assert_eq!(policy.get("public_only"), Some(&Value::Bool(true)));
+    assert_eq!(
+        policy.get("no_remote_relationship"),
+        Some(&Value::Bool(true))
+    );
+
+    let source_policy: Value =
+        serde_json::from_str(&source_policy_json_for_type(&body, "rss")).unwrap();
+    assert_eq!(source_policy.get("watch"), Some(&Value::Bool(false)));
+    assert_eq!(
+        source_policy.get("no_remote_relationship"),
+        Some(&Value::Bool(false))
+    );
+}
+
+#[test]
+fn normalizes_private_watch_targets_by_protocol() {
+    let bluesky = serde_json::json!({
+        "target": "https://bsky.app/profile/nasa.gov"
+    });
+    assert_eq!(
+        normalized_source_target("watch_bluesky_actor", &bluesky).unwrap(),
+        "nasa.gov"
+    );
+
+    let activitypub = serde_json::json!({
+        "actor": "@alice@example.social"
+    });
+    assert_eq!(
+        normalized_source_target("watch_activitypub_actor", &activitypub).unwrap(),
+        "@alice@example.social"
+    );
+
+    let feed = serde_json::json!({
+        "url": "https://example.com/feed.xml"
+    });
+    assert_eq!(
+        normalized_source_target("watch_rss", &feed).unwrap(),
+        "https://example.com/feed.xml"
+    );
+
+    let insecure = serde_json::json!({
+        "url": "http://example.com/feed.xml"
+    });
+    assert_eq!(
+        normalized_source_target("watch_rss", &insecure).unwrap_err(),
+        "watch target must use https"
+    );
+}
+
+#[test]
+fn source_ids_dedupe_by_type_and_normalized_target() {
+    let one = source_id("watch_bluesky_actor", "nasa.gov");
+    let two = source_id("watch_bluesky_actor", "nasa.gov");
+    let different_type = source_id("watch_bluesky_post", "nasa.gov");
+
+    assert_eq!(one, two);
+    assert_ne!(one, different_type);
+    assert!(one.starts_with("source-"));
 }
 
 #[test]
