@@ -13,6 +13,7 @@ use worker::{
 mod mastodon;
 mod media;
 mod owner_auth;
+mod request;
 use mastodon::{
     account_action_path as mastodon_account_action_path,
     account_followers_path as mastodon_account_followers_path,
@@ -38,6 +39,11 @@ pub(crate) use media::{
 #[cfg(test)]
 pub(crate) use owner_auth::parse_scoped_owner_tokens;
 use owner_auth::{owner_bearer_tokens, owner_token_has_scopes, remote_environment};
+use request::{
+    decode_component, optional_body_string, optional_trimmed_body, optional_url_field, query_param,
+    read_json, read_mastodon_body, request_content_type, required_body_string, string_like_any,
+    string_like_field,
+};
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
 const SOURCE_TYPES: &[&str] = &[
@@ -10929,141 +10935,6 @@ async fn owner_local_actor(env: &Env) -> Result<LocalActor> {
         id: string_field(row.as_ref(), "id").unwrap_or_else(|| local_actor_url(env)),
         private_key,
     })
-}
-
-fn query_param(url: &worker::Url, key: &str) -> Option<String> {
-    url.query_pairs()
-        .find(|(name, _)| name == key)
-        .map(|(_, value)| value.into_owned())
-}
-
-fn decode_component(value: &str) -> String {
-    urlencoding::decode(value)
-        .map(|decoded| decoded.into_owned())
-        .unwrap_or_else(|_| value.to_string())
-}
-
-async fn read_json(req: &mut Request) -> Value {
-    req.json::<Value>()
-        .await
-        .unwrap_or_else(|_| serde_json::json!({}))
-}
-
-async fn read_mastodon_body(req: &mut Request) -> Value {
-    let content_type = request_content_type(req);
-    if content_type.contains("application/json") {
-        return read_json(req).await;
-    }
-    if content_type.contains("application/x-www-form-urlencoded") {
-        let text = req.text().await.unwrap_or_default();
-        let mut body = Map::new();
-        for pair in text.split('&').filter(|part| !part.is_empty()) {
-            let mut parts = pair.splitn(2, '=');
-            let key = parts.next().map(decode_form_component).unwrap_or_default();
-            if key.is_empty() {
-                continue;
-            }
-            let value = parts.next().map(decode_form_component).unwrap_or_default();
-            insert_repeating_body_value(&mut body, key, Value::String(value));
-        }
-        return Value::Object(body);
-    }
-    serde_json::json!({})
-}
-
-fn request_content_type(req: &Request) -> String {
-    req.headers()
-        .get("Content-Type")
-        .ok()
-        .flatten()
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-}
-
-fn decode_form_component(value: &str) -> String {
-    decode_component(&value.replace('+', " "))
-}
-
-fn insert_repeating_body_value(body: &mut Map<String, Value>, key: String, value: Value) {
-    match body.get_mut(&key) {
-        Some(Value::Array(items)) => items.push(value),
-        Some(existing) => {
-            let previous = existing.clone();
-            *existing = Value::Array(vec![previous, value]);
-        }
-        None => {
-            body.insert(key, value);
-        }
-    }
-}
-
-fn required_body_string(value: Option<&Value>) -> Option<String> {
-    match value {
-        Some(Value::String(text)) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        }
-        Some(Value::Number(number)) if number.as_i64().unwrap_or(1) != 0 => {
-            Some(number.to_string())
-        }
-        Some(Value::Bool(true)) => Some("true".to_string()),
-        _ => None,
-    }
-}
-
-fn string_like_field(body: &Value, key: &str) -> Option<String> {
-    body.get(key).map(|value| match value {
-        Value::Null => String::new(),
-        Value::String(text) => text.clone(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        _ => value.to_string(),
-    })
-}
-
-fn string_like_any(body: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| string_like_field(body, key))
-}
-
-fn optional_trimmed_body(body: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| body.get(*key).and_then(optional_body_string))
-}
-
-fn optional_body_string(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        }
-        Value::Number(number) if number.as_i64().unwrap_or(1) != 0 => Some(number.to_string()),
-        Value::Bool(true) => Some("true".to_string()),
-        _ => None,
-    }
-}
-
-fn optional_url_field(
-    body: &Value,
-    key: &str,
-    field: &str,
-) -> std::result::Result<Option<String>, String> {
-    let Some(value) = body.get(key).and_then(optional_body_string) else {
-        return Ok(None);
-    };
-    let url =
-        worker::Url::parse(&value).map_err(|_| format!("{field} must be an absolute https URL"))?;
-    if url.scheme() != "https" {
-        return Err(format!("{field} must be an absolute https URL"));
-    }
-    Ok(Some(value))
 }
 
 #[derive(Clone)]
