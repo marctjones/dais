@@ -154,9 +154,10 @@ component ToolbarCommandButton inherits Rectangle {
     in property <string> symbol;
     in property <string> label;
     in property <string> description;
+    in property <length> button-width: 84px;
     callback activate();
 
-    width: 84px;
+    width: root.button-width;
     height: 46px;
     border-radius: 6px;
     border-width: 1px;
@@ -892,12 +893,12 @@ export component MainWindow inherits Window {
                     }
 
                     VerticalLayout {
-                        width: 220px;
+                        width: 270px;
                         padding-top: 7px;
                         padding-bottom: 5px;
                         spacing: 2px;
                         Text {
-                            text: "Account";
+                            text: root.active-account-label;
                             color: #344055;
                             font-size: 11px;
                             font-weight: 700;
@@ -932,8 +933,9 @@ export component MainWindow inherits Window {
 
                     ToolbarCommandButton {
                         symbol: "";
-                        label: "Refresh";
+                        label: "Sync";
                         description: "Refresh posts and conversations";
+                        button-width: 62px;
                         activate => {
                             root.refresh();
                         }

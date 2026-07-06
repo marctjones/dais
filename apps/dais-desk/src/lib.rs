@@ -744,6 +744,7 @@ impl DeskController {
         };
         self.selected_row = self.first_row_id();
         self.inspector_open = true;
+        self.clear_workflow_status();
     }
 
     pub fn select_screen(&mut self, screen: &str) {
@@ -759,6 +760,7 @@ impl DeskController {
         self.selected_row = self.first_row_id();
         self.inspector_open = true;
         self.populate_form_from_selected_row();
+        self.clear_workflow_status();
     }
 
     pub fn select_row(&mut self, row_id: &str) {
@@ -804,6 +806,10 @@ impl DeskController {
 
     pub fn toggle_inspector(&mut self) {
         self.inspector_open = !self.inspector_open;
+    }
+
+    fn clear_workflow_status(&mut self) {
+        self.status_message = "Ready.".into();
     }
 
     pub fn select_first_row(&mut self) {

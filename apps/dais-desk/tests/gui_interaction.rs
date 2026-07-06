@@ -93,6 +93,14 @@ fn exercises_normal_owner_task_flows_through_projection() {
     assert!(projection.status_message.contains("reply"));
 
     controller.select_mode("people");
+    let projection = controller.projection();
+    assert_eq!(projection.active_screen, "find");
+    assert_eq!(projection.status_message, "Ready.");
+    assert!(
+        !projection.status_message.contains("reply"),
+        "reply workflow status leaked into People/Find"
+    );
+
     controller.select_screen("audience");
     controller.row_action("audience:close-friends", "Use in compose");
     let projection = controller.projection();
