@@ -558,6 +558,7 @@ export component MainWindow inherits Window {
     in property <string> compose-protocol;
     in property <string> compose-warning;
     in property <string> compose-audience-summary;
+    in property <string> compose-primary-action-text;
     in property <bool> compose-can-send;
     in-out property <string> account-label;
     in-out property <string> account-url;
@@ -978,7 +979,7 @@ export component MainWindow inherits Window {
                         }
 
                         if root.active-screen == "compose" : Rectangle {
-                            height: 372px;
+                            height: 292px;
                             border-radius: 8px;
                             border-width: 1px;
                             border-color: #ccd6e3;
@@ -986,22 +987,41 @@ export component MainWindow inherits Window {
 
                             VerticalLayout {
                                 padding: 12px;
-                                spacing: 8px;
+                                spacing: 7px;
 
-                                Text {
-                                    text: "Write privately by default";
-                                    font-size: 15px;
-                                    font-weight: 800;
-                                    color: #111827;
+                                HorizontalLayout {
+                                    height: 34px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: "Compose";
+                                        font-size: 15px;
+                                        font-weight: 800;
+                                        color: #111827;
+                                        horizontal-stretch: 1;
+                                        vertical-alignment: center;
+                                    }
+                                    Button {
+                                        text: "Save draft";
+                                        clicked => {
+                                            root.row-action("compose:privacy", "Save draft");
+                                        }
+                                    }
+                                    Button {
+                                        text: root.compose-primary-action-text;
+                                        enabled: root.compose-can-send;
+                                        clicked => {
+                                            root.compose-send();
+                                        }
+                                    }
                                 }
 
                                 TextEdit {
                                     text <=> root.compose-text;
-                                    height: 108px;
+                                    height: 92px;
                                 }
 
                                 VerticalLayout {
-                                    spacing: 6px;
+                                    spacing: 5px;
 
                                     HorizontalLayout {
                                         spacing: 8px;
@@ -1058,25 +1078,16 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
-                                Text {
-                                    text: "Audience: " + (root.compose-visibility == "followers" ? "known people" : root.compose-visibility) + "   Route: " + root.compose-protocol;
-                                    color: #344055;
-                                    font-size: 12px;
-                                    font-weight: 700;
-                                }
-
-                                Text {
-                                    text: root.compose-audience-summary;
-                                    color: root.compose-visibility == "public" ? #7b1c1c : #27415f;
-                                    font-size: 12px;
-                                    wrap: word-wrap;
-                                }
-
                                 HorizontalLayout {
                                     spacing: 8px;
                                     LineEdit {
                                         text <=> root.compose-recipients;
                                         placeholder-text: "Direct recipients";
+                                        horizontal-stretch: 1;
+                                    }
+                                    LineEdit {
+                                        text <=> root.compose-audience-list;
+                                        placeholder-text: "Audience group";
                                         horizontal-stretch: 1;
                                     }
                                     CheckBox {
@@ -1085,44 +1096,34 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
-                                if root.compose-visibility == "direct" && root.compose-recipients == "" && root.compose-audience-list == "" : Text {
-                                    text: "Add a direct recipient or audience group before sending.";
-                                    color: #8a4d0a;
-                                    font-size: 12px;
-                                    font-weight: 700;
-                                    wrap: word-wrap;
-                                }
-
-                                if root.compose-encrypt && root.compose-visibility != "direct" : Text {
-                                    text: "Encryption is only available for direct messages.";
-                                    color: #8a4d0a;
-                                    font-size: 12px;
-                                    font-weight: 700;
-                                    wrap: word-wrap;
-                                }
-
-                                LineEdit {
-                                    text <=> root.compose-audience-list;
-                                    placeholder-text: "Audience group id, for example close-friends";
-                                }
-
                                 LineEdit {
                                     text <=> root.compose-media-description;
                                     placeholder-text: "Media alt text / sensitivity note";
                                 }
 
-                                Text {
-                                    text: root.compose-warning;
-                                    color: root.compose-warning == "Ready to send privately." ? #1f7a45 : #8a4d0a;
-                                    font-size: 12px;
-                                    wrap: word-wrap;
-                                }
+                                Rectangle {
+                                    height: 42px;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: root.compose-visibility == "public" ? #d8b4b4 : #d9dee6;
+                                    background: root.compose-visibility == "public" ? #fff7f7 : #ffffff;
 
-                                Button {
-                                    text: root.compose-visibility == "public" ? "Post Publicly" : "Send";
-                                    enabled: root.compose-can-send;
-                                    clicked => {
-                                        root.compose-send();
+                                    VerticalLayout {
+                                        padding: 7px;
+                                        spacing: 2px;
+                                        Text {
+                                            text: root.compose-audience-summary;
+                                            color: root.compose-visibility == "public" ? #7b1c1c : #27415f;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: root.compose-warning;
+                                            color: root.compose-warning == "Ready to send privately." ? #1f7a45 : #8a4d0a;
+                                            font-size: 11px;
+                                            overflow: elide;
+                                        }
                                     }
                                 }
                             }

@@ -484,6 +484,7 @@ pub struct UiProjection {
     pub compose_protocol: String,
     pub compose_warning: String,
     pub compose_audience_summary: String,
+    pub compose_primary_action_text: String,
     pub compose_can_send: bool,
     pub account_label: String,
     pub account_url: String,
@@ -1624,6 +1625,7 @@ impl DeskController {
             compose_can_send: compose_can_send(&self.compose),
             compose_warning,
             compose_audience_summary: compose_audience_summary(&self.compose, &self.data.snapshot),
+            compose_primary_action_text: compose_primary_action_text(&self.compose),
             account_label: self
                 .account_form_label
                 .clone()
@@ -4201,27 +4203,7 @@ impl DeskController {
     }
 
     fn compose_context_rows(&self) -> Vec<UiRow> {
-        let indicator = compose_audience_indicator(&self.compose);
-        let mut rows = vec![row(
-            "compose:privacy",
-            "Audience preview",
-            "Private by default",
-            &compose_warning(&self.compose),
-            &indicator.label,
-            indicator.tone,
-            "Save draft",
-            "",
-        )];
-        rows.push(row(
-            "compose:visibility-summary",
-            "Who can see this",
-            "Review before sending",
-            &compose_audience_summary(&self.compose, &self.data.snapshot),
-            &indicator.label,
-            indicator.tone,
-            "",
-            "",
-        ));
+        let mut rows = Vec::new();
         if let Some(reply) = &self.compose.in_reply_to {
             rows.push(row(
                 &format!("post:{reply}"),
@@ -6001,6 +5983,7 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_compose_protocol(s(&projection.compose_protocol));
     window.set_compose_warning(s(&projection.compose_warning));
     window.set_compose_audience_summary(s(&projection.compose_audience_summary));
+    window.set_compose_primary_action_text(s(&projection.compose_primary_action_text));
     window.set_compose_can_send(projection.compose_can_send);
     window.set_account_label(s(&projection.account_label));
     window.set_account_url(s(&projection.account_url));
@@ -6686,6 +6669,18 @@ fn compose_audience_summary(compose: &ComposeState, snapshot: &OwnerSnapshotBund
         ));
     }
     parts.join(" ")
+}
+
+fn compose_primary_action_text(compose: &ComposeState) -> String {
+    if matches!(compose.visibility, Visibility::Public) {
+        "Post publicly".into()
+    } else if compose.encrypt {
+        "Send encrypted".into()
+    } else if matches!(compose.visibility, Visibility::Direct) {
+        "Send message".into()
+    } else {
+        "Send".into()
+    }
 }
 
 fn audience_members_preview(list: &OwnerAudienceList) -> String {
@@ -11261,6 +11256,10 @@ mod tests {
 
     fn assert_primary_workflow_complete(controller: &mut DeskController, screen: &str) {
         controller.select_screen(screen);
+        if screen == "compose" {
+            assert_compose_surface_complete(controller);
+            return;
+        }
         let rows = controller.rows_for_active_screen_for_projection();
         assert!(
             !rows.is_empty(),
@@ -11278,6 +11277,30 @@ mod tests {
                 row
             );
         }
+    }
+
+    fn assert_compose_surface_complete(controller: &DeskController) {
+        let projection = controller.projection();
+        assert_eq!(projection.active_screen.as_str(), "compose");
+        assert!(
+            !projection.compose_primary_action_text.trim().is_empty(),
+            "compose primary action text is missing"
+        );
+        assert!(
+            !projection.compose_warning.trim().is_empty(),
+            "compose warning/status text is missing"
+        );
+        assert!(
+            !projection.compose_audience_summary.trim().is_empty(),
+            "compose audience summary is missing"
+        );
+        assert!(
+            !projection
+                .compose_audience_summary
+                .to_ascii_lowercase()
+                .contains("placeholder"),
+            "compose audience summary contains placeholder language"
+        );
     }
 
     #[test]
@@ -11306,6 +11329,10 @@ mod tests {
             "accounts",
         ] {
             controller.select_screen(screen);
+            if *screen == "compose" {
+                assert_compose_surface_complete(&controller);
+                continue;
+            }
             assert_supported_row_actions(&controller.rows_for_active_screen());
             if let Some(first_row) = controller.rows_for_active_screen().first() {
                 controller.select_row(first_row.id.as_str());
@@ -12730,6 +12757,47 @@ mod tests {
     }
 
     #[test]
+    fn compose_projection_exposes_contextual_primary_action_label() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.compose.text = "hello".into();
+        assert_eq!(controller.projection().compose_primary_action_text, "Send");
+
+        controller.compose.visibility = Visibility::Direct;
+        controller.compose.recipients = "https://friend.example/users/ada".into();
+        assert_eq!(
+            controller.projection().compose_primary_action_text,
+            "Send message"
+        );
+
+        controller.compose.encrypt = true;
+        assert_eq!(
+            controller.projection().compose_primary_action_text,
+            "Send encrypted"
+        );
+
+        controller.compose.encrypt = false;
+        controller.compose.visibility = Visibility::Public;
+        assert_eq!(
+            controller.projection().compose_primary_action_text,
+            "Post publicly"
+        );
+    }
+
+    #[test]
+    fn compose_context_rows_do_not_duplicate_audience_preview() {
+        let controller = DeskController::fixture_for_tests();
+        let rows = controller.compose_context_rows();
+
+        assert!(rows.is_empty());
+        assert!(!rows
+            .iter()
+            .any(|row| row.title.as_str() == "Audience preview"));
+        assert!(!rows
+            .iter()
+            .any(|row| row.id.as_str() == "compose:visibility-summary"));
+    }
+
+    #[test]
     fn compose_send_button_uses_controller_gate() {
         let slint = include_str!("../ui/app.slint");
         assert!(
@@ -13774,11 +13842,14 @@ mod tests {
     fn compose_context_rows_explain_visibility_and_reply_context() {
         let mut controller = DeskController::fixture_for_tests();
         controller.row_action("notification:notice-reply", "Reply");
+        let projection = controller.projection();
+        assert!(projection
+            .compose_audience_summary
+            .contains("approved people"));
         let rows = controller.compose_context_rows();
-        assert!(rows
+        assert!(!rows
             .iter()
-            .any(|row| row.id.as_str() == "compose:visibility-summary"
-                && row.detail.contains("approved people")));
+            .any(|row| row.id.as_str() == "compose:visibility-summary"));
         assert!(rows.iter().any(|row| row.title.as_str() == "Reply context"
             && !row.detail.contains("fixture-private-post")));
     }

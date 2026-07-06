@@ -43,7 +43,16 @@ fn run() -> Result<(), Box<dyn Error>> {
         .set_size(slint::LogicalSize::new(1180.0, 760.0));
 
     window.invoke_select_screen("compose".into());
+    assert_compose_surface(&window);
     capture(&window, &output_dir, "home-compose-media")?;
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(920.0, 660.0));
+    assert_compose_surface(&window);
+    capture(&window, &output_dir, "home-compose-min-width")?;
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(1180.0, 760.0));
     window.invoke_select_screen("inbox".into());
     window.invoke_select_row("notification:notice-reply".into());
     capture(&window, &output_dir, "home-inbox-notifications")?;
@@ -137,4 +146,20 @@ fn capture(
     )?;
     println!("wrote {}", path.display());
     Ok(())
+}
+
+fn assert_compose_surface(window: &dais_desk::MainWindow) {
+    assert_eq!(window.get_active_screen().as_str(), "compose");
+    let action = window.get_compose_primary_action_text();
+    assert!(
+        matches!(
+            action.as_str(),
+            "Send" | "Send message" | "Send encrypted" | "Post publicly"
+        ),
+        "compose primary action text is missing or unexpected: {action}"
+    );
+    assert!(
+        !window.get_compose_audience_summary().trim().is_empty(),
+        "compose audience summary must be available in the compact compose surface"
+    );
 }
