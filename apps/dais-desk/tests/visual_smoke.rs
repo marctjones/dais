@@ -24,35 +24,35 @@ fn run() -> Result<(), Box<dyn Error>> {
     std::fs::create_dir_all(&output_dir)?;
 
     let window = dais_desk::create_test_window()?;
-    window
-        .window()
-        .set_size(slint::LogicalSize::new(1180.0, 760.0));
+    set_smoke_size(&window, 1180.0, 760.0);
     window.show()?;
 
     capture(&window, &output_dir, "home")?;
-    window
-        .window()
-        .set_size(slint::LogicalSize::new(920.0, 660.0));
+    set_smoke_size(&window, 920.0, 660.0);
+    assert!(
+        window.get_inspector_compact(),
+        "inspector should collapse at the minimum visual-smoke width"
+    );
     capture(&window, &output_dir, "home-min-width")?;
-    window
-        .window()
-        .set_size(slint::LogicalSize::new(1440.0, 860.0));
+    set_smoke_size(&window, 1440.0, 860.0);
+    assert!(
+        !window.get_inspector_compact(),
+        "inspector should be expanded at the wide visual-smoke width"
+    );
     capture(&window, &output_dir, "home-wide")?;
-    window
-        .window()
-        .set_size(slint::LogicalSize::new(1180.0, 760.0));
+    set_smoke_size(&window, 1180.0, 760.0);
 
     window.invoke_select_screen("compose".into());
     assert_compose_surface(&window);
     capture(&window, &output_dir, "home-compose-media")?;
-    window
-        .window()
-        .set_size(slint::LogicalSize::new(920.0, 660.0));
+    set_smoke_size(&window, 920.0, 660.0);
+    assert!(
+        window.get_inspector_compact(),
+        "compose minimum-width screenshot should use the compact inspector rail"
+    );
     assert_compose_surface(&window);
     capture(&window, &output_dir, "home-compose-min-width")?;
-    window
-        .window()
-        .set_size(slint::LogicalSize::new(1180.0, 760.0));
+    set_smoke_size(&window, 1180.0, 760.0);
     window.invoke_select_screen("inbox".into());
     window.invoke_select_row("notification:notice-reply".into());
     capture(&window, &output_dir, "home-inbox-notifications")?;
@@ -69,6 +69,14 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     window.invoke_select_mode("people".into());
     window.invoke_select_screen("find".into());
+    assert!(
+        !window.get_inspector_compact(),
+        "find smoke width should keep the inspector open"
+    );
+    assert!(
+        window.get_find_compact_form(),
+        "find smoke width should use single-column filter fields"
+    );
     capture(&window, &output_dir, "people-find-search")?;
 
     window.invoke_select_screen("friends".into());
@@ -146,6 +154,13 @@ fn capture(
     )?;
     println!("wrote {}", path.display());
     Ok(())
+}
+
+fn set_smoke_size(window: &dais_desk::MainWindow, width: f32, height: f32) {
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(width, height));
+    dais_desk::apply_responsive_layout(window);
 }
 
 fn assert_compose_surface(window: &dais_desk::MainWindow) {

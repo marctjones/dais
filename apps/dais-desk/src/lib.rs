@@ -6057,6 +6057,7 @@ fn apply_controller_projection(window: &MainWindow, controller: &Rc<RefCell<Desk
 }
 
 fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
+    apply_responsive_layout(window);
     window.set_mode_nav(model(projection.mode_nav));
     window.set_screen_nav(model(projection.screen_nav));
     window.set_rows(model(projection.rows));
@@ -6157,6 +6158,12 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_media_expires_seconds(s(&projection.media_expires_seconds));
     window.set_media_authorized_fetch(projection.media_authorized_fetch);
     window.set_media_revoke_url(s(&projection.media_revoke_url));
+}
+
+pub fn apply_responsive_layout(window: &MainWindow) {
+    let width = window.window().size().width as f32;
+    window.set_inspector_compact(width < 1040.0);
+    window.set_find_compact_form(width < 1220.0);
 }
 
 fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
