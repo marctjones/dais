@@ -9,6 +9,7 @@ use worker::{
     Response, Result, ScheduleContext, ScheduledEvent,
 };
 
+mod audience;
 mod config;
 mod e2ee;
 mod fixtures;
@@ -18,6 +19,10 @@ mod owner_auth;
 mod request;
 mod response;
 mod sources;
+pub(crate) use audience::{
+    audience_group_purpose_label, audience_membership_label, normalize_audience_group_type,
+    normalize_audience_membership_visibility, normalize_audience_posting_policy,
+};
 use config::{
     activitypub_domain, activitypub_user_prefix, handle_domain, local_actor_url,
     local_actor_url_for_request, local_username, origin, owner_instance_url,
@@ -11828,43 +11833,6 @@ fn clamp_cadence_minutes(value: Option<String>) -> i32 {
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(60.0);
     minutes.max(5.0).min(1440.0) as i32
-}
-
-fn normalize_audience_group_type(value: &str) -> &'static str {
-    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "private_group" | "private" | "group" | "community" => "private_group",
-        _ => "audience",
-    }
-}
-
-fn normalize_audience_membership_visibility(value: &str) -> &'static str {
-    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "members" | "member" | "group" => "members",
-        "public" | "visible" => "public",
-        _ => "private",
-    }
-}
-
-fn normalize_audience_posting_policy(value: &str) -> &'static str {
-    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "members" | "member" | "group" => "members",
-        _ => "owner",
-    }
-}
-
-fn audience_group_purpose_label(group_type: &str) -> &'static str {
-    match normalize_audience_group_type(group_type) {
-        "private_group" => "Private group",
-        _ => "Audience list",
-    }
-}
-
-fn audience_membership_label(membership_visibility: &str) -> &'static str {
-    match normalize_audience_membership_visibility(membership_visibility) {
-        "members" => "Membership visible to members",
-        "public" => "Membership public",
-        _ => "Membership private",
-    }
 }
 
 fn body_string_any(body: &Value, keys: &[&str]) -> Option<String> {
