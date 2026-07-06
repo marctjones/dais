@@ -681,7 +681,7 @@ impl DeskController {
         self.settings = settings.clone();
         self.data = match self.fetch_live_data(&settings) {
             Ok(data) => {
-                self.status_message = "Loaded owner server state.".to_string();
+                self.status_message = "Loaded latest posts and people.".to_string();
                 data
             }
             Err(error) => {
@@ -1049,14 +1049,14 @@ impl DeskController {
                             .map(|delivery| format!("delivery:{}", delivery.id))
                             .unwrap_or_else(|| row_id.to_string())
                     };
-                    Ok("Delivery details are hidden from the simplified social view.".to_string())
+                    Ok("Opened delivery review. Normal social views stay focused on conversations.".to_string())
                 }
                 "Copy evidence" => {
                     if let Some(row) = self.find_row(row_id) {
                         let evidence =
                             if row.id.starts_with("health:") || row.id.starts_with("diagnostic:") {
                                 let detail = if row.detail.is_empty() {
-                                    "open diagnostics on server for raw evidence"
+                                    "open diagnostics for full evidence"
                                 } else {
                                     row.detail.as_str()
                                 };
@@ -1076,7 +1076,7 @@ impl DeskController {
                                         )
                                     })
                                     .unwrap_or_else(|| {
-                                        "Open delivery list on server for raw evidence".to_string()
+                                        "Open delivery review for full evidence".to_string()
                                     })
                             } else {
                                 format!("Evidence: {}", row.title)
@@ -1141,7 +1141,7 @@ impl DeskController {
         let result = self.save_account_inner(label, instance_url, owner_token);
         match result {
             Ok(()) => {
-                self.status_message = "Saved account and switched active owner API target.".into();
+                self.status_message = "Saved account and switched active account.".into();
                 self.refresh();
             }
             Err(error) => self.status_message = format!("Save account failed: {error}"),
@@ -3005,7 +3005,7 @@ impl DeskController {
             return self.refresh_source_or_watch(row_id);
         }
         self.refresh();
-        Ok("Refreshed owner server state.".into())
+        Ok("Refreshed posts, people, and conversations.".into())
     }
 
     fn retry_delivery(&self, row_id: &str) -> Result<String, String> {
@@ -3974,7 +3974,7 @@ impl DeskController {
             "find" => "Find people to follow by handle, URL, or name.".into(),
             "relationship" => "Relationship context for one person.".into(),
             "watches" => "Private monitoring of public posts without follow approval.".into(),
-            "deliveries" => "Where posts went and what needs operator action.".into(),
+            "deliveries" => "Sent posts that may need attention.".into(),
             "moderation" => "Review replies, warnings, blocks, and sensitivity policy.".into(),
             "security" => "E2EE devices, peer keys, fingerprints, and trust decisions.".into(),
             "accounts" => "Multiple Dais instances and owner tokens.".into(),
@@ -4863,7 +4863,7 @@ impl DeskController {
             "inspector:raw",
             "More details",
             "Hidden by default",
-            "Protocol and delivery evidence stays out of the normal reading view.",
+            "Extra sharing details stay out of the normal reading view.",
             "More",
             "info",
             "",
@@ -8394,7 +8394,7 @@ fn follower_row(follower: &OwnerFollower) -> UiRow {
         &title,
         "Can read private posts only if approved",
         detail,
-        "Raw delivery details are hidden from the normal reading view.",
+        "Sharing details stay out of the normal people view.",
         &status_label,
         tone,
         primary,
@@ -13652,7 +13652,54 @@ mod tests {
         assert_eq!(controller.selected_row, "delivery:delivery-failed");
         assert!(controller
             .status_message
-            .contains("hidden from the simplified social view"));
+            .contains("Normal social views stay focused on conversations"));
+    }
+
+    #[test]
+    fn primary_social_screens_avoid_operational_language() {
+        let mut controller = DeskController::fixture_for_tests();
+        let screens = [
+            "today",
+            "inbox",
+            "conversations",
+            "saved",
+            "find",
+            "friends",
+            "followers",
+            "following",
+        ];
+        let banned = [
+            "raw delivery",
+            "delivery details",
+            "operator",
+            "owner api",
+            "owner server",
+            "protocol and delivery evidence",
+            "raw evidence",
+        ];
+
+        for screen in screens {
+            controller.select_screen(screen);
+            let projection = controller.projection();
+            for row in projection
+                .rows
+                .iter()
+                .chain(projection.inspector_rows.iter())
+            {
+                let text = format!(
+                    "{}\n{}\n{}\n{}\n{}\n{}",
+                    row.title, row.subtitle, row.detail, row.meta, row.primary, row.secondary
+                )
+                .to_ascii_lowercase();
+                for phrase in banned {
+                    assert!(
+                        !text.contains(phrase),
+                        "screen {screen} row {} leaked operational phrase {phrase}: {text}",
+                        row.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]
