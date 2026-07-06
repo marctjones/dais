@@ -44,21 +44,20 @@ use config::{
 };
 use deliveries::{
     insert_delivery_rows, owner_deliveries, owner_delivery_action_path,
-    owner_delivery_rows_for_post, owner_update_delivery_status,
+    owner_update_delivery_status,
 };
 #[cfg(test)]
 pub(crate) use e2ee::{
-    e2ee_device_fingerprint, normalize_e2ee_fingerprint, normalize_e2ee_protocol,
-    peer_trust_state_after_material_update, validate_e2ee_device_material,
-    validate_encrypted_message_envelope,
+    e2ee_device_fingerprint, normalize_e2ee_device_id, normalize_e2ee_fingerprint,
+    normalize_e2ee_protocol, peer_trust_state_after_material_update, validate_e2ee_device_material,
+    validate_encrypted_message_envelope, validate_owner_e2ee_payload,
 };
 pub(crate) use e2ee::{
-    normalize_e2ee_device_id, owner_discover_e2ee_peer_devices,
-    owner_e2ee_device_by_actor_and_device, owner_e2ee_devices, owner_e2ee_inbox_for_actor,
-    owner_e2ee_peer_devices, owner_require_trusted_e2ee_peer, owner_revoke_e2ee_device,
-    owner_revoke_e2ee_peer_device, owner_trust_e2ee_peer_device, owner_upsert_e2ee_device,
-    public_e2ee_devices, validate_dais_encrypted_message_v2, validate_encrypted_media_payload,
-    validate_owner_e2ee_payload,
+    owner_delete_e2ee_message, owner_direct_messages, owner_discover_e2ee_peer_devices,
+    owner_e2ee_devices, owner_e2ee_messages, owner_e2ee_peer_devices, owner_revoke_e2ee_device,
+    owner_revoke_e2ee_peer_device, owner_send_e2ee_message, owner_trust_e2ee_peer_device,
+    owner_upsert_e2ee_device, public_e2ee_devices, validate_dais_encrypted_message_v2,
+    validate_encrypted_media_payload,
 };
 use fixtures::{
     fixture_actor_response, fixture_outbox_response, fixture_post_response, fixture_public_key,
@@ -1487,7 +1486,7 @@ async fn activitypub_store_e2ee_direct_message(
     Ok(())
 }
 
-async fn persist_mls_message_metadata(
+pub(crate) async fn persist_mls_message_metadata(
     env: &Env,
     message_id: &str,
     conversation_id: &str,
@@ -5314,479 +5313,6 @@ async fn owner_mark_notification_read(env: &Env, id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn owner_direct_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
-    let db = env.d1("DB")?;
-    let limit_arg = D1Type::Integer(limit);
-    db.prepare(
-        r#"
-        SELECT id, conversation_id, sender_id, content, published_at, created_at
-        FROM direct_messages
-        ORDER BY published_at DESC
-        LIMIT ?1
-        "#,
-    )
-    .bind_refs(&limit_arg)?
-    .all()
-    .await?
-    .results::<Map<String, Value>>()
-}
-
-async fn owner_e2ee_messages(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
-    let local_actor = owner_local_actor(env).await?;
-    let db = env.d1("DB")?;
-    let limit_arg = D1Type::Integer(limit);
-    let rows = db
-        .prepare(
-            r#"
-            SELECT m.id, m.conversation_id, m.sender_actor_id, m.sender_device_id,
-                   m.ciphertext, m.aad, m.created_at, c.participants, c.protocol
-            FROM e2ee_messages m
-            JOIN e2ee_conversations c ON c.id = m.conversation_id
-            ORDER BY m.created_at DESC
-            LIMIT ?1
-            "#,
-        )
-        .bind_refs(&limit_arg)?
-        .all()
-        .await?
-        .results::<Map<String, Value>>()?;
-    let mut items = Vec::new();
-    for row in rows {
-        items.push(owner_e2ee_message_row(env, &local_actor.id, row).await?);
-    }
-    Ok(items)
-}
-
-async fn owner_send_e2ee_message(
-    env: &Env,
-    body: &Value,
-) -> std::result::Result<Map<String, Value>, String> {
-    let local_actor = owner_local_actor(env)
-        .await
-        .map_err(|error| error.to_string())?;
-    let recipient_actor_id = public_https_url(
-        &body_string_any(
-            body,
-            &["recipient_actor_id", "recipientActorId", "recipient"],
-        )
-        .ok_or("recipientActorId is required")?,
-        "recipientActorId",
-    )?;
-    if recipient_actor_id == local_actor.id {
-        return Err("recipientActorId must be a remote actor".to_string());
-    }
-    let sender_device_id = normalize_e2ee_device_id(
-        &body_string_any(body, &["sender_device_id", "senderDeviceId"])
-            .ok_or("senderDeviceId is required")?,
-    )?;
-    let encrypted_message = body
-        .get("dais_encrypted_message")
-        .or_else(|| body.get("daisEncryptedMessage"))
-        .or_else(|| body.get("encrypted_message"))
-        .or_else(|| body.get("encryptedMessage"))
-        .cloned()
-        .ok_or("encryptedMessage or daisEncryptedMessage is required")?;
-    let (envelope_field, protocol) = validate_owner_e2ee_payload(&encrypted_message)?;
-    if protocol == "mls-rfc9420" {
-        let envelope_sender = encrypted_message
-            .get("senderDeviceId")
-            .and_then(Value::as_str)
-            .ok_or("daisEncryptedMessage.senderDeviceId is required")?;
-        if normalize_e2ee_device_id(envelope_sender)? != sender_device_id {
-            return Err(
-                "senderDeviceId must match daisEncryptedMessage.senderDeviceId".to_string(),
-            );
-        }
-    }
-    let fallback_content = body_string_any(body, &["fallback_content", "fallbackContent"])
-        .unwrap_or_else(|| "Encrypted message. Open in a dais client to decrypt.".to_string());
-    if fallback_content.len() > 512 {
-        return Err("fallbackContent is too long".to_string());
-    }
-    let attachments = normalize_encrypted_media_attachments(
-        &body
-            .get("attachments")
-            .or_else(|| body.get("media_attachments"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
-    )?;
-    if !attachments.is_empty() && protocol != "dais-mls-v1" {
-        return Err(
-            "encrypted media attachments are currently supported only for encryptedMessage v1"
-                .to_string(),
-        );
-    }
-
-    let local_device =
-        owner_e2ee_device_by_actor_and_device(env, &local_actor.id, &sender_device_id)
-            .await
-            .map_err(|error| error.to_string())?;
-    match local_device
-        .as_ref()
-        .and_then(|row| string_field(Some(row), "status"))
-        .as_deref()
-    {
-        Some("active") => {}
-        _ => return Err("senderDeviceId is not an active local E2EE device".to_string()),
-    }
-
-    let recipient_device_id = body_string_any(body, &["recipient_device_id", "recipientDeviceId"]);
-    owner_require_trusted_e2ee_peer(env, &recipient_actor_id, recipient_device_id.as_deref())
-        .await?;
-    let inbox = owner_e2ee_inbox_for_actor(env, &recipient_actor_id).await?;
-
-    let mut participants = vec![local_actor.id.clone(), recipient_actor_id.clone()];
-    participants.sort();
-    let participants_json =
-        serde_json::to_string(&participants).map_err(|error| error.to_string())?;
-    let conversation_id = format!("e2ee-conversation-{}", stable_id(&participants.join("\n")));
-    let now = js_sys::Date::new_0()
-        .to_iso_string()
-        .as_string()
-        .unwrap_or_default();
-    let message_id = format!(
-        "{}/e2ee/messages/{}-{}",
-        local_actor.id,
-        timestamp_for_local_id(&now),
-        stable_id(&serde_json::to_string(&encrypted_message).unwrap_or_default())
-    );
-    let aad = serde_json::json!({
-        "recipientActorId": recipient_actor_id,
-        "fallbackContent": fallback_content,
-        "attachments": attachments.clone(),
-    });
-    let aad_json = serde_json::to_string(&aad).map_err(|error| error.to_string())?;
-    let ciphertext_json =
-        serde_json::to_string(&encrypted_message).map_err(|error| error.to_string())?;
-
-    let db = env.d1("DB").map_err(|error| error.to_string())?;
-    let conversation_arg = D1Type::Text(&conversation_id);
-    let participants_arg = D1Type::Text(&participants_json);
-    db.prepare(
-        r#"
-        INSERT INTO e2ee_conversations (id, protocol, participants, created_at, updated_at)
-        VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))
-        ON CONFLICT(id) DO UPDATE SET protocol = excluded.protocol, updated_at = datetime('now')
-        "#,
-    )
-    .bind_refs(&[conversation_arg, D1Type::Text(protocol), participants_arg])
-    .map_err(|error| error.to_string())?
-    .run()
-    .await
-    .map_err(|error| error.to_string())?;
-
-    let id_arg = D1Type::Text(&message_id);
-    let conversation_arg = D1Type::Text(&conversation_id);
-    let sender_actor_arg = D1Type::Text(&local_actor.id);
-    let sender_device_arg = D1Type::Text(&sender_device_id);
-    let ciphertext_arg = D1Type::Text(&ciphertext_json);
-    let aad_arg = D1Type::Text(&aad_json);
-    db.prepare(
-        r#"
-        INSERT INTO e2ee_messages (
-            id, conversation_id, sender_actor_id, sender_device_id, ciphertext, aad, created_at
-        ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, datetime('now')
-        )
-        "#,
-    )
-    .bind_refs(&[
-        id_arg,
-        conversation_arg,
-        sender_actor_arg,
-        sender_device_arg,
-        ciphertext_arg,
-        aad_arg,
-    ])
-    .map_err(|error| error.to_string())?
-    .run()
-    .await
-    .map_err(|error| error.to_string())?;
-
-    if protocol == "mls-rfc9420" {
-        persist_mls_message_metadata(
-            env,
-            &message_id,
-            &conversation_id,
-            &encrypted_message,
-            &local_actor.id,
-            &sender_device_id,
-            &now,
-        )
-        .await?;
-    }
-
-    let mut note = serde_json::json!({
-        "id": message_id,
-        "type": "Note",
-        "attributedTo": local_actor.id,
-        "to": [recipient_actor_id],
-        "published": now,
-        "content": fallback_content,
-        "daisE2ee": {
-            "v": if protocol == "mls-rfc9420" { 2 } else { 1 },
-            "protocol": protocol,
-            "senderDeviceId": sender_device_id,
-        },
-    });
-    if let Some(object) = note.as_object_mut() {
-        object.insert(envelope_field.to_string(), encrypted_message.clone());
-        if !attachments.is_empty() {
-            object.insert("attachment".to_string(), Value::Array(attachments.clone()));
-        }
-        if protocol == "mls-rfc9420" {
-            if let Some(group_id) = encrypted_message.get("groupId").cloned() {
-                object
-                    .get_mut("daisE2ee")
-                    .and_then(Value::as_object_mut)
-                    .map(|dais| dais.insert("groupId".to_string(), group_id));
-            }
-            if let Some(epoch) = encrypted_message.get("epoch").cloned() {
-                object
-                    .get_mut("daisE2ee")
-                    .and_then(Value::as_object_mut)
-                    .map(|dais| dais.insert("epoch".to_string(), epoch));
-            }
-        }
-    }
-
-    let activity = serde_json::json!({
-        "@context": "https://www.w3.org/ns/activitystreams",
-        "id": format!("{message_id}#create"),
-        "type": "Create",
-        "actor": local_actor.id,
-        "published": now,
-        "to": [recipient_actor_id],
-        "object": note
-    });
-    let delivery_ids = insert_delivery_rows(
-        env,
-        &message_id,
-        vec![inbox],
-        "Create",
-        Some(activity.to_string()),
-    )
-    .await?;
-    let mut message = owner_e2ee_message_by_id(env, &local_actor.id, &message_id)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "message not found after insert".to_string())?;
-    message.insert(
-        "delivery_ids".to_string(),
-        Value::Array(
-            delivery_ids
-                .iter()
-                .map(|id| Value::String(id.clone()))
-                .collect(),
-        ),
-    );
-    let mut result = Map::new();
-    result.insert("ok".to_string(), Value::Bool(true));
-    result.insert("message".to_string(), Value::Object(message));
-    result.insert(
-        "delivery_ids".to_string(),
-        Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
-    );
-    Ok(result)
-}
-
-async fn owner_delete_e2ee_message(env: &Env, message_id: &str) -> Result<bool> {
-    let local_actor = owner_local_actor(env).await?;
-    let db = env.d1("DB")?;
-    let message_arg = D1Type::Text(message_id);
-    let Some(row) = db
-        .prepare(
-            r#"
-            SELECT m.conversation_id, c.participants
-            FROM e2ee_messages m
-            JOIN e2ee_conversations c ON c.id = m.conversation_id
-            WHERE m.id = ?1
-            LIMIT 1
-            "#,
-        )
-        .bind_refs(&message_arg)?
-        .first::<Map<String, Value>>(None)
-        .await?
-    else {
-        return Ok(false);
-    };
-    let participants = string_vec_json_field(Some(&row), "participants");
-    if !participants.iter().any(|actor| actor == &local_actor.id) {
-        return Ok(false);
-    }
-    let conversation_id = string_field(Some(&row), "conversation_id").unwrap_or_default();
-
-    db.prepare("DELETE FROM e2ee_mls_message_metadata WHERE message_id = ?1")
-        .bind_refs(&message_arg)?
-        .run()
-        .await?;
-    db.prepare("DELETE FROM e2ee_messages WHERE id = ?1")
-        .bind_refs(&message_arg)?
-        .run()
-        .await?;
-    db.prepare("DELETE FROM deliveries WHERE post_id = ?1")
-        .bind_refs(&message_arg)?
-        .run()
-        .await?;
-
-    if !conversation_id.is_empty() {
-        let conversation_arg = D1Type::Text(&conversation_id);
-        let remaining = db
-            .prepare("SELECT id FROM e2ee_messages WHERE conversation_id = ?1 LIMIT 1")
-            .bind_refs(&conversation_arg)?
-            .first::<Map<String, Value>>(None)
-            .await?;
-        if remaining.is_none() {
-            db.prepare("DELETE FROM e2ee_conversations WHERE id = ?1")
-                .bind_refs(&conversation_arg)?
-                .run()
-                .await?;
-        }
-    }
-    Ok(true)
-}
-
-async fn owner_e2ee_message_by_id(
-    env: &Env,
-    local_actor_id: &str,
-    message_id: &str,
-) -> Result<Option<Map<String, Value>>> {
-    let message_arg = D1Type::Text(message_id);
-    let row = env
-        .d1("DB")?
-        .prepare(
-            r#"
-            SELECT m.id, m.conversation_id, m.sender_actor_id, m.sender_device_id,
-                   m.ciphertext, m.aad, m.created_at, c.participants, c.protocol
-            FROM e2ee_messages m
-            JOIN e2ee_conversations c ON c.id = m.conversation_id
-            WHERE m.id = ?1
-            LIMIT 1
-            "#,
-        )
-        .bind_refs(&message_arg)?
-        .first::<Map<String, Value>>(None)
-        .await?;
-    match row {
-        Some(row) => Ok(Some(
-            owner_e2ee_message_row(env, local_actor_id, row).await?,
-        )),
-        None => Ok(None),
-    }
-}
-
-async fn owner_e2ee_message_row(
-    env: &Env,
-    local_actor_id: &str,
-    row: Map<String, Value>,
-) -> Result<Map<String, Value>> {
-    let message_id = string_field(Some(&row), "id").unwrap_or_default();
-    let aad = string_field(Some(&row), "aad")
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let encrypted_message = string_field(Some(&row), "ciphertext")
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .unwrap_or(Value::Null);
-    let protocol = string_field(Some(&row), "protocol")
-        .or_else(|| {
-            aad.get("e2eeProtocol")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| "dais-mls-v1".to_string());
-    let participants = string_vec_json_field(Some(&row), "participants");
-    let recipient_actor_id = aad
-        .get("recipientActorId")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            participants
-                .iter()
-                .find(|actor_id| actor_id.as_str() != local_actor_id)
-                .cloned()
-        });
-    let fallback_content = aad
-        .get("fallbackContent")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let attachments = aad
-        .get("attachments")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let delivery_statuses = owner_delivery_rows_for_post(env, &message_id).await?;
-    let mut item = Map::new();
-    item.insert("id".to_string(), string_value_or_default(&row, "id"));
-    item.insert(
-        "conversation_id".to_string(),
-        string_value_or_default(&row, "conversation_id"),
-    );
-    item.insert(
-        "sender_actor_id".to_string(),
-        string_value_or_default(&row, "sender_actor_id"),
-    );
-    item.insert(
-        "sender_device_id".to_string(),
-        string_value_or_default(&row, "sender_device_id"),
-    );
-    item.insert(
-        "recipient_actor_id".to_string(),
-        recipient_actor_id.map(Value::String).unwrap_or(Value::Null),
-    );
-    item.insert("e2ee_protocol".to_string(), Value::String(protocol.clone()));
-    if protocol == "mls-rfc9420" {
-        item.insert(
-            "dais_encrypted_message".to_string(),
-            encrypted_message.clone(),
-        );
-        item.insert("encrypted_message".to_string(), Value::Null);
-        item.insert(
-            "mls_group_id".to_string(),
-            encrypted_message
-                .get("groupId")
-                .cloned()
-                .unwrap_or(Value::Null),
-        );
-        item.insert(
-            "mls_epoch".to_string(),
-            encrypted_message
-                .get("epoch")
-                .cloned()
-                .unwrap_or(Value::Null),
-        );
-    } else {
-        item.insert("encrypted_message".to_string(), encrypted_message);
-        item.insert("dais_encrypted_message".to_string(), Value::Null);
-        item.insert("mls_group_id".to_string(), Value::Null);
-        item.insert("mls_epoch".to_string(), Value::Null);
-    }
-    item.insert(
-        "fallback_content".to_string(),
-        fallback_content.map(Value::String).unwrap_or(Value::Null),
-    );
-    item.insert("attachments".to_string(), Value::Array(attachments));
-    item.insert(
-        "delivery_ids".to_string(),
-        Value::Array(
-            delivery_statuses
-                .iter()
-                .filter_map(|delivery| string_field(Some(delivery), "id"))
-                .map(Value::String)
-                .collect(),
-        ),
-    );
-    item.insert(
-        "delivery_statuses".to_string(),
-        Value::Array(delivery_statuses.into_iter().map(Value::Object).collect()),
-    );
-    item.insert(
-        "created_at".to_string(),
-        row_value_or_null(&row, "created_at"),
-    );
-    Ok(item)
-}
-
 #[derive(Clone)]
 struct OwnerSearchFlags {
     include_local: bool,
@@ -7339,7 +6865,7 @@ fn normalize_owner_post_attachments(
     Ok(media_attachments)
 }
 
-fn normalize_encrypted_media_attachments(
+pub(crate) fn normalize_encrypted_media_attachments(
     values: &[Value],
 ) -> std::result::Result<Vec<Value>, String> {
     let mut attachments = Vec::new();
@@ -7465,7 +6991,7 @@ fn canonical_mastodon_status_id(value: &str) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
-fn timestamp_for_local_id(iso: &str) -> String {
+pub(crate) fn timestamp_for_local_id(iso: &str) -> String {
     iso.chars()
         .filter(|ch| !matches!(ch, '-' | ':' | 'T' | 'Z' | '.'))
         .take(14)
@@ -7672,7 +7198,7 @@ fn integer_field(row: Option<&Map<String, Value>>, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-fn string_vec_json_field(row: Option<&Map<String, Value>>, key: &str) -> Vec<String> {
+pub(crate) fn string_vec_json_field(row: Option<&Map<String, Value>>, key: &str) -> Vec<String> {
     let Some(raw) = string_field(row, key) else {
         return Vec::new();
     };
@@ -7698,11 +7224,11 @@ fn bool_field(row: Option<&Map<String, Value>>, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn row_value_or_null(row: &Map<String, Value>, key: &str) -> Value {
+pub(crate) fn row_value_or_null(row: &Map<String, Value>, key: &str) -> Value {
     non_empty_value(row, key).unwrap_or(Value::Null)
 }
 
-fn string_value_or_default(row: &Map<String, Value>, key: &str) -> Value {
+pub(crate) fn string_value_or_default(row: &Map<String, Value>, key: &str) -> Value {
     string_field(Some(row), key)
         .map(Value::String)
         .unwrap_or_else(|| Value::String(String::new()))
