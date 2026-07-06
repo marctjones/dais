@@ -1,14 +1,16 @@
 use crate::request::string_like_any;
 use crate::{
-    bluesky_appview_xrpc_url, bluesky_post_url, collapse_whitespace, fetch_activitypub_json,
-    fetch_actor_recent_public_posts, fetch_json_with_accept, normalize_discovered_public_post,
-    optional_body_string, public_https_url, resolve_activitypub_actor, stable_id, string_field,
-    strip_html, value_string,
+    activitypub_domain, bluesky_appview_xrpc_url, bluesky_post_url, bool_field,
+    clamp_cadence_minutes, collapse_whitespace, fetch_activitypub_json,
+    fetch_actor_recent_public_posts, fetch_json_with_accept, fixture_rss_response, non_empty_value,
+    normalize_discovered_public_post, optional_body_string, public_https_url,
+    resolve_activitypub_actor, row_int, row_value_or_fallback_null, row_value_or_null, stable_id,
+    string_field, strip_html, truncate_chars, value_string,
 };
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
+use worker::{D1Type, Env, Fetch, Headers, Request, RequestInit, Result};
 
 const SOURCE_TYPES: &[&str] = &[
     "rss",
@@ -781,4 +783,799 @@ fn normalize_source_date(value: Option<String>) -> Option<String> {
             date.to_iso_string().as_string()
         }
     }
+}
+
+pub(crate) async fn owner_source_subscriptions(
+    env: &Env,
+    limit: i32,
+) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               last_fetched_at, next_fetch_at, last_error, error_count, policy_json, created_at, updated_at
+        FROM source_subscriptions
+        WHERE source_type NOT IN (
+          'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+          'watch_bluesky_actor', 'watch_bluesky_post'
+        )
+        ORDER BY updated_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+pub(crate) async fn owner_watch_subscriptions(
+    env: &Env,
+    limit: i32,
+) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               last_fetched_at, next_fetch_at, last_error, error_count, policy_json, created_at, updated_at
+        FROM source_subscriptions
+        WHERE source_type IN (
+          'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+          'watch_bluesky_actor', 'watch_bluesky_post'
+        )
+        ORDER BY updated_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind_refs(&limit_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+pub(crate) async fn owner_source_items(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, source_id, source_type, title, canonical_url, external_id, author,
+                   published_at, fetched_at, excerpt, content_type, thumbnail_url,
+                   rights_policy_json, read, summary, created_at, updated_at
+            FROM source_items
+            WHERE source_type NOT IN (
+              'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+              'watch_bluesky_actor', 'watch_bluesky_post'
+            )
+            ORDER BY COALESCE(published_at, fetched_at) DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(rows.into_iter().map(normalize_source_item).collect())
+}
+
+pub(crate) async fn owner_watch_items(env: &Env, limit: i32) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let limit_arg = D1Type::Integer(limit);
+    let rows = db
+        .prepare(
+            r#"
+            SELECT id, source_id, source_type, title, canonical_url, external_id, author,
+                   published_at, fetched_at, excerpt, content_type, thumbnail_url,
+                   rights_policy_json, read, summary, created_at, updated_at
+            FROM source_items
+            WHERE source_type IN (
+              'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+              'watch_bluesky_actor', 'watch_bluesky_post'
+            )
+            ORDER BY COALESCE(published_at, fetched_at) DESC
+            LIMIT ?1
+            "#,
+        )
+        .bind_refs(&limit_arg)?
+        .all()
+        .await?
+        .results::<Map<String, Value>>()?;
+    Ok(rows.into_iter().map(normalize_source_item).collect())
+}
+
+pub(crate) async fn owner_add_source(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let source_type = normalize_source_type(
+        &string_like_any(body, &["source_type", "sourceType"]).unwrap_or_default(),
+    );
+    if !is_addable_source_type(&source_type) {
+        return Err(format!(
+            "source_type must be one of: {}",
+            addable_source_types().join(", ")
+        ));
+    }
+    let source_url = normalized_source_target(&source_type, body)?;
+    let title = body.get("title").and_then(optional_body_string);
+    let cadence_minutes = clamp_cadence_minutes(string_like_any(
+        body,
+        &["cadence_minutes", "cadenceMinutes"],
+    ));
+    let api_secret_name = if is_watch_source_type(&source_type) {
+        None
+    } else {
+        string_like_any(body, &["api_secret_name", "apiSecretName"])
+            .and_then(|value| optional_body_string(&Value::String(value)))
+    };
+    let policy_json = source_policy_json_for_type(body, &source_type);
+
+    owner_upsert_source(
+        env,
+        &source_type,
+        &source_url,
+        title.as_deref(),
+        cadence_minutes,
+        api_secret_name.as_deref(),
+        &policy_json,
+    )
+    .await
+}
+
+pub(crate) async fn owner_add_watch(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let watch_kind = string_like_any(
+        body,
+        &[
+            "watch_type",
+            "watchType",
+            "source_type",
+            "sourceType",
+            "protocol",
+            "kind",
+        ],
+    )
+    .unwrap_or_else(|| "rss".to_string());
+    let source_type = source_type_for_watch_kind(&watch_kind)
+        .ok_or_else(|| "watch_type must be rss, atom, activitypub_actor, activitypub_object, bluesky_actor, or bluesky_post".to_string())?;
+    let source_url = normalized_source_target(source_type, body)?;
+    let id = source_id(source_type, &source_url);
+    let title = body.get("title").and_then(optional_body_string);
+    let cadence_minutes = clamp_cadence_minutes(string_like_any(
+        body,
+        &["cadence_minutes", "cadenceMinutes"],
+    ));
+    let policy_json = source_policy_json_for_type(body, source_type);
+
+    owner_upsert_source(
+        env,
+        source_type,
+        &source_url,
+        title.as_deref(),
+        cadence_minutes,
+        None,
+        &policy_json,
+    )
+    .await
+    .map(|mut row| {
+        row.insert("watch".to_string(), Value::Bool(true));
+        row.insert(
+            "watch_type".to_string(),
+            Value::String(source_type.to_string()),
+        );
+        row.insert("id".to_string(), Value::String(id));
+        row
+    })
+}
+
+async fn owner_upsert_source(
+    env: &Env,
+    source_type: &str,
+    source_url: &str,
+    title: Option<&str>,
+    cadence_minutes: i32,
+    api_secret_name: Option<&str>,
+    policy_json: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    let id = source_id(source_type, source_url);
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let id_arg = D1Type::Text(&id);
+    let type_arg = D1Type::Text(source_type);
+    let url_arg = D1Type::Text(source_url);
+    let title_arg = title.map(D1Type::Text).unwrap_or(D1Type::Null);
+    let cadence_arg = D1Type::Integer(cadence_minutes);
+    let policy_arg = D1Type::Text(policy_json);
+    let secret_arg = api_secret_name.map(D1Type::Text).unwrap_or(D1Type::Null);
+    db.prepare(
+        r#"
+        INSERT INTO source_subscriptions (
+          id, source_type, url, title, refresh_cadence_minutes, policy_json,
+          api_secret_name, status, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          source_type = excluded.source_type,
+          url = excluded.url,
+          title = excluded.title,
+          refresh_cadence_minutes = excluded.refresh_cadence_minutes,
+          policy_json = excluded.policy_json,
+          api_secret_name = excluded.api_secret_name,
+          status = 'active',
+          last_error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind_refs([
+        &id_arg,
+        &type_arg,
+        &url_arg,
+        &title_arg,
+        &cadence_arg,
+        &policy_arg,
+        &secret_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    owner_source_by_id(env, &id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "source add failed".to_string())
+}
+
+async fn owner_source_by_id(env: &Env, id: &str) -> Result<Option<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+               policy_json, api_secret_name, created_at, updated_at
+        FROM source_subscriptions
+        WHERE id = ?1
+        "#,
+    )
+    .bind_refs(&id_arg)?
+    .first::<Map<String, Value>>(None)
+    .await
+}
+
+pub(crate) async fn owner_refresh_sources(
+    env: &Env,
+    id: Option<&str>,
+) -> std::result::Result<Value, String> {
+    let rows = if let Some(id) = id.filter(|value| !value.trim().is_empty()) {
+        match owner_source_by_id(env, id)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            Some(source) => vec![source],
+            None => return Err(format!("source not found: {id}")),
+        }
+    } else {
+        owner_active_sources(env)
+            .await
+            .map_err(|error| error.to_string())?
+    };
+    refresh_source_rows(env, rows).await
+}
+
+pub(crate) async fn owner_refresh_watches(
+    env: &Env,
+    id: Option<&str>,
+) -> std::result::Result<Value, String> {
+    let rows = if let Some(id) = id.filter(|value| !value.trim().is_empty()) {
+        match owner_source_by_id(env, id)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            Some(source)
+                if string_field(Some(&source), "source_type")
+                    .map(|source_type| is_watch_source_type(&source_type))
+                    .unwrap_or(false) =>
+            {
+                vec![source]
+            }
+            Some(_) => return Err(format!("source is not a watch: {id}")),
+            None => return Err(format!("watch not found: {id}")),
+        }
+    } else {
+        owner_active_watches(env)
+            .await
+            .map_err(|error| error.to_string())?
+    };
+    refresh_source_rows(env, rows).await
+}
+
+async fn refresh_source_rows(
+    env: &Env,
+    rows: Vec<Map<String, Value>>,
+) -> std::result::Result<Value, String> {
+    let mut items = Vec::new();
+    for source in rows {
+        let source_id = string_field(Some(&source), "id").unwrap_or_default();
+        match refresh_feed_source(env, &source).await {
+            Ok(()) => {
+                let status = owner_source_by_id(env, &source_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|row| string_field(Some(&row), "status"))
+                    .unwrap_or_else(|| "active".to_string());
+                items.push(serde_json::json!({ "id": source_id, "ok": true, "status": status }));
+            }
+            Err(message) => {
+                let message = truncate_chars(&message, 500);
+                mark_source_error(env, &source_id, &message).await?;
+                items.push(serde_json::json!({ "id": source_id, "ok": false, "error": message }));
+            }
+        }
+    }
+    let ok = items
+        .iter()
+        .all(|item| item.get("ok").and_then(Value::as_bool).unwrap_or(false));
+    Ok(serde_json::json!({ "ok": ok, "items": items }))
+}
+
+pub(crate) async fn refresh_due_sources(env: &Env) -> std::result::Result<(), String> {
+    let rows = due_active_sources(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    for source in rows {
+        if let Err(message) = refresh_feed_source(env, &source).await {
+            if let Some(source_id) = string_field(Some(&source), "id") {
+                let message = truncate_chars(&message, 500);
+                mark_source_error(env, &source_id, &message).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn owner_active_sources(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+               policy_json, api_secret_name, created_at, updated_at
+        FROM source_subscriptions
+        WHERE status = 'active'
+          AND source_type IN (
+            'rss', 'atom', 'api', 'watch_rss', 'watch_atom',
+            'watch_activitypub_actor', 'watch_activitypub_object',
+            'watch_bluesky_actor', 'watch_bluesky_post'
+          )
+        ORDER BY COALESCE(next_fetch_at, created_at) ASC
+        LIMIT 20
+        "#,
+    )
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn owner_active_watches(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+               policy_json, api_secret_name, created_at, updated_at
+        FROM source_subscriptions
+        WHERE status = 'active'
+          AND source_type IN (
+            'watch_rss', 'watch_atom', 'watch_activitypub_actor', 'watch_activitypub_object',
+            'watch_bluesky_actor', 'watch_bluesky_post'
+          )
+        ORDER BY COALESCE(next_fetch_at, created_at) ASC
+        LIMIT 20
+        "#,
+    )
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn due_active_sources(env: &Env) -> Result<Vec<Map<String, Value>>> {
+    let db = env.d1("DB")?;
+    let now = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+    let now_arg = D1Type::Text(&now);
+    db.prepare(
+        r#"
+        SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
+               etag, last_modified, last_fetched_at, next_fetch_at, last_error, error_count,
+               policy_json, api_secret_name, created_at, updated_at
+        FROM source_subscriptions
+        WHERE status = 'active'
+          AND source_type IN (
+            'rss', 'atom', 'api', 'watch_rss', 'watch_atom',
+            'watch_activitypub_actor', 'watch_activitypub_object',
+            'watch_bluesky_actor', 'watch_bluesky_post'
+          )
+          AND (next_fetch_at IS NULL OR next_fetch_at <= ?1)
+        ORDER BY COALESCE(next_fetch_at, created_at) ASC
+        LIMIT 20
+        "#,
+    )
+    .bind_refs(&now_arg)?
+    .all()
+    .await?
+    .results::<Map<String, Value>>()
+}
+
+async fn refresh_feed_source(
+    env: &Env,
+    source: &Map<String, Value>,
+) -> std::result::Result<(), String> {
+    let source_id =
+        string_field(Some(source), "id").ok_or_else(|| "source id is missing".to_string())?;
+    let source_type =
+        string_field(Some(source), "source_type").unwrap_or_else(|| "rss".to_string());
+    if !is_refreshable_source_type(&source_type) {
+        return Err(format!("unsupported source type {source_type}"));
+    }
+    let url =
+        string_field(Some(source), "url").ok_or_else(|| "source url is missing".to_string())?;
+    let cadence = row_int(source, "refresh_cadence_minutes")
+        .unwrap_or(60)
+        .max(5);
+    let next_fetch_at = js_sys::Date::new(&JsValue::from_f64(
+        js_sys::Date::now() + (cadence as f64) * 60.0 * 1000.0,
+    ))
+    .to_iso_string()
+    .as_string()
+    .unwrap_or_default();
+    let policy = source_policy_from_row(source);
+
+    if source_type == "watch_activitypub_actor" {
+        let items = watch_activitypub_actor_items(source, &policy).await?;
+        store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
+        mark_source_refreshed(env, &source_id, &next_fetch_at, None, None).await?;
+        return Ok(());
+    }
+    if source_type == "watch_activitypub_object" {
+        let items = watch_activitypub_object_items(source, &policy).await?;
+        store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
+        mark_source_refreshed(env, &source_id, &next_fetch_at, None, None).await?;
+        return Ok(());
+    }
+    if source_type == "watch_bluesky_actor" {
+        let items = watch_bluesky_actor_items(source, &policy).await?;
+        store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
+        mark_source_refreshed(env, &source_id, &next_fetch_at, None, None).await?;
+        return Ok(());
+    }
+    if source_type == "watch_bluesky_post" {
+        let items = watch_bluesky_post_items(source, &policy).await?;
+        store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
+        mark_source_refreshed(env, &source_id, &next_fetch_at, None, None).await?;
+        return Ok(());
+    }
+
+    let mut response = fetch_source(env, source, &url).await?;
+    let status = response.status_code();
+    if status == 304 {
+        mark_source_refreshed(
+            env,
+            &source_id,
+            &next_fetch_at,
+            string_field(Some(source), "etag").as_deref(),
+            string_field(Some(source), "last_modified").as_deref(),
+        )
+        .await?;
+        return Ok(());
+    }
+    if !(200..=299).contains(&status) {
+        return Err(format!("source fetch failed with HTTP {status}"));
+    }
+
+    let etag = response
+        .headers()
+        .get("ETag")
+        .map_err(|error| error.to_string())?
+        .or_else(|| string_field(Some(source), "etag"));
+    let last_modified = response
+        .headers()
+        .get("Last-Modified")
+        .map_err(|error| error.to_string())?
+        .or_else(|| string_field(Some(source), "last_modified"));
+    let body = response.text().await.map_err(|error| error.to_string())?;
+    let mut items = if source_type == "api" {
+        parse_api_items(&body, source, &policy)?
+    } else {
+        parse_feed_items(&body, source, &policy)
+    };
+    items.truncate(50);
+    store_source_refresh_items(env, &source_id, &source_type, &policy, items).await?;
+    mark_source_refreshed(
+        env,
+        &source_id,
+        &next_fetch_at,
+        etag.as_deref(),
+        last_modified.as_deref(),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn store_source_refresh_items(
+    env: &Env,
+    source_id: &str,
+    source_type: &str,
+    policy: &SourcePolicy,
+    mut items: Vec<SourceRefreshItem>,
+) -> std::result::Result<(), String> {
+    items.truncate(50);
+    for item in items {
+        insert_source_item(env, source_id, source_type, policy, &item).await?;
+    }
+    Ok(())
+}
+
+async fn fetch_source(
+    env: &Env,
+    env_source: &Map<String, Value>,
+    url: &str,
+) -> std::result::Result<worker::Response, String> {
+    if let Ok(parsed) = worker::Url::parse(url) {
+        if parsed.host_str() == Some(activitypub_domain(env).as_str())
+            && parsed.path() == "/__dais-fixtures/sources/rss"
+        {
+            return fixture_rss_response(&parsed).map_err(|error| error.to_string());
+        }
+    }
+
+    let headers = Headers::new();
+    headers
+        .set("User-Agent", "dais-source-refresh/1.0")
+        .map_err(|error| error.to_string())?;
+    if let Some(etag) = string_field(Some(env_source), "etag") {
+        headers
+            .set("If-None-Match", &etag)
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(last_modified) = string_field(Some(env_source), "last_modified") {
+        headers
+            .set("If-Modified-Since", &last_modified)
+            .map_err(|error| error.to_string())?;
+    }
+    let source_type = string_field(Some(env_source), "source_type").unwrap_or_default();
+    if !is_watch_source_type(&source_type) {
+        if let Some(secret_name) = string_field(Some(env_source), "api_secret_name") {
+            if let Ok(secret) = env.var(&secret_name) {
+                headers
+                    .set("Authorization", &format!("Bearer {}", secret.to_string()))
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+    }
+    let mut init = RequestInit::new();
+    init.with_method(worker::Method::Get).with_headers(headers);
+    let request = Request::new_with_init(url, &init).map_err(|error| error.to_string())?;
+    Fetch::Request(request)
+        .send()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn insert_source_item(
+    env: &Env,
+    source_id: &str,
+    source_type: &str,
+    policy: &SourcePolicy,
+    item: &SourceRefreshItem,
+) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let policy_json =
+        serde_json::to_string(&policy.to_value()).map_err(|error| error.to_string())?;
+    let metadata_json = serde_json::json!({ "scheduled": true }).to_string();
+    let item_id_arg = D1Type::Text(&item.id);
+    let source_id_arg = D1Type::Text(source_id);
+    let source_type_arg = D1Type::Text(source_type);
+    let title_arg = D1Type::Text(&item.title);
+    let canonical_arg = item
+        .canonical_url
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let external_arg = item
+        .external_id
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let author_arg = item
+        .author
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let published_arg = item
+        .published_at
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let excerpt_arg = item
+        .excerpt
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let content_type_arg = D1Type::Text("text/html");
+    let hash_arg = D1Type::Text(&item.hash);
+    let thumbnail_arg = item
+        .thumbnail_url
+        .as_deref()
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let policy_arg = D1Type::Text(&policy_json);
+    let metadata_arg = D1Type::Text(&metadata_json);
+    db.prepare(
+        r#"
+        INSERT OR IGNORE INTO source_items (
+          id, source_id, source_type, title, canonical_url, external_id, author,
+          published_at, excerpt, content_type, hash, thumbnail_url, rights_policy_json,
+          raw_metadata_json, fetched_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        "#,
+    )
+    .bind_refs([
+        &item_id_arg,
+        &source_id_arg,
+        &source_type_arg,
+        &title_arg,
+        &canonical_arg,
+        &external_arg,
+        &author_arg,
+        &published_arg,
+        &excerpt_arg,
+        &content_type_arg,
+        &hash_arg,
+        &thumbnail_arg,
+        &policy_arg,
+        &metadata_arg,
+    ])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+async fn mark_source_refreshed(
+    env: &Env,
+    source_id: &str,
+    next_fetch_at: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let next_arg = D1Type::Text(next_fetch_at);
+    let etag_arg = etag.map(D1Type::Text).unwrap_or(D1Type::Null);
+    let modified_arg = last_modified.map(D1Type::Text).unwrap_or(D1Type::Null);
+    let id_arg = D1Type::Text(source_id);
+    db.prepare(
+        r#"
+        UPDATE source_subscriptions
+        SET status = 'active',
+            last_fetched_at = CURRENT_TIMESTAMP,
+            next_fetch_at = ?1,
+            etag = COALESCE(?2, etag),
+            last_modified = COALESCE(?3, last_modified),
+            last_error = NULL,
+            error_count = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?4
+        "#,
+    )
+    .bind_refs([&next_arg, &etag_arg, &modified_arg, &id_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn mark_source_error(
+    env: &Env,
+    source_id: &str,
+    message: &str,
+) -> std::result::Result<(), String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let message_arg = D1Type::Text(message);
+    let id_arg = D1Type::Text(source_id);
+    db.prepare(
+        r#"
+        UPDATE source_subscriptions
+        SET status = 'error',
+            last_error = ?1,
+            error_count = error_count + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?2
+        "#,
+    )
+    .bind_refs([&message_arg, &id_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub(crate) async fn owner_delete_source(env: &Env, id: &str) -> Result<()> {
+    let db = env.d1("DB")?;
+    let id_arg = D1Type::Text(id);
+    db.prepare("DELETE FROM source_subscriptions WHERE id = ?1")
+        .bind_refs(&id_arg)?
+        .run()
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn owner_delete_watch(env: &Env, id: &str) -> std::result::Result<(), String> {
+    let Some(source) = owner_source_by_id(env, id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Err(format!("watch not found: {id}"));
+    };
+    let source_type = string_field(Some(&source), "source_type").unwrap_or_default();
+    if !is_watch_source_type(&source_type) {
+        return Err(format!("source is not a watch: {id}"));
+    }
+    owner_delete_source(env, id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn normalize_source_item(row: Map<String, Value>) -> Map<String, Value> {
+    let mut item = Map::new();
+    item.insert("id".to_string(), row_value_or_null(&row, "id"));
+    item.insert("title".to_string(), row_value_or_null(&row, "title"));
+    item.insert(
+        "source_type".to_string(),
+        row_value_or_null(&row, "source_type"),
+    );
+    item.insert(
+        "canonical_url".to_string(),
+        row_value_or_null(&row, "canonical_url"),
+    );
+    item.insert(
+        "excerpt".to_string(),
+        row_value_or_fallback_null(&row, "excerpt", "summary"),
+    );
+    item.insert(
+        "rights_policy_json".to_string(),
+        non_empty_value(&row, "rights_policy_json")
+            .unwrap_or_else(|| Value::String("{}".to_string())),
+    );
+    item.insert(
+        "read".to_string(),
+        Value::Bool(bool_field(Some(&row), "read")),
+    );
+    item.insert(
+        "source_id".to_string(),
+        row_value_or_null(&row, "source_id"),
+    );
+    item.insert("author".to_string(), row_value_or_null(&row, "author"));
+    item.insert(
+        "published_at".to_string(),
+        row_value_or_null(&row, "published_at"),
+    );
+    item.insert(
+        "fetched_at".to_string(),
+        row_value_or_null(&row, "fetched_at"),
+    );
+    item.insert(
+        "thumbnail_url".to_string(),
+        row_value_or_null(&row, "thumbnail_url"),
+    );
+    item
 }
