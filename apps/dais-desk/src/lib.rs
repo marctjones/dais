@@ -4017,6 +4017,7 @@ impl DeskController {
                     )
                 })
                 .push(
+                    &compact_actor(&dm.sender_id),
                     preview_markdown_safe(&dm.content),
                     dm.published_at.clone(),
                     false,
@@ -4042,6 +4043,7 @@ impl DeskController {
                 .entry(conversation_id.clone())
                 .or_insert_with(|| ConversationSummary::new(&conversation_id, peer, "Direct", "ok"))
                 .push(
+                    peer,
                     preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content)),
                     post.published_at
                         .clone()
@@ -4073,6 +4075,7 @@ impl DeskController {
                     )
                 })
                 .push(
+                    "You",
                     preview_markdown_safe(&post.content),
                     post.published_at
                         .clone()
@@ -4087,15 +4090,7 @@ impl DeskController {
             let rendered = e2ee_message_render_state(&self.settings, message);
             let peer = conversation_peer_for_e2ee(&self.data.snapshot, message);
             let is_group = e2ee_message_is_group(message);
-            let conversation_id = if is_group {
-                format!("group:{}", message.conversation_id)
-            } else {
-                format!(
-                    "peer:{}",
-                    e2ee_peer_actor(&self.data.snapshot, message)
-                        .unwrap_or_else(|| message.conversation_id.clone())
-                )
-            };
+            let conversation_id = e2ee_conversation_id(&self.data.snapshot, message);
             summaries
                 .entry(conversation_id.clone())
                 .or_insert_with(|| {
@@ -4111,6 +4106,7 @@ impl DeskController {
                     )
                 })
                 .push(
+                    &e2ee_message_speaker_label(&self.data.snapshot, message),
                     rendered.preview,
                     message
                         .created_at
@@ -4835,7 +4831,9 @@ impl DeskController {
     fn inspector_rows(&self, selected_row: &str) -> Vec<UiRow> {
         let mut rows = Vec::new();
         if let Some(selected) = self.find_row(selected_row) {
-            if selected.kind.as_str() != "notification" {
+            if selected.kind.as_str() == "conversation" {
+                rows.extend(self.conversation_thread_rows(selected_row));
+            } else if selected.kind.as_str() != "notification" {
                 rows.push(selected.clone());
                 rows.extend(selected_visibility_inspector_rows(&selected));
             }
@@ -4865,6 +4863,118 @@ impl DeskController {
             "",
             "",
         ));
+        rows
+    }
+
+    fn conversation_thread_rows(&self, selected_row: &str) -> Vec<UiRow> {
+        let Some(id) = selected_row.strip_prefix("conversation:") else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+
+        for dm in &self.data.direct_messages {
+            if id != format!("peer:{}", dm.sender_id) {
+                continue;
+            }
+            rows.push(row_with_kind(
+                "message",
+                &format!("dm:{}", dm.id),
+                &compact_actor(&dm.sender_id),
+                &dm.published_at,
+                &preview_markdown_safe(&dm.content),
+                "Plaintext direct message",
+                "Direct",
+                "ok",
+                "Reply",
+                "",
+            ));
+        }
+
+        for post in self
+            .data
+            .snapshot
+            .home_timeline
+            .iter()
+            .filter(|post| post.visibility.eq_ignore_ascii_case("direct"))
+        {
+            if id != format!("peer:{}", post.actor_id) {
+                continue;
+            }
+            let peer = post
+                .actor_display_name
+                .as_deref()
+                .or(post.actor_username.as_deref())
+                .unwrap_or(&post.actor_id);
+            rows.push(row_with_kind(
+                "message",
+                &format!("conversation-post:{}", post.object_id),
+                peer,
+                post.published_at.as_deref().unwrap_or("direct post"),
+                &preview_markdown_safe(post.content_html.as_deref().unwrap_or(&post.content)),
+                "Direct post",
+                "Direct",
+                "ok",
+                "Reply",
+                "",
+            ));
+        }
+
+        for post in self
+            .data
+            .snapshot
+            .posts
+            .iter()
+            .filter(|post| matches!(post.visibility, Visibility::Direct))
+        {
+            if id != format!("own-direct-post:{}", post.id) {
+                continue;
+            }
+            rows.push(row_with_kind(
+                "message",
+                &format!("conversation-own-post:{}", post.id),
+                "You",
+                post.published_at.as_deref().unwrap_or("direct post"),
+                &preview_markdown_safe(&post.content),
+                if post.encrypted {
+                    "Encrypted direct post"
+                } else {
+                    "Direct post"
+                },
+                if post.encrypted { "E2EE" } else { "Direct" },
+                "ok",
+                "",
+                "",
+            ));
+        }
+
+        for message in &self.data.e2ee_messages {
+            let expected = e2ee_conversation_id(&self.data.snapshot, message);
+            if id != expected {
+                continue;
+            }
+            let rendered = e2ee_message_render_state(&self.settings, message);
+            let chip = if e2ee_message_is_group(message) {
+                "E2EE group"
+            } else if message.e2ee_protocol == "mls-rfc9420" {
+                "MLS"
+            } else {
+                "E2EE"
+            };
+            rows.push(row_with_kind(
+                "message",
+                &format!("e2ee-message:{}", message.id),
+                &e2ee_message_speaker_label(&self.data.snapshot, message),
+                message.created_at.as_deref().unwrap_or("encrypted message"),
+                &rendered.preview,
+                &rendered.meta,
+                chip,
+                if rendered.locked { "warn" } else { "ok" },
+                "Reply",
+                "",
+            ));
+        }
+
+        rows.sort_by(|left, right| left.subtitle.cmp(&right.subtitle));
         rows
     }
 
@@ -7503,6 +7613,7 @@ struct ConversationSummary {
     peer: String,
     latest_preview: String,
     previews: Vec<String>,
+    latest_speaker: String,
     latest_at: String,
     count: usize,
     encrypted_count: usize,
@@ -7519,6 +7630,7 @@ impl ConversationSummary {
             peer: peer.into(),
             latest_preview: String::new(),
             previews: Vec::new(),
+            latest_speaker: String::new(),
             latest_at: String::new(),
             count: 0,
             encrypted_count: 0,
@@ -7531,15 +7643,23 @@ impl ConversationSummary {
 
     fn push(
         &mut self,
+        speaker: &str,
         preview: String,
         timestamp: String,
         encrypted: bool,
         locked: bool,
         group: bool,
     ) {
-        self.latest_preview = preview.clone();
-        self.previews.retain(|existing| existing != &preview);
-        self.previews.insert(0, preview.clone());
+        let speaker = speaker.trim();
+        let thread_line = if speaker.is_empty() {
+            preview.clone()
+        } else {
+            format!("{speaker}: {preview}")
+        };
+        self.latest_speaker = speaker.to_string();
+        self.latest_preview = preview;
+        self.previews.retain(|existing| existing != &thread_line);
+        self.previews.insert(0, thread_line);
         self.previews.truncate(3);
         self.latest_at = timestamp;
         self.count += 1;
@@ -7560,9 +7680,9 @@ impl ConversationSummary {
 
     fn into_row(self) -> UiRow {
         let title = if self.group {
-            format!("Group conversation with {}", self.peer)
+            format!("Group: {}", self.peer)
         } else {
-            format!("Conversation with {}", self.peer)
+            self.peer.clone()
         };
         let mut meta = vec![message_count_label(self.count)];
         if self.encrypted_count > 0 {
@@ -7571,13 +7691,23 @@ impl ConversationSummary {
         if self.locked_count > 0 {
             meta.push(format!("{} locked", self.locked_count));
         }
+        let subtitle = if self.latest_at.is_empty() {
+            meta.join(" · ")
+        } else {
+            format!("{} · {}", self.latest_at, meta.join(" · "))
+        };
+        let meta_text = if self.latest_speaker.is_empty() {
+            meta.join(" · ")
+        } else {
+            format!("Latest from {}", self.latest_speaker)
+        };
         row_with_kind(
             "conversation",
             &format!("conversation:{}", self.id),
             &title,
-            &self.latest_at,
+            &subtitle,
             &self.preview_detail(),
-            &meta.join(" · "),
+            &meta_text,
             &self.chip,
             &self.tone,
             "Reply",
@@ -7592,7 +7722,7 @@ impl ConversationSummary {
         };
         let mut detail = first.clone();
         for previous in previews.take(1) {
-            detail.push_str(" Previous: ");
+            detail.push('\n');
             detail.push_str(previous);
         }
         detail
@@ -7614,6 +7744,29 @@ fn conversation_peer_for_e2ee(
     compact_actor(
         &e2ee_peer_actor(snapshot, message).unwrap_or_else(|| message.sender_actor_id.clone()),
     )
+}
+
+fn e2ee_conversation_id(snapshot: &OwnerSnapshotBundle, message: &OwnerE2eeMessage) -> String {
+    if e2ee_message_is_group(message) {
+        format!("group:{}", message.conversation_id)
+    } else {
+        format!(
+            "peer:{}",
+            e2ee_peer_actor(snapshot, message).unwrap_or_else(|| message.conversation_id.clone())
+        )
+    }
+}
+
+fn e2ee_message_speaker_label(
+    snapshot: &OwnerSnapshotBundle,
+    message: &OwnerE2eeMessage,
+) -> String {
+    let owner = snapshot.profile.actor_url.as_str();
+    if message.sender_actor_id == owner || message.sender_actor_id.starts_with(owner) {
+        "You".into()
+    } else {
+        compact_actor(&message.sender_actor_id)
+    }
 }
 
 fn e2ee_peer_actor(snapshot: &OwnerSnapshotBundle, message: &OwnerE2eeMessage) -> Option<String> {
@@ -13335,13 +13488,35 @@ mod tests {
             .expect("1:1 conversation");
         assert_eq!(plaintext.kind.as_str(), "conversation");
         assert_eq!(plaintext.chip.as_str(), "Encrypted");
-        assert!(plaintext.meta.contains("2 messages"));
-        assert!(plaintext.meta.contains("1 encrypted"));
-        assert!(!plaintext.meta.contains("locked"));
+        assert!(plaintext.subtitle.contains("2 messages"));
+        assert!(plaintext.subtitle.contains("1 encrypted"));
+        assert!(!plaintext.subtitle.contains("locked"));
+        assert!(plaintext.meta.contains("Latest from"));
+        assert!(plaintext.detail.contains("Ada"));
         assert!(plaintext.detail.contains("backyard telescope"));
         assert!(plaintext
             .detail
             .contains("Encrypted fixture message decrypted on this device"));
+    }
+
+    #[test]
+    fn selected_conversation_inspector_shows_thread_messages() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_screen("conversations");
+        let rows = controller.inspector_rows("conversation:peer:https://friend.example/users/ada");
+
+        assert!(rows.iter().any(|row| row.kind.as_str() == "message"
+            && row.id.as_str().starts_with("dm:")
+            && row.detail.contains("backyard telescope")));
+        assert!(rows.iter().any(|row| row.kind.as_str() == "message"
+            && row.id.as_str().starts_with("e2ee-message:")
+            && row
+                .detail
+                .contains("Encrypted fixture message decrypted on this device")
+            && row.meta.contains("Decrypted")));
+        assert!(!rows
+            .iter()
+            .any(|row| row.title.as_str().starts_with("Conversation with")));
     }
 
     #[test]
