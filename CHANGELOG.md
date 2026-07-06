@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.135] - 2026-07-06
+
+### Added
+- Added explicit private community/group primitives on top of owner audience
+  lists, including `group_type`, `membership_visibility`, and `posting_policy`
+  metadata with private membership as the default.
+- Added owner CLI support for `audience-lists`, `audience-save`,
+  `audience-delete`, and `post-create --audience-list-id` so group membership
+  and direct group posting can be verified without the GUI.
+
+### Changed
+- Updated Dais Desk to expose audience list vs private group purpose,
+  membership visibility, and posting policy in group rows, form controls,
+  save status, and direct compose previews.
+- Closed the v1.32 discovery/watches/sources/community milestone after live RSS,
+  ActivityPub, Bluesky watch, public search, and private-group posting evidence.
+- Deployed production and the independent skpt instance through the strict
+  server release gate with all conformance, D1 schema updates, production/skpt
+  deploys, skpt smoke, cross-instance E2EE smoke, and cross-instance MLS smoke.
+
+### Fixed
+- Guarded the release D1 migration runner so the private-group schema migration
+  is skipped on future releases once the columns already exist.
+
 ## [1.28.134] - 2026-07-05
 
 ### Added

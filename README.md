@@ -51,7 +51,7 @@ client and the core-based Cloudflare worker tree.
   `social.skpt.cl` instances pass MLS v2 device publication, bidirectional
   owner-DM delivery/decrypt, audience-list group delivery/decrypt, two-device
   recipient delivery/decrypt for one actor, and removed-device decrypt-failure
-  smoke tests.
+  smoke tests, including the 2026-07-06 strict production/skpt release gate.
 - Rich ActivityPub object support includes ActivityStreams `Note`, `Article`,
   `Document`, and `Event` objects from the Rust CLI, including title/summary,
   event time, and location metadata while preserving Mastodon fallback status
@@ -70,6 +70,14 @@ client and the core-based Cloudflare worker tree.
   JSON API sources with `articles[]` or `items[]` into a private reader item
   model with rights-policy metadata; scheduled Cloudflare refresh stores
   metadata/excerpts only and never reposts automatically.
+- Private watches can follow owner-selected RSS, ActivityPub, and Bluesky public
+  targets without creating remote follow relationships, and public search is
+  explicit through Bluesky and ActivityPub provider buckets with sensitive-query
+  guardrails.
+- Private community/group primitives are implemented through owner audience
+  groups with explicit `audience` vs `private_group` purpose,
+  private-by-default membership visibility, posting policy metadata, direct
+  group posting, and Dais Desk/CLI visibility labels.
 
 Mastodon parity is not complete. Dais is currently best described as
 Mastodon-readable with a growing compatibility API, not a full Mastodon server
@@ -112,6 +120,9 @@ cargo run --manifest-path client/Cargo.toml -- sources add rss https://www.w3.or
 cargo run --manifest-path client/Cargo.toml -- sources add api https://api.example.com/articles --title "Licensed API" --api-secret-name EXAMPLE_API_TOKEN --remote
 cargo run --manifest-path client/Cargo.toml -- sources refresh --remote
 cargo run --manifest-path client/Cargo.toml -- sources items --remote
+cargo run --manifest-path client/Cargo.toml -- owner audience-lists
+cargo run --manifest-path client/Cargo.toml -- owner audience-save --id close-friends --name "Close Friends" --group-type private_group --member https://example.social/users/alice
+cargo run --manifest-path client/Cargo.toml -- owner post-create "private group note" --visibility direct --audience-list-id close-friends
 cargo run --manifest-path client/Cargo.toml -- timeline home --remote
 cargo run --manifest-path client/Cargo.toml -- friends list --remote
 cargo run --manifest-path client/Cargo.toml -- tui --remote

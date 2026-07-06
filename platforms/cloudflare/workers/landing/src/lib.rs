@@ -288,12 +288,12 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <div class="tile">
                     <span class="status">verified</span>
                     <h3>E2EE</h3>
-                    <p>The encryptedMessage v1 fallback and MLS v2 owner-device paths are implemented. The independent skpt.cl deployment passed the 2026-07-05 strict production release gate with dais.social: bidirectional owner-DM delivery/decrypt, MLS direct messages, audience-list group delivery/decrypt, two-device recipient decrypt, removed-device decrypt failure, and delivery-worker processing.</p>
+                    <p>The encryptedMessage v1 fallback and MLS v2 owner-device paths are implemented. The independent skpt.cl deployment passed the 2026-07-06 strict production release gate with dais.social: bidirectional owner-DM delivery/decrypt, MLS direct messages, audience-list group delivery/decrypt, two-device recipient decrypt, removed-device decrypt failure, and delivery-worker processing.</p>
                 </div>
                 <div class="tile">
-                    <span class="status partial">in progress</span>
-                    <h3>Media and polish</h3>
-                    <p>R2 media serving, private ActivityPub media, AT Protocol public image upload, and encrypted media attachments are implemented. Desk media presentation, profile editing, moderation UI, and analytics remain active roadmap items.</p>
+                    <span class="status">verified</span>
+                    <h3>Discovery and groups</h3>
+                    <p>RSS/Atom/API sources, private RSS/ActivityPub/Bluesky watches, explicit public search, and private group primitives are implemented. Group membership is private by default, and Dais Desk/CLI label audience lists versus private groups before posting.</p>
                 </div>
             </div>
         </section>
@@ -312,7 +312,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
     </main>
 
     <div class="footer">
-        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-07-05 strict production/skpt server release gate.</p>
+        <p>Open source under active development. Running on Cloudflare Workers, D1, R2, and Queues. Homepage status updated after the 2026-07-06 strict production/skpt server release gate.</p>
     </div>
 </body>
 </html>"#,
