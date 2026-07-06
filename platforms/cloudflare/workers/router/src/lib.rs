@@ -85,26 +85,23 @@ pub(crate) use media::{
     media_r2_key_from_url, media_type_for_filename, private_media_expires_at, random_token,
     safe_media_filename, MediaMetadataInput,
 };
-use moderation::{
-    detect_sensitive_categories, owner_moderation, owner_moderation_replies,
-    owner_set_reply_moderation_status, owner_update_moderation_settings,
-};
 #[cfg(test)]
 pub(crate) use moderation::{
     normalize_ai_categories, parse_workers_ai_moderation, strip_json_fence,
 };
+use moderation::{
+    owner_moderation, owner_moderation_replies, owner_set_reply_moderation_status,
+    owner_update_moderation_settings,
+};
 #[cfg(test)]
 pub(crate) use owner_auth::parse_scoped_owner_tokens;
 use owner_auth::{owner_bearer_tokens, owner_token_has_scopes, remote_environment};
-pub(crate) use public_search::{
-    bluesky_appview_xrpc_url, bluesky_post_url, owner_public_search, OwnerPublicSearch,
-    OwnerPublicSearchOptions,
-};
+use public_search::{bluesky_appview_xrpc_url, bluesky_post_url, owner_search, owner_search_flags};
 #[cfg(test)]
 pub(crate) use public_search::{
     owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
     owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
-    tootfinder_search_items, tootfinder_search_url,
+    tootfinder_search_items, tootfinder_search_url, OwnerPublicSearchOptions,
 };
 #[cfg(test)]
 pub(crate) use public_search::{OwnerPublicSearchProvider, OwnerPublicSearchResultType};
@@ -5313,195 +5310,6 @@ async fn owner_mark_notification_read(env: &Env, id: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone)]
-struct OwnerSearchFlags {
-    include_local: bool,
-    include_public: bool,
-    confirm_public_sensitive: bool,
-    public_options: OwnerPublicSearchOptions,
-}
-
-fn owner_search_flags(url: &worker::Url) -> OwnerSearchFlags {
-    let scope = query_param(url, "scope")
-        .unwrap_or_else(|| "local".to_string())
-        .to_ascii_lowercase();
-    let mut include_local = matches!(scope.as_str(), "" | "local" | "all");
-    let mut include_public = matches!(scope.as_str(), "public" | "remote" | "all");
-
-    if query_param(url, "include_public").as_deref() == Some("true") {
-        include_public = true;
-    }
-    if query_param(url, "include_local").as_deref() == Some("false") {
-        include_local = false;
-    }
-    let confirm_public_sensitive = matches!(
-        query_param(url, "confirm_public_sensitive").as_deref(),
-        Some("true" | "1" | "yes" | "on")
-    );
-
-    OwnerSearchFlags {
-        include_local,
-        include_public,
-        confirm_public_sensitive,
-        public_options: OwnerPublicSearchOptions::from_url(url),
-    }
-}
-
-async fn owner_search(
-    env: &Env,
-    query: String,
-    limit: i32,
-    flags: OwnerSearchFlags,
-) -> Result<OwnerSearch> {
-    let term = query.trim().to_string();
-    if term.is_empty() {
-        return Ok(OwnerSearch {
-            posts: Vec::new(),
-            users: Vec::new(),
-            sources: Vec::new(),
-            source_items: Vec::new(),
-            public_posts: Vec::new(),
-            public_actors: Vec::new(),
-            provider_errors: Vec::new(),
-            public_search_guard: OwnerPublicSearchGuard::default(),
-        });
-    }
-
-    let (posts, users, sources, source_items) = if flags.include_local {
-        owner_local_search(env, &term, limit).await?
-    } else {
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
-    };
-    let public_categories = if flags.include_public {
-        detect_sensitive_categories(&term)
-    } else {
-        Vec::new()
-    };
-    let public_guard =
-        owner_public_search_guard(&public_categories, flags.confirm_public_sensitive);
-    let public = if flags.include_public && !public_guard.blocked {
-        owner_public_search(env, &term, limit, &flags.public_options).await
-    } else {
-        OwnerPublicSearch::default()
-    };
-
-    Ok(OwnerSearch {
-        posts,
-        users,
-        sources,
-        source_items,
-        public_posts: public.posts,
-        public_actors: public.actors,
-        provider_errors: public.provider_errors,
-        public_search_guard: public_guard,
-    })
-}
-
-fn owner_public_search_guard(
-    categories: &[String],
-    confirm_public_sensitive: bool,
-) -> OwnerPublicSearchGuard {
-    let requires_confirmation = !categories.is_empty();
-    let confirmed = requires_confirmation && confirm_public_sensitive;
-    let blocked = requires_confirmation && !confirmed;
-    let message = if blocked {
-        Some("Public provider search skipped until the operator confirms this sensitive query.")
-    } else if confirmed {
-        Some("Sensitive public search was explicitly confirmed by the operator.")
-    } else {
-        None
-    };
-    OwnerPublicSearchGuard {
-        blocked,
-        requires_confirmation,
-        confirmed,
-        categories: categories.to_vec(),
-        message: message.map(str::to_string),
-    }
-}
-
-type OwnerLocalSearchRows = (
-    Vec<Map<String, Value>>,
-    Vec<Map<String, Value>>,
-    Vec<Map<String, Value>>,
-    Vec<Map<String, Value>>,
-);
-
-async fn owner_local_search(env: &Env, term: &str, limit: i32) -> Result<OwnerLocalSearchRows> {
-    let db = env.d1("DB")?;
-    let like = format!("%{term}%");
-    let like_arg = D1Type::Text(&like);
-    let limit_arg = D1Type::Integer(limit);
-    let posts = db
-        .prepare(
-            r#"
-            SELECT id, actor_id, content, content_html, COALESCE(object_type, 'Note') AS object_type,
-                   name, summary, start_time, end_time, location, poll_options,
-                   visibility, COALESCE(protocol, 'activitypub') AS protocol,
-                   published_at, in_reply_to, atproto_uri, encrypted_message, media_attachments
-            FROM posts
-            WHERE content LIKE ?1 OR name LIKE ?1 OR summary LIKE ?1
-            ORDER BY published_at DESC
-            LIMIT ?2
-            "#,
-        )
-        .bind_refs([&like_arg, &limit_arg])?
-        .all()
-        .await?
-        .results::<Map<String, Value>>()?;
-    let users = db
-        .prepare(
-            r#"
-            SELECT follower_actor_id AS actor_id, 'follower' AS relation, status, created_at
-            FROM followers
-            WHERE follower_actor_id LIKE ?1
-            UNION ALL
-            SELECT target_actor_id AS actor_id, 'following' AS relation, status, created_at
-            FROM following
-            WHERE target_actor_id LIKE ?1
-            ORDER BY created_at DESC
-            LIMIT ?2
-            "#,
-        )
-        .bind_refs([&like_arg, &limit_arg])?
-        .all()
-        .await?
-        .results::<Map<String, Value>>()?;
-    let sources = db
-        .prepare(
-            r#"
-            SELECT id, source_type, url, title, homepage_url, status, refresh_cadence_minutes,
-                   last_fetched_at, next_fetch_at, last_error, error_count, policy_json,
-                   created_at, updated_at
-            FROM source_subscriptions
-            WHERE url LIKE ?1 OR title LIKE ?1 OR homepage_url LIKE ?1
-            ORDER BY updated_at DESC
-            LIMIT ?2
-            "#,
-        )
-        .bind_refs([&like_arg, &limit_arg])?
-        .all()
-        .await?
-        .results::<Map<String, Value>>()?;
-    let source_items = db
-        .prepare(
-            r#"
-            SELECT id, source_id, source_type, title, canonical_url, excerpt, published_at,
-                   read, rights_policy_json, created_at
-            FROM source_items
-            WHERE title LIKE ?1 OR canonical_url LIKE ?1 OR excerpt LIKE ?1
-            ORDER BY COALESCE(published_at, created_at) DESC
-            LIMIT ?2
-            "#,
-        )
-        .bind_refs([&like_arg, &limit_arg])?
-        .all()
-        .await?
-        .results::<Map<String, Value>>()?;
-
-    Ok((posts, users, sources, source_items))
-}
-
 async fn owner_unblock(env: &Env, value: &str) -> Result<()> {
     let db = env.d1("DB")?;
     let value_arg = D1Type::Text(value);
@@ -7372,27 +7180,6 @@ struct OwnerStats {
 #[derive(Serialize)]
 struct OwnerItems<T> {
     items: Vec<T>,
-}
-
-#[derive(Serialize)]
-struct OwnerSearch {
-    posts: Vec<Map<String, Value>>,
-    users: Vec<Map<String, Value>>,
-    sources: Vec<Map<String, Value>>,
-    source_items: Vec<Map<String, Value>>,
-    public_posts: Vec<Map<String, Value>>,
-    public_actors: Vec<Map<String, Value>>,
-    provider_errors: Vec<Map<String, Value>>,
-    public_search_guard: OwnerPublicSearchGuard,
-}
-
-#[derive(Default, Serialize)]
-struct OwnerPublicSearchGuard {
-    blocked: bool,
-    requires_confirmation: bool,
-    confirmed: bool,
-    categories: Vec<String>,
-    message: Option<String>,
 }
 
 #[derive(Serialize)]
