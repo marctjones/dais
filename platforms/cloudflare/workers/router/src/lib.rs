@@ -113,9 +113,10 @@ use request::{
 };
 use response::{activity_json, activitypub_error, api_json, jrd_json, text_response};
 use social::{
-    insert_block, owner_allow_host, owner_allowlist, owner_block, owner_blocks,
-    owner_delete_allowlist_host, owner_discover_actor, owner_follow_actor, owner_followers,
-    owner_following, owner_friends, owner_set_follower_status, owner_unblock, owner_unfollow_actor,
+    insert_block, owner_allow_host, owner_allowlist, owner_approved_follower_inboxes, owner_block,
+    owner_blocks, owner_delete_allowlist_host, owner_discover_actor,
+    owner_federation_target_allowed, owner_follow_actor, owner_followers, owner_following,
+    owner_friends, owner_set_follower_status, owner_unblock, owner_unfollow_actor,
 };
 #[cfg(test)]
 pub(crate) use sources::{
@@ -5902,57 +5903,6 @@ fn actor_handle(actor: &RemoteActor) -> Option<String> {
         preferred_username,
         url.host_str().unwrap_or_default()
     ))
-}
-
-async fn owner_federation_target_allowed(
-    env: &Env,
-    target_url: &str,
-) -> std::result::Result<bool, String> {
-    let settings = owner_settings(env)
-        .await
-        .map_err(|error| error.to_string())?;
-    if !bool_field(Some(&settings), "closed_network") {
-        return Ok(true);
-    }
-    let host = worker::Url::parse(target_url)
-        .ok()
-        .and_then(|url| url.host_str().map(ToOwned::to_owned))
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if host.is_empty() {
-        return Ok(false);
-    }
-    let db = env.d1("DB").map_err(|error| error.to_string())?;
-    let host_arg = D1Type::Text(&host);
-    let row = db
-        .prepare(
-            "SELECT 1 AS allowed FROM federation_allowlist WHERE host = ?1 AND enabled = 1 LIMIT 1",
-        )
-        .bind_refs(&host_arg)
-        .map_err(|error| error.to_string())?
-        .first::<Map<String, Value>>(None)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(row.is_some())
-}
-
-async fn owner_approved_follower_inboxes(env: &Env) -> Result<Vec<String>> {
-    let db = env.d1("DB")?;
-    let rows = db
-        .prepare(
-            r#"
-            SELECT COALESCE(NULLIF(follower_shared_inbox, ''), follower_inbox) AS inbox
-            FROM followers
-            WHERE status = 'approved'
-            "#,
-        )
-        .all()
-        .await?
-        .results::<Map<String, Value>>()?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| string_field(Some(&row), "inbox"))
-        .collect())
 }
 
 pub(crate) async fn owner_local_actor(env: &Env) -> Result<LocalActor> {
