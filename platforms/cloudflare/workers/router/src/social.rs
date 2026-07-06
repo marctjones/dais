@@ -483,3 +483,98 @@ async fn owner_following_row(
     .first::<Map<String, Value>>(None)
     .await
 }
+
+pub(crate) async fn owner_set_follower_status(
+    env: &Env,
+    follower_actor_id: &str,
+    status: &str,
+) -> std::result::Result<Map<String, Value>, String> {
+    if follower_actor_id.is_empty() {
+        return Err("follower_actor_id is required".to_string());
+    }
+    if !matches!(status, "approved" | "pending" | "rejected") {
+        return Err("status must be approved, pending, or rejected".to_string());
+    }
+
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let local_actor = owner_local_actor(env)
+        .await
+        .map_err(|error| error.to_string())?;
+    let local_actor_arg = D1Type::Text(&local_actor.id);
+    let follower_arg = D1Type::Text(follower_actor_id);
+    let existing = db
+        .prepare(
+            r#"
+            SELECT id, actor_id, follower_actor_id, follower_inbox, follower_shared_inbox, status
+            FROM followers
+            WHERE actor_id = ?1 AND follower_actor_id = ?2
+            LIMIT 1
+            "#,
+        )
+        .bind_refs([&local_actor_arg, &follower_arg])
+        .map_err(|error| error.to_string())?
+        .first::<Map<String, Value>>(None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(existing) = existing else {
+        return Err("follower not found".to_string());
+    };
+
+    let status_arg = D1Type::Text(status);
+    db.prepare(
+        r#"
+        UPDATE followers
+        SET status = ?1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE actor_id = ?2 AND follower_actor_id = ?3
+        "#,
+    )
+    .bind_refs([&status_arg, &local_actor_arg, &follower_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let delivery_ids = if status == "approved" {
+        let follow_id =
+            string_field(Some(&existing), "id").unwrap_or_else(|| follower_actor_id.to_string());
+        let accept_id = format!(
+            "{}#accepts/{}",
+            local_actor.id,
+            stable_id(&follow_id).chars().take(16).collect::<String>()
+        );
+        let activity = serde_json::json!({
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": accept_id,
+            "type": "Accept",
+            "actor": local_actor.id,
+            "to": [follower_actor_id],
+            "object": {
+                "id": follow_id,
+                "type": "Follow",
+                "actor": follower_actor_id,
+                "object": local_actor.id,
+            },
+        });
+        let inbox = string_field(Some(&existing), "follower_shared_inbox")
+            .or_else(|| string_field(Some(&existing), "follower_inbox"));
+        insert_delivery_rows(
+            env,
+            &accept_id,
+            inbox.into_iter().collect(),
+            "Accept",
+            Some(activity.to_string()),
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+
+    let mut response = Map::new();
+    response.insert("ok".to_string(), Value::Bool(true));
+    response.insert(
+        "delivery_ids".to_string(),
+        Value::Array(delivery_ids.into_iter().map(Value::String).collect()),
+    );
+    Ok(response)
+}
