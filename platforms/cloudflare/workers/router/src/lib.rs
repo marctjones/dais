@@ -16,6 +16,7 @@ mod fixtures;
 mod mastodon;
 mod media;
 mod owner_auth;
+mod public_search;
 mod request;
 mod response;
 mod sources;
@@ -64,6 +65,13 @@ pub(crate) use media::{
 #[cfg(test)]
 pub(crate) use owner_auth::parse_scoped_owner_tokens;
 use owner_auth::{owner_bearer_tokens, owner_token_has_scopes, remote_environment};
+use public_search::OwnerPublicSearchFilters;
+pub(crate) use public_search::{
+    bluesky_appview_xrpc_url, owner_public_search_mastodon_query_params, tootfinder_search_items,
+    tootfinder_search_url, OwnerPublicSearchOptions, MAX_ACTIVITYPUB_SEARCH_SERVERS,
+};
+#[cfg(test)]
+pub(crate) use public_search::{OwnerPublicSearchProvider, OwnerPublicSearchResultType};
 use request::{
     decode_component, optional_body_string, optional_trimmed_body, optional_url_field, query_param,
     read_json, read_mastodon_body, request_content_type, required_body_string, string_like_any,
@@ -79,9 +87,6 @@ use sources::{
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
 const DEFAULT_ACTIVITYPUB_SEARCH_SERVERS: &[&str] =
     &["mastodon.social", "mstdn.social", "fosstodon.org"];
-const MAX_ACTIVITYPUB_SEARCH_SERVERS: usize = 5;
-const BLUESKY_APPVIEW_BASE_URL: &str = "https://api.bsky.app";
-const TOOTFINDER_SEARCH_BASE_URL: &str = "https://www.tootfinder.ch/rest/api/search";
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -7764,191 +7769,6 @@ fn owner_search_flags(url: &worker::Url) -> OwnerSearchFlags {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum OwnerPublicSearchProvider {
-    All,
-    Bluesky,
-    ActivityPub,
-    Tootfinder,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum OwnerPublicSearchResultType {
-    All,
-    Posts,
-    Actors,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct OwnerPublicSearchFilters {
-    sort: Option<String>,
-    since: Option<String>,
-    until: Option<String>,
-    author: Option<String>,
-    mentions: Option<String>,
-    lang: Option<String>,
-    domain: Option<String>,
-    url: Option<String>,
-    tags: Vec<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct OwnerPublicSearchOptions {
-    provider: OwnerPublicSearchProvider,
-    result_type: OwnerPublicSearchResultType,
-    activitypub_servers: Vec<String>,
-    filters: OwnerPublicSearchFilters,
-}
-
-impl Default for OwnerPublicSearchOptions {
-    fn default() -> Self {
-        Self {
-            provider: OwnerPublicSearchProvider::All,
-            result_type: OwnerPublicSearchResultType::All,
-            activitypub_servers: Vec::new(),
-            filters: OwnerPublicSearchFilters::default(),
-        }
-    }
-}
-
-impl OwnerPublicSearchOptions {
-    fn from_url(url: &worker::Url) -> Self {
-        Self {
-            provider: owner_public_search_provider(
-                query_param(url, "provider").as_deref().unwrap_or("all"),
-            ),
-            result_type: owner_public_search_result_type(
-                query_param(url, "type")
-                    .or_else(|| query_param(url, "result_type"))
-                    .as_deref()
-                    .unwrap_or("all"),
-            ),
-            activitypub_servers: public_search_query_values(
-                url,
-                &[
-                    "server",
-                    "servers",
-                    "activitypub_server",
-                    "activitypub_servers",
-                ],
-            )
-            .into_iter()
-            .filter_map(|value| normalize_host_value(&value).ok())
-            .take(MAX_ACTIVITYPUB_SEARCH_SERVERS)
-            .collect(),
-            filters: OwnerPublicSearchFilters {
-                sort: public_search_sort(query_param(url, "sort")),
-                since: non_empty_query_param(url, "since"),
-                until: non_empty_query_param(url, "until"),
-                author: non_empty_query_param(url, "author"),
-                mentions: non_empty_query_param(url, "mentions"),
-                lang: non_empty_query_param(url, "lang"),
-                domain: non_empty_query_param(url, "domain"),
-                url: non_empty_query_param(url, "url"),
-                tags: public_search_query_values(url, &["tag", "tags"])
-                    .into_iter()
-                    .map(|value| value.trim().trim_start_matches('#').to_string())
-                    .filter(|value| !value.is_empty())
-                    .take(8)
-                    .collect(),
-            },
-        }
-    }
-
-    fn includes_bluesky(&self) -> bool {
-        matches!(
-            self.provider,
-            OwnerPublicSearchProvider::All | OwnerPublicSearchProvider::Bluesky
-        )
-    }
-
-    fn includes_activitypub(&self) -> bool {
-        matches!(
-            self.provider,
-            OwnerPublicSearchProvider::All | OwnerPublicSearchProvider::ActivityPub
-        )
-    }
-
-    fn includes_tootfinder(&self) -> bool {
-        matches!(
-            self.provider,
-            OwnerPublicSearchProvider::All
-                | OwnerPublicSearchProvider::ActivityPub
-                | OwnerPublicSearchProvider::Tootfinder
-        )
-    }
-
-    fn includes_posts(&self) -> bool {
-        matches!(
-            self.result_type,
-            OwnerPublicSearchResultType::All | OwnerPublicSearchResultType::Posts
-        )
-    }
-
-    fn includes_actors(&self) -> bool {
-        matches!(
-            self.result_type,
-            OwnerPublicSearchResultType::All | OwnerPublicSearchResultType::Actors
-        )
-    }
-}
-
-fn owner_public_search_provider(value: &str) -> OwnerPublicSearchProvider {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "bluesky" | "bsky" | "atproto" | "at" => OwnerPublicSearchProvider::Bluesky,
-        "activitypub" | "ap" | "mastodon" | "fediverse" => OwnerPublicSearchProvider::ActivityPub,
-        "tootfinder" | "tootfinder.ch" | "activitypub-index" | "activitypub_index" | "index" => {
-            OwnerPublicSearchProvider::Tootfinder
-        }
-        _ => OwnerPublicSearchProvider::All,
-    }
-}
-
-fn owner_public_search_result_type(value: &str) -> OwnerPublicSearchResultType {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "post" | "posts" | "status" | "statuses" => OwnerPublicSearchResultType::Posts,
-        "actor" | "actors" | "account" | "accounts" | "profile" | "profiles" => {
-            OwnerPublicSearchResultType::Actors
-        }
-        _ => OwnerPublicSearchResultType::All,
-    }
-}
-
-fn public_search_sort(value: Option<String>) -> Option<String> {
-    match value
-        .as_deref()
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("top") => Some("top".to_string()),
-        Some("latest") | Some("recent") | Some("new") => Some("latest".to_string()),
-        _ => None,
-    }
-}
-
-fn non_empty_query_param(url: &worker::Url, key: &str) -> Option<String> {
-    query_param(url, key)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn public_search_query_values(url: &worker::Url, keys: &[&str]) -> Vec<String> {
-    let mut values = Vec::new();
-    for (name, value) in url.query_pairs() {
-        if !keys.iter().any(|key| name == *key) {
-            continue;
-        }
-        for part in value.split(',') {
-            let trimmed = part.trim();
-            if !trimmed.is_empty() {
-                values.push(trimmed.to_string());
-            }
-        }
-    }
-    values
-}
-
 async fn owner_search(
     env: &Env,
     query: String,
@@ -8268,36 +8088,6 @@ async fn owner_public_search_mastodon(
     Ok((posts, actors))
 }
 
-fn owner_public_search_mastodon_query_params(
-    term: &str,
-    limit: i32,
-    result_type: &OwnerPublicSearchResultType,
-) -> Vec<(String, String)> {
-    let mut params = vec![
-        ("q".to_string(), term.to_string()),
-        ("limit".to_string(), limit.to_string()),
-    ];
-    match result_type {
-        OwnerPublicSearchResultType::Posts => {
-            params.push(("type".to_string(), "statuses".to_string()));
-        }
-        OwnerPublicSearchResultType::Actors => {
-            params.push(("type".to_string(), "accounts".to_string()));
-        }
-        OwnerPublicSearchResultType::All => {}
-    }
-    params
-}
-
-fn bluesky_appview_xrpc_url(method: &str, query: &str) -> String {
-    let base = format!("{BLUESKY_APPVIEW_BASE_URL}/xrpc/{method}");
-    if query.is_empty() {
-        base
-    } else {
-        format!("{base}?{query}")
-    }
-}
-
 fn activitypub_search_servers(env: &Env, options: &OwnerPublicSearchOptions) -> Vec<String> {
     let mut servers = Vec::new();
     if !options.activitypub_servers.is_empty() {
@@ -8336,23 +8126,6 @@ async fn owner_public_search_tootfinder(
         .filter_map(owner_normalize_tootfinder_status)
         .take(limit.max(0) as usize)
         .collect())
-}
-
-fn tootfinder_search_url(term: &str) -> String {
-    format!(
-        "{TOOTFINDER_SEARCH_BASE_URL}/{}",
-        urlencoding::encode(term.trim())
-    )
-}
-
-fn tootfinder_search_items(body: &Value) -> Vec<Value> {
-    if let Some(items) = body.as_array() {
-        return items.clone();
-    }
-    body.get("items")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
 }
 
 fn encoded_query(params: &[(String, String)]) -> String {
