@@ -1,5 +1,5 @@
 use image::{ColorType, ImageFormat};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model, ModelRc};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -27,6 +27,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     set_smoke_size(&window, 1180.0, 760.0);
     window.show()?;
 
+    assert_screen_content(
+        &window,
+        "today",
+        "Feed",
+        "timeline:ada-week-friday-space-news",
+    );
     capture(&window, &output_dir, "home")?;
     set_smoke_size(&window, 920.0, 660.0);
     assert!(
@@ -55,12 +61,20 @@ fn run() -> Result<(), Box<dyn Error>> {
     set_smoke_size(&window, 1180.0, 760.0);
     window.invoke_select_screen("inbox".into());
     window.invoke_select_row("notification:notice-reply".into());
+    assert_screen_content(&window, "inbox", "Inbox", "notification:notice-reply");
     capture(&window, &output_dir, "home-inbox-notifications")?;
     window.invoke_row_action("timeline:ada-week-friday-space-news".into(), "Save".into());
     capture(&window, &output_dir, "workflow-save-post")?;
     window.invoke_select_screen("today".into());
     capture(&window, &output_dir, "home-today")?;
     window.invoke_select_screen("conversations".into());
+    assert_screen_content(
+        &window,
+        "conversations",
+        "Conversations",
+        "conversation:peer:",
+    );
+    assert_encrypted_conversation_content(&window);
     capture(&window, &output_dir, "home-conversations")?;
 
     window.invoke_select_screen("inbox".into());
@@ -69,6 +83,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     window.invoke_select_mode("people".into());
     window.invoke_select_screen("find".into());
+    assert_screen_content(&window, "find", "Find", "bundle:science-news");
     assert!(
         !window.get_inspector_compact(),
         "find smoke width should keep the inspector open"
@@ -80,10 +95,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     capture(&window, &output_dir, "people-find-search")?;
 
     window.invoke_select_screen("friends".into());
+    assert_screen_content(&window, "friends", "Friends", "actor:");
     capture(&window, &output_dir, "people-friends")?;
     window.invoke_select_screen("followers".into());
+    assert_screen_content(&window, "followers", "Follow Requests", "follower:");
     capture(&window, &output_dir, "people-followers")?;
     window.invoke_select_screen("following".into());
+    assert_screen_content(&window, "following", "Following", "following:");
     capture(&window, &output_dir, "people-following")?;
     window.invoke_select_mode("people".into());
     window.invoke_select_screen("followers".into());
@@ -161,6 +179,65 @@ fn set_smoke_size(window: &dais_desk::MainWindow, width: f32, height: f32) {
         .window()
         .set_size(slint::LogicalSize::new(width, height));
     dais_desk::apply_responsive_layout(window);
+}
+
+fn assert_screen_content(
+    window: &dais_desk::MainWindow,
+    expected_screen: &str,
+    expected_title: &str,
+    expected_row_prefix: &str,
+) {
+    assert_eq!(window.get_active_screen().as_str(), expected_screen);
+    let title = window.get_window_title();
+    assert!(
+        title.contains(expected_title),
+        "{expected_screen} title {title:?} did not include {expected_title:?}"
+    );
+    assert!(
+        !window.get_active_account_label().trim().is_empty(),
+        "{expected_screen} must expose the active account label"
+    );
+    let rows = ui_rows(window.get_rows());
+    assert!(
+        rows.iter()
+            .any(|row| row.id.as_str().starts_with(expected_row_prefix)),
+        "{expected_screen} did not expose a visible row with prefix {expected_row_prefix:?}; rows: {:?}",
+        rows.iter()
+            .map(|row| row.id.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        rows.iter().all(|row| !row.title.trim().is_empty()),
+        "{expected_screen} has a visible row without a title"
+    );
+}
+
+fn assert_encrypted_conversation_content(window: &dais_desk::MainWindow) {
+    let rows = ui_rows(window.get_rows());
+    let combined = rows
+        .iter()
+        .map(|row| {
+            format!(
+                "{}\n{}\n{}\n{}",
+                row.title, row.subtitle, row.detail, row.meta
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        combined.contains("Encrypted fixture message decrypted on this device"),
+        "conversations should show decrypted fixture plaintext, not just an encrypted placeholder: {combined}"
+    );
+    assert!(
+        !combined.contains("locked encrypted message"),
+        "successfully decryptable fixture message should not be rendered as locked: {combined}"
+    );
+}
+
+fn ui_rows(model: ModelRc<dais_desk::UiRow>) -> Vec<dais_desk::UiRow> {
+    (0..model.row_count())
+        .filter_map(|index| model.row_data(index))
+        .collect()
 }
 
 fn assert_compose_surface(window: &dais_desk::MainWindow) {

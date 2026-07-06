@@ -7528,11 +7528,13 @@ fn e2ee_message_render_state_with_roots(
                 .fallback_content
                 .as_deref()
                 .map(preview_markdown_safe)
-                .unwrap_or_else(|| {
-                    "Encrypted message could not be decrypted on this device.".into()
-                });
+                .filter(|value| !value.trim().is_empty());
+            let preview = match fallback {
+                Some(fallback) => format!("{fallback} Decryption failed: {error} {repair}"),
+                None => format!("Decryption failed: {error} {repair}"),
+            };
             E2eeMessageRenderState {
-                preview: format!("{fallback} Decryption failed: {error} {repair}"),
+                preview,
                 meta: format!("{protocol} private message decryption failed. {error}"),
                 locked: true,
             }
@@ -13590,6 +13592,13 @@ mod tests {
             "title={} meta={} detail={}",
             e2ee.title,
             e2ee.meta,
+            e2ee.detail
+        );
+        assert!(
+            !e2ee
+                .detail
+                .contains("Encrypted message could not be decrypted on this device."),
+            "specific decrypt failure should not collapse to a generic placeholder: {}",
             e2ee.detail
         );
     }
