@@ -1,8 +1,12 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
 use worker::{Env, Headers, Request, Response, Result};
 
+use crate::config::{activitypub_domain, local_actor_url};
+use crate::request::optional_body_string;
+use crate::{body_string_any, js_truthy, stable_id};
 use serde_json::{Map, Value};
 
 pub(crate) struct MediaMetadataInput<'a> {
@@ -322,4 +326,182 @@ fn decode_component(value: &str) -> String {
 
 fn is_known_activitypub_host(host: Option<&str>) -> bool {
     matches!(host, Some("social.dais.social") | Some("social.skpt.cl"))
+}
+
+pub(crate) async fn owner_upload_media(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let filename = body
+        .get("filename")
+        .and_then(optional_body_string)
+        .ok_or_else(|| "filename is required".to_string())?;
+    let data_base64 = body
+        .get("data_base64")
+        .and_then(optional_body_string)
+        .ok_or_else(|| "data_base64 is required".to_string())?;
+    let media_type = body
+        .get("media_type")
+        .and_then(optional_body_string)
+        .unwrap_or_else(|| media_type_for_filename(&filename));
+    let access = body
+        .get("access")
+        .and_then(optional_body_string)
+        .unwrap_or_else(|| "public".to_string());
+    let require_authorized_fetch = body
+        .get("require_authorized_fetch")
+        .or_else(|| body.get("requireAuthorizedFetch"))
+        .map(js_truthy)
+        .unwrap_or(false);
+    let expires_at = private_media_expires_at(
+        body.get("expires_in_seconds")
+            .or_else(|| body.get("expiresInSeconds")),
+    )?;
+
+    if !allowed_media_type(&media_type) {
+        return Err("unsupported media type".to_string());
+    }
+    if !matches!(access.as_str(), "public" | "private") {
+        return Err("access must be public or private".to_string());
+    }
+    if expires_at.is_some() && access != "private" {
+        return Err("media expiration is only supported for private uploads".to_string());
+    }
+    if require_authorized_fetch && access != "private" {
+        return Err("authorized-fetch media is only supported for private uploads".to_string());
+    }
+
+    let bytes = BASE64
+        .decode(data_base64.as_bytes())
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("media file is larger than 8 MB".to_string());
+    }
+
+    let safe_name = safe_media_filename(&filename)?;
+    let timestamp = current_media_timestamp();
+    let created_at = current_media_created_at();
+    let token = random_token()?;
+    let public_name = format!(
+        "{}-{}-{}",
+        timestamp,
+        stable_id(&format!("{safe_name}\n{data_base64}"))
+            .chars()
+            .take(12)
+            .collect::<String>(),
+        safe_name
+    );
+    let key = if access == "private" {
+        format!("private/{token}/{safe_name}")
+    } else {
+        format!("uploads/{public_name}")
+    };
+
+    let description = body.get("description").and_then(optional_body_string);
+    let actor_url = local_actor_url(env);
+    let custom_metadata = media_custom_metadata(MediaMetadataInput {
+        owner: &actor_url,
+        access: &access,
+        media_type: &media_type,
+        bytes: &bytes,
+        created_at: &created_at,
+        description: description.as_deref(),
+        expires_at: expires_at.as_deref(),
+        require_authorized_fetch,
+    });
+    let media_size = bytes.len() as u64;
+    let media_hash = custom_metadata
+        .get("sha256")
+        .cloned()
+        .unwrap_or_else(String::new);
+
+    let mut http_metadata = worker::HttpMetadata::default();
+    http_metadata.content_type = Some(media_type.clone());
+    let bucket = env
+        .bucket("MEDIA_BUCKET")
+        .map_err(|error| error.to_string())?;
+    let put = bucket.put(key.clone(), bytes).http_metadata(http_metadata);
+    if custom_metadata.is_empty() {
+        put.execute().await.map_err(|error| error.to_string())?;
+    } else {
+        put.custom_metadata(custom_metadata)
+            .execute()
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+
+    let url = if access == "private" {
+        format!(
+            "https://{}/media/{}/{}/{}",
+            activitypub_domain(env),
+            if require_authorized_fetch {
+                "_private_signed"
+            } else {
+                "_private"
+            },
+            token,
+            safe_name
+        )
+    } else {
+        format!("https://{}/media/{key}", activitypub_domain(env))
+    };
+    let mut attachment = Map::new();
+    attachment.insert(
+        "type".to_string(),
+        Value::String(if media_type.starts_with("image/") {
+            "Image".to_string()
+        } else {
+            "Document".to_string()
+        }),
+    );
+    attachment.insert("mediaType".to_string(), Value::String(media_type.clone()));
+    attachment.insert("url".to_string(), Value::String(url.clone()));
+    attachment.insert(
+        "name".to_string(),
+        Value::String(description.clone().unwrap_or(safe_name)),
+    );
+
+    let mut response = Map::new();
+    response.insert("url".to_string(), Value::String(url));
+    response.insert("media_type".to_string(), Value::String(media_type));
+    response.insert("access".to_string(), Value::String(access));
+    response.insert("owner".to_string(), Value::String(actor_url));
+    response.insert("size".to_string(), Value::from(media_size));
+    response.insert("hash".to_string(), Value::String(media_hash));
+    response.insert("created_at".to_string(), Value::String(created_at));
+    response.insert(
+        "authorized_fetch".to_string(),
+        Value::Bool(require_authorized_fetch),
+    );
+    response.insert("attachment".to_string(), Value::Object(attachment));
+    response.insert(
+        "description".to_string(),
+        description.map(Value::String).unwrap_or(Value::Null),
+    );
+    response.insert(
+        "expires_at".to_string(),
+        expires_at.map(Value::String).unwrap_or(Value::Null),
+    );
+    Ok(response)
+}
+
+pub(crate) async fn owner_revoke_media(
+    env: &Env,
+    body: &Value,
+) -> std::result::Result<Map<String, Value>, String> {
+    let url = body_string_any(body, &["url", "media_url", "id"]).unwrap_or_default();
+    let Some(key) = media_r2_key_from_url(&url) else {
+        return Err("valid media url is required".to_string());
+    };
+    env.bucket("MEDIA_BUCKET")
+        .map_err(|error| error.to_string())?
+        .delete(key.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut response = Map::new();
+    response.insert("ok".to_string(), Value::Bool(true));
+    response.insert("url".to_string(), Value::String(url));
+    response.insert("key".to_string(), Value::String(key));
+    Ok(response)
 }
