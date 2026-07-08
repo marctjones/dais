@@ -7,9 +7,9 @@ order or release policy changes.
 
 ## Current Milestone Order
 
-| Order | Milestone | Focus | Open work |
-| --- | --- | --- | --- |
-| 1 | `v1.35 - Post-roadmap hardening and product readiness` | Quality hardening after the completed v1.28-v1.34 roadmap: implementation honesty audit, Desk GUI regression confidence, E2EE/MLS security review, disaster recovery, CI/release evidence, and managed-ops polish. | #349, #356, #353, #355, #354, #351, #350 |
+No active implementation milestone is open after `v1.35`. Create or update the
+next GitHub milestone before starting new product scope, then refresh this
+snapshot from the live tracker.
 
 Recently completed foundations:
 
@@ -29,6 +29,10 @@ Recently completed foundations:
 - `v1.34`: managed hosting and operations workflows, including provisioning,
   backup/restore/export verification, migration/import tooling, health checks,
   observability, runbooks, support boundaries, and account-policy guidance.
+- `v1.35`: post-roadmap hardening and product-readiness gates, including strict
+  implementation-honesty and E2EE/MLS audits, expanded Desk visual regression
+  coverage, fresh-environment disaster-recovery drill evidence, CI-safe gates,
+  release-evidence packaging, and managed-health JSONL support.
 - `v1.28.142`: current release checkpoint. The 2026-07-08 production/skpt deploy
   passed strict server tests, production/skpt builds, Bluesky and Mastodon API
   conformance, D1 update gates, production/skpt deploys, skpt live smoke, and
@@ -37,21 +41,17 @@ Recently completed foundations:
 
 ## Immediate Priorities
 
-1. **Start with the implementation honesty audit (#356).**
-   Before adding new feature scope, audit server, core, client, Desk, scripts,
-   docs, and conformance code for placeholders, dummy behavior, shortcuts,
-   compatibility stubs, and unimplemented APIs. Fix small clear problems
-   directly; file focused follow-ups for larger findings.
+1. **Keep v1.35 gates green.**
+   Run the CI-safe hardening gates for routine changes and the strict
+   server/Desk release gates before production, skpt, or GUI releases.
 
-2. **Raise confidence in the user-facing and private paths (#353, #355).**
-   Harden Dais Desk automated visual/interaction gates without depending on
-   manual focus-taking runs, and run a dedicated E2EE/MLS security review now
-   that live cross-instance encrypted-message gates pass.
+2. **Open the next milestone in GitHub before adding scope.**
+   New product work should get a parent issue, focused child issues, and closure
+   evidence before implementation starts.
 
-3. **Prove operations are repeatable (#354, #351, #350).**
-   Run a fresh-environment backup/restore disaster-recovery drill, automate more
-   CI/release evidence, and polish production observability plus managed-instance
-   support workflows.
+3. **Keep docs and the homepage aligned with deploys.**
+   When production or skpt changes ship, update README/project docs and the
+   `https://dais.social` homepage in the same release pass.
 
 ## Coverage Policy
 
@@ -118,5 +118,5 @@ closed when prerequisites are missing. Use strict environment settings such as
 
 ```bash
 gh api repos/marctjones/dais/milestones --paginate
-gh issue list --milestone "v1.35 - Post-roadmap hardening and product readiness"
+gh issue list --state open
 ```
