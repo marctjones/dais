@@ -22,7 +22,7 @@ jobs:
       - name: Install Linux GUI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev pkg-config ripgrep jq xvfb
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 pkg-config ripgrep jq xvfb
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
