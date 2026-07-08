@@ -172,7 +172,7 @@ default-open federation.
 | **E2EE DMs** | **Implemented for encryptedMessage v1 fallback and MLS v2 owner workflows; live dais.social <-> skpt.cl gates cover 1:1, groups, multi-device, removal, and encrypted media** |
 | Rich ActivityPub objects | **v0.17 foundation: Article, Document, Event, Group, Organization with Mastodon-safe fallbacks** |
 | Media / R2 | **Implemented for public/private ActivityPub media, ATProto public image upload, and encrypted media attachments; shared R2 binding abstraction intentionally not exposed yet** |
-| Managed hosting (dais.cloud) | **Concept only** |
+| Managed hosting (dais.cloud) | **Designed / not launched**. Tier, privacy, family/org, and support boundaries are defined in `docs/guides/MANAGED_HOSTING.md`; provisioning/restore/import/observability workflows remain v1.34 implementation work. |
 | Rust integration tests | **Core and client suites exist; broader live federation remains scripted/manual** |
 
 **Reality:** the *public single-user ActivityPub publisher* is largely built. The

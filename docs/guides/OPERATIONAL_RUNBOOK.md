@@ -80,6 +80,37 @@ dais tui
 
 ## Health Monitoring
 
+### Managed Instance Health Check
+
+For production/skpt and future managed instances, use the parameterized managed
+health check instead of hand-running one-off probes:
+
+```bash
+scripts/managed-health-check.sh \
+  --domain skpt.cl \
+  --activitypub-domain social.skpt.cl \
+  --pds-domain pds.skpt.cl \
+  --owner-token-file /private/tmp/dais-skpt-owner-token.txt \
+  --r2-bucket dais-media-skpt
+```
+
+The script checks public WebFinger, ActivityPub actor JSON, PDS
+`describeServer`, owner API bearer rejection, owner token auth, owner stats,
+diagnostics, recent failed/retry deliveries, optional R2 bucket info, and backup
+freshness. It reports exact Cloudflare Queue depth as `UNKNOWN` because the
+current owner API/Wrangler workflow does not expose a queue-depth value. Do not
+turn that into a fake zero.
+
+Use `scripts/smoke-managed-instance.sh` for a smaller post-provisioning smoke:
+
+```bash
+scripts/smoke-managed-instance.sh \
+  --domain example.com \
+  --activitypub-domain social.example.com \
+  --pds-domain pds.example.com \
+  --owner-token-file /secure/path/owner-token
+```
+
 ### Quick Health Check
 
 ```bash

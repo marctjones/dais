@@ -61,10 +61,37 @@ DAIS_BACKUP_PASSPHRASE='use-a-real-secret' scripts/backup.sh --env production
 DAIS_BACKUP_PASSPHRASE='use-a-real-secret' scripts/backup.sh --env skpt
 scripts/backup.sh --skip-cloud --no-encrypt --output-dir tmp/backup-test
 scripts/verify-backup-archive.sh ~/.dais/backups/dais_production_backup_YYYYMMDDTHHMMSSZ.tar.gz.gpg
+scripts/verify-backup-restore.sh ~/.dais/backups/dais_production_backup_YYYYMMDDTHHMMSSZ.tar.gz.gpg
 ```
 
 Use `--no-encrypt` only for local tests with non-secret fixture data. Production
 backups contain owner tokens, private keys, and recovery material when available.
+
+### Restore Verification Harness
+
+`scripts/verify-backup-restore.sh` is the restore gate for managed operations.
+It extracts the archive, imports `database.sql` into a fresh local SQLite
+database, and verifies that the restored schema includes the Dais portability
+families: actors/profile data, posts, media metadata, follower/following graph,
+settings, moderation settings, blocks, audiences, source/watch subscriptions and
+items, local/peer E2EE devices, and encrypted messages.
+
+Run the built-in harness test:
+
+```bash
+scripts/verify-backup-restore.sh --self-test
+```
+
+Run it against a real backup archive:
+
+```bash
+DAIS_BACKUP_PASSPHRASE_FILE=~/.dais/backup-passphrase \
+  scripts/verify-backup-restore.sh ~/.dais/backups/dais_production_backup_YYYYMMDDTHHMMSSZ.tar.gz.gpg
+```
+
+Backups created with `--skip-cloud` intentionally contain placeholder SQL. The
+restore verifier rejects those by default; pass `--allow-placeholder-sql` only
+when you are checking archive packaging rather than restore coverage.
 
 ### Automated Backup with Cron
 

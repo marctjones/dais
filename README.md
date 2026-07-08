@@ -91,6 +91,8 @@ The source of truth for the product is:
 - [docs/design/PRIVATE_MODE.md](docs/design/PRIVATE_MODE.md)
 - [docs/design/PROTOCOL_ADAPTERS.md](docs/design/PROTOCOL_ADAPTERS.md)
 - [docs/design/E2EE_WIRE_FORMAT.md](docs/design/E2EE_WIRE_FORMAT.md)
+- [docs/guides/MANAGED_HOSTING.md](docs/guides/MANAGED_HOSTING.md)
+- [docs/guides/MIGRATION_IMPORTS.md](docs/guides/MIGRATION_IMPORTS.md)
 - [docs/guides/MODEL_ALLOCATION.md](docs/guides/MODEL_ALLOCATION.md)
 
 GitHub issues under epic #70 track roadmap, decisions, and active work.
@@ -181,6 +183,18 @@ Run the active server release gate:
 
 ```bash
 scripts/release-server.sh --strict
+```
+
+Managed-hosting operations are tracked in
+[docs/guides/MANAGED_HOSTING.md](docs/guides/MANAGED_HOSTING.md). The current
+repeatable operational tools are:
+
+```bash
+scripts/provision-managed-instance.sh --slug example-family --domain example.com
+scripts/smoke-managed-instance.sh --domain skpt.cl --activitypub-domain social.skpt.cl --pds-domain pds.skpt.cl --owner-token-file /private/tmp/dais-skpt-owner-token.txt
+scripts/managed-health-check.sh --domain skpt.cl --activitypub-domain social.skpt.cl --pds-domain pds.skpt.cl --owner-token-file /private/tmp/dais-skpt-owner-token.txt
+scripts/verify-backup-restore.sh --self-test
+scripts/import-preview.rb --format opml --file subscriptions.opml
 ```
 
 Use `scripts/release-server.sh --plan` to print the exact gate plan without
