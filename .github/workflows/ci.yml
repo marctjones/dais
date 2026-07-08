@@ -22,7 +22,7 @@ jobs:
       - name: Install Linux GUI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev pkg-config ripgrep jq
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev pkg-config ripgrep jq xvfb
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -76,7 +76,7 @@ jobs:
         run: cargo check --manifest-path platforms/cloudflare/workers/router/Cargo.toml --target wasm32-unknown-unknown
 
       - name: Dais Desk tests and visual smoke
-        run: cargo test --manifest-path apps/dais-desk/Cargo.toml
+        run: xvfb-run -a cargo test --manifest-path apps/dais-desk/Cargo.toml
 
       - name: Upload hardening reports
         if: always()

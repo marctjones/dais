@@ -71,6 +71,9 @@ cargo test --manifest-path platforms/cloudflare/workers/router/Cargo.toml
 SLINT_BACKEND=software cargo test --manifest-path apps/dais-desk/Cargo.toml
 ```
 
+On headless Linux runners, wrap the Desk command with `xvfb-run -a` so winit
+has a display while Slint still uses the software renderer.
+
 Secret-backed live gates remain explicit release steps. Do not treat CI-safe
 checks as a substitute for `scripts/release-server.sh --deploy --strict
 --bluesky-conformance --mastodon-conformance` before production/skpt releases.
