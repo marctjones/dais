@@ -35,6 +35,15 @@ done
 
 mkdir -p "$REPORT_DIR"
 
+require_tool() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "$1 is required for implementation honesty audit" >&2
+    exit 2
+  fi
+}
+
+require_tool rg
+
 run_rg() {
   (cd "$ROOT" && rg -n "$@" 2>/dev/null) || true
 }
