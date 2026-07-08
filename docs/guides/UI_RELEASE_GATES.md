@@ -14,14 +14,15 @@ Run the Dais Desk release gate from the repository root:
 The script executes:
 
 ```text
-cargo test --manifest-path apps/dais-desk/Cargo.toml
+SLINT_BACKEND=software DAIS_DESK_SCREENSHOT_DIR=tmp/desk-release-*/screenshots cargo test --manifest-path apps/dais-desk/Cargo.toml
 cargo build --manifest-path apps/dais-desk/Cargo.toml
 cargo test --manifest-path conformance/Cargo.toml -- --nocapture
 ```
 
 The command runs Rust unit tests, Slint interaction tests, and the native visual
-smoke test. The visual smoke writes PNG screenshots to
-`apps/dais-desk/target/dais-desk-screenshots/`.
+smoke test using Slint's software backend so it does not require an interactive
+foreground GUI session. The visual smoke writes PNG screenshots into the release
+report directory, `tmp/desk-release-*/screenshots/`.
 
 ## Required Coverage
 
@@ -30,11 +31,10 @@ The smoke gate must cover:
 - **Home** mode: daily reading and compose-facing workflows.
 - **People** mode: discovery, followers, audience groups, watches, and public
   search.
-- **Server** mode: settings, diagnostics, moderation, profile, and operator
-  state.
 - Explicit sections: Home, Compose, Settings, Discovery, and Moderation.
-- Explicit screens: home, compose, inbox, people relationship/follows/watch, and
-  server health/deliveries/moderation/identity/accounts.
+- Explicit screens: home/feed, reading, conversations, compose, inbox, my posts
+  with thread inspector, saved, people find/friends/follow requests/following,
+  accounts, settings, and E2EE security.
 
 Design-alignment coverage tracking lives in:
 
@@ -52,14 +52,14 @@ The smoke gate checks and release script requirements:
 - Source-list navigation uses accessible controls rather than inert text.
 - Slint accessibility labels exist for the primary source-list controls and row
   cards.
-- User-like automated activation can move through Home, People, Followers,
-  Server, and Accounts & Tokens.
+- User-like automated activation can move through Home, People, Followers, and
+  Compose.
 - Core text colors meet contrast requirements.
 - Font sizing does not depend on viewport width.
-- Native screenshots for Home, People/Followers, and Server/Accounts (plus the full
-  required matrix screens below) are nonblank and visually varied.
-- Release script enforces that all screens listed in
-  `docs/guides/DESIGN_ALIGNMENT_MATRIX.md` are present as artifacts.
+- Native screenshots for Home, People/Followers, Accounts, Settings, and
+  Security are nonblank and visually varied.
+- Release script enforces the required screenshot names below and still keeps
+  `docs/guides/DESIGN_ALIGNMENT_MATRIX.md` as the design-coverage source.
 
 Future GUI changes that add new icon-only controls, dialogs, sheets, or custom
 interactive widgets should extend the smoke gate with targeted checks for those
@@ -89,22 +89,25 @@ UI release gate evidence
 - Commit:
 - Command: ./scripts/release-desk-v2.sh
 - Result:
-- Covered modes: Home, People, Server
-- Covered sections: Home, Followers, Accounts & Tokens, visual screenshots
+- Covered modes: Home, People, settings/security surfaces
+- Covered sections: Feed, Conversations, Compose, Followers, Accounts & Tokens,
+  Settings, Security, visual screenshots
 - Accessibility notes:
 - Privacy notes:
 - Screenshots or video, if visual behavior changed:
+```
 
 Required screenshot names at release time:
 
 ```text
-home, home-compose-media, home-inbox-notifications, home-reading, home-today,
-workflow-save-post, workflow-reply-compose,
-people-find-search, people-relationship, people-friends, people-followers, people-following,
-people-watches-sources, people-audience-groups, people-blocks,
-workflow-audience-compose, workflow-follower-approve,
-server-health, server-deliveries, server-stats, server-identity, server-moderation, server-security, server-settings, server-accounts
-```
+home, home-min-width, home-wide,
+home-compose-media, home-compose-min-width,
+home-inbox-notifications, workflow-save-post, home-today,
+home-conversations, home-reading, home-post-thread, home-saved,
+workflow-reply-compose,
+people-find-search, people-friends, people-followers, people-following,
+workflow-follower-approve,
+settings-accounts, settings-privacy, settings-security
 ```
 
 If a gate is intentionally deferred, the release issue must name the missing

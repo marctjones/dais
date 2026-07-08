@@ -7,11 +7,36 @@ ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 STAMP="$(date -u +"%Y%m%d-%H%M%S")"
 REPORT_DIR="${ROOT_DIR}/tmp/desk-release-${STAMP}"
 REPORT_FILE="${REPORT_DIR}/report.md"
+SCREENSHOT_DIR="${REPORT_DIR}/screenshots"
 RUN_PRIVATE_MODE_LOCAL_SMOKE="${RUN_PRIVATE_MODE_LOCAL_SMOKE:-0}"
 REQUIRE_FULL_RELEASE_GATES="${REQUIRE_FULL_RELEASE_GATES:-${REQUIRE_FULL:-0}}"
 RELEASE_GATE_FAILURE=0
 
-mkdir -p "${REPORT_DIR}"
+REQUIRED_SCREENSHOTS=(
+  home
+  home-min-width
+  home-wide
+  home-compose-media
+  home-compose-min-width
+  home-inbox-notifications
+  workflow-save-post
+  home-today
+  home-conversations
+  home-reading
+  home-post-thread
+  home-saved
+  workflow-reply-compose
+  people-find-search
+  people-friends
+  people-followers
+  people-following
+  workflow-follower-approve
+  settings-accounts
+  settings-privacy
+  settings-security
+)
+
+mkdir -p "${REPORT_DIR}" "${SCREENSHOT_DIR}"
 
 secret_status() {
   local name="$1"
@@ -81,7 +106,7 @@ run_cmd() {
   fi
 }
 
-run_cmd "Rust Desk UI release gate" cargo test --manifest-path apps/dais-desk/Cargo.toml
+run_cmd "Rust Desk UI release gate" env SLINT_BACKEND=software DAIS_DESK_SCREENSHOT_DIR="${SCREENSHOT_DIR}" cargo test --manifest-path apps/dais-desk/Cargo.toml
 run_cmd "Desk build verification" cargo build --manifest-path apps/dais-desk/Cargo.toml
 run_cmd "Private-mode regression gate" cargo test --manifest-path core/Cargo.toml --test private_mode
 if [[ "${RUN_PRIVATE_MODE_LOCAL_SMOKE}" == "1" ]]; then
@@ -100,14 +125,16 @@ run_cmd "Bluesky conformance gate" env DAIS_CONFORMANCE_ONLY=bluesky cargo test 
 run_cmd "Design alignment progress evidence" test -f docs/guides/DESIGN_ALIGNMENT_MATRIX.md
 run_cmd "Desk product completeness audit evidence" test -f docs/guides/DESK_PRODUCT_COMPLETENESS_AUDIT.md
 run_cmd "Design coverage screenshots present" bash -c '
-  for shot in home home-compose-media home-inbox-notifications home-today workflow-save-post workflow-reply-compose people-find-search people-friends people-followers people-following workflow-follower-approve; do
-    path="apps/dais-desk/target/dais-desk-screenshots/${shot}.png"
+  screenshot_dir="$1"
+  shift
+  for shot in "$@"; do
+    path="${screenshot_dir}/${shot}.png"
     if [ ! -f "${path}" ]; then
       echo "Missing required screenshot: ${shot}.png"
       exit 1
     fi
   done
-'
+' -- "${SCREENSHOT_DIR}" "${REQUIRED_SCREENSHOTS[@]}"
 
 {
   echo "## Credential-Gated Fixture Summary"
@@ -130,10 +157,11 @@ run_cmd "Design coverage screenshots present" bash -c '
   echo "## Artifacts"
   echo
   echo "- Report: \`${REPORT_FILE}\`"
+  echo "- Screenshot directory: \`${SCREENSHOT_DIR}\`"
   echo
   echo "- Desk screenshots:"
-  for screenshot in home home-compose-media home-inbox-notifications home-today workflow-save-post workflow-reply-compose people-find-search people-friends people-followers people-following workflow-follower-approve; do
-    path="${ROOT_DIR}/apps/dais-desk/target/dais-desk-screenshots/${screenshot}.png"
+  for screenshot in "${REQUIRED_SCREENSHOTS[@]}"; do
+    path="${SCREENSHOT_DIR}/${screenshot}.png"
     if [ -f "${path}" ]; then
       echo "  - ✅ ${screenshot}.png"
     else

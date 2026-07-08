@@ -77,6 +77,20 @@ fn run() -> Result<(), Box<dyn Error>> {
     assert_encrypted_conversation_content(&window);
     capture(&window, &output_dir, "home-conversations")?;
 
+    window.invoke_select_screen("reading".into());
+    assert_screen_content(&window, "reading", "Reading", "timeline:");
+    capture(&window, &output_dir, "home-reading")?;
+
+    window.invoke_select_screen("posts".into());
+    assert_screen_content(&window, "posts", "My Posts", "post:");
+    window.invoke_select_row("post:fixture-private-post".into());
+    assert_inspector_content(&window, "Thread detail", ":reply:");
+    capture(&window, &output_dir, "home-post-thread")?;
+
+    window.invoke_select_screen("saved".into());
+    assert_screen_content(&window, "saved", "Saved", "saved:");
+    capture(&window, &output_dir, "home-saved")?;
+
     window.invoke_select_screen("inbox".into());
     window.invoke_row_action("notification:notice-reply".into(), "Reply".into());
     capture(&window, &output_dir, "workflow-reply-compose")?;
@@ -110,6 +124,18 @@ fn run() -> Result<(), Box<dyn Error>> {
         "Approve".into(),
     );
     capture(&window, &output_dir, "workflow-follower-approve")?;
+
+    window.invoke_select_screen("accounts".into());
+    assert_screen_content(&window, "accounts", "Accounts & Tokens", "account:");
+    capture(&window, &output_dir, "settings-accounts")?;
+
+    window.invoke_select_screen("settings".into());
+    assert_screen_content(&window, "settings", "Settings", "settings:");
+    capture(&window, &output_dir, "settings-privacy")?;
+
+    window.invoke_select_screen("security".into());
+    assert_screen_content(&window, "security", "Security", "security:");
+    capture(&window, &output_dir, "settings-security")?;
 
     window.hide()?;
     Ok(())
@@ -231,6 +257,27 @@ fn assert_encrypted_conversation_content(window: &dais_desk::MainWindow) {
     assert!(
         !combined.contains("locked encrypted message"),
         "successfully decryptable fixture message should not be rendered as locked: {combined}"
+    );
+}
+
+fn assert_inspector_content(
+    window: &dais_desk::MainWindow,
+    expected_title: &str,
+    expected_row_fragment: &str,
+) {
+    let rows = ui_rows(window.get_inspector_rows());
+    let combined = rows
+        .iter()
+        .map(|row| format!("{}\n{}\n{}\n{}", row.id, row.title, row.detail, row.meta))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        combined.contains(expected_title),
+        "inspector did not include {expected_title:?}: {combined}"
+    );
+    assert!(
+        combined.contains(expected_row_fragment),
+        "inspector did not include row fragment {expected_row_fragment:?}: {combined}"
     );
 }
 
