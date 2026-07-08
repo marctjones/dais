@@ -9,49 +9,49 @@ order or release policy changes.
 
 | Order | Milestone | Focus | Open work |
 | --- | --- | --- | --- |
-| 4 | `v1.31 - Bluesky and public protocol completion` | First-class public ATProto/Bluesky surface and active-router architecture cleanup. | #274, #334 |
-| 6 | `v1.33 - Dais Desk usability and GUI quality gates` | Desk usability hardening before managed hosting: compact compose, conversation clarity, responsive layout, scoped status/toolbar behavior, reduced operational language, and automated visual/interaction gates. | #340, #341, #342, #343, #344, #345, #346 |
-| 7 | `v1.34 - Managed hosting and operations` | Productized managed hosting and operations after Desk usability gates: provisioning, backups, migration/import, observability, runbooks, support, and account policy. | #294, #295, #296, #297, #298, #299, #300 |
+| 1 | `v1.35 - Post-roadmap hardening and product readiness` | Quality hardening after the completed v1.28-v1.34 roadmap: implementation honesty audit, Desk GUI regression confidence, E2EE/MLS security review, disaster recovery, CI/release evidence, and managed-ops polish. | #349, #356, #353, #355, #354, #351, #350 |
 
 Recently completed foundations:
 
+- `v1.28`: independent `skpt.cl` instance deployment and cross-instance E2EE
+  testbed.
 - `v1.29` / `v1.29.1`: encryptedMessage v1 fallback, OpenMLS/MLS v2 owner
   workflows, device publication/trust, recovery UX, and live dais.social <->
   skpt.cl E2EE/MLS gates.
 - `v1.30`: media foundations including public/private ActivityPub media,
   ATProto public image upload, and encrypted media attachment validation.
-- `v1.31` protocol work: server release gate matrix (#335), retired unfinished
-  Bluesky reply sidecar (#332), clarified Mastodon OAuth compatibility-only auth
-  behavior (#333), public ATProto posting/reading/search/follow parity, and
-  protocol conformance gates. #334 remains open for continued active-router
-  decomposition.
+- `v1.31`: Bluesky/public protocol completion, protocol conformance gates, and
+  active-router decomposition into focused modules.
 - `v1.32`: RSS/website sources, private RSS/ActivityPub/Bluesky watches, public
-  search, source provenance, JSON API source ingestion/status cleanup (#331),
-  and private community/group primitives with private membership by default.
-- `v1.34` progress: verifiable backup archive format and production/skpt
-  encrypted backup smoke (#297 remains open for fresh-environment restore) and
-  fail-closed E2EE/MLS live-smoke prerequisite checks outside release gates
-  (#338).
+  search, source provenance, and private community/group primitives with private
+  membership by default.
+- `v1.33`: Dais Desk usability and GUI quality gates.
+- `v1.34`: managed hosting and operations workflows, including provisioning,
+  backup/restore/export verification, migration/import tooling, health checks,
+  observability, runbooks, support boundaries, and account-policy guidance.
+- `v1.28.142`: current release checkpoint. The 2026-07-08 production/skpt deploy
+  passed strict server tests, production/skpt builds, Bluesky and Mastodon API
+  conformance, D1 update gates, production/skpt deploys, skpt live smoke, and
+  cross-instance E2EE/MLS live smoke. The live `https://dais.social` homepage
+  was updated after that gate.
 
 ## Immediate Priorities
 
-1. **Finish v1.31 router decomposition.**
-   #334 is the remaining implementation issue under v1.31. Continue moving the
-   active router into focused modules until `router/src/lib.rs` is primarily
-   routing/glue, then close #274 if no new protocol-completion issues remain.
+1. **Start with the implementation honesty audit (#356).**
+   Before adding new feature scope, audit server, core, client, Desk, scripts,
+   docs, and conformance code for placeholders, dummy behavior, shortcuts,
+   compatibility stubs, and unimplemented APIs. Fix small clear problems
+   directly; file focused follow-ups for larger findings.
 
-2. **Harden v1.33 Desk usability gates.**
-   #340 is the parent epic for the current Desk visual and interaction quality
-   work. Start with #346 so headless GUI tests catch regressions, then fix
-   responsive layout (#343), compact Compose (#341), conversation clarity
-   (#342), scoped status/toolbar behavior (#344), and operational language
-   cleanup (#345).
+2. **Raise confidence in the user-facing and private paths (#353, #355).**
+   Harden Dais Desk automated visual/interaction gates without depending on
+   manual focus-taking runs, and run a dedicated E2EE/MLS security review now
+   that live cross-instance encrypted-message gates pass.
 
-3. **Complete v1.34 restore/provisioning gates.**
-   #297 now has a verifiable backup archive and production/skpt backup smoke,
-   but still needs a fresh-environment restore test before closure. #296 and
-   #299 should build on that evidence instead of adding separate ad hoc ops
-   scripts.
+3. **Prove operations are repeatable (#354, #351, #350).**
+   Run a fresh-environment backup/restore disaster-recovery drill, automate more
+   CI/release evidence, and polish production observability plus managed-instance
+   support workflows.
 
 ## Coverage Policy
 
@@ -93,6 +93,12 @@ scripts/release-server.sh --strict --bluesky-conformance
 scripts/release-server.sh --strict --mastodon-conformance
 ```
 
+Full production/skpt release gate:
+
+```bash
+scripts/release-server.sh --deploy --strict --bluesky-conformance --mastodon-conformance
+```
+
 For release-critical privacy, protocol, or E2EE changes, live gates should fail
 closed when prerequisites are missing. Use strict environment settings such as
 `REQUIRE_FULL=1` where supported rather than accepting a silent skip.
@@ -112,8 +118,5 @@ closed when prerequisites are missing. Use strict environment settings such as
 
 ```bash
 gh api repos/marctjones/dais/milestones --paginate
-gh issue list --milestone "v1.31 - Bluesky and public protocol completion"
-gh issue list --milestone "v1.32 - Discovery, watches, sources, and communities"
-gh issue list --milestone "v1.33 - Dais Desk usability and GUI quality gates"
-gh issue list --milestone "v1.34 - Managed hosting and operations"
+gh issue list --milestone "v1.35 - Post-roadmap hardening and product readiness"
 ```
