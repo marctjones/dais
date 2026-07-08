@@ -51,7 +51,7 @@ client and the core-based Cloudflare worker tree.
   `social.skpt.cl` instances pass MLS v2 device publication, bidirectional
   owner-DM delivery/decrypt, audience-list group delivery/decrypt, two-device
   recipient delivery/decrypt for one actor, and removed-device decrypt-failure
-  smoke tests, including the 2026-07-06 strict production/skpt release gate.
+  smoke tests, including the 2026-07-08 strict production/skpt release gate.
 - Rich ActivityPub object support includes ActivityStreams `Note`, `Article`,
   `Document`, and `Event` objects from the Rust CLI, including title/summary,
   event time, and location metadata while preserving Mastodon fallback status
