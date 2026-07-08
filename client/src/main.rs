@@ -2188,14 +2188,7 @@ async fn decrypt_owner_e2ee_message(
 
 fn print_owner_e2ee_keys(store: &ConfigStore, instance_url: Option<&str>) -> Result<()> {
     let entries = store.list_e2ee_private_keys()?;
-    let instance_filter = instance_url.map(|value| {
-        store
-            .e2ee_private_key_path(value, "placeholder")
-            .parent()
-            .and_then(|path| path.file_name())
-            .map(|value| value.to_string_lossy().to_string())
-            .unwrap_or_default()
-    });
+    let instance_filter = instance_url.map(|value| store.e2ee_instance_dir_name(value));
     let mut printed = 0usize;
     for entry in entries {
         if instance_filter
@@ -2298,12 +2291,7 @@ fn local_e2ee_key_device_ids(
     store: &ConfigStore,
     instance_url: &str,
 ) -> Result<std::collections::BTreeSet<String>> {
-    let instance_dir = store
-        .e2ee_private_key_path(instance_url, "placeholder")
-        .parent()
-        .and_then(|path| path.file_name())
-        .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let instance_dir = store.e2ee_instance_dir_name(instance_url);
     let ids = store
         .list_e2ee_private_keys()?
         .into_iter()

@@ -109,8 +109,12 @@ impl ConfigStore {
     pub fn e2ee_private_key_path(&self, instance_url: &str, device_id: &str) -> PathBuf {
         self.root
             .join("e2ee")
-            .join(safe_path_component(instance_url))
+            .join(self.e2ee_instance_dir_name(instance_url))
             .join(format!("{}.pkcs8.pem", safe_path_component(device_id)))
+    }
+
+    pub fn e2ee_instance_dir_name(&self, instance_url: &str) -> String {
+        safe_path_component(instance_url)
     }
 
     pub fn save_e2ee_private_key(
