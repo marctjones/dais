@@ -93,6 +93,26 @@ Backups created with `--skip-cloud` intentionally contain placeholder SQL. The
 restore verifier rejects those by default; pass `--allow-placeholder-sql` only
 when you are checking archive packaging rather than restore coverage.
 
+### Fresh-Environment Disaster-Recovery Drill
+
+Use `scripts/disaster-recovery-drill.sh` for release or managed-hosting evidence
+that a backup can be restored without relying on the operator's normal local
+Dais state. The drill sets isolated `HOME` and `DAIS_HOME` values, runs the
+restore verifier for each archive, and writes a report under
+`tmp/disaster-recovery-*/`.
+
+```bash
+DAIS_BACKUP_PASSPHRASE_FILE=~/.dais/backup-passphrase \
+  scripts/disaster-recovery-drill.sh \
+    --self-test \
+    --production-archive ~/.dais/backups/dais_production_backup_YYYYMMDDTHHMMSSZ.tar.gz.gpg \
+    --skpt-archive ~/.dais/backups/dais_skpt_backup_YYYYMMDDTHHMMSSZ.tar.gz.gpg
+```
+
+The report is safe to attach to a GitHub issue when it excludes secret values.
+Do not paste passphrases, owner tokens, private keys, or decrypted private/E2EE
+content into issue comments.
+
 ### Automated Backup with Cron
 
 **Setup daily backup at 2 AM:**

@@ -53,6 +53,28 @@ wrangler --version
 ./scripts/dev-stop.sh
 ```
 
+### CI-Safe Hardening Gates
+
+These gates do not require production owner tokens or Cloudflare deploy
+permissions:
+
+```bash
+scripts/audit-implementation-honesty.sh
+scripts/audit-e2ee-mls-security.sh --check-only
+scripts/verify-backup-restore.sh --self-test
+cargo test --manifest-path core/Cargo.toml
+cargo test --manifest-path core/Cargo.toml --features mls
+cargo test --manifest-path client-core/Cargo.toml
+cargo test --manifest-path client/Cargo.toml
+cargo test --manifest-path platforms/cloudflare/bindings/Cargo.toml
+cargo test --manifest-path platforms/cloudflare/workers/router/Cargo.toml
+SLINT_BACKEND=software cargo test --manifest-path apps/dais-desk/Cargo.toml
+```
+
+Secret-backed live gates remain explicit release steps. Do not treat CI-safe
+checks as a substitute for `scripts/release-server.sh --deploy --strict
+--bluesky-conformance --mastodon-conformance` before production/skpt releases.
+
 ### Test Scripts
 
 #### ActivityPub Conformance

@@ -130,3 +130,28 @@ git push -u origin feature/<short-name>
 # View release
 git show v1.0.0
 ```
+
+## Current Release Evidence Flow
+
+For current Cloudflare-backed releases, use the server release script as the
+canonical deploy gate:
+
+```bash
+scripts/release-server.sh --deploy --strict --bluesky-conformance --mastodon-conformance
+```
+
+For GUI releases, use:
+
+```bash
+scripts/release-desk-v2.sh
+```
+
+Package and upload release evidence after creating a GitHub Release:
+
+```bash
+scripts/publish-release-evidence.sh --tag vX.Y.Z --report-dir tmp/server-release-YYYYMMDDTHHMMSSZ
+```
+
+Use `--dry-run` to create the archive without uploading it. Do not upload
+reports containing owner tokens, private keys, passphrases, decrypted private
+messages, or other secret material.

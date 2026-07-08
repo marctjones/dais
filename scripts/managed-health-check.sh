@@ -19,6 +19,8 @@ R2_BUCKET=""
 FAILED_DELIVERY_WARN="0"
 QUEUED_DELIVERY_WARN="25"
 WRANGLER="${WRANGLER:-wrangler}"
+JSONL_OUT=""
+SELF_TEST="false"
 
 usage() {
   cat <<'USAGE'
@@ -33,6 +35,8 @@ Options:
   --r2-bucket BUCKET            Optional R2 media bucket inventory check
   --failed-delivery-warn N      Default: 0
   --queued-delivery-warn N      Default: 25
+  --jsonl-out FILE              Write machine-readable check rows as JSONL
+  --self-test                   Exercise JSONL/status output without network probes
   -h, --help                    Show this help
 USAGE
 }
@@ -49,10 +53,19 @@ while [ $# -gt 0 ]; do
     --r2-bucket) R2_BUCKET="${2:-}"; shift 2 ;;
     --failed-delivery-warn) FAILED_DELIVERY_WARN="${2:-}"; shift 2 ;;
     --queued-delivery-warn) QUEUED_DELIVERY_WARN="${2:-}"; shift 2 ;;
+    --jsonl-out) JSONL_OUT="${2:-}"; shift 2 ;;
+    --self-test) SELF_TEST="true"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [ "$SELF_TEST" = "true" ]; then
+  DOMAIN="${DOMAIN:-example.test}"
+  ACTIVITYPUB_DOMAIN="${ACTIVITYPUB_DOMAIN:-social.example.test}"
+  PDS_DOMAIN="${PDS_DOMAIN:-pds.example.test}"
+  JSONL_OUT="${JSONL_OUT:-$(mktemp -t dais-managed-health.XXXXXX.jsonl)}"
+fi
 
 if [ -z "$DOMAIN" ] || [ -z "$ACTIVITYPUB_DOMAIN" ] || [ -z "$PDS_DOMAIN" ]; then
   usage >&2
@@ -62,31 +75,68 @@ if [ -n "$OWNER_TOKEN_FILE" ]; then
   [ -f "$OWNER_TOKEN_FILE" ] || { echo "Owner token file not found: $OWNER_TOKEN_FILE" >&2; exit 2; }
   OWNER_TOKEN="$(tr -d '\n' < "$OWNER_TOKEN_FILE")"
 fi
+if [ -n "$JSONL_OUT" ]; then
+  mkdir -p "$(dirname "$JSONL_OUT")"
+  : > "$JSONL_OUT"
+fi
 
 status="ok"
 
+record() {
+  local level="$1"
+  local label="$2"
+  if [ -n "$JSONL_OUT" ]; then
+    jq -cn \
+      --arg level "$level" \
+      --arg label "$label" \
+      --arg domain "$DOMAIN" \
+      --arg activitypub_domain "$ACTIVITYPUB_DOMAIN" \
+      --arg pds_domain "$PDS_DOMAIN" \
+      '{level:$level,label:$label,domain:$domain,activitypub_domain:$activitypub_domain,pds_domain:$pds_domain}' \
+      >> "$JSONL_OUT"
+  fi
+}
+
 ok() {
+  record "ok" "$1"
   printf 'OK      %s\n' "$1"
 }
 
 warn() {
   status="warn"
+  record "warn" "$1"
   printf 'WARN    %s\n' "$1"
 }
 
 unknown() {
   [ "$status" = "ok" ] && status="warn"
+  record "unknown" "$1"
   printf 'UNKNOWN %s\n' "$1"
 }
 
 fail() {
   status="fail"
+  record "fail" "$1"
   printf 'FAIL    %s\n' "$1"
 }
 
 json_get() {
   jq -r "$1 // empty"
 }
+
+if [ "$SELF_TEST" = "true" ]; then
+  echo "=== Dais managed health self-test ==="
+  ok "fixture public endpoints and owner auth smoke"
+  unknown "queue depth exact count: not exposed by current Dais owner API/Wrangler workflow"
+  warn "fixture warning row for support triage"
+  if jq -e 'select(.level == "ok" or .level == "unknown" or .level == "warn")' "$JSONL_OUT" >/dev/null; then
+    echo "=== result: self-test-pass ==="
+    echo "jsonl: $JSONL_OUT"
+    exit 0
+  fi
+  echo "Self-test JSONL validation failed" >&2
+  exit 1
+fi
 
 echo "=== Dais managed health: $ACTIVITYPUB_DOMAIN ==="
 
@@ -185,4 +235,8 @@ else
 fi
 
 echo "=== result: $status ==="
+if [ -n "$JSONL_OUT" ]; then
+  jq -cn --arg level "result" --arg status "$status" '{level:$level,status:$status}' >> "$JSONL_OUT"
+  echo "jsonl: $JSONL_OUT"
+fi
 [ "$status" != "fail" ]

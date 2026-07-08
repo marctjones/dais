@@ -91,7 +91,8 @@ scripts/managed-health-check.sh \
   --activitypub-domain social.skpt.cl \
   --pds-domain pds.skpt.cl \
   --owner-token-file /private/tmp/dais-skpt-owner-token.txt \
-  --r2-bucket dais-media-skpt
+  --r2-bucket dais-media-skpt \
+  --jsonl-out tmp/managed-health-skpt.jsonl
 ```
 
 The script checks public WebFinger, ActivityPub actor JSON, PDS
@@ -100,6 +101,17 @@ diagnostics, recent failed/retry deliveries, optional R2 bucket info, and backup
 freshness. It reports exact Cloudflare Queue depth as `UNKNOWN` because the
 current owner API/Wrangler workflow does not expose a queue-depth value. Do not
 turn that into a fake zero.
+
+Use `--jsonl-out` when attaching support or release evidence. Each line records
+one `ok`, `warn`, `unknown`, or `fail` check with the target domains. `UNKNOWN`
+is actionable: it means the workflow lacks a supported measurement, not that the
+system is healthy.
+
+Validate the structured-output path without network probes:
+
+```bash
+scripts/managed-health-check.sh --self-test --jsonl-out tmp/managed-health-self-test.jsonl
+```
 
 Use `scripts/smoke-managed-instance.sh` for a smaller post-provisioning smoke:
 
