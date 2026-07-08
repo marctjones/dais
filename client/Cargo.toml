@@ -51,3 +51,6 @@ directories = "5"   # config dir resolution (P4 precedence)
 [dev-dependencies]
 hex = "0.4"
 tempfile = "3"
+
+[patch.crates-io]
+hpke-rs-libcrux = { path = "../third_party/hpke-rs-libcrux-0.6.1" }

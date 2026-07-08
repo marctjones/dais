@@ -27,3 +27,6 @@ tempfile = "3"
 name = "visual_smoke"
 path = "tests/visual_smoke.rs"
 harness = false
+
+[patch.crates-io]
+hpke-rs-libcrux = { path = "../../third_party/hpke-rs-libcrux-0.6.1" }

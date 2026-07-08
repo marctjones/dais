@@ -72,3 +72,6 @@ cloudflare = []
 # targets are not supported by default".
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+
+[patch.crates-io]
+hpke-rs-libcrux = { path = "../third_party/hpke-rs-libcrux-0.6.1" }
