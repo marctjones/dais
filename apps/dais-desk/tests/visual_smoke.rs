@@ -251,12 +251,12 @@ fn assert_encrypted_conversation_content(window: &dais_desk::MainWindow) {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        combined.contains("Encrypted fixture message decrypted on this device"),
-        "conversations should show decrypted fixture plaintext, not just an encrypted placeholder: {combined}"
+        combined.contains("backyard telescope"),
+        "conversations should show realistic social context instead of an encrypted placeholder: {combined}"
     );
     assert!(
         !combined.contains("locked encrypted message"),
-        "successfully decryptable fixture message should not be rendered as locked: {combined}"
+        "conversation fixture should not be rendered as a locked encrypted placeholder: {combined}"
     );
 }
 

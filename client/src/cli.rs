@@ -46,9 +46,6 @@ pub enum Command {
     /// Inspect and process ActivityPub delivery jobs.
     #[command(subcommand)]
     Deliveries(DeliveriesCommand),
-    /// End-to-end encryption helpers for dais encryptedMessage v1.
-    #[command(subcommand)]
-    E2ee(E2eeCommand),
     /// Create and coordinate ActivityPub Event objects.
     #[command(subcommand)]
     Events(EventsCommand),
@@ -264,15 +261,6 @@ pub struct CreatePostArgs {
     pub public: bool,
     #[arg(long, value_enum, default_value_t = Protocol::Both)]
     pub protocol: Protocol,
-    /// End-to-end encrypt the ActivityPub post.
-    #[arg(long, alias = "e2ee")]
-    pub encrypt: bool,
-    /// Encrypted fallback behavior for Mastodon/non-dais recipients.
-    #[arg(long, value_enum, default_value_t = E2eeFallbackMode::Strict)]
-    pub e2ee_fallback: E2eeFallbackMode,
-    /// Recipient in key_id=public_key_pem_file form. Repeat for multiple recipients.
-    #[arg(long = "recipient")]
-    pub recipients: Vec<String>,
     /// ActivityPub object URL this post replies to.
     #[arg(long)]
     pub reply_to: Option<String>,
@@ -306,7 +294,7 @@ pub struct CreatePostArgs {
     /// Direct ActivityPub recipient actor URL. Repeat for multiple recipients.
     #[arg(long = "to")]
     pub to: Vec<String>,
-    /// Store/read against production D1 for ActivityPub encrypted posts.
+    /// Store/read against production D1 for ActivityPub posts.
     #[arg(long)]
     pub remote: bool,
 }
@@ -638,16 +626,6 @@ impl std::fmt::Display for EventRsvp {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum E2eeFallbackMode {
-    /// Keyless fallback link. Most secure; key must arrive out of band.
-    Strict,
-    /// Include the decrypt key in the federated fallback link fragment.
-    TrustedServer,
-    /// Keep fallback keyless and print a separate decrypt link/key locally.
-    SplitChannel,
-}
-
 #[derive(Args)]
 pub struct TuiArgs {
     /// Read from production D1 instead of local development D1.
@@ -815,18 +793,10 @@ pub enum OwnerCommand {
     Dms(OwnerApiArgs),
     /// List encrypted owner E2EE messages.
     E2eeMessages(OwnerApiArgs),
-    /// Encrypt and send an owner E2EE message to a known device.
-    E2eeSend(OwnerE2eeSendArgs),
-    /// Encrypt one message to every trusted device in a named audience group.
-    E2eeGroupSend(OwnerE2eeGroupSendArgs),
-    /// Decrypt one encrypted owner E2EE message with a local private key.
-    E2eeDecrypt(OwnerE2eeDecryptArgs),
     /// Delete one encrypted owner E2EE message row.
     E2eeDelete(OwnerE2eeDeleteArgs),
     /// List local E2EE devices published by the live owner API.
     E2eeDevices(OwnerApiArgs),
-    /// Generate a local E2EE device key and publish its public material.
-    E2eeDeviceInit(OwnerE2eeDeviceInitArgs),
     /// Generate a local MLS v2 device and publish its OpenMLS key package.
     E2eeMlsDeviceInit(OwnerE2eeMlsDeviceInitArgs),
     /// Encrypt and send a true MLS v2 owner E2EE message.
@@ -837,14 +807,8 @@ pub enum OwnerCommand {
     E2eeMlsDecrypt(OwnerE2eeMlsDecryptArgs),
     /// Revoke/deactivate one local E2EE device.
     E2eeDeviceRevoke(OwnerE2eeDeviceRefArgs),
-    /// Revoke one local E2EE device and publish a replacement device.
-    E2eeDeviceRotate(OwnerE2eeDeviceRotateArgs),
-    /// List local stored E2EE private keys.
-    E2eeKeys(OwnerE2eeKeyListArgs),
-    /// Compare published devices with local private-key recovery material.
+    /// Compare published MLS devices with local MLS device/group state.
     E2eeRecovery(OwnerApiArgs),
-    /// Export one stored E2EE private key for backup.
-    E2eeKeyExport(OwnerE2eeKeyExportArgs),
     /// List discovered E2EE peer devices.
     E2eePeers(OwnerApiArgs),
     /// Discover and store E2EE devices published by a remote ActivityPub actor.
@@ -932,24 +896,6 @@ pub struct OwnerApiArgs {
 }
 
 #[derive(Args, Clone, Debug)]
-pub struct OwnerE2eeDeviceInitArgs {
-    #[command(flatten)]
-    pub api: OwnerApiArgs,
-    /// Stable local device id to publish.
-    #[arg(long)]
-    pub device_id: String,
-    /// Human-readable device label.
-    #[arg(long)]
-    pub display_name: Option<String>,
-    /// Path where the generated private key PEM will be written. Defaults to the local Dais key store.
-    #[arg(long)]
-    pub private_key_out: Option<PathBuf>,
-    /// Overwrite the private key file if it already exists.
-    #[arg(long)]
-    pub force: bool,
-}
-
-#[derive(Args, Clone, Debug)]
 pub struct OwnerE2eeMlsDeviceInitArgs {
     #[command(flatten)]
     pub api: OwnerApiArgs,
@@ -974,54 +920,6 @@ pub struct OwnerE2eeDeviceRefArgs {
 }
 
 #[derive(Args, Clone, Debug)]
-pub struct OwnerE2eeDeviceRotateArgs {
-    #[command(flatten)]
-    pub api: OwnerApiArgs,
-    /// Existing local device id to revoke.
-    #[arg(long)]
-    pub old_device_id: String,
-    /// Replacement local device id to generate and publish.
-    #[arg(long)]
-    pub new_device_id: String,
-    /// Human-readable replacement device label.
-    #[arg(long)]
-    pub display_name: Option<String>,
-    /// Path where the replacement private key PEM will be written. Defaults to the local Dais key store.
-    #[arg(long)]
-    pub private_key_out: Option<PathBuf>,
-    /// Overwrite the replacement private key file if it already exists.
-    #[arg(long)]
-    pub force: bool,
-}
-
-#[derive(Args, Clone, Debug)]
-pub struct OwnerE2eeKeyListArgs {
-    /// Dais instance base URL to filter by.
-    #[arg(long, env = "DAIS_OWNER_INSTANCE_URL")]
-    pub instance_url: Option<String>,
-}
-
-#[derive(Args, Clone, Debug)]
-pub struct OwnerE2eeKeyExportArgs {
-    /// Dais instance base URL.
-    #[arg(
-        long,
-        env = "DAIS_OWNER_INSTANCE_URL",
-        default_value = "https://social.dais.social"
-    )]
-    pub instance_url: String,
-    /// Local device id.
-    #[arg(long)]
-    pub device_id: String,
-    /// Backup/export destination path.
-    #[arg(long)]
-    pub output: PathBuf,
-    /// Overwrite output if it already exists.
-    #[arg(long)]
-    pub force: bool,
-}
-
-#[derive(Args, Clone, Debug)]
 pub struct OwnerE2eePeerDiscoverArgs {
     #[command(flatten)]
     pub api: OwnerApiArgs,
@@ -1039,75 +937,6 @@ pub struct OwnerE2eePeerRefArgs {
     /// Remote device id.
     #[arg(long)]
     pub device_id: String,
-}
-
-#[derive(Args, Clone, Debug)]
-pub struct OwnerE2eeSendArgs {
-    #[command(flatten)]
-    pub api: OwnerApiArgs,
-    /// Remote recipient ActivityPub actor URL.
-    #[arg(long)]
-    pub recipient_actor_id: String,
-    /// Recipient device id.
-    #[arg(long)]
-    pub recipient_device_id: String,
-    /// Local sender device id.
-    #[arg(long)]
-    pub sender_device_id: String,
-    /// Plaintext message to encrypt and send.
-    pub plaintext: String,
-    /// Inline media attachment JSON with data_base64/dataBase64. Repeat for multiple encrypted attachments.
-    #[arg(long = "attachment")]
-    pub attachments: Vec<String>,
-    /// Recipient public key PEM file. If omitted, trusted peer devices are used.
-    #[arg(long)]
-    pub recipient_public_key: Option<PathBuf>,
-    /// URL to include in fallback HTML.
-    #[arg(long)]
-    pub view_url: Option<String>,
-    /// Permit sending to an untrusted discovered peer device.
-    #[arg(long)]
-    pub allow_untrusted: bool,
-}
-
-#[derive(Args, Clone, Debug)]
-pub struct OwnerE2eeGroupSendArgs {
-    #[command(flatten)]
-    pub api: OwnerApiArgs,
-    /// Audience group id from owner audience lists.
-    #[arg(long)]
-    pub audience_list_id: String,
-    /// Local sender device id.
-    #[arg(long)]
-    pub sender_device_id: String,
-    /// Plaintext message to encrypt and send.
-    pub plaintext: String,
-    /// Inline media attachment JSON with data_base64/dataBase64. Repeat for multiple encrypted attachments.
-    #[arg(long = "attachment")]
-    pub attachments: Vec<String>,
-    /// URL to include in fallback HTML.
-    #[arg(long)]
-    pub view_url: Option<String>,
-    /// Permit sending to untrusted discovered peer devices.
-    #[arg(long)]
-    pub allow_untrusted: bool,
-}
-
-#[derive(Args, Clone, Debug)]
-pub struct OwnerE2eeDecryptArgs {
-    #[command(flatten)]
-    pub api: OwnerApiArgs,
-    /// Owner E2EE message id.
-    pub message_id: String,
-    /// PKCS#8 PEM private key file. If omitted, --device-id is loaded from the local Dais key store.
-    #[arg(long)]
-    pub private_key: Option<PathBuf>,
-    /// Local device id to load from the Dais key store when --private-key is omitted.
-    #[arg(long)]
-    pub device_id: Option<String>,
-    /// Recipient key id to select. Optional only when the message has one recipient.
-    #[arg(long)]
-    pub key_id: Option<String>,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -1312,8 +1141,6 @@ pub struct OwnerPostCreateArgs {
     pub public: bool,
     #[arg(long, value_enum, default_value_t = Protocol::ActivityPub)]
     pub protocol: Protocol,
-    #[arg(long)]
-    pub encrypt: bool,
     /// ActivityPub object URL this post replies to.
     #[arg(long)]
     pub reply_to: Option<String>,
@@ -1562,41 +1389,6 @@ pub struct ProcessQueuedDeliveriesArgs {
     pub admin_token: Option<String>,
     #[arg(long)]
     pub remote: bool,
-}
-
-#[derive(Subcommand)]
-pub enum E2eeCommand {
-    /// Encrypt plaintext and emit a Note payload with fallback content plus encryptedMessage.
-    Encrypt(EncryptArgs),
-    /// Decrypt an encryptedMessage JSON file or Note payload.
-    Decrypt(DecryptArgs),
-    /// Render the graceful fallback HTML content.
-    Fallback {
-        #[arg(long)]
-        view_url: Option<String>,
-    },
-}
-
-#[derive(Args)]
-pub struct EncryptArgs {
-    pub plaintext: String,
-    /// Recipient in key_id=public_key_pem_file form. Repeat for multiple recipients.
-    #[arg(long = "recipient", required = true)]
-    pub recipients: Vec<String>,
-    #[arg(long)]
-    pub view_url: Option<String>,
-}
-
-#[derive(Args)]
-pub struct DecryptArgs {
-    /// JSON file containing encryptedMessage or a Note payload with encryptedMessage.
-    pub input: String,
-    /// PKCS#8 PEM private key file.
-    #[arg(long)]
-    pub private_key: String,
-    /// Recipient key id to select. Optional only when the message has one recipient.
-    #[arg(long)]
-    pub key_id: Option<String>,
 }
 
 #[derive(Subcommand)]

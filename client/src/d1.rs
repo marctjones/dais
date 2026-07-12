@@ -39,17 +39,6 @@ pub struct D1Actor {
     pub image: Option<String>,
 }
 
-pub struct EncryptedPostInsert<'a> {
-    pub id: &'a str,
-    pub actor_id: &'a str,
-    pub fallback_content: &'a str,
-    pub visibility: &'a str,
-    pub published_at: &'a str,
-    pub encrypted_message_json: &'a str,
-    pub in_reply_to: Option<&'a str>,
-    pub media_attachments: Option<&'a str>,
-}
-
 pub struct ActivityDeliveryInsert<'a> {
     pub post_id: &'a str,
     pub actor_id: &'a str,
@@ -391,37 +380,6 @@ impl D1Client {
             ends_at = ends_at,
             location = location,
             poll_options = poll_options,
-            media_attachments = media_attachments,
-        );
-        self.execute(&sql)
-    }
-
-    pub async fn create_encrypted_post(&self, post: EncryptedPostInsert<'_>) -> Result<()> {
-        let in_reply_to = post
-            .in_reply_to
-            .map(sql_literal)
-            .unwrap_or_else(|| "NULL".to_string());
-        let media_attachments = post
-            .media_attachments
-            .map(sql_literal)
-            .unwrap_or_else(|| "NULL".to_string());
-        let sql = format!(
-            r#"
-            INSERT INTO posts (
-                id, actor_id, content, content_html, visibility,
-                published_at, protocol, encrypted_message, in_reply_to, media_attachments
-            ) VALUES (
-                {id}, {actor_id}, {fallback_content}, {fallback_content},
-                {visibility}, {published_at}, 'activitypub', {encrypted_message_json}, {in_reply_to}, {media_attachments}
-            )
-            "#,
-            id = sql_literal(post.id),
-            actor_id = sql_literal(post.actor_id),
-            fallback_content = sql_literal(post.fallback_content),
-            visibility = sql_literal(post.visibility),
-            published_at = sql_literal(post.published_at),
-            encrypted_message_json = sql_literal(post.encrypted_message_json),
-            in_reply_to = in_reply_to,
             media_attachments = media_attachments,
         );
         self.execute(&sql)

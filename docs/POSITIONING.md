@@ -169,7 +169,7 @@ default-open federation.
 | ATProto / Bluesky / PDS | **Public-read compatibility floor; AppView work remains** |
 | Bluesky **reading** (AppView) | **Partial via PDS read floor; personal AppView is v0.16** |
 | Private mode (home timeline, default-private, friends) | **Implemented foundation; still hardening UX and lifecycle coverage** |
-| **E2EE DMs** | **Implemented for encryptedMessage v1 fallback and MLS v2 owner workflows; live dais.social <-> skpt.cl gates cover 1:1, groups, multi-device, removal, and encrypted media** |
+| **E2EE DMs** | **Implemented on the MLS/RFC 9420 v2 owner workflow; legacy encryptedMessage v1 rows/devices are purged, and live dais.social <-> skpt.cl gates cover 1:1, groups, multi-device, removal, and delivery-worker processing** |
 | Rich ActivityPub objects | **v0.17 foundation: Article, Document, Event, Group, Organization with Mastodon-safe fallbacks** |
 | Media / R2 | **Implemented for public/private ActivityPub media, ATProto public image upload, and encrypted media attachments; shared R2 binding abstraction intentionally not exposed yet** |
 | Managed hosting (dais.cloud) | **Designed / not launched**. Tier, privacy, family/org, and support boundaries are defined in `docs/guides/MANAGED_HOSTING.md`; provisioning/restore/import/observability workflows remain v1.34 implementation work. |

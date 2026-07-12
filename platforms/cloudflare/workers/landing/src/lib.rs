@@ -288,7 +288,7 @@ async fn handle_landing(env: Env) -> Result<Response> {
                 <div class="tile">
                     <span class="status">verified</span>
                     <h3>E2EE</h3>
-                    <p>The encryptedMessage v1 fallback and MLS v2 owner-device paths are implemented. The independent skpt.cl deployment passed the 2026-07-08 strict production/skpt release gate with dais.social: bidirectional owner-DM delivery/decrypt, MLS direct messages, audience-list group delivery/decrypt, two-device recipient decrypt, removed-device decrypt failure, and delivery-worker processing.</p>
+                    <p>Dais E2EE is now v2-only on the MLS/RFC 9420 owner-device path. The independent skpt.cl deployment is the cross-instance testbed for bidirectional owner-DM delivery/decrypt, MLS direct messages, audience-list group delivery/decrypt, two-device recipient decrypt, removed-device decrypt failure, and delivery-worker processing.</p>
                 </div>
                 <div class="tile">
                     <span class="status">verified</span>

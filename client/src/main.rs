@@ -4,7 +4,6 @@ mod config;
 mod d1;
 mod delivery;
 mod doctor;
-mod e2ee;
 mod integrations;
 mod output;
 mod posting;
@@ -12,15 +11,14 @@ mod routing;
 mod sources;
 mod tui;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use clap::{CommandFactory, Parser};
 use cli::{
-    ActorsCommand, BlueskyCommand, Cli, Command, DeliveriesCommand, E2eeCommand, EventsCommand,
-    FollowCommand, FollowersCommand, FriendsCommand, MediaCommand, ModerationCommand,
-    NotificationsCommand, OwnerCommand, PostCommand, ReportsCommand, SearchCommand,
-    TimelineCommand,
+    ActorsCommand, BlueskyCommand, Cli, Command, DeliveriesCommand, EventsCommand, FollowCommand,
+    FollowersCommand, FriendsCommand, MediaCommand, ModerationCommand, NotificationsCommand,
+    OwnerCommand, PostCommand, ReportsCommand, SearchCommand, TimelineCommand,
 };
 use config::{ConfigStore, MlsDeviceStateFile, MlsGroupStateFile};
 use d1::D1Client;
@@ -43,13 +41,8 @@ use posting::{
     delete_activitypub_post, publish_interaction, publish_post, update_activitypub_post,
     ActivityOutcome, PostDraft, PostOutcome,
 };
-use rand::rngs::OsRng;
 use rand::RngCore;
 use routing::{Protocol, Visibility};
-use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-use rsa::{RsaPrivateKey, RsaPublicKey};
-use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::fs;
 
 #[tokio::main]
@@ -69,7 +62,6 @@ async fn main() -> Result<()> {
         Command::Followers(command) => handle_followers(command).await?,
         Command::Notifications(command) => handle_notifications(command).await?,
         Command::Deliveries(command) => handle_deliveries(command).await?,
-        Command::E2ee(command) => handle_e2ee(command).await?,
         Command::Events(command) => handle_events(command, &store).await?,
         Command::Media(command) => handle_media(command).await?,
         Command::Moderation(command) => handle_moderation(command).await?,
@@ -373,17 +365,12 @@ async fn handle_bluesky_follow(command: FollowCommand, store: &ConfigStore) -> R
 async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> Result<()> {
     match command {
         cli::TopLevelPostCommand::Create(args) => {
-            let encrypt = args.encrypt;
-            let e2ee_fallback = args.e2ee_fallback;
             let db = D1Client::new(args.remote)?;
             let draft = PostDraft::from_create_args(cli::CreatePostArgs {
                 text: args.text,
                 visibility: args.visibility,
                 public: args.public,
                 protocol: args.protocol,
-                encrypt: args.encrypt,
-                e2ee_fallback,
-                recipients: args.recipients,
                 reply_to: args.reply_to,
                 object_type: args.object_type,
                 title: args.title,
@@ -402,40 +389,11 @@ async fn handle_post(command: cli::TopLevelPostCommand, store: &ConfigStore) -> 
             match result {
                 PostOutcome::ActivityPub {
                     post_id,
-                    read_url,
-                    split_key_url,
                     delivery_ids,
                 } => {
-                    if encrypt {
-                        println!("Encrypted ActivityPub post stored");
-                        println!("Post: {post_id}");
-                        if let Some(read_url) = read_url {
-                            println!("Read URL: {read_url}");
-                        }
-                        match e2ee_fallback {
-                            cli::E2eeFallbackMode::Strict => {
-                                println!("No decryption key was included in the fallback link.");
-                            }
-                            cli::E2eeFallbackMode::TrustedServer => {
-                                println!(
-                                    "Trusted-server fallback selected: the federated fallback link includes the decrypt key fragment."
-                                );
-                            }
-                            cli::E2eeFallbackMode::SplitChannel => {
-                                if let Some(split_key_url) = split_key_url {
-                                    println!("Split-channel unlock URL: {split_key_url}");
-                                }
-                                println!(
-                                    "The fallback link sent through federation remains keyless."
-                                );
-                            }
-                        }
-                        println!("Deliveries queued: {}", delivery_ids.len());
-                    } else {
-                        println!("Posted to ActivityPub");
-                        println!("Post: {post_id}");
-                        println!("Deliveries queued: {}", delivery_ids.len());
-                    }
+                    println!("Posted to ActivityPub");
+                    println!("Post: {post_id}");
+                    println!("Deliveries queued: {}", delivery_ids.len());
                     if !delivery_ids.is_empty() {
                         println!("Delivery IDs:");
                         for delivery_id in delivery_ids {
@@ -545,11 +503,8 @@ async fn handle_events(command: EventsCommand, store: &ConfigStore) -> Result<()
                     args.visibility
                 },
                 protocol: Protocol::ActivityPub,
-                encrypt: false,
-                recipients: BTreeMap::new(),
                 reply_to: None,
                 to: args.to,
-                e2ee_fallback: cli::E2eeFallbackMode::Strict,
                 object_type: cli::ActivityObjectType::Event,
                 title: Some(args.title),
                 summary: None,
@@ -919,40 +874,6 @@ async fn handle_stats(args: cli::StatsArgs) -> Result<()> {
     Ok(())
 }
 
-async fn handle_e2ee(command: E2eeCommand) -> Result<()> {
-    match command {
-        E2eeCommand::Encrypt(args) => {
-            let mut recipients = BTreeMap::new();
-            for recipient in args.recipients {
-                let (key_id, path) = recipient.split_once('=').ok_or_else(|| {
-                    anyhow::anyhow!("recipient must be in key_id=public_key_pem_file form")
-                })?;
-                recipients.insert(key_id.to_string(), fs::read_to_string(path)?);
-            }
-
-            let payload = e2ee::encrypted_note_payload(
-                &args.plaintext,
-                &recipients,
-                args.view_url.as_deref(),
-            )?;
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-        }
-        E2eeCommand::Decrypt(args) => {
-            let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(args.input)?)?;
-            let encrypted = e2ee::encrypted_message_from_json(value)?;
-            let private_key = fs::read_to_string(args.private_key)?;
-            let plaintext =
-                e2ee::decrypt_message(&encrypted, &private_key, args.key_id.as_deref())?;
-            println!("{plaintext}");
-        }
-        E2eeCommand::Fallback { view_url } => {
-            println!("{}", e2ee::fallback_content(view_url.as_deref()));
-        }
-    }
-
-    Ok(())
-}
-
 async fn handle_friends(command: FriendsCommand) -> Result<()> {
     match command {
         FriendsCommand::List {
@@ -1131,15 +1052,6 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_e2ee_messages(&messages);
         }
-        OwnerCommand::E2eeSend(args) => {
-            send_owner_e2ee_message(args).await?;
-        }
-        OwnerCommand::E2eeGroupSend(args) => {
-            send_owner_e2ee_group_message(args).await?;
-        }
-        OwnerCommand::E2eeDecrypt(args) => {
-            decrypt_owner_e2ee_message(args, store).await?;
-        }
         OwnerCommand::E2eeDelete(args) => {
             let result = owner_api(&args.api)
                 .delete_e2ee_message(&args.message_id)
@@ -1153,9 +1065,6 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
                 .await
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_e2ee_devices(&devices);
-        }
-        OwnerCommand::E2eeDeviceInit(args) => {
-            init_owner_e2ee_device(args, store).await?;
         }
         OwnerCommand::E2eeMlsDeviceInit(args) => {
             init_owner_e2ee_mls_device(args, store).await?;
@@ -1178,17 +1087,8 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             print_owner_e2ee_devices(&[device]);
         }
-        OwnerCommand::E2eeDeviceRotate(args) => {
-            rotate_owner_e2ee_device(args, store).await?;
-        }
-        OwnerCommand::E2eeKeys(args) => {
-            print_owner_e2ee_keys(store, args.instance_url.as_deref())?;
-        }
         OwnerCommand::E2eeRecovery(args) => {
             print_owner_e2ee_recovery(&args, store).await?;
-        }
-        OwnerCommand::E2eeKeyExport(args) => {
-            export_owner_e2ee_key(store, args)?;
         }
         OwnerCommand::E2eePeers(args) => {
             let devices = owner_api(&args)
@@ -1269,7 +1169,6 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
                     text: args.text,
                     visibility: owner_visibility(visibility),
                     protocol: owner_protocol(args.protocol),
-                    encrypt: args.encrypt,
                     in_reply_to: args.reply_to,
                     audience_list_id: args.audience_list_id,
                     recipients: args.recipients,
@@ -1618,65 +1517,6 @@ async fn handle_owner_profile(command: cli::OwnerProfileCommand) -> Result<()> {
     Ok(())
 }
 
-async fn init_owner_e2ee_device(
-    args: cli::OwnerE2eeDeviceInitArgs,
-    store: &ConfigStore,
-) -> Result<()> {
-    let mut rng = OsRng;
-    let private_key = RsaPrivateKey::new(&mut rng, 2048)?;
-    let public_key = RsaPublicKey::from(&private_key);
-    let private_pem = private_key.to_pkcs8_pem(LineEnding::LF)?;
-    let public_pem = public_key.to_public_key_pem(LineEnding::LF)?;
-
-    let private_key_path = if let Some(path) = args.private_key_out.as_ref() {
-        if path.exists() && !args.force {
-            return Err(anyhow::anyhow!(
-                "{} already exists; pass --force to overwrite",
-                path.display()
-            ));
-        }
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
-        }
-        fs::write(path, private_pem.as_bytes())?;
-        set_private_key_permissions(path)?;
-        path.clone()
-    } else {
-        store.save_e2ee_private_key(
-            &args.api.instance_url,
-            &args.device_id,
-            private_pem.as_ref(),
-            args.force,
-        )?
-    };
-
-    let device = owner_api(&args.api)
-        .upsert_e2ee_device(&OwnerE2eeDeviceUpsert {
-            device_id: args.device_id.clone(),
-            display_name: args.display_name,
-            protocol: "dais-mls-v1".to_string(),
-            credential: public_pem.clone(),
-            key_package: public_pem,
-        })
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-
-    println!("Published E2EE device");
-    println!("device_id={}", device.device_id);
-    println!("actor={}", device.actor_id);
-    println!("fingerprint={}", device.fingerprint);
-    println!("private_key={}", private_key_path.display());
-    println!("protocol={}", device.protocol);
-    println!("status={}", device.status);
-    println!("wire_material=v1-rsa-fallback");
-    println!(
-        "Back up this private key; losing it means old encrypted messages cannot be decrypted."
-    );
-    Ok(())
-}
-
 async fn init_owner_e2ee_mls_device(
     args: cli::OwnerE2eeMlsDeviceInitArgs,
     store: &ConfigStore,
@@ -1722,41 +1562,6 @@ async fn init_owner_e2ee_mls_device(
     println!("wire_material=daisEncryptedMessage-v2-mls-rfc9420");
     println!("Back up this MLS device state; losing it means this device cannot join or decrypt MLS conversations.");
     Ok(())
-}
-
-async fn rotate_owner_e2ee_device(
-    args: cli::OwnerE2eeDeviceRotateArgs,
-    store: &ConfigStore,
-) -> Result<()> {
-    if args.old_device_id == args.new_device_id {
-        return Err(anyhow::anyhow!(
-            "--new-device-id must differ from --old-device-id"
-        ));
-    }
-    println!("Revoking old E2EE device");
-    let revoked = owner_api(&args.api)
-        .revoke_e2ee_device(&OwnerE2eeDeviceRef {
-            device_id: args.old_device_id.clone(),
-        })
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    print_owner_e2ee_devices(&[revoked]);
-    println!(
-        "Rotation note: keep the old private key backup if you need to decrypt messages addressed to {}. Revocation only stops future publication/use.",
-        args.old_device_id
-    );
-
-    init_owner_e2ee_device(
-        cli::OwnerE2eeDeviceInitArgs {
-            api: args.api,
-            device_id: args.new_device_id,
-            display_name: args.display_name,
-            private_key_out: args.private_key_out,
-            force: args.force,
-        },
-        store,
-    )
-    .await
 }
 
 async fn send_owner_e2ee_mls_message(
@@ -1825,7 +1630,6 @@ async fn send_owner_e2ee_mls_message(
             recipient_device_id: Some(args.recipient_device_id),
             sender_device_id: args.sender_device_id,
             dais_encrypted_message: Some(serde_json::to_value(&envelope)?),
-            encrypted_message: None,
             fallback_content: Some(
                 "Encrypted MLS message. Open in a dais client to decrypt.".to_string(),
             ),
@@ -1928,7 +1732,6 @@ async fn send_owner_e2ee_mls_group_message(
                 recipient_device_id: Some(delivery.validation_device_id.clone()),
                 sender_device_id: args.sender_device_id.clone(),
                 dais_encrypted_message: Some(encrypted_message.clone()),
-                encrypted_message: None,
                 fallback_content: Some(
                     "Encrypted MLS group message. Open in a dais client to decrypt.".to_string(),
                 ),
@@ -1953,45 +1756,6 @@ async fn send_owner_e2ee_mls_group_message(
     Ok(())
 }
 
-async fn send_owner_e2ee_message(args: cli::OwnerE2eeSendArgs) -> Result<()> {
-    let recipient_public_key = resolve_owner_e2ee_recipient_key(&args).await?;
-    let mut recipients = BTreeMap::new();
-    recipients.insert(args.recipient_device_id.clone(), recipient_public_key);
-    let (payload, content_key) = e2ee::encrypted_note_payload_with_content_key(
-        &args.plaintext,
-        &recipients,
-        args.view_url.as_deref(),
-    )?;
-    let encrypted_message = serde_json::to_value(&payload.encrypted_message)?;
-    let attachments = posting::encrypted_attachment_values(&args.attachments, &content_key)?;
-
-    let result = owner_api(&args.api)
-        .send_e2ee_message(&OwnerE2eeMessageSend {
-            recipient_actor_id: args.recipient_actor_id,
-            recipient_device_id: Some(args.recipient_device_id),
-            sender_device_id: args.sender_device_id,
-            dais_encrypted_message: None,
-            encrypted_message: Some(encrypted_message),
-            fallback_content: Some(payload.content),
-            attachments,
-        })
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    ConfigStore::default()?.save_decrypted_message(
-        &args.api.instance_url,
-        &result.message.id,
-        &args.plaintext,
-        "dais-mls-v1",
-    )?;
-
-    println!("Sent owner E2EE message");
-    println!("id={}", result.message.id);
-    println!("conversation_id={}", result.message.conversation_id);
-    println!("recipient_actor={:?}", result.message.recipient_actor_id);
-    println!("delivery_ids={}", result.delivery_ids.join(","));
-    Ok(())
-}
-
 async fn decrypt_owner_e2ee_mls_message(
     args: cli::OwnerE2eeMlsDecryptArgs,
     store: &ConfigStore,
@@ -2006,7 +1770,7 @@ async fn decrypt_owner_e2ee_mls_message(
         .ok_or_else(|| anyhow::anyhow!("owner E2EE message {} not found", args.message_id))?;
     if message.e2ee_protocol != "mls-rfc9420" {
         return Err(anyhow::anyhow!(
-            "message {} uses {}; use e2ee-decrypt for v1 RSA fallback messages",
+            "message {} uses unsupported protocol {}; only MLS/RFC 9420 v2 messages can be decrypted",
             message.id,
             message.e2ee_protocol
         ));
@@ -2061,220 +1825,58 @@ async fn decrypt_owner_e2ee_mls_message(
     Ok(())
 }
 
-async fn send_owner_e2ee_group_message(args: cli::OwnerE2eeGroupSendArgs) -> Result<()> {
-    let api = owner_api(&args.api);
-    let audience_lists = api
-        .audience_lists()
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let audience = audience_lists
-        .iter()
-        .find(|list| list.id == args.audience_list_id)
-        .ok_or_else(|| anyhow::anyhow!("audience group {} not found", args.audience_list_id))?;
-    let peers = api
-        .e2ee_peer_devices()
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let plan = plan_owner_e2ee_group_recipients(audience, &peers, args.allow_untrusted)?;
-    let (payload, content_key) = e2ee::encrypted_note_payload_with_content_key(
-        &args.plaintext,
-        &plan.recipients,
-        args.view_url.as_deref(),
-    )?;
-    let encrypted_message = serde_json::to_value(&payload.encrypted_message)?;
-    let attachments = posting::encrypted_attachment_values(&args.attachments, &content_key)?;
-
-    println!("Sending owner E2EE group message");
-    println!("audience_id={}", audience.id);
-    println!("audience_name={}", audience.name);
-    println!("member_count={}", plan.member_count);
-    println!("recipient_device_count={}", plan.recipients.len());
-    println!("wire_material=v1-rsa-fallback-group");
-    println!(
-        "Recovery note: every recipient needs a matching private key; lost keys cannot decrypt this message later."
-    );
-
-    let mut all_delivery_ids = Vec::new();
-    for delivery in &plan.deliveries {
-        let result = api
-            .send_e2ee_message(&OwnerE2eeMessageSend {
-                recipient_actor_id: delivery.actor_id.clone(),
-                recipient_device_id: Some(delivery.validation_device_id.clone()),
-                sender_device_id: args.sender_device_id.clone(),
-                dais_encrypted_message: None,
-                encrypted_message: Some(encrypted_message.clone()),
-                fallback_content: Some(payload.content.clone()),
-                attachments: attachments.clone(),
-            })
-            .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        ConfigStore::default()?.save_decrypted_message(
-            &args.api.instance_url,
-            &result.message.id,
-            &args.plaintext,
-            "dais-mls-v1",
-        )?;
-        all_delivery_ids.extend(result.delivery_ids);
-        println!(
-            "sent actor={} validation_device={} message={}",
-            delivery.actor_id, delivery.validation_device_id, result.message.id
-        );
-    }
-
-    println!("delivery_ids={}", all_delivery_ids.join(","));
-    Ok(())
-}
-
-async fn decrypt_owner_e2ee_message(
-    args: cli::OwnerE2eeDecryptArgs,
-    store: &ConfigStore,
-) -> Result<()> {
-    let messages = owner_api(&args.api)
-        .e2ee_messages()
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let message = messages
-        .into_iter()
-        .find(|message| message.id == args.message_id)
-        .ok_or_else(|| anyhow::anyhow!("owner E2EE message {} not found", args.message_id))?;
-    if message.e2ee_protocol == "mls-rfc9420" {
-        return Err(anyhow::anyhow!(
-            "message {} is MLS E2EE group={} epoch={}; v1 RSA fallback decrypt cannot decrypt MLS state",
-            message.id,
-            message.mls_group_id.as_deref().unwrap_or("unknown"),
-            message
-                .mls_epoch
-                .map(|epoch| epoch.to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        ));
-    }
-    let encrypted = e2ee::encrypted_message_from_json(message.encrypted_message)?;
-    let private_key = if let Some(path) = args.private_key.as_ref() {
-        fs::read_to_string(path)?
-    } else {
-        let device_id = args.device_id.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("--device-id is required when --private-key is omitted")
-        })?;
-        store.load_e2ee_private_key(&args.api.instance_url, device_id)?
-    };
-    let (plaintext, content_key) =
-        e2ee::decrypt_message_with_content_key(&encrypted, &private_key, args.key_id.as_deref())?;
-    store.save_decrypted_message(
-        &args.api.instance_url,
-        &message.id,
-        &plaintext,
-        &message.e2ee_protocol,
-    )?;
-    println!("{plaintext}");
-    for (index, attachment) in message.attachments.iter().enumerate() {
-        let encrypted_media = e2ee::encrypted_media_from_json(attachment.clone())?;
-        let bytes = e2ee::decrypt_media_bytes_with_content_key(&encrypted_media, &content_key)
-            .with_context(|| format!("could not decrypt attachment {}", index + 1))?;
-        let digest = Sha256::digest(&bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        println!(
-            "attachment[{}] name={} media_type={} bytes={} sha256={}",
-            index + 1,
-            encrypted_media.name.as_deref().unwrap_or("unnamed"),
-            encrypted_media.media_type,
-            bytes.len(),
-            digest
-        );
-    }
-    Ok(())
-}
-
-fn print_owner_e2ee_keys(store: &ConfigStore, instance_url: Option<&str>) -> Result<()> {
-    let entries = store.list_e2ee_private_keys()?;
-    let instance_filter = instance_url.map(|value| store.e2ee_instance_dir_name(value));
-    let mut printed = 0usize;
-    for entry in entries {
-        if instance_filter
-            .as_ref()
-            .is_some_and(|filter| filter != &entry.instance)
-        {
-            continue;
-        }
-        println!("{} {}", entry.instance, entry.device_id);
-        println!("path={}", entry.path.display());
-        printed += 1;
-    }
-    if printed == 0 {
-        println!("No stored E2EE private keys found");
-    }
-    Ok(())
-}
-
-fn export_owner_e2ee_key(store: &ConfigStore, args: cli::OwnerE2eeKeyExportArgs) -> Result<()> {
-    if args.output.exists() && !args.force {
-        return Err(anyhow::anyhow!(
-            "{} already exists; pass --force to overwrite",
-            args.output.display()
-        ));
-    }
-    let private_key = store.load_e2ee_private_key(&args.instance_url, &args.device_id)?;
-    if let Some(parent) = args.output.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
-    fs::write(&args.output, private_key)?;
-    set_private_key_permissions(&args.output)?;
-    println!("Exported E2EE private key");
-    println!("device_id={}", args.device_id);
-    println!("output={}", args.output.display());
-    println!("Store this backup securely; anyone with it can decrypt messages for this device.");
-    Ok(())
-}
-
 async fn print_owner_e2ee_recovery(args: &cli::OwnerApiArgs, store: &ConfigStore) -> Result<()> {
     let devices = owner_api(args)
         .e2ee_devices()
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let local_key_ids = local_e2ee_key_device_ids(store, &args.instance_url)?;
-    let local_mls_states = store.list_mls_group_states()?;
+    let instance_dir = store.instance_dir_name(&args.instance_url);
+    let local_device_state_ids = local_mls_device_state_ids(store, &args.instance_url)?;
+    let local_mls_states = store
+        .list_mls_group_states()?
+        .into_iter()
+        .filter(|state| state.instance == instance_dir)
+        .collect::<Vec<_>>();
     let mut missing_active = 0usize;
-    let mut revoked_with_key = 0usize;
+    let mut revoked_with_state = 0usize;
 
     println!("E2EE recovery status");
     println!("instance={}", args.instance_url);
     for device in &devices {
-        let has_local_key = local_key_ids.contains(&device.device_id);
-        if device.status == "active" && !has_local_key {
+        let has_local_state = local_device_state_ids.contains(&device.device_id);
+        if device.status == "active" && !has_local_state {
             missing_active += 1;
         }
-        if device.status == "revoked" && has_local_key {
-            revoked_with_key += 1;
+        if device.status == "revoked" && has_local_state {
+            revoked_with_state += 1;
         }
         println!(
-            "{} [{}] fingerprint={} local_private_key={}",
+            "{} [{}] protocol={} fingerprint={} local_mls_device_state={}",
             device.device_id,
             device.status,
+            device.protocol,
             device.fingerprint,
-            if has_local_key { "present" } else { "missing" }
+            if has_local_state { "present" } else { "missing" }
         );
     }
 
     if missing_active == 0 {
-        println!("active_key_status=ok");
+        println!("active_mls_device_state_status=ok");
     } else {
-        println!("active_key_status=missing_private_key");
+        println!("active_mls_device_state_status=missing");
         println!(
-            "WARNING: active devices without local private keys can receive encrypted messages that this client cannot decrypt."
+            "WARNING: active published MLS devices without local MLS device state cannot send or decrypt MLS messages on this client."
         );
     }
-    if revoked_with_key > 0 {
+    if revoked_with_state > 0 {
         println!(
-            "revoked_key_note=keep revoked-device private keys if old encrypted messages still need to be decrypted."
+            "revoked_state_note=local state for revoked MLS devices can be removed after messages from those devices are no longer needed."
         );
     }
-    println!("mls_state_count={}", local_mls_states.len());
+    println!("mls_group_state_count={}", local_mls_states.len());
     for state in local_mls_states {
         println!(
-            "mls_state instance={} device={} group={} path={}",
+            "mls_group_state instance={} device={} group={} path={}",
             state.instance,
             state.device_id,
             state.group_id,
@@ -2282,18 +1884,18 @@ async fn print_owner_e2ee_recovery(args: &cli::OwnerApiArgs, store: &ConfigStore
         );
     }
     println!(
-        "Recovery boundary: Dais cannot recover old encrypted content after all recipient private keys are lost."
+        "Recovery boundary: Dais cannot decrypt MLS content without the matching local MLS device/group state."
     );
     Ok(())
 }
 
-fn local_e2ee_key_device_ids(
+fn local_mls_device_state_ids(
     store: &ConfigStore,
     instance_url: &str,
 ) -> Result<std::collections::BTreeSet<String>> {
-    let instance_dir = store.e2ee_instance_dir_name(instance_url);
+    let instance_dir = store.instance_dir_name(instance_url);
     let ids = store
-        .list_e2ee_private_keys()?
+        .list_mls_device_states()?
         .into_iter()
         .filter(|entry| entry.instance == instance_dir)
         .map(|entry| entry.device_id)
@@ -2328,50 +1930,6 @@ async fn trust_owner_e2ee_peer(args: cli::OwnerE2eePeerRefArgs) -> Result<OwnerE
         })
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))
-}
-
-async fn resolve_owner_e2ee_recipient_key(args: &cli::OwnerE2eeSendArgs) -> Result<String> {
-    if let Some(path) = args.recipient_public_key.as_ref() {
-        return Ok(fs::read_to_string(path)?);
-    }
-
-    let api = owner_api(&args.api);
-    let local_devices = api
-        .e2ee_devices()
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    if let Some(device) = local_devices.iter().find(|device| {
-        device.actor_id == args.recipient_actor_id && device.device_id == args.recipient_device_id
-    }) {
-        return Ok(device.credential.clone());
-    }
-
-    let peers = api
-        .e2ee_peer_devices()
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let peer = peers
-        .iter()
-        .find(|peer| {
-            peer.actor_id == args.recipient_actor_id
-                && peer.device_id == args.recipient_device_id
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "recipient E2EE device {} for {} not found; provide --recipient-public-key or run e2ee-peer-discover",
-                args.recipient_device_id,
-                args.recipient_actor_id
-            )
-        })?;
-    if peer.trust_state != "trusted" && !args.allow_untrusted {
-        return Err(anyhow::anyhow!(
-            "recipient E2EE device {} for {} is {}; run e2ee-peer-trust or pass --allow-untrusted",
-            peer.device_id,
-            peer.actor_id,
-            peer.trust_state
-        ));
-    }
-    Ok(peer.credential.clone())
 }
 
 async fn resolve_owner_e2ee_mls_peer(
@@ -2417,13 +1975,6 @@ fn owner_actor_id_hint(instance_url: &str) -> String {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct OwnerE2eeGroupPlan {
-    member_count: usize,
-    recipients: BTreeMap<String, String>,
-    deliveries: Vec<OwnerE2eeGroupDelivery>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 struct OwnerE2eeGroupDelivery {
     actor_id: String,
     validation_device_id: String,
@@ -2434,61 +1985,6 @@ struct OwnerMlsGroupPlan {
     member_count: usize,
     devices: Vec<OwnerE2eePeerDevice>,
     deliveries: Vec<OwnerE2eeGroupDelivery>,
-}
-
-fn plan_owner_e2ee_group_recipients(
-    audience: &OwnerAudienceList,
-    peers: &[OwnerE2eePeerDevice],
-    allow_untrusted: bool,
-) -> Result<OwnerE2eeGroupPlan> {
-    let members: Vec<String> = audience
-        .member_actor_ids
-        .iter()
-        .map(|member| member.trim())
-        .filter(|member| !member.is_empty())
-        .map(ToOwned::to_owned)
-        .collect();
-    if members.is_empty() {
-        return Err(anyhow::anyhow!(
-            "audience group {} has no members",
-            audience.id
-        ));
-    }
-
-    let mut recipients = BTreeMap::new();
-    let mut deliveries = Vec::new();
-    for actor_id in &members {
-        let devices: Vec<&OwnerE2eePeerDevice> = peers
-            .iter()
-            .filter(|peer| {
-                peer.actor_id == *actor_id
-                    && (peer.trust_state == "trusted" || allow_untrusted)
-                    && peer.revoked_at.is_none()
-            })
-            .collect();
-        if devices.is_empty() {
-            return Err(anyhow::anyhow!(
-                "audience member {} has no {}E2EE peer devices; run e2ee-peer-discover and e2ee-peer-trust first",
-                actor_id,
-                if allow_untrusted { "discovered " } else { "trusted " }
-            ));
-        }
-
-        for device in &devices {
-            let key_id = owner_e2ee_group_key_id(&device.actor_id, &device.device_id);
-            recipients.insert(key_id, device.credential.clone());
-        }
-        deliveries.push(OwnerE2eeGroupDelivery {
-            actor_id: actor_id.clone(),
-            validation_device_id: devices[0].device_id.clone(),
-        });
-    }
-
-    Ok(OwnerE2eeGroupPlan {
-        member_count: members.len(),
-        recipients,
-        deliveries,
-    })
 }
 
 fn plan_owner_mls_group_recipients(
@@ -2553,25 +2049,6 @@ fn owner_mls_audience_group_id(audience: &OwnerAudienceList, plan: &OwnerMlsGrou
         .collect();
     members.sort();
     format!("dais-mls-audience:{}:{}", audience.id, members.join(","))
-}
-
-fn owner_e2ee_group_key_id(actor_id: &str, device_id: &str) -> String {
-    format!("{}#{}", actor_id.trim_end_matches('#'), device_id)
-}
-
-#[cfg(unix)]
-fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(0o600);
-    fs::set_permissions(path, permissions)?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_private_key_permissions(_path: &std::path::Path) -> Result<()> {
-    Ok(())
 }
 
 async fn owner_interact(
@@ -2876,7 +2353,7 @@ fn print_owner_e2ee_messages(messages: &[OwnerE2eeMessage]) {
             );
             println!("envelope=daisEncryptedMessage");
         } else {
-            println!("envelope=encryptedMessage");
+            println!("envelope=unsupported");
         }
         if !message.attachments.is_empty() {
             println!("attachments={}", message.attachments.len());
@@ -3426,10 +2903,6 @@ mod tests {
         }
     }
 
-    fn peer(actor_id: &str, device_id: &str, trust_state: &str) -> OwnerE2eePeerDevice {
-        peer_with_protocol(actor_id, device_id, trust_state, "dais-mls-v1")
-    }
-
     fn peer_with_protocol(
         actor_id: &str,
         device_id: &str,
@@ -3456,65 +2929,13 @@ mod tests {
     }
 
     #[test]
-    fn group_e2ee_plan_tracks_audience_membership_changes() {
-        let alice = "https://alice.example/users/alice";
-        let bob = "https://bob.example/users/bob";
-        let peers = vec![
-            peer(alice, "phone", "trusted"),
-            peer(bob, "laptop", "trusted"),
-        ];
-
-        let original = plan_owner_e2ee_group_recipients(
-            &audience("close-friends", &[alice, bob]),
-            &peers,
-            false,
-        )
-        .unwrap();
-        let after_remove =
-            plan_owner_e2ee_group_recipients(&audience("close-friends", &[alice]), &peers, false)
-                .unwrap();
-
-        assert_eq!(original.member_count, 2);
-        assert_eq!(original.deliveries.len(), 2);
-        assert_eq!(original.recipients.len(), 2);
-        assert_eq!(after_remove.member_count, 1);
-        assert_eq!(after_remove.deliveries.len(), 1);
-        assert_eq!(after_remove.recipients.len(), 1);
-        assert!(after_remove
-            .recipients
-            .contains_key(&owner_e2ee_group_key_id(alice, "phone")));
-        assert!(!after_remove
-            .recipients
-            .contains_key(&owner_e2ee_group_key_id(bob, "laptop")));
-    }
-
-    #[test]
-    fn group_e2ee_plan_requires_trusted_devices_by_default() {
-        let alice = "https://alice.example/users/alice";
-        let peers = vec![peer(alice, "phone", "untrusted")];
-
-        assert!(plan_owner_e2ee_group_recipients(
-            &audience("close-friends", &[alice]),
-            &peers,
-            false
-        )
-        .is_err());
-        assert!(plan_owner_e2ee_group_recipients(
-            &audience("close-friends", &[alice]),
-            &peers,
-            true
-        )
-        .is_ok());
-    }
-
-    #[test]
     fn mls_group_plan_requires_trusted_mls_devices_and_tracks_membership() {
         let alice = "https://alice.example/users/alice";
         let bob = "https://bob.example/users/bob";
         let peers = vec![
             peer_with_protocol(alice, "phone", "trusted", "mls-rfc9420"),
             peer_with_protocol(bob, "laptop", "trusted", "mls-rfc9420"),
-            peer_with_protocol(bob, "legacy", "trusted", "dais-mls-v1"),
+            peer_with_protocol(bob, "legacy", "trusted", "unsupported-legacy"),
         ];
 
         let original = plan_owner_mls_group_recipients(

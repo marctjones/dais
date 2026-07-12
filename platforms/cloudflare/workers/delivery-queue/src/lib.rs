@@ -751,7 +751,7 @@ fn build_create_activity_json(
     }
 
     if let Some(encrypted_message) = encrypted_message {
-        note["encryptedMessage"] = encrypted_message;
+        note["daisEncryptedMessage"] = encrypted_message;
     }
 
     let activity = serde_json::json!({

@@ -368,7 +368,7 @@ pub async fn handle_update(db: &dyn DatabaseProvider, activity: &Activity) -> Co
         .unwrap_or_else(crate::utils::now_rfc3339);
     let raw_object = serde_json::to_string(object)?;
     let encrypted_message = object
-        .get("encryptedMessage")
+        .get("daisEncryptedMessage")
         .map(serde_json::to_string)
         .transpose()?;
 
@@ -478,7 +478,7 @@ async fn ingest_timeline_post(
     let raw_object = serde_json::to_string(object)?;
     let raw_activity = serde_json::to_string(activity)?;
     let encrypted_message = object
-        .get("encryptedMessage")
+        .get("daisEncryptedMessage")
         .map(serde_json::to_string)
         .transpose()?;
 
@@ -654,7 +654,7 @@ async fn handle_direct_message(
     )
     .await?;
 
-    if let Some(encrypted_message) = object.get("encryptedMessage") {
+    if let Some(encrypted_message) = object.get("daisEncryptedMessage") {
         persist_e2ee_direct_message(
             db,
             activity,
@@ -720,7 +720,7 @@ async fn persist_e2ee_direct_message(
     db.execute(
         r#"
         INSERT INTO e2ee_conversations (id, protocol, participants, created_at, updated_at)
-        VALUES (?1, 'dais-mls-v1', ?2, ?3, ?3)
+        VALUES (?1, 'mls-rfc9420', ?2, ?3, ?3)
         ON CONFLICT(id) DO UPDATE SET updated_at = ?3
         "#,
         &[

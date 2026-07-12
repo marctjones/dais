@@ -815,7 +815,7 @@ mod tests {
             .expect("encrypt");
 
         let mut wrong_protocol = envelope.clone();
-        wrong_protocol.protocol = "dais-mls-v1".to_string();
+        wrong_protocol.protocol = "unsupported-legacy".to_string();
         assert!(bob.decrypt_application_message(&wrong_protocol).is_err());
 
         let mut malformed = envelope;

@@ -50,8 +50,7 @@ use deliveries::{owner_deliveries, owner_delivery_action_path, owner_update_deli
 pub(crate) use e2ee::{
     e2ee_device_fingerprint, normalize_e2ee_device_id, normalize_e2ee_fingerprint,
     normalize_e2ee_protocol, peer_trust_state_after_material_update,
-    validate_dais_encrypted_message_v2, validate_e2ee_device_material,
-    validate_encrypted_message_envelope, validate_owner_e2ee_payload,
+    validate_dais_encrypted_message_v2, validate_e2ee_device_material, validate_owner_e2ee_payload,
 };
 pub(crate) use e2ee::{
     owner_delete_e2ee_message, owner_direct_messages, owner_discover_e2ee_peer_devices,

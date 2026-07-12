@@ -20,10 +20,10 @@ INSERT INTO e2ee_conversations (
     state
 ) VALUES (
     'e2ee-conversation-mls-smoke',
-    'dais-mls-v1',
+    'mls-rfc9420',
     '["https://social.dais.social/users/social","https://social.skpt.cl/users/social"]',
     '1',
-    'legacy-v1-state'
+    'mls-state'
 );
 
 INSERT INTO e2ee_messages (
@@ -38,8 +38,8 @@ INSERT INTO e2ee_messages (
     'e2ee-conversation-mls-smoke',
     'https://social.dais.social/users/social',
     'dais-mac',
-    'legacy-v1-ciphertext',
-    '{"v":1}'
+    '{"v":2,"protocol":"mls-rfc9420","groupId":"bWxzLXNtb2tl","epoch":1,"senderDeviceId":"dais-mac","ciphertext":"Y2lwaGVydGV4dA=="}',
+    '{"v":2}'
 );
 
 INSERT INTO e2ee_mls_group_states (
@@ -174,6 +174,8 @@ INSERT INTO e2ee_mls_message_metadata (
         'skpt-phone',
         'revoked_device'
     );
+
+.read $ROOT_DIR/cli/migrations/033_e2ee_v2_only.sql
 
 SELECT CASE
     WHEN (SELECT COUNT(*) FROM e2ee_messages) = 1

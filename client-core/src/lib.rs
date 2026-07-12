@@ -1,5 +1,3 @@
-pub mod e2ee;
-
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -969,7 +967,6 @@ pub struct OwnerE2eeMessage {
     pub e2ee_protocol: String,
     #[serde(default)]
     pub dais_encrypted_message: serde_json::Value,
-    pub encrypted_message: serde_json::Value,
     #[serde(default)]
     pub mls_group_id: Option<String>,
     #[serde(default)]
@@ -991,15 +988,13 @@ pub struct OwnerE2eeMessageSend {
     pub sender_device_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dais_encrypted_message: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encrypted_message: Option<serde_json::Value>,
     pub fallback_content: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<serde_json::Value>,
 }
 
 fn default_e2ee_protocol() -> String {
-    "dais-mls-v1".to_string()
+    "mls-rfc9420".to_string()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1606,7 +1601,6 @@ mod tests {
                 "senderDeviceId": "mac",
                 "ciphertext": "Y2lwaGVydGV4dA=="
             },
-            "encrypted_message": null,
             "mls_group_id": "group",
             "mls_epoch": 2,
             "fallback_content": "Encrypted message",
@@ -1617,7 +1611,6 @@ mod tests {
         assert_eq!(message.e2ee_protocol, "mls-rfc9420");
         assert_eq!(message.mls_group_id.as_deref(), Some("group"));
         assert_eq!(message.mls_epoch, Some(2));
-        assert_eq!(message.encrypted_message, serde_json::Value::Null);
         assert_eq!(message.dais_encrypted_message["v"], 2);
     }
 
@@ -1628,7 +1621,6 @@ mod tests {
             recipient_device_id: Some("phone".into()),
             sender_device_id: "mac".into(),
             dais_encrypted_message: Some(serde_json::json!({"v": 2})),
-            encrypted_message: None,
             fallback_content: Some("Encrypted".into()),
             attachments: Vec::new(),
         };

@@ -1,14 +1,12 @@
-# Design: dais E2EE v1 Wire Format (interop contract)
+# Historical Design: dais E2EE v1 Wire Format
 
-**Status:** Normative spec, extracted from the validated-live Python implementation
-(`cli/dais_cli/e2ee.py`, commit `dc592f1`, #71) before that client was retired in
-favour of the Rust client. The Rust client (and any future client) **MUST** reproduce
-this byte-for-byte to stay interoperable with messages already sent, and to keep the
-graceful-fallback behaviour for non-supporting clients (Mastodon, etc.).
+**Status:** Obsolete historical reference. Dais no longer supports the
+`encryptedMessage` v1/RSA fallback path for owner E2EE messages. Current encrypted
+messages use MLS/RFC 9420 v2 `daisEncryptedMessage` envelopes only; legacy v1 rows
+and devices are purged by migration.
 
-**Roadmap:** v1 is a pragmatic first cut. The target is MLS (RFC 9420) with dedicated
-keys, forward secrecy, post-compromise security, and efficient groups (#71). This doc
-describes **v1 only** — do not extend it; design v2 as MLS.
+This document is kept only to explain the retired wire format. Do not implement new
+client or server behavior from it.
 
 ---
 

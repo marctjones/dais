@@ -8,8 +8,6 @@ DAIS_ACTOR="${DAIS_ACTOR:-https://social.dais.social/users/social}"
 SKPT_ACTOR="${SKPT_ACTOR:-https://social.skpt.cl/users/social}"
 DAIS_DEVICE_ID="${DAIS_DEVICE_ID:-dais-cli-device}"
 SKPT_DEVICE_ID="${SKPT_DEVICE_ID:-skpt-cli-device}"
-DAIS_PRIVATE_KEY="${DAIS_PRIVATE_KEY:-/private/tmp/dais-dais-cli-device.private.pem}"
-SKPT_PRIVATE_KEY="${SKPT_PRIVATE_KEY:-/private/tmp/dais-skpt-cli-device.private.pem}"
 DAIS_OWNER_TOKEN_FILE="${DAIS_OWNER_TOKEN_FILE:-/private/tmp/dais-owner-token-20260614.txt}"
 SKPT_OWNER_TOKEN_FILE="${SKPT_OWNER_TOKEN_FILE:-/private/tmp/dais-skpt-owner-token.txt}"
 DAIS_DELIVERY_WORKER_URL="${DAIS_DELIVERY_WORKER_URL:-https://delivery-queue-production.marc-t-jones.workers.dev}"
@@ -84,30 +82,14 @@ ensure_device() {
   local token="$3"
   local actor_url="$4"
   local device_id="$5"
-  local private_key="$6"
-
-  if owner_has_device "$base_url" "$token" "$device_id"; then
-    if [ -e "$private_key" ]; then
-      ok "$label owner device $device_id exists"
-    elif [ "$INIT_DEVICES" = "1" ]; then
-      owner "$base_url" "$token" e2ee-device-init \
-        --device-id "$device_id" \
-        --display-name "$label CLI device" \
-        --private-key-out "$private_key" \
-        --force
-      ok "$label owner device $device_id refreshed local private key"
-    else
-      fail "$label owner device $device_id exists but local private key $private_key is missing"
-    fi
-  elif [ "$INIT_DEVICES" = "1" ]; then
-    if [ -e "$private_key" ]; then
-      fail "$label owner device $device_id missing but $private_key already exists; remove it or publish a matching device manually"
-    fi
-    owner "$base_url" "$token" e2ee-device-init \
+  if [ "$INIT_DEVICES" = "1" ]; then
+    owner "$base_url" "$token" e2ee-mls-device-init \
       --device-id "$device_id" \
       --display-name "$label CLI device" \
-      --private-key-out "$private_key"
-    ok "$label owner device $device_id initialized"
+      --force
+    ok "$label MLS owner device $device_id initialized/refreshed"
+  elif owner_has_device "$base_url" "$token" "$device_id"; then
+    ok "$label owner device $device_id exists"
   else
     fail "$label owner device $device_id missing and INIT_DEVICES=0"
   fi
@@ -148,7 +130,7 @@ latest_message_id() {
   local token="$2"
   local output
   output="$(owner "$base_url" "$token" e2ee-messages)"
-  awk 'BEGIN { id="" } /^https:\/\// { candidate=$1 } /^protocol=dais-mls-v1$/ { id=candidate; print id; exit }' <<< "$output"
+  awk 'BEGIN { id="" } /^https:\/\// { candidate=$1 } /^protocol=mls-rfc9420$/ { id=candidate; print id; exit }' <<< "$output"
 }
 
 process_delivery_if_possible() {
@@ -185,11 +167,10 @@ send_and_decrypt() {
   local recipient_token="$9"
   local recipient_actor="${10}"
   local recipient_device="${11}"
-  local recipient_private_key="${12}"
 
   local before after send_output delivery_ids delivery_id
   before="$(latest_message_id "$recipient_url" "$recipient_token" || true)"
-  send_output="$(owner "$sender_url" "$sender_token" e2ee-send \
+  send_output="$(owner "$sender_url" "$sender_token" e2ee-mls-send \
     --recipient-actor-id "$recipient_actor" \
     --recipient-device-id "$recipient_device" \
     --sender-device-id "$sender_device" \
@@ -212,7 +193,7 @@ send_and_decrypt() {
   fi
 
   local plaintext
-  plaintext="$(owner "$recipient_url" "$recipient_token" e2ee-decrypt "$after" --private-key "$recipient_private_key")"
+  plaintext="$(owner "$recipient_url" "$recipient_token" e2ee-mls-decrypt "$after" --device-id "$recipient_device")"
   if [ "$plaintext" != "$MESSAGE_TEXT" ]; then
     printf 'expected: %s\nactual: %s\n' "$MESSAGE_TEXT" "$plaintext" >&2
     fail "$recipient_label decrypted plaintext mismatch"
@@ -263,16 +244,16 @@ if [ "$REQUIRE_FULL" = "1" ]; then
     || fail "skpt delivery admin token unavailable; set SKPT_DELIVERY_ADMIN_TOKEN or SKPT_DELIVERY_ADMIN_TOKEN_FILE=$SKPT_DELIVERY_ADMIN_TOKEN_FILE"
 fi
 
-ensure_device "dais.social" "$DAIS_URL" "$DAIS_TOKEN" "$DAIS_ACTOR" "$DAIS_DEVICE_ID" "$DAIS_PRIVATE_KEY"
-ensure_device "skpt" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_ACTOR" "$SKPT_DEVICE_ID" "$SKPT_PRIVATE_KEY"
+ensure_device "dais.social" "$DAIS_URL" "$DAIS_TOKEN" "$DAIS_ACTOR" "$DAIS_DEVICE_ID"
+ensure_device "skpt" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_ACTOR" "$SKPT_DEVICE_ID"
 
 discover_and_trust "dais.social -> skpt" "$DAIS_URL" "$DAIS_TOKEN" "$SKPT_ACTOR" "$SKPT_DEVICE_ID"
 discover_and_trust "skpt -> dais.social" "$SKPT_URL" "$SKPT_TOKEN" "$DAIS_ACTOR" "$DAIS_DEVICE_ID"
 
 send_and_decrypt \
   "dais.social" "$DAIS_URL" "$DAIS_TOKEN" "$DAIS_DEVICE_ID" "$DAIS_DELIVERY_WORKER_URL" "$DAIS_DELIVERY_ADMIN_TOKEN" \
-  "skpt" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_ACTOR" "$SKPT_DEVICE_ID" "$SKPT_PRIVATE_KEY"
+  "skpt" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_ACTOR" "$SKPT_DEVICE_ID"
 
 send_and_decrypt \
   "skpt" "$SKPT_URL" "$SKPT_TOKEN" "$SKPT_DEVICE_ID" "$SKPT_DELIVERY_WORKER_URL" "$SKPT_DELIVERY_ADMIN_TOKEN" \
-  "dais.social" "$DAIS_URL" "$DAIS_TOKEN" "$DAIS_ACTOR" "$DAIS_DEVICE_ID" "$DAIS_PRIVATE_KEY"
+  "dais.social" "$DAIS_URL" "$DAIS_TOKEN" "$DAIS_ACTOR" "$DAIS_DEVICE_ID"

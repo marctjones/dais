@@ -15,9 +15,9 @@ Recently completed foundations:
 
 - `v1.28`: independent `skpt.cl` instance deployment and cross-instance E2EE
   testbed.
-- `v1.29` / `v1.29.1`: encryptedMessage v1 fallback, OpenMLS/MLS v2 owner
-  workflows, device publication/trust, recovery UX, and live dais.social <->
-  skpt.cl E2EE/MLS gates.
+- `v1.29` / `v1.29.1`: MLS/RFC 9420 v2 owner workflows, device
+  publication/trust, recovery UX, legacy encryptedMessage v1 purge, and live
+  dais.social <-> skpt.cl E2EE/MLS gates.
 - `v1.30`: media foundations including public/private ActivityPub media,
   ATProto public image upload, and encrypted media attachment validation.
 - `v1.31`: Bluesky/public protocol completion, protocol conformance gates, and

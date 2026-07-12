@@ -1,16 +1,10 @@
-use std::collections::BTreeMap;
-use std::fs;
-
 use anyhow::{anyhow, Result};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use reqwest::Url;
 
 use crate::atproto::{AtprotoClient, ImageUpload};
-use crate::cli::{ActivityObjectType, CreatePostArgs, E2eeFallbackMode};
+use crate::cli::{ActivityObjectType, CreatePostArgs};
 use crate::config::ConfigStore;
-use crate::d1::{ActivityDeliveryInsert, D1Client, EncryptedPostInsert};
-use crate::e2ee;
+use crate::d1::{ActivityDeliveryInsert, D1Client};
 use crate::new_local_post_id;
 use crate::routing::{effective_protocol, Protocol, Visibility};
 
@@ -41,10 +35,8 @@ pub struct PostDraft {
     pub visibility: Visibility,
     pub protocol: Protocol,
     pub encrypt: bool,
-    pub recipients: BTreeMap<String, String>,
     pub reply_to: Option<String>,
     pub to: Vec<String>,
-    pub e2ee_fallback: E2eeFallbackMode,
     pub object_type: ActivityObjectType,
     pub title: Option<String>,
     pub summary: Option<String>,
@@ -280,14 +272,6 @@ struct CreateActivityInput<'a> {
 
 impl PostDraft {
     pub fn from_create_args(args: CreatePostArgs) -> Result<Self> {
-        let mut recipients = BTreeMap::new();
-        for recipient in args.recipients {
-            let (key_id, path) = recipient
-                .split_once('=')
-                .ok_or_else(|| anyhow!("recipient must be in key_id=public_key_pem_file form"))?;
-            recipients.insert(key_id.to_string(), fs::read_to_string(path)?);
-        }
-
         let mut object_type = args.object_type;
         if !args.poll_options.is_empty() && object_type == ActivityObjectType::Note {
             object_type = ActivityObjectType::Question;
@@ -302,10 +286,8 @@ impl PostDraft {
             },
             protocol: args.protocol,
             encrypt: args.encrypt,
-            recipients,
             reply_to: args.reply_to,
             to: args.to,
-            e2ee_fallback: args.e2ee_fallback,
             object_type,
             title: args.title,
             summary: args.summary,
@@ -334,81 +316,13 @@ pub async fn publish_post(
         anyhow::bail!("rich ActivityPub objects can only be sent to ActivityPub");
     }
     if draft.encrypt && draft.object_type != ActivityObjectType::Note {
-        anyhow::bail!("encrypted posts currently use Note fallback objects");
+        anyhow::bail!("encrypted ActivityPub posts used encryptedMessage v1 and have been removed");
     }
 
     if draft.encrypt {
-        if effective != Protocol::ActivityPub {
-            anyhow::bail!("encrypted posts can only be sent to ActivityPub");
-        }
-        let local_post_id = new_local_post_id();
-        let post_id = format!("https://social.dais.social/users/social/posts/{local_post_id}");
-        let actor_id = "https://social.dais.social/users/social";
-        let read_url = format!("https://social.dais.social/messages/{local_post_id}");
-        let (payload, content_key) = e2ee::encrypted_note_payload_with_content_key(
-            &draft.text,
-            &draft.recipients,
-            Some(&read_url),
-        )?;
-        let encrypted_attachments = encrypted_attachment_values(&draft.attachments, &content_key)?;
-        let encrypted_attachment_json = if encrypted_attachments.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(&encrypted_attachments)?)
-        };
-        let encrypted_attachment_strings = encrypted_attachments
-            .iter()
-            .map(serde_json::to_string)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let split_key_url = format!("{read_url}#cek={content_key}");
-        let fallback_content = match draft.e2ee_fallback {
-            E2eeFallbackMode::Strict | E2eeFallbackMode::SplitChannel => payload.content.clone(),
-            E2eeFallbackMode::TrustedServer => e2ee::fallback_content(Some(&split_key_url)),
-        };
-        let encrypted_json = serde_json::to_string(&payload.encrypted_message)?;
-        let published_at = chrono::Utc::now().to_rfc3339();
-        let visibility = draft.visibility.to_string();
-        db.create_encrypted_post(EncryptedPostInsert {
-            id: &post_id,
-            actor_id,
-            fallback_content: &fallback_content,
-            visibility: &visibility,
-            published_at: &published_at,
-            encrypted_message_json: &encrypted_json,
-            in_reply_to: draft.reply_to.as_deref(),
-            media_attachments: encrypted_attachment_json.as_deref(),
-        })
-        .await?;
-
-        let activity_json = build_create_activity_json(CreateActivityInput {
-            actor_id,
-            post_id: &post_id,
-            content: &fallback_content,
-            visibility: &visibility,
-            published_at: &published_at,
-            encrypted_message: Some(serde_json::to_value(&payload.encrypted_message)?),
-            in_reply_to: draft.reply_to.as_deref(),
-            recipients: &draft.to,
-            object_type: ActivityObjectType::Note,
-            title: None,
-            summary: None,
-            starts_at: None,
-            ends_at: None,
-            location: None,
-            poll_options: &[],
-            poll_multiple: false,
-            attachments: &encrypted_attachment_strings,
-        })?;
-        let delivery_ids =
-            create_deliveries(db, &post_id, actor_id, &activity_json, &draft).await?;
-
-        return Ok(PostOutcome::ActivityPub {
-            post_id,
-            read_url: Some(read_url),
-            split_key_url: (draft.e2ee_fallback == E2eeFallbackMode::SplitChannel)
-                .then_some(split_key_url),
-            delivery_ids,
-        });
+        anyhow::bail!(
+            "encrypted ActivityPub posts used encryptedMessage v1 and have been removed; use owner MLS E2EE messages instead"
+        );
     }
 
     match effective {
@@ -670,7 +584,7 @@ fn build_create_activity_json(input: CreateActivityInput<'_>) -> Result<String> 
     }
 
     if let Some(encrypted_message) = input.encrypted_message {
-        note["encryptedMessage"] = encrypted_message;
+        note["daisEncryptedMessage"] = encrypted_message;
     }
 
     let activity = serde_json::json!({
@@ -770,61 +684,6 @@ fn attachment_values(attachments: &[String]) -> Result<Vec<serde_json::Value>> {
             }
         })
         .collect()
-}
-
-pub(crate) fn encrypted_attachment_values(
-    attachments: &[String],
-    content_key: &str,
-) -> Result<Vec<serde_json::Value>> {
-    attachment_values(attachments)?
-        .into_iter()
-        .map(|attachment| encrypted_attachment_value(&attachment, content_key))
-        .collect()
-}
-
-fn encrypted_attachment_value(
-    attachment: &serde_json::Value,
-    content_key: &str,
-) -> Result<serde_json::Value> {
-    let data_base64 = attachment
-        .get("data_base64")
-        .or_else(|| attachment.get("dataBase64"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow!("encrypted media attachments require data_base64 or dataBase64"))?;
-    let bytes = STANDARD
-        .decode(data_base64)
-        .map_err(|error| anyhow!("encrypted media data is not valid base64: {error}"))?;
-    if bytes.is_empty() {
-        anyhow::bail!("encrypted media data must not be empty");
-    }
-
-    let media_type = attachment
-        .get("mediaType")
-        .or_else(|| attachment.get("media_type"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("application/octet-stream");
-    let name = attachment
-        .get("name")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let encrypted =
-        e2ee::encrypt_media_bytes_with_content_key(&bytes, content_key, media_type, name)?;
-
-    let mut value = serde_json::json!({
-        "type": attachment
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("Document"),
-        "mediaType": media_type,
-        "encryptedMedia": encrypted
-    });
-    if let Some(name) = name {
-        value["name"] = serde_json::json!(name);
-    }
-    Ok(value)
 }
 
 fn media_type_for_url(url: &str) -> &'static str {
@@ -988,10 +847,10 @@ fn activity_suffix(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        activity_tags, build_create_activity_json, encrypted_attachment_values,
-        validate_media_attachments, validate_poll, CreateActivityInput, PostDraft,
+        activity_tags, build_create_activity_json, validate_media_attachments, validate_poll,
+        CreateActivityInput, PostDraft,
     };
-    use crate::cli::{ActivityObjectType, E2eeFallbackMode};
+    use crate::cli::ActivityObjectType;
     use crate::routing::{Protocol, Visibility};
 
     #[test]
@@ -1018,33 +877,6 @@ mod tests {
         let error = validate_media_attachments(&attachments, Visibility::Followers, true)
             .expect_err("encrypted media must require bytes to encrypt");
         assert!(error.to_string().contains("data_base64"));
-    }
-
-    #[test]
-    fn encrypted_media_attachment_serializes_ciphertext_only() {
-        let plaintext_base64 = "c2VjcmV0IGltYWdlIGJ5dGVz";
-        let attachments = vec![serde_json::json!({
-            "type": "Document",
-            "mediaType": "image/png",
-            "name": "secret.png",
-            "data_base64": plaintext_base64
-        })
-        .to_string()];
-        validate_media_attachments(&attachments, Visibility::Followers, true).unwrap();
-
-        let encrypted = encrypted_attachment_values(
-            &attachments,
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        )
-        .unwrap();
-        let json = serde_json::to_string(&encrypted).unwrap();
-
-        assert!(json.contains("encryptedMedia"));
-        assert!(json.contains("image/png"));
-        assert!(json.contains("secret.png"));
-        assert!(!json.contains("secret image bytes"));
-        assert!(!json.contains(plaintext_base64));
-        assert!(!json.contains("data_base64"));
     }
 
     #[test]
@@ -1151,10 +983,8 @@ mod tests {
             visibility: Visibility::Public,
             protocol: Protocol::ActivityPub,
             encrypt: false,
-            recipients: Default::default(),
             reply_to: None,
             to: Vec::new(),
-            e2ee_fallback: E2eeFallbackMode::Strict,
             object_type: ActivityObjectType::Question,
             title: None,
             summary: None,

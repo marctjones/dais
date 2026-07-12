@@ -1,13 +1,13 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use dais_client_core::{
-    e2ee, ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate,
-    ModerationState, OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost,
-    OwnerDeletedPost, OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice,
-    OwnerE2eeMessage, OwnerE2eeMessageSend, OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef,
-    OwnerE2eePeerTrustRequest, OwnerFollowResult, OwnerFollower, OwnerFollowing, OwnerFriend,
-    OwnerInteraction, OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification,
-    OwnerPost, OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerPublicSearchActor,
+    ComposeDraft, DiagnosticStatus, ModerationReplyRow, ModerationSettingsUpdate, ModerationState,
+    OwnerApiClient, OwnerAudienceList, OwnerAudienceListUpsert, OwnerCreatedPost, OwnerDeletedPost,
+    OwnerDelivery, OwnerDirectMessage, OwnerDiscoveredActor, OwnerE2eeDevice, OwnerE2eeMessage,
+    OwnerE2eeMessageSend, OwnerE2eePeerDevice, OwnerE2eePeerDeviceRef, OwnerE2eePeerTrustRequest,
+    OwnerFollowResult, OwnerFollower, OwnerFollowing, OwnerFriend, OwnerInteraction,
+    OwnerInteractionResult, OwnerMedia, OwnerMediaUpload, OwnerNotification, OwnerPost,
+    OwnerPostDetail, OwnerProfile, OwnerProfileUpdate, OwnerPublicSearchActor,
     OwnerPublicSearchPost, OwnerSavePost, OwnerSavedPost, OwnerSearchQuery, OwnerSearchResult,
     OwnerSection, OwnerSettings, OwnerSettingsUpdate, OwnerSourceAdd, OwnerSourceAddResult,
     OwnerSourceRefreshResult, OwnerSources, OwnerStats, OwnerTimelinePost, OwnerWatchAdd,
@@ -17,9 +17,6 @@ use dais_core::e2ee_mls::{
     DaisMlsEnvelope, MlsDevice, MlsDeviceMaterial, MlsDevicePrivateState, MlsDeviceState,
     MlsPublicDevice,
 };
-use rand::rngs::OsRng;
-use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -29,16 +26,11 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
-use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 slint::include_modules!();
 
 const DEFAULT_INSTANCE_URL: &str = "https://social.dais.social";
-const FIXTURE_E2EE_DEVICE_ID: &str = "dais-desk-fixture-device";
-const FIXTURE_E2EE_PLAINTEXT: &str =
-    "Encrypted fixture message decrypted on this device: Ada found a backyard telescope listing.";
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredOwnerSettings {
     #[serde(default = "default_instance_url")]
@@ -3503,7 +3495,6 @@ impl DeskController {
                     dais_encrypted_message: Some(
                         serde_json::to_value(&envelope).map_err(|error| error.to_string())?,
                     ),
-                    encrypted_message: None,
                     fallback_content: Some(
                         "Encrypted MLS message. Open in a dais client to decrypt.".to_string(),
                     ),
@@ -3593,7 +3584,6 @@ impl DeskController {
                         recipient_device_id: Some(delivery.validation_device_id),
                         sender_device_id: sender_device_id.clone(),
                         dais_encrypted_message: Some(encrypted_message.clone()),
-                        encrypted_message: None,
                         fallback_content: Some(
                             "Encrypted MLS group message. Open in a dais client to decrypt."
                                 .to_string(),
@@ -7507,15 +7497,13 @@ fn e2ee_message_render_state_with_roots(
     }
     match decrypt_e2ee_message_for_desk(settings, message, roots) {
         Ok(plaintext) => {
-            if !is_fixture_e2ee_message(message) {
-                let _ = persist_cached_decrypted_message(
-                    roots,
-                    &settings.instance_url,
-                    &message.id,
-                    &plaintext,
-                    &message.e2ee_protocol,
-                );
-            }
+            let _ = persist_cached_decrypted_message(
+                roots,
+                &settings.instance_url,
+                &message.id,
+                &plaintext,
+                &message.e2ee_protocol,
+            );
             E2eeMessageRenderState {
                 preview: preview_markdown_safe(&plaintext),
                 meta: format!("{protocol} encrypted. Decrypted on this device."),
@@ -7542,21 +7530,10 @@ fn e2ee_message_render_state_with_roots(
     }
 }
 
-fn is_fixture_e2ee_message(message: &OwnerE2eeMessage) -> bool {
-    message
-        .encrypted_message
-        .get("recipients")
-        .and_then(|recipients| recipients.as_array())
-        .is_some_and(|recipients| {
-            recipients.iter().any(|recipient| {
-                recipient.get("keyId").and_then(|key_id| key_id.as_str())
-                    == Some(FIXTURE_E2EE_DEVICE_ID)
-            })
-        })
-}
-
 fn decrypt_repair_hint(error: &str) -> &'static str {
-    if error.contains("requested secret was deleted") {
+    if error.contains("Unsupported encrypted message protocol") {
+        "Delete the legacy message or resend it with MLS v2."
+    } else if error.contains("requested secret was deleted") {
         "The old message key is no longer available on this device."
     } else if error.contains("No local private key") {
         "Restore the matching device key to read it here."
@@ -7574,6 +7551,9 @@ fn load_cached_decrypted_message_from_roots(
     instance_url: &str,
     message_id: &str,
 ) -> Option<String> {
+    if !decrypted_message_cache_enabled() {
+        return None;
+    }
     for root in roots {
         let path = decrypted_message_cache_path(&root, instance_url, message_id);
         let Ok(content) = fs::read_to_string(path) else {
@@ -7596,6 +7576,9 @@ fn persist_cached_decrypted_message(
     plaintext: &str,
     protocol: &str,
 ) -> Result<(), String> {
+    if !decrypted_message_cache_enabled() {
+        return Ok(());
+    }
     let root = roots
         .iter()
         .next()
@@ -7614,6 +7597,17 @@ fn persist_cached_decrypted_message(
     };
     let json = serde_json::to_string_pretty(&cached).map_err(|error| error.to_string())?;
     fs::write(path, json).map_err(|error| error.to_string())
+}
+
+fn decrypted_message_cache_enabled() -> bool {
+    std::env::var("DAIS_DESK_DISABLE_DECRYPT_CACHE")
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(true)
 }
 
 fn decrypted_message_cache_path(root: &Path, instance_url: &str, message_id: &str) -> PathBuf {
@@ -7841,36 +7835,13 @@ fn decrypt_e2ee_message_for_desk(
     message: &OwnerE2eeMessage,
     roots: &[PathBuf],
 ) -> Result<String, String> {
-    if message.e2ee_protocol == "mls-rfc9420" {
-        return decrypt_mls_message_for_desk(settings, message, roots);
+    if message.e2ee_protocol != "mls-rfc9420" {
+        return Err(format!(
+            "Unsupported encrypted message protocol {}; Dais Desk only supports MLS v2 (mls-rfc9420).",
+            message.e2ee_protocol
+        ));
     }
-    let encrypted = e2ee::encrypted_message_from_json(message.encrypted_message.clone())?;
-    let mut attempted = Vec::new();
-    for recipient in &encrypted.recipients {
-        attempted.push(recipient.key_id.clone());
-        let Some(private_key) =
-            load_local_e2ee_private_key(roots, &settings.instance_url, &recipient.key_id)
-        else {
-            continue;
-        };
-        match e2ee::decrypt_message(&encrypted, &private_key, Some(&recipient.key_id)) {
-            Ok(plaintext) => return Ok(plaintext),
-            Err(error) => {
-                return Err(format!(
-                    "Could not decrypt with {}: {error}",
-                    recipient.key_id
-                ))
-            }
-        }
-    }
-    if attempted.is_empty() {
-        Err("Encrypted message has no recipient device ids.".into())
-    } else {
-        Err(format!(
-            "No local private key found for device {}.",
-            attempted.join(", ")
-        ))
-    }
+    decrypt_mls_message_for_desk(settings, message, roots)
 }
 
 fn decrypt_mls_message_for_desk(
@@ -7973,61 +7944,6 @@ fn decrypt_mls_message_for_desk(
         report.checked_roots_summary(),
         report.diagnostics_summary()
     ))
-}
-
-fn load_local_e2ee_private_key(
-    roots: &[PathBuf],
-    instance_url: &str,
-    device_id: &str,
-) -> Option<String> {
-    for root in roots {
-        let path = root
-            .join("e2ee")
-            .join(safe_path_component(instance_url))
-            .join(format!("{}.pkcs8.pem", safe_path_component(device_id)));
-        if let Ok(private_key) = fs::read_to_string(path) {
-            return Some(private_key);
-        }
-    }
-    if instance_url == DEFAULT_INSTANCE_URL && device_id == FIXTURE_E2EE_DEVICE_ID {
-        return Some(fixture_e2ee_keypair().private_key.clone());
-    }
-    None
-}
-
-#[derive(Clone, Debug)]
-struct FixtureE2eeKeypair {
-    private_key: String,
-    public_key: String,
-}
-
-fn fixture_e2ee_keypair() -> &'static FixtureE2eeKeypair {
-    static KEYPAIR: OnceLock<FixtureE2eeKeypair> = OnceLock::new();
-    KEYPAIR.get_or_init(|| {
-        let private_key =
-            RsaPrivateKey::new(&mut OsRng, 2048).expect("fixture E2EE key generation failed");
-        let public_key = RsaPublicKey::from(&private_key);
-        FixtureE2eeKeypair {
-            private_key: private_key
-                .to_pkcs8_pem(LineEnding::LF)
-                .expect("fixture private key PEM encoding failed")
-                .to_string(),
-            public_key: public_key
-                .to_public_key_pem(LineEnding::LF)
-                .expect("fixture public key PEM encoding failed"),
-        }
-    })
-}
-
-fn fixture_e2ee_encrypted_message() -> serde_json::Value {
-    let mut recipients = BTreeMap::new();
-    recipients.insert(
-        FIXTURE_E2EE_DEVICE_ID.to_string(),
-        fixture_e2ee_keypair().public_key.clone(),
-    );
-    let encrypted = e2ee::encrypt_message(FIXTURE_E2EE_PLAINTEXT, &recipients)
-        .expect("fixture encrypted message must be decryptable");
-    serde_json::to_value(encrypted).expect("fixture encrypted message should serialize")
 }
 
 fn load_local_mls_group_states(
@@ -10306,38 +10222,7 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
             published_at: "Wed 9:42 PM".into(),
             created_at: Some("Wed 9:42 PM".into()),
         }],
-        e2ee_messages: vec![
-            OwnerE2eeMessage {
-                id: "https://social.dais.social/users/social/e2ee/messages/fixture".into(),
-                conversation_id: "e2ee-conversation-ada".into(),
-                sender_actor_id: "https://social.dais.social/users/social".into(),
-                sender_device_id: "macbook".into(),
-                recipient_actor_id: Some("https://friend.example/users/ada".into()),
-                e2ee_protocol: "dais-mls-v1".into(),
-                dais_encrypted_message: serde_json::Value::Null,
-                encrypted_message: fixture_e2ee_encrypted_message(),
-                mls_group_id: None,
-                mls_epoch: None,
-                fallback_content: None,
-                attachments: Vec::new(),
-                delivery_ids: vec!["delivery-e2ee-queued".into()],
-                delivery_statuses: vec![OwnerDelivery {
-                    id: "delivery-e2ee-queued".into(),
-                    post_id: "https://social.dais.social/users/social/e2ee/messages/fixture".into(),
-                    target_type: Some("inbox".into()),
-                    target_url: "https://friend.example/inbox".into(),
-                    protocol: "activitypub".into(),
-                    status: "queued".into(),
-                    retry_count: Some(0),
-                    last_attempt_at: None,
-                    error_message: None,
-                    activity_type: Some("Create".into()),
-                    created_at: Some("today".into()),
-                    delivered_at: None,
-                }],
-                created_at: Some("today".into()),
-            },
-        ],
+        e2ee_messages: Vec::new(),
         sources: OwnerSources {
             subscriptions: vec![SourceSubscription {
                 id: "source-npr".into(),
@@ -10394,22 +10279,7 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 read: false,
             }],
         },
-        e2ee_devices: vec![
-            OwnerE2eeDevice {
-                id: "e2ee-device-local-laptop".into(),
-                actor_id: "https://social.dais.social/users/social".into(),
-                device_id: "macbook:2026".into(),
-                display_name: Some("MacBook".into()),
-                protocol: "dais-mls-v1".into(),
-                credential: "fixture-credential".into(),
-                key_package: "fixture-key-package".into(),
-                fingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                    .into(),
-                status: "active".into(),
-                created_at: Some("today".into()),
-                updated_at: Some("today".into()),
-            },
-            OwnerE2eeDevice {
+        e2ee_devices: vec![OwnerE2eeDevice {
                 id: "e2ee-device-local-mls".into(),
                 actor_id: "https://social.dais.social/users/social".into(),
                 device_id: "macbook-mls".into(),
@@ -10422,15 +10292,14 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 status: "active".into(),
                 created_at: Some("today".into()),
                 updated_at: Some("today".into()),
-            },
-        ],
+            }],
         e2ee_peer_devices: vec![
             OwnerE2eePeerDevice {
                 id: "e2ee-peer-ada-phone".into(),
                 actor_id: "https://friend.example/users/ada".into(),
                 device_id: "phone:ada".into(),
                 display_name: Some("Ada phone".into()),
-                protocol: "dais-mls-v1".into(),
+                protocol: "mls-rfc9420".into(),
                 credential: "fixture-peer-credential".into(),
                 key_package: "fixture-peer-key-package".into(),
                 fingerprint:
@@ -10447,7 +10316,7 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 actor_id: "https://new.example/users/follower".into(),
                 device_id: "tablet:new".into(),
                 display_name: Some("New follower tablet".into()),
-                protocol: "dais-mls-v1".into(),
+                protocol: "mls-rfc9420".into(),
                 credential: "fixture-untrusted-credential".into(),
                 key_package: "fixture-untrusted-key-package".into(),
                 fingerprint:
@@ -11146,7 +11015,6 @@ mod tests {
             recipient_actor_id: Some("https://social.skpt.cl/users/social".into()),
             e2ee_protocol: "mls-rfc9420".into(),
             dais_encrypted_message: serde_json::to_value(envelope).expect("MLS envelope JSON"),
-            encrypted_message: serde_json::Value::Null,
             mls_group_id: Some(envelope.group_id.clone()),
             mls_epoch: Some(envelope.epoch),
             fallback_content: None,
@@ -11284,7 +11152,6 @@ mod tests {
             recipient_actor_id: Some("https://social.dais.social/users/social".into()),
             e2ee_protocol: "mls-rfc9420".into(),
             dais_encrypted_message: serde_json::json!({"not": "a decryptable MLS envelope"}),
-            encrypted_message: serde_json::Value::Null,
             mls_group_id: None,
             mls_epoch: None,
             fallback_content: None,
@@ -13494,7 +13361,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_rows_show_generated_encrypted_messages_as_decrypted() {
+    fn conversation_rows_focus_on_plain_social_context_without_fixture_e2ee() {
         let controller = DeskController::fixture_for_tests();
         let rows = controller.conversation_rows();
         let plaintext = rows
@@ -13502,16 +13369,13 @@ mod tests {
             .find(|row| row.id.as_str() == "conversation:peer:https://friend.example/users/ada")
             .expect("1:1 conversation");
         assert_eq!(plaintext.kind.as_str(), "conversation");
-        assert_eq!(plaintext.chip.as_str(), "Encrypted");
-        assert!(plaintext.subtitle.contains("2 messages"));
-        assert!(plaintext.subtitle.contains("1 encrypted"));
+        assert_eq!(plaintext.chip.as_str(), "1:1");
+        assert!(plaintext.subtitle.contains("1 messages"));
+        assert!(!plaintext.subtitle.contains("encrypted"));
         assert!(!plaintext.subtitle.contains("locked"));
         assert!(plaintext.meta.contains("Latest from"));
         assert!(plaintext.detail.contains("Ada"));
         assert!(plaintext.detail.contains("backyard telescope"));
-        assert!(plaintext
-            .detail
-            .contains("Encrypted fixture message decrypted on this device"));
     }
 
     #[test]
@@ -13523,54 +13387,33 @@ mod tests {
         assert!(rows.iter().any(|row| row.kind.as_str() == "message"
             && row.id.as_str().starts_with("dm:")
             && row.detail.contains("backyard telescope")));
-        assert!(rows.iter().any(|row| row.kind.as_str() == "message"
-            && row.id.as_str().starts_with("e2ee-message:")
-            && row
-                .detail
-                .contains("Encrypted fixture message decrypted on this device")
-            && row.meta.contains("Decrypted")));
+        assert!(!rows
+            .iter()
+            .any(|row| row.id.as_str().starts_with("e2ee-message:")));
         assert!(!rows
             .iter()
             .any(|row| row.title.as_str().starts_with("Conversation with")));
     }
 
     #[test]
-    fn generated_encrypted_messages_decrypt_in_desk() {
+    fn legacy_v1_encrypted_messages_render_unsupported_protocol_error() {
         let controller = DeskController::fixture_for_tests();
-        let message = controller
-            .data
-            .e2ee_messages
-            .iter()
-            .find(|message| message.e2ee_protocol != "mls-rfc9420")
-            .expect("v1 encrypted message");
-        let e2ee = e2ee_social_message_row(&controller.settings, message);
-        assert_eq!(e2ee.kind.as_str(), "message");
-        assert!(e2ee.title.contains("Direct message from"));
-        assert!(e2ee.meta.contains("Decrypted"));
-        assert!(!e2ee.meta.contains("No local private key"));
-        assert!(e2ee
-            .detail
-            .contains("Encrypted fixture message decrypted on this device"));
-    }
-
-    #[test]
-    fn external_broken_encrypted_messages_render_specific_error() {
-        let controller = DeskController::fixture_for_tests();
-        let mut message = controller
-            .data
-            .e2ee_messages
-            .iter()
-            .find(|message| message.e2ee_protocol != "mls-rfc9420")
-            .expect("v1 encrypted message")
-            .clone();
-        message.id = "https://external.example/e2ee/messages/broken-missing-key".into();
-        let encrypted = message
-            .encrypted_message
-            .get_mut("recipients")
-            .and_then(|recipients| recipients.as_array_mut())
-            .and_then(|recipients| recipients.first_mut())
-            .expect("fixture recipient");
-        encrypted["keyId"] = serde_json::Value::String("external-missing-device".into());
+        let message = OwnerE2eeMessage {
+            id: "https://external.example/e2ee/messages/legacy-v1".into(),
+            conversation_id: "legacy-conversation".into(),
+            sender_actor_id: "https://external.example/users/legacy".into(),
+            sender_device_id: "legacy-device".into(),
+            recipient_actor_id: Some("https://social.dais.social/users/social".into()),
+            e2ee_protocol: "unsupported-legacy".into(),
+            dais_encrypted_message: serde_json::Value::Null,
+            mls_group_id: None,
+            mls_epoch: None,
+            fallback_content: Some("Legacy encrypted message.".into()),
+            attachments: Vec::new(),
+            delivery_ids: Vec::new(),
+            delivery_statuses: Vec::new(),
+            created_at: Some("test".into()),
+        };
         let e2ee = e2ee_social_message_row(&controller.settings, &message);
         assert_eq!(e2ee.kind.as_str(), "message");
         assert!(
@@ -13581,14 +13424,14 @@ mod tests {
             e2ee.detail
         );
         assert!(
-            e2ee.meta.contains("No local private key"),
+            e2ee.meta.contains("Unsupported"),
             "title={} meta={} detail={}",
             e2ee.title,
             e2ee.meta,
             e2ee.detail
         );
         assert!(
-            e2ee.detail.contains("Restore the matching device key"),
+            e2ee.detail.contains("only supports MLS v2"),
             "title={} meta={} detail={}",
             e2ee.title,
             e2ee.meta,

@@ -850,7 +850,7 @@ async fn inbox_update_and_delete_modify_timeline_post() {
             "id": "https://remote.example/users/alice/statuses/1",
             "content": "after",
             "updated": "2026-06-10T12:05:00Z",
-            "encryptedMessage": { "v": 1, "alg": "AES-256-GCM", "keyWrap": "RSA-OAEP-256", "iv": "a", "ciphertext": "b", "tag": "c", "recipients": [] }
+            "daisEncryptedMessage": { "v": 2, "protocol": "mls-rfc9420", "groupId": "bWxzLXRlc3Q=", "epoch": 1, "senderDeviceId": "alice-phone", "ciphertext": "Y2lwaGVydGV4dA==" }
         })),
         target: None,
         to: None,
@@ -1205,17 +1205,12 @@ async fn inbox_encrypted_direct_message_persists_e2ee_envelope() {
     let remote_actor = "https://remote.example/users/alice";
     let message_id = "https://remote.example/users/alice/e2ee/messages/1";
     let encrypted_message = json!({
-        "v": 1,
-        "alg": "AES-256-GCM",
-        "keyWrap": "RSA-OAEP-256",
-        "iv": "MTIzNDU2Nzg5MDEy",
-        "ciphertext": "Y2lwaGVydGV4dA==",
-        "recipients": [
-            {
-                "keyId": "https://social.dais.social/users/social#main-key",
-                "wrappedKey": "d3JhcHBlZA=="
-            }
-        ]
+        "v": 2,
+        "protocol": "mls-rfc9420",
+        "groupId": "bWxzLXRlc3Q=",
+        "epoch": 1,
+        "senderDeviceId": "alice-phone",
+        "ciphertext": "Y2lwaGVydGV4dA=="
     });
     let activity = activitypub::Activity {
         context: activitypub::Context::default(),
@@ -1230,11 +1225,11 @@ async fn inbox_encrypted_direct_message_persists_e2ee_envelope() {
             "published": "2026-06-10T12:00:00Z",
             "content": "Encrypted message. Open in a dais client to decrypt.",
             "daisE2ee": {
-                "v": 1,
-                "protocol": "dais-mls-v1",
+                "v": 2,
+                "protocol": "mls-rfc9420",
                 "senderDeviceId": "alice-phone"
             },
-            "encryptedMessage": encrypted_message
+            "daisEncryptedMessage": encrypted_message
         })),
         target: None,
         to: None,
@@ -1266,16 +1261,10 @@ async fn inbox_encrypted_direct_message_persists_e2ee_envelope() {
         encrypted.get_string("sender_device_id").as_deref(),
         Some("alice-phone")
     );
-    assert!(
-        encrypted
-            .get_string("ciphertext")
-            .expect("ciphertext JSON should be stored")
-            .contains("\"encryptedMessage\"")
-            || encrypted
-                .get_string("ciphertext")
-                .expect("ciphertext JSON should be stored")
-                .contains("\"AES-256-GCM\"")
-    );
+    assert!(encrypted
+        .get_string("ciphertext")
+        .expect("ciphertext JSON should be stored")
+        .contains("\"mls-rfc9420\""));
     assert!(encrypted
         .get_string("aad")
         .expect("aad JSON should be stored")

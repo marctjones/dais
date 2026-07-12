@@ -174,8 +174,8 @@ async fn activitypub_actor(env: &Env, url: &worker::Url) -> Result<Response> {
                 object.insert(
                     "daisE2ee".to_string(),
                     serde_json::json!({
-                        "v": 1,
-                        "protocol": "dais-mls-v1",
+                        "v": 2,
+                        "protocol": "mls-rfc9420",
                         "devices": devices,
                     }),
                 );
@@ -692,19 +692,6 @@ async fn activitypub_store_create(env: &Env, body: &Value) -> std::result::Resul
                 encrypted_message,
                 "daisEncryptedMessage",
                 "mls-rfc9420",
-            )
-            .await?;
-        } else if let Some(encrypted_message) = object.get("encryptedMessage") {
-            activitypub_store_e2ee_direct_message(
-                env,
-                &actor,
-                &object_id,
-                &Value::Object(object.clone()),
-                &published,
-                &content,
-                encrypted_message,
-                "encryptedMessage",
-                "dais-mls-v1",
             )
             .await?;
         }
