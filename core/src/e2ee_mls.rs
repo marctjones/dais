@@ -9,8 +9,7 @@ use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::RwLock};
 
-const DAIS_MLS_ENVELOPE_VERSION: u8 = 2;
-const DAIS_MLS_PROTOCOL: &str = "mls-rfc9420";
+use crate::e2ee_wire::{DAIS_MLS_ENVELOPE_VERSION, DAIS_MLS_PROTOCOL};
 
 pub type MlsResult<T> = Result<T, MlsError>;
 

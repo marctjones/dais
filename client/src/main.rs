@@ -2960,23 +2960,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn recovery_key_inventory_is_scoped_to_instance() {
-        let root =
-            std::env::temp_dir().join(format!("dais-e2ee-recovery-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let store = ConfigStore::new(root.clone());
-        store
-            .save_e2ee_private_key("https://social.dais.social", "dais-device", "key", false)
-            .unwrap();
-        store
-            .save_e2ee_private_key("https://social.skpt.cl", "skpt-device", "key", false)
-            .unwrap();
-
-        let dais_keys = local_e2ee_key_device_ids(&store, "https://social.dais.social").unwrap();
-
-        assert!(dais_keys.contains("dais-device"));
-        assert!(!dais_keys.contains("skpt-device"));
-        let _ = std::fs::remove_dir_all(root);
-    }
 }

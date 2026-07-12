@@ -446,7 +446,6 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let encrypt = body.get("encrypt").map(js_truthy).unwrap_or(false);
             let in_reply_to =
                 body_string_any(&body, &["in_reply_to", "inReplyTo", "in_reply_to_id"]);
             let audience_list_id = body_string_any(&body, &["audience_list_id", "audienceListId"]);
@@ -470,7 +469,6 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 &protocol,
                 recipients,
                 attachments,
-                encrypt,
                 in_reply_to,
                 audience_list_id,
                 "Note",

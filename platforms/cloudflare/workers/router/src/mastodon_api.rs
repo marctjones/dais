@@ -808,7 +808,6 @@ async fn mastodon_create_status(env: &Env, body: &Value) -> Result<Response> {
         "activitypub",
         Vec::new(),
         attachments,
-        false,
         in_reply_to.clone(),
         None,
         object_type,

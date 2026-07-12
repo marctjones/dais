@@ -3335,13 +3335,12 @@ impl DeskController {
             text: self.compose.text.trim().to_string(),
             visibility: self.compose.visibility.clone(),
             protocol: self.compose.protocol.clone(),
-            encrypt: self.compose.encrypt,
             in_reply_to: self.compose.in_reply_to.clone(),
             audience_list_id: self.compose.audience_list_id.clone(),
             recipients: split_list(&self.compose.recipients),
             attachments: self.compose.attachments.clone(),
         };
-        if draft.encrypt {
+        if self.compose.encrypt {
             return self.compose_send_encrypted_direct_mls(&draft);
         }
         if self
@@ -13367,14 +13366,14 @@ mod tests {
         let plaintext = rows
             .iter()
             .find(|row| row.id.as_str() == "conversation:peer:https://friend.example/users/ada")
-            .expect("1:1 conversation");
+            .expect("direct conversation");
         assert_eq!(plaintext.kind.as_str(), "conversation");
-        assert_eq!(plaintext.chip.as_str(), "1:1");
-        assert!(plaintext.subtitle.contains("1 messages"));
+        assert_eq!(plaintext.chip.as_str(), "Direct");
+        assert!(plaintext.subtitle.contains("1 message"));
         assert!(!plaintext.subtitle.contains("encrypted"));
         assert!(!plaintext.subtitle.contains("locked"));
         assert!(plaintext.meta.contains("Latest from"));
-        assert!(plaintext.detail.contains("Ada"));
+        assert!(plaintext.detail.contains("friend.example/@ada"));
         assert!(plaintext.detail.contains("backyard telescope"));
     }
 
@@ -13988,7 +13987,7 @@ mod tests {
         let rows = controller.rows_for_active_screen();
         assert!(rows.iter().any(|row| row.id.as_str() == "security:summary"));
         assert!(rows.iter().any(
-            |row| row.id.as_str() == "e2ee-device:e2ee-device-local-laptop"
+            |row| row.id.as_str() == "e2ee-device:e2ee-device-local-mls"
                 && row.chip.as_str() == "Active"
         ));
         assert!(

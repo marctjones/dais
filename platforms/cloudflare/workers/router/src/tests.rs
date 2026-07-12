@@ -360,44 +360,43 @@ fn normalizes_only_ciphertext_encrypted_media_attachments() {
 }
 
 #[test]
-fn owner_post_compose_accepts_encrypted_activitypub_media() {
-    let encrypted = serde_json::json!({
+fn owner_post_media_must_be_private_for_followers_and_direct() {
+    let public_url = serde_json::json!({
         "type": "Document",
-        "name": "field notes.jpg",
-        "encryptedMedia": {
-            "v": 1,
-            "alg": "AES-256-GCM",
-            "mediaType": "image/jpeg",
-            "iv": BASE64.encode([1u8; 12]),
-            "ciphertext": BASE64.encode(b"ciphertext bytes"),
-            "sha256": sha256_hex(b"plaintext bytes")
-        }
+        "mediaType": "image/png",
+        "url": "https://social.dais.social/media/uploads/public.png"
+    });
+    let private_url = serde_json::json!({
+        "type": "Document",
+        "mediaType": "image/png",
+        "url": "https://social.dais.social/media/_private/token/private.png"
     });
 
-    let normalized = normalize_owner_post_attachments(&[encrypted], true, "activitypub", "direct")
-        .expect("encrypted owner media should normalize");
+    for visibility in ["followers", "direct"] {
+        let error =
+            normalize_owner_post_attachments(&[public_url.clone()], "activitypub", visibility)
+                .expect_err("public media must not attach to a non-public post");
+        assert!(error.contains("private media upload URLs"));
 
-    let object = normalized[0].as_object().expect("attachment object");
-    assert!(object.get("encryptedMedia").is_some());
-    assert!(object.get("url").is_none());
+        normalize_owner_post_attachments(&[private_url.clone()], "activitypub", visibility)
+            .expect("private media should attach to a non-public post");
+    }
+
+    normalize_owner_post_attachments(&[public_url], "activitypub", "public")
+        .expect("public media should attach to a public post");
 }
 
 #[test]
-fn owner_post_compose_rejects_encrypted_media_for_atproto() {
-    let encrypted = serde_json::json!({
-        "encryptedMedia": {
-            "v": 1,
-            "alg": "AES-256-GCM",
-            "mediaType": "image/png",
-            "iv": BASE64.encode([2u8; 12]),
-            "ciphertext": BASE64.encode(b"ciphertext bytes")
-        }
+fn owner_post_media_for_atproto_must_be_a_public_image_upload() {
+    let private_url = serde_json::json!({
+        "type": "Document",
+        "mediaType": "image/png",
+        "url": "https://social.dais.social/media/_private/token/private.png"
     });
 
-    let error = normalize_owner_post_attachments(&[encrypted], true, "both", "followers")
-        .expect_err("encrypted media should not route to ATProto");
-
-    assert!(error.contains("ActivityPub-only"));
+    let error = normalize_owner_post_attachments(&[private_url], "both", "public")
+        .expect_err("private media must not be routed to AT Protocol");
+    assert!(error.contains("public image uploads"));
 }
 
 #[test]

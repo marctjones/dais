@@ -1,5 +1,6 @@
 use crate::activitypub::security::{is_blocked_actor, is_federation_host_allowed};
 use crate::activitypub::types::Activity;
+use crate::e2ee_wire::{is_supported_envelope, DAIS_MLS_PROTOCOL};
 use crate::error::{CoreError, CoreResult};
 /// ActivityPub inbox processing
 ///
@@ -367,10 +368,7 @@ pub async fn handle_update(db: &dyn DatabaseProvider, activity: &Activity) -> Co
         .map(|value| value.to_string())
         .unwrap_or_else(crate::utils::now_rfc3339);
     let raw_object = serde_json::to_string(object)?;
-    let encrypted_message = object
-        .get("daisEncryptedMessage")
-        .map(serde_json::to_string)
-        .transpose()?;
+    let encrypted_message = supported_encrypted_message(object)?;
 
     let query = r#"
         UPDATE timeline_posts
@@ -477,10 +475,7 @@ async fn ingest_timeline_post(
     let in_reply_to = object.get("inReplyTo").and_then(|v| v.as_str());
     let raw_object = serde_json::to_string(object)?;
     let raw_activity = serde_json::to_string(activity)?;
-    let encrypted_message = object
-        .get("daisEncryptedMessage")
-        .map(serde_json::to_string)
-        .transpose()?;
+    let encrypted_message = supported_encrypted_message(object)?;
 
     let (actor_username, actor_display_name, actor_avatar_url) =
         extract_actor_info(http, &activity.actor)
@@ -654,7 +649,10 @@ async fn handle_direct_message(
     )
     .await?;
 
-    if let Some(encrypted_message) = object.get("daisEncryptedMessage") {
+    if let Some(encrypted_message) = object
+        .get("daisEncryptedMessage")
+        .filter(|envelope| is_supported_envelope(envelope))
+    {
         persist_e2ee_direct_message(
             db,
             activity,
@@ -684,6 +682,22 @@ async fn handle_direct_message(
     .await?;
 
     Ok(())
+}
+
+/// Serialize an inbound `daisEncryptedMessage` only when it is an envelope this
+/// build understands.
+///
+/// dais speaks one encrypted-message format (MLS/RFC 9420 in a v2 envelope).
+/// Anything else — notably the retired v1/RSA format — is dropped rather than
+/// stored, so a peer cannot reintroduce a wire format we can no longer decrypt.
+/// The post itself is still kept; only the envelope is discarded.
+fn supported_encrypted_message(object: &Value) -> CoreResult<Option<String>> {
+    object
+        .get("daisEncryptedMessage")
+        .filter(|envelope| is_supported_envelope(envelope))
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| CoreError::Internal(error.to_string()))
 }
 
 async fn persist_e2ee_direct_message(
@@ -720,11 +734,12 @@ async fn persist_e2ee_direct_message(
     db.execute(
         r#"
         INSERT INTO e2ee_conversations (id, protocol, participants, created_at, updated_at)
-        VALUES (?1, 'mls-rfc9420', ?2, ?3, ?3)
-        ON CONFLICT(id) DO UPDATE SET updated_at = ?3
+        VALUES (?1, ?2, ?3, ?4, ?4)
+        ON CONFLICT(id) DO UPDATE SET updated_at = ?4
         "#,
         &[
             Value::String(conversation_id.clone()),
+            Value::String(DAIS_MLS_PROTOCOL.to_string()),
             Value::String(participants_json),
             Value::String(published_at.to_string()),
         ],

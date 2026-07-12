@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS e2ee_devices (
     actor_id TEXT NOT NULL,
     device_id TEXT NOT NULL,
     display_name TEXT,
-    protocol TEXT NOT NULL DEFAULT 'mls-rfc9420',
+    protocol TEXT NOT NULL DEFAULT 'dais-mls-v1',
     credential TEXT NOT NULL,
     key_package TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS e2ee_peer_devices (
     actor_id TEXT NOT NULL,
     device_id TEXT NOT NULL,
     display_name TEXT,
-    protocol TEXT NOT NULL DEFAULT 'mls-rfc9420',
+    protocol TEXT NOT NULL DEFAULT 'dais-mls-v1',
     credential TEXT NOT NULL,
     key_package TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS e2ee_peer_devices (
 
 CREATE TABLE IF NOT EXISTS e2ee_conversations (
     id TEXT PRIMARY KEY,
-    protocol TEXT NOT NULL DEFAULT 'mls-rfc9420',
+    protocol TEXT NOT NULL DEFAULT 'dais-mls-v1',
     participants TEXT NOT NULL,
     epoch TEXT,
     state TEXT,

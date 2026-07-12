@@ -505,6 +505,55 @@ mod tests {
     }
 
     #[test]
+    fn mls_device_state_is_scoped_to_its_instance() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let device_state = |instance: &str, device_id: &str| MlsDeviceStateFile {
+            version: 1,
+            instance_url: instance.to_string(),
+            local_actor_id: format!("{instance}/users/social"),
+            device_id: device_id.to_string(),
+            serialized_device_state: format!("serialized-state-for-{device_id}"),
+            updated_at: "2026-07-01T00:00:00Z".to_string(),
+        };
+
+        store
+            .save_mls_device_state(&device_state("https://social.dais.social", "dais-device"), false)
+            .unwrap();
+        store
+            .save_mls_device_state(&device_state("https://social.skpt.cl", "skpt-device"), false)
+            .unwrap();
+
+        // A device belongs to exactly one instance. Reading it through another
+        // instance must fail rather than hand back private MLS key material
+        // that instance was never entitled to.
+        assert!(store
+            .load_mls_device_state("https://social.dais.social", "dais-device")
+            .is_ok());
+        assert!(store
+            .load_mls_device_state("https://social.dais.social", "skpt-device")
+            .is_err());
+        assert!(store
+            .load_mls_device_state("https://social.skpt.cl", "dais-device")
+            .is_err());
+
+        let mut listed = store
+            .list_mls_device_states()
+            .unwrap()
+            .into_iter()
+            .map(|entry| (entry.instance, entry.device_id))
+            .collect::<Vec<_>>();
+        listed.sort();
+        assert_eq!(
+            listed,
+            vec![
+                ("social.dais.social".to_string(), "dais-device".to_string()),
+                ("social.skpt.cl".to_string(), "skpt-device".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn stores_decrypted_messages_under_instance_and_message_id() {
         let dir = tempfile::tempdir().unwrap();
         let store = ConfigStore::new(dir.path().to_path_buf());

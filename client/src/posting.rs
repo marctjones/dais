@@ -11,8 +11,6 @@ use crate::routing::{effective_protocol, Protocol, Visibility};
 pub enum PostOutcome {
     ActivityPub {
         post_id: String,
-        read_url: Option<String>,
-        split_key_url: Option<String>,
         delivery_ids: Vec<String>,
     },
     Bluesky {
@@ -34,7 +32,6 @@ pub struct PostDraft {
     pub text: String,
     pub visibility: Visibility,
     pub protocol: Protocol,
-    pub encrypt: bool,
     pub reply_to: Option<String>,
     pub to: Vec<String>,
     pub object_type: ActivityObjectType,
@@ -285,7 +282,6 @@ impl PostDraft {
                 args.visibility
             },
             protocol: args.protocol,
-            encrypt: args.encrypt,
             reply_to: args.reply_to,
             to: args.to,
             object_type,
@@ -307,22 +303,13 @@ pub async fn publish_post(
     db: &D1Client,
 ) -> Result<PostOutcome> {
     let effective = effective_protocol(draft.protocol, draft.visibility);
-    validate_media_attachments(&draft.attachments, draft.visibility, draft.encrypt)?;
+    validate_media_attachments(&draft.attachments, draft.visibility)?;
     validate_poll(&draft)?;
     if draft.visibility == Visibility::Direct && draft.to.is_empty() {
         anyhow::bail!("direct posts require at least one --to actor URL");
     }
     if draft.object_type != ActivityObjectType::Note && effective != Protocol::ActivityPub {
         anyhow::bail!("rich ActivityPub objects can only be sent to ActivityPub");
-    }
-    if draft.encrypt && draft.object_type != ActivityObjectType::Note {
-        anyhow::bail!("encrypted ActivityPub posts used encryptedMessage v1 and have been removed");
-    }
-
-    if draft.encrypt {
-        anyhow::bail!(
-            "encrypted ActivityPub posts used encryptedMessage v1 and have been removed; use owner MLS E2EE messages instead"
-        );
     }
 
     match effective {
@@ -447,8 +434,6 @@ pub async fn publish_post(
 
             Ok(PostOutcome::ActivityPub {
                 post_id,
-                read_url: None,
-                split_key_url: None,
                 delivery_ids,
             })
         }
@@ -650,9 +635,6 @@ fn validate_poll(draft: &PostDraft) -> Result<()> {
     if draft.object_type != ActivityObjectType::Question {
         anyhow::bail!("poll options can only be used with ActivityPub Question objects");
     }
-    if draft.encrypt {
-        anyhow::bail!("encrypted ActivityPub polls are not supported");
-    }
     if draft.poll_options.len() < 2 || draft.poll_options.len() > 4 {
         anyhow::bail!("polls require between two and four --poll-option values");
     }
@@ -718,25 +700,12 @@ fn poll_option_values(options: &[String]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn validate_media_attachments(
-    attachments: &[String],
-    visibility: Visibility,
-    encrypt: bool,
-) -> Result<()> {
+fn validate_media_attachments(attachments: &[String], visibility: Visibility) -> Result<()> {
     if attachments.is_empty() {
         return Ok(());
     }
 
     let values = attachment_values(attachments)?;
-    if encrypt {
-        if !values.iter().all(is_encryptable_media_attachment) {
-            anyhow::bail!(
-                "encrypted media attachments must be JSON objects with data_base64 or dataBase64"
-            );
-        }
-        return Ok(());
-    }
-
     if matches!(visibility, Visibility::Followers | Visibility::Direct)
         && !values.iter().all(is_private_media_attachment)
     {
@@ -745,19 +714,7 @@ fn validate_media_attachments(
         );
     }
 
-    if visibility == Visibility::Public || visibility == Visibility::Unlisted {
-        return Ok(());
-    }
-
     Ok(())
-}
-
-fn is_encryptable_media_attachment(attachment: &serde_json::Value) -> bool {
-    attachment
-        .get("data_base64")
-        .or_else(|| attachment.get("dataBase64"))
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn is_private_media_attachment(attachment: &serde_json::Value) -> bool {
@@ -856,7 +813,7 @@ mod tests {
     #[test]
     fn followers_media_requires_private_capability_url() {
         let attachments = vec!["https://social.dais.social/media/uploads/public.png".to_string()];
-        let error = validate_media_attachments(&attachments, Visibility::Followers, false)
+        let error = validate_media_attachments(&attachments, Visibility::Followers)
             .expect_err("public media must not be valid for followers posts");
         assert!(error
             .to_string()
@@ -867,16 +824,7 @@ mod tests {
     fn followers_media_allows_private_capability_url() {
         let attachments =
             vec!["https://social.dais.social/media/_private/token/image.png".to_string()];
-        validate_media_attachments(&attachments, Visibility::Followers, false).unwrap();
-    }
-
-    #[test]
-    fn encrypted_media_requires_inline_base64_payload() {
-        let attachments =
-            vec!["https://social.dais.social/media/_private/token/image.png".to_string()];
-        let error = validate_media_attachments(&attachments, Visibility::Followers, true)
-            .expect_err("encrypted media must require bytes to encrypt");
-        assert!(error.to_string().contains("data_base64"));
+        validate_media_attachments(&attachments, Visibility::Followers).unwrap();
     }
 
     #[test]
@@ -982,7 +930,6 @@ mod tests {
             text: "Poll?".to_string(),
             visibility: Visibility::Public,
             protocol: Protocol::ActivityPub,
-            encrypt: false,
             reply_to: None,
             to: Vec::new(),
             object_type: ActivityObjectType::Question,

@@ -390,7 +390,6 @@ pub(crate) async fn owner_create_post(
     protocol: &str,
     recipients: Vec<String>,
     attachments: Vec<Value>,
-    encrypt: bool,
     in_reply_to: Option<String>,
     audience_list_id: Option<String>,
     object_type: &str,
@@ -443,8 +442,7 @@ pub(crate) async fn owner_create_post(
     );
     let post_id = format!("{actor_id}/posts/{local_id}");
     let content_html = format!("<p>{}</p>", escape_html(text).replace('\n', "<br>"));
-    let media_attachments =
-        normalize_owner_post_attachments(&attachments, encrypt, protocol, visibility)?;
+    let media_attachments = normalize_owner_post_attachments(&attachments, protocol, visibility)?;
 
     let mut reply_target_inbox = None;
     if let Some(in_reply_to) = in_reply_to.as_deref() {
@@ -1008,18 +1006,10 @@ fn normalize_attachments(values: &[Value]) -> std::result::Result<Vec<Value>, St
 
 pub(crate) fn normalize_owner_post_attachments(
     values: &[Value],
-    encrypt: bool,
     protocol: &str,
     visibility: &str,
 ) -> std::result::Result<Vec<Value>, String> {
-    let media_attachments = if encrypt {
-        if matches!(protocol, "atproto" | "both") {
-            return Err("encrypted media attachments are ActivityPub-only".to_string());
-        }
-        normalize_encrypted_media_attachments(values)?
-    } else {
-        normalize_attachments(values)?
-    };
+    let media_attachments = normalize_attachments(values)?;
     if !media_attachments.is_empty()
         && matches!(protocol, "atproto" | "both")
         && !media_attachments
@@ -1028,8 +1018,7 @@ pub(crate) fn normalize_owner_post_attachments(
     {
         return Err("AT Protocol media attachments must be public image uploads".to_string());
     }
-    if !encrypt
-        && !media_attachments.is_empty()
+    if !media_attachments.is_empty()
         && matches!(visibility, "followers" | "direct")
         && !media_attachments.iter().all(is_private_media_attachment)
     {

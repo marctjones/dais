@@ -1131,7 +1131,6 @@ impl App {
             text,
             visibility: owner_visibility(self.compose.visibility),
             protocol: owner_protocol(self.compose.protocol),
-            encrypt: self.compose.encrypt,
             in_reply_to: reply_to,
             audience_list_id: None,
             recipients: to,

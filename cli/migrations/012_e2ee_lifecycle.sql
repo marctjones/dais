@@ -1,5 +1,4 @@
--- Historical E2EE product lifecycle: persisted legacy encrypted-message
--- envelopes for read links. Current owner E2EE uses MLS/RFC 9420 v2.
+-- E2EE product lifecycle: persist encryptedMessage envelopes for read links.
 
 ALTER TABLE posts ADD COLUMN encrypted_message TEXT;
 ALTER TABLE timeline_posts ADD COLUMN encrypted_message TEXT;

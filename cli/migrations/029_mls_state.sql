@@ -2,7 +2,8 @@
 -- Migration: 029_mls_state
 -- Created: 2026-07-01
 --
--- This extends the E2EE lifecycle tables from migration 026 with
+-- This extends the encryptedMessage v1 lifecycle tables from migration 026.
+-- The v1 tables remain the durable message/device inventory; these tables add
 -- instance-scoped and device-scoped MLS private state for daisEncryptedMessage v2.
 
 CREATE TABLE IF NOT EXISTS e2ee_mls_group_states (

@@ -607,7 +607,6 @@ pub struct ComposeDraft {
     pub text: String,
     pub visibility: Visibility,
     pub protocol: ProtocolRoute,
-    pub encrypt: bool,
     pub in_reply_to: Option<String>,
     pub audience_list_id: Option<String>,
     pub recipients: Vec<String>,
@@ -1502,9 +1501,6 @@ pub fn privacy_badges(draft: &ComposeDraft) -> Vec<&'static str> {
         ProtocolRoute::AtProto => badges.push("bluesky"),
         ProtocolRoute::Both => badges.push("dual-protocol"),
     }
-    if draft.encrypt {
-        badges.push("e2ee");
-    }
     badges
 }
 
@@ -1555,7 +1551,6 @@ mod tests {
             text: "hello".to_string(),
             visibility: Visibility::Followers,
             protocol: ProtocolRoute::ActivityPub,
-            encrypt: false,
             in_reply_to: None,
             audience_list_id: None,
             recipients: Vec::new(),
@@ -1571,13 +1566,11 @@ mod tests {
             text: "secret".to_string(),
             visibility: Visibility::Direct,
             protocol: ProtocolRoute::Both,
-            encrypt: true,
             in_reply_to: None,
             audience_list_id: None,
             recipients: vec!["https://example.com/users/alice".to_string()],
             attachments: Vec::new(),
         };
-        assert!(privacy_badges(&draft).contains(&"e2ee"));
         assert_eq!(
             route_warning(&draft),
             Some("Direct posts cannot be represented on Bluesky; route ActivityPub only.")
