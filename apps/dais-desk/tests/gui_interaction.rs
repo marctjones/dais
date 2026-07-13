@@ -1,4 +1,4 @@
-use i_slint_backend_testing::ElementHandle;
+use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::platform::PointerEventButton;
 
 fn click_label(window: &dais_desk::MainWindow, label: &str) {
@@ -9,6 +9,52 @@ fn click_label(window: &dais_desk::MainWindow, label: &str) {
     );
     matches[0].mock_single_click(PointerEventButton::Left);
     slint::platform::update_timers_and_animations();
+}
+
+/// Regression coverage for #363: a live macOS accessibility-tree query against
+/// the running app found nearly every toolbar/nav button and the account
+/// switcher reporting `name=missing value`. Assert every interactive control
+/// (button, combobox, text input) has a non-empty accessible label, the same
+/// way VoiceOver or automation would look for one.
+#[test]
+fn every_interactive_control_has_an_accessible_label() {
+    i_slint_backend_testing::init_no_event_loop();
+    let window = dais_desk::create_test_window().expect("test fixture window");
+
+    let screens: &[(&str, &str)] = &[
+        ("home", "today"),
+        ("home", "compose"),
+        ("people", "find"),
+        ("people", "audience"),
+        ("people", "blocks"),
+        ("server", "identity"),
+        ("server", "moderation"),
+        ("server", "accounts"),
+        ("server", "settings"),
+    ];
+
+    for (mode, screen) in screens {
+        window.invoke_select_mode((*mode).into());
+        window.invoke_select_screen((*screen).into());
+
+        for role in [
+            AccessibleRole::Button,
+            AccessibleRole::Combobox,
+            AccessibleRole::TextInput,
+        ] {
+            let elements = ElementQuery::from_root(&window)
+                .match_accessible_role(role)
+                .find_all();
+            for element in elements {
+                let label = element.accessible_label();
+                assert!(
+                    label.as_deref().is_some_and(|value| !value.trim().is_empty()),
+                    "on {mode}/{screen}: {role:?} control (type {:?}) has no accessible-label",
+                    element.type_name()
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -28,9 +74,9 @@ fn navigates_primary_workflows_through_accessible_controls() {
     assert_eq!(window.get_active_mode().as_str(), "home");
     assert_eq!(window.get_active_screen().as_str(), "today");
 
-    click_label(&window, "Conversations");
+    click_label(&window, "Inbox");
     assert_eq!(window.get_active_mode().as_str(), "home");
-    assert_eq!(window.get_active_screen().as_str(), "conversations");
+    assert_eq!(window.get_active_screen().as_str(), "inbox");
 
     click_label(&window, "People");
     assert_eq!(window.get_active_mode().as_str(), "people");
@@ -126,4 +172,71 @@ fn exercises_normal_owner_task_flows_through_projection() {
     controller.select_screen("followers");
     controller.row_action("follower:https://new.example/users/follower", "Approve");
     assert!(controller.projection().status_message.contains("approved"));
+}
+
+/// Repro for #360: the account shown as selected in the top-right instance
+/// ComboBox was observed to differ from `active_account_id` across separate
+/// cold launches. Rather than only asserting on the projection (which is
+/// already covered and already deterministic), read the actual rendered
+/// ComboBox widget through the accessibility tree across many fresh windows,
+/// the same way real automation/VoiceOver would see it.
+#[test]
+fn repro_360_rendered_account_combobox_matches_active_account_on_every_cold_launch() {
+    i_slint_backend_testing::init_no_event_loop();
+
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let settings_path = temp_dir.path().join("owner-settings.json");
+    std::fs::write(
+        &settings_path,
+        serde_json::json!({
+            "instance_url": "https://account-b.invalid.example",
+            "owner_token": "token-b",
+            "accounts": [
+                {
+                    "id": "account-a",
+                    "label": "Account A",
+                    "instance_url": "https://account-a.invalid.example",
+                    "owner_token": "token-a"
+                },
+                {
+                    "id": "account-b",
+                    "label": "Account B",
+                    "instance_url": "https://account-b.invalid.example",
+                    "owner_token": "token-b"
+                }
+            ],
+            "active_account_id": "account-b"
+        })
+        .to_string(),
+    )
+    .expect("write settings");
+
+    for iteration in 0..15 {
+        let window = dais_desk::create_live_test_window(settings_path.clone())
+            .expect("construct live window");
+
+        assert_eq!(
+            window.get_active_account_label().as_str(),
+            "Account B",
+            "iteration {iteration}: projection-level active account label drifted"
+        );
+
+        let combo = ElementQuery::from_root(&window)
+            .match_accessible_role(AccessibleRole::Combobox)
+            .find_first()
+            .expect("account switcher ComboBox should be reachable in the accessibility tree");
+        let rendered_value = combo.accessible_value();
+        assert!(
+            rendered_value
+                .as_deref()
+                .is_some_and(|value| value.contains("Account B")),
+            "iteration {iteration}: rendered ComboBox showed {rendered_value:?} instead of Account B"
+        );
+        assert!(
+            !rendered_value
+                .as_deref()
+                .is_some_and(|value| value.contains("Account A")),
+            "iteration {iteration}: rendered ComboBox showed the inactive account instead"
+        );
+    }
 }

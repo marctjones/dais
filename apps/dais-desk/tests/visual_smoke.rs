@@ -67,15 +67,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     capture(&window, &output_dir, "workflow-save-post")?;
     window.invoke_select_screen("today".into());
     capture(&window, &output_dir, "home-today")?;
-    window.invoke_select_screen("conversations".into());
-    assert_screen_content(
-        &window,
-        "conversations",
-        "Conversations",
-        "conversation:peer:",
-    );
+    // Direct/encrypted conversations merged into Inbox per #367 (IA doc
+    // §4.1/§5) — no more standalone "conversations" screen.
+    window.invoke_select_screen("inbox".into());
+    assert_screen_content(&window, "inbox", "Inbox", "conversation:peer:");
     assert_encrypted_conversation_content(&window);
-    capture(&window, &output_dir, "home-conversations")?;
+    capture(&window, &output_dir, "home-inbox-conversations")?;
 
     window.invoke_select_screen("reading".into());
     assert_screen_content(&window, "reading", "Reading", "timeline:");
@@ -138,6 +135,27 @@ fn run() -> Result<(), Box<dyn Error>> {
     capture(&window, &output_dir, "settings-security")?;
 
     window.hide()?;
+
+    // Owner API 401/403 fallback must show a persistent, hard-to-miss warning
+    // banner rather than only a status-bar line (see issue #359).
+    let fixture_error_window = dais_desk::create_test_window_with_api_error(
+        "owner API returned 401 Unauthorized: Owner bearer token required".to_string(),
+    )?;
+    set_smoke_size(&fixture_error_window, 1180.0, 760.0);
+    fixture_error_window.show()?;
+    assert!(
+        fixture_error_window.get_showing_fixture_data(),
+        "api_error should surface as showing_fixture_data on the projection"
+    );
+    assert!(
+        fixture_error_window
+            .get_fixture_data_reason()
+            .contains("401"),
+        "fixture data reason should include the underlying API error"
+    );
+    capture(&fixture_error_window, &output_dir, "home-fixture-data-warning")?;
+    fixture_error_window.hide()?;
+
     Ok(())
 }
 

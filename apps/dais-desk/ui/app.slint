@@ -549,6 +549,8 @@ export component MainWindow inherits Window {
     in property <string> attention-summary;
     in property <string> privacy-status;
     in property <string> status-message;
+    in property <bool> showing-fixture-data;
+    in property <string> fixture-data-reason;
     in-out property <bool> inspector-compact;
     in-out property <bool> find-compact-form;
     in-out property <string> command-text;
@@ -886,6 +888,7 @@ export component MainWindow inherits Window {
                     LineEdit {
                         text <=> root.command-text;
                         placeholder-text: "Search people or posts";
+                        accessible-label: "Search people or posts";
                         horizontal-stretch: 1;
                         accepted => {
                             root.run-command(root.command-text);
@@ -907,6 +910,7 @@ export component MainWindow inherits Window {
                         ComboBox {
                             model: root.account-options;
                             current-index: root.active-account-index;
+                            accessible-label: "Switch account, currently " + root.active-account-label;
                             selected(option) => {
                                 root.switch-account-option(option);
                             }
@@ -982,6 +986,46 @@ export component MainWindow inherits Window {
                             }
                         }
 
+                        if root.showing-fixture-data : Rectangle {
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: #c23b3b;
+                            background: #fff0f0;
+                            accessible-role: text;
+                            accessible-label: "Warning: showing local preview data, not your real account. " + root.fixture-data-reason;
+
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 10px;
+
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: "⚠ Showing local preview data — this is not your real account";
+                                        color: #7b1c1c;
+                                        font-size: 13px;
+                                        font-weight: 800;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: root.fixture-data-reason;
+                                        color: #7b1c1c;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+
+                                Button {
+                                    text: "Retry sync";
+                                    accessible-label: "Retry connecting to your real account";
+                                    clicked => {
+                                        root.refresh();
+                                    }
+                                }
+                            }
+                        }
+
                         if root.active-screen == "compose" : Rectangle {
                             height: 292px;
                             border-radius: 8px;
@@ -1021,6 +1065,7 @@ export component MainWindow inherits Window {
 
                                 TextEdit {
                                     text <=> root.compose-text;
+                                    accessible-label: "Post text";
                                     height: 92px;
                                 }
 
@@ -1087,11 +1132,13 @@ export component MainWindow inherits Window {
                                     LineEdit {
                                         text <=> root.compose-recipients;
                                         placeholder-text: "Direct recipients";
+                                        accessible-label: "Direct recipients";
                                         horizontal-stretch: 1;
                                     }
                                     LineEdit {
                                         text <=> root.compose-audience-list;
                                         placeholder-text: "Audience group";
+                                        accessible-label: "Audience group";
                                         horizontal-stretch: 1;
                                     }
                                     CheckBox {
@@ -1103,6 +1150,7 @@ export component MainWindow inherits Window {
                                 LineEdit {
                                     text <=> root.compose-media-description;
                                     placeholder-text: "Media alt text / sensitivity note";
+                                    accessible-label: "Media alt text / sensitivity note";
                                 }
 
                                 Rectangle {
@@ -1171,6 +1219,7 @@ export component MainWindow inherits Window {
 
                         Button {
                             text: root.inspector-compact ? ">" : "Details";
+                            accessible-label: "Show details panel";
                             clicked => {
                                 root.toggle-inspector();
                             }
@@ -1226,23 +1275,23 @@ export component MainWindow inherits Window {
                                 Text { text: "Find people and sources"; font-weight: 800; font-size: 13px; color: #172033; }
                                 if root.find-compact-form : VerticalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.search-scope; placeholder-text: "private or public"; }
-                                    LineEdit { text <=> root.search-provider; placeholder-text: "network"; }
-                                    LineEdit { text <=> root.search-type; placeholder-text: "people/posts"; }
-                                    LineEdit { text <=> root.search-sort; placeholder-text: "recent/relevant"; }
+                                    LineEdit { text <=> root.search-scope; placeholder-text: "private or public"; accessible-label: "private or public"; }
+                                    LineEdit { text <=> root.search-provider; placeholder-text: "network"; accessible-label: "network"; }
+                                    LineEdit { text <=> root.search-type; placeholder-text: "people/posts"; accessible-label: "people/posts"; }
+                                    LineEdit { text <=> root.search-sort; placeholder-text: "recent/relevant"; accessible-label: "recent/relevant"; }
                                 }
                                 if !root.find-compact-form : HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.search-scope; placeholder-text: "private or public"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.search-provider; placeholder-text: "network"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-scope; placeholder-text: "private or public"; accessible-label: "private or public"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-provider; placeholder-text: "network"; accessible-label: "network"; horizontal-stretch: 1; }
                                 }
                                 if !root.find-compact-form : HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.search-type; placeholder-text: "people/posts"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.search-sort; placeholder-text: "recent/relevant"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-type; placeholder-text: "people/posts"; accessible-label: "people/posts"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-sort; placeholder-text: "recent/relevant"; accessible-label: "recent/relevant"; horizontal-stretch: 1; }
                                 }
-                                LineEdit { text <=> root.search-author; placeholder-text: "handle, URL, or name"; }
-                                LineEdit { text <=> root.search-url; placeholder-text: "source URL"; }
+                                LineEdit { text <=> root.search-author; placeholder-text: "handle, URL, or name"; accessible-label: "handle, URL, or name"; }
+                                LineEdit { text <=> root.search-url; placeholder-text: "source URL"; accessible-label: "source URL"; }
                                 CheckBox {
                                     text: "Allow broad public search";
                                     checked <=> root.search-confirm-public-sensitive;
@@ -1257,24 +1306,24 @@ export component MainWindow inherits Window {
                                 Text { text: "Advanced filters"; font-weight: 800; font-size: 12px; color: #4b5565; }
                                 if root.find-compact-form : VerticalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.search-lang; placeholder-text: "lang"; }
-                                    LineEdit { text <=> root.search-domain; placeholder-text: "domain"; }
-                                    LineEdit { text <=> root.search-since; placeholder-text: "since"; }
-                                    LineEdit { text <=> root.search-until; placeholder-text: "until"; }
+                                    LineEdit { text <=> root.search-lang; placeholder-text: "lang"; accessible-label: "lang"; }
+                                    LineEdit { text <=> root.search-domain; placeholder-text: "domain"; accessible-label: "domain"; }
+                                    LineEdit { text <=> root.search-since; placeholder-text: "since"; accessible-label: "since"; }
+                                    LineEdit { text <=> root.search-until; placeholder-text: "until"; accessible-label: "until"; }
                                 }
                                 if !root.find-compact-form : HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.search-lang; placeholder-text: "lang"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.search-domain; placeholder-text: "domain"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-lang; placeholder-text: "lang"; accessible-label: "lang"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-domain; placeholder-text: "domain"; accessible-label: "domain"; horizontal-stretch: 1; }
                                 }
                                 if !root.find-compact-form : HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.search-since; placeholder-text: "since"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.search-until; placeholder-text: "until"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-since; placeholder-text: "since"; accessible-label: "since"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.search-until; placeholder-text: "until"; accessible-label: "until"; horizontal-stretch: 1; }
                                 }
-                                LineEdit { text <=> root.search-mentions; placeholder-text: "mentions"; }
-                                LineEdit { text <=> root.search-servers; placeholder-text: "servers, comma separated"; }
-                                LineEdit { text <=> root.search-tags; placeholder-text: "tags, comma separated"; }
+                                LineEdit { text <=> root.search-mentions; placeholder-text: "mentions"; accessible-label: "mentions"; }
+                                LineEdit { text <=> root.search-servers; placeholder-text: "servers, comma separated"; accessible-label: "servers, comma separated"; }
+                                LineEdit { text <=> root.search-tags; placeholder-text: "tags, comma separated"; accessible-label: "tags, comma separated"; }
                             }
                         }
 
@@ -1292,7 +1341,7 @@ export component MainWindow inherits Window {
                                 if root.media-file-path == "" : HorizontalLayout {
                                     height: 34px;
                                     spacing: 6px;
-                                    LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; horizontal-stretch: 1; height: 34px; }
+                                    LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; accessible-label: "Local file path"; horizontal-stretch: 1; height: 34px; }
                                     Button {
                                         height: 34px;
                                         text: "Choose file";
@@ -1304,7 +1353,7 @@ export component MainWindow inherits Window {
                                 if root.media-file-path != "" : HorizontalLayout {
                                     height: 34px;
                                     spacing: 6px;
-                                    LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; horizontal-stretch: 1; height: 34px; }
+                                    LineEdit { text <=> root.media-file-path; placeholder-text: "Local file path"; accessible-label: "Local file path"; horizontal-stretch: 1; height: 34px; }
                                     Button {
                                         height: 34px;
                                         text: "Choose file";
@@ -1315,13 +1364,13 @@ export component MainWindow inherits Window {
                                 }
                                 if root.media-file-path != "" : HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.media-type; placeholder-text: "media type"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.media-access; placeholder-text: "access"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.media-type; placeholder-text: "media type"; accessible-label: "media type"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.media-access; placeholder-text: "access"; accessible-label: "access"; horizontal-stretch: 1; }
                                 }
-                                if root.media-file-path != "" : LineEdit { text <=> root.media-description; placeholder-text: "alt text / description"; }
+                                if root.media-file-path != "" : LineEdit { text <=> root.media-description; placeholder-text: "alt text / description"; accessible-label: "alt text / description"; }
                                 if root.media-file-path != "" : HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.media-expires-seconds; placeholder-text: "expires seconds"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.media-expires-seconds; placeholder-text: "expires seconds"; accessible-label: "expires seconds"; horizontal-stretch: 1; }
                                     CheckBox { text: "Auth fetch"; checked <=> root.media-authorized-fetch; }
                                 }
                                 if root.media-file-path != "" : Button {
@@ -1330,7 +1379,7 @@ export component MainWindow inherits Window {
                                         root.upload-media(root.media-file-path, root.media-type, root.media-description, root.media-access, root.media-expires-seconds, root.media-authorized-fetch);
                                     }
                                 }
-                                if root.media-revoke-url != "" : LineEdit { text <=> root.media-revoke-url; placeholder-text: "Uploaded media URL to revoke"; }
+                                if root.media-revoke-url != "" : LineEdit { text <=> root.media-revoke-url; placeholder-text: "Uploaded media URL to revoke"; accessible-label: "Uploaded media URL to revoke"; }
                                 if root.media-revoke-url != "" : Button {
                                     text: "Revoke media";
                                     clicked => {
@@ -1353,11 +1402,11 @@ export component MainWindow inherits Window {
                                     Text { text: "Add source or Watch"; font-weight: 800; font-size: 13px; color: #172033; }
                                     HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.source-type; placeholder-text: "rss | atom | api"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.source-cadence; placeholder-text: "minutes"; width: 70px; }
+                                    LineEdit { text <=> root.source-type; placeholder-text: "rss | atom | api"; accessible-label: "rss | atom | api"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.source-cadence; placeholder-text: "minutes"; accessible-label: "minutes"; width: 70px; }
                                 }
-                                LineEdit { text <=> root.source-url; placeholder-text: "Source URL"; }
-                                LineEdit { text <=> root.source-title; placeholder-text: "Source title"; }
+                                LineEdit { text <=> root.source-url; placeholder-text: "Source URL"; accessible-label: "Source URL"; }
+                                LineEdit { text <=> root.source-title; placeholder-text: "Source title"; accessible-label: "Source title"; }
                                 Button {
                                     text: "Add source";
                                     clicked => {
@@ -1366,12 +1415,12 @@ export component MainWindow inherits Window {
                                 }
                                 HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.watch-type; placeholder-text: "activitypub_actor"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.watch-cadence; placeholder-text: "minutes"; width: 70px; }
+                                    LineEdit { text <=> root.watch-type; placeholder-text: "activitypub_actor"; accessible-label: "activitypub_actor"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.watch-cadence; placeholder-text: "minutes"; accessible-label: "minutes"; width: 70px; }
                                 }
-                                LineEdit { text <=> root.watch-target; placeholder-text: "Watch target"; }
-                                LineEdit { text <=> root.watch-title; placeholder-text: "Watch title"; }
-                                LineEdit { text <=> root.bundle-follow-target; placeholder-text: "Follow target to review"; }
+                                LineEdit { text <=> root.watch-target; placeholder-text: "Watch target"; accessible-label: "Watch target"; }
+                                LineEdit { text <=> root.watch-title; placeholder-text: "Watch title"; accessible-label: "Watch title"; }
+                                LineEdit { text <=> root.bundle-follow-target; placeholder-text: "Follow target to review"; accessible-label: "Follow target to review"; }
                                 Button {
                                     text: "Add Watch";
                                     clicked => {
@@ -1398,9 +1447,9 @@ export component MainWindow inherits Window {
                                     padding: 10px;
                                     spacing: 7px;
                                     Text { text: "Audience group"; font-weight: 800; font-size: 13px; color: #172033; }
-                                LineEdit { text <=> root.audience-id; placeholder-text: "id, blank for new"; }
-                                LineEdit { text <=> root.audience-name; placeholder-text: "name"; }
-                                LineEdit { text <=> root.audience-description; placeholder-text: "description"; }
+                                LineEdit { text <=> root.audience-id; placeholder-text: "id, blank for new"; accessible-label: "id, blank for new"; }
+                                LineEdit { text <=> root.audience-name; placeholder-text: "name"; accessible-label: "name"; }
+                                LineEdit { text <=> root.audience-description; placeholder-text: "description"; accessible-label: "description"; }
                                 HorizontalLayout {
                                     spacing: 7px;
                                     ComboBox {
@@ -1425,8 +1474,8 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                LineEdit { text <=> root.audience-categories; placeholder-text: "sensitive categories"; }
-                                TextEdit { text <=> root.audience-members; height: 58px; }
+                                LineEdit { text <=> root.audience-categories; placeholder-text: "sensitive categories"; accessible-label: "sensitive categories"; }
+                                TextEdit { text <=> root.audience-members; accessible-label: "Audience members"; height: 58px; }
                                 HorizontalLayout {
                                     spacing: 8px;
                                     Button {
@@ -1457,11 +1506,11 @@ export component MainWindow inherits Window {
                                     padding: 10px;
                                     spacing: 7px;
                                     Text { text: "Public identity"; font-weight: 800; font-size: 13px; color: #172033; }
-                                LineEdit { text <=> root.profile-actor-type; placeholder-text: "actor type"; }
-                                LineEdit { text <=> root.profile-display-name; placeholder-text: "display name"; }
-                                TextEdit { text <=> root.profile-summary; height: 66px; }
-                                LineEdit { text <=> root.profile-icon; placeholder-text: "icon URL"; }
-                                LineEdit { text <=> root.profile-image; placeholder-text: "header image URL"; }
+                                LineEdit { text <=> root.profile-actor-type; placeholder-text: "actor type"; accessible-label: "actor type"; }
+                                LineEdit { text <=> root.profile-display-name; placeholder-text: "display name"; accessible-label: "display name"; }
+                                TextEdit { text <=> root.profile-summary; accessible-label: "Profile summary"; height: 66px; }
+                                LineEdit { text <=> root.profile-icon; placeholder-text: "icon URL"; accessible-label: "icon URL"; }
+                                LineEdit { text <=> root.profile-image; placeholder-text: "header image URL"; accessible-label: "header image URL"; }
                                 Rectangle {
                                     min-height: 58px;
                                     border-radius: 6px;
@@ -1509,10 +1558,10 @@ export component MainWindow inherits Window {
                                     Text { text: "Moderation policy"; font-weight: 800; font-size: 13px; color: #172033; }
                                     HorizontalLayout {
                                     spacing: 6px;
-                                    LineEdit { text <=> root.moderation-reply-policy; placeholder-text: "reply policy"; horizontal-stretch: 1; }
-                                    LineEdit { text <=> root.moderation-ai-budget; placeholder-text: "AI budget"; width: 82px; }
+                                    LineEdit { text <=> root.moderation-reply-policy; placeholder-text: "reply policy"; accessible-label: "reply policy"; horizontal-stretch: 1; }
+                                    LineEdit { text <=> root.moderation-ai-budget; placeholder-text: "AI budget"; accessible-label: "AI budget"; width: 82px; }
                                 }
-                                LineEdit { text <=> root.moderation-ai-model; placeholder-text: "AI model"; }
+                                LineEdit { text <=> root.moderation-ai-model; placeholder-text: "AI model"; accessible-label: "AI model"; }
                                 CheckBox { text: "AI advisory"; checked <=> root.moderation-ai-enabled; }
                                 Button {
                                     text: "Save policy";
@@ -1520,9 +1569,9 @@ export component MainWindow inherits Window {
                                         root.save-moderation(root.moderation-reply-policy, root.moderation-ai-enabled, root.moderation-ai-model, root.moderation-ai-budget);
                                     }
                                 }
-                                LineEdit { text <=> root.moderation-block-actor; placeholder-text: "Actor to block"; }
-                                LineEdit { text <=> root.moderation-block-domain; placeholder-text: "Domain to block"; }
-                                LineEdit { text <=> root.moderation-block-reason; placeholder-text: "Reason"; }
+                                LineEdit { text <=> root.moderation-block-actor; placeholder-text: "Actor to block"; accessible-label: "Actor to block"; }
+                                LineEdit { text <=> root.moderation-block-domain; placeholder-text: "Domain to block"; accessible-label: "Domain to block"; }
+                                LineEdit { text <=> root.moderation-block-reason; placeholder-text: "Reason"; accessible-label: "Reason"; }
                                 HorizontalLayout {
                                     spacing: 8px;
                                     Button { text: "Block actor"; clicked => { root.block-actor(root.moderation-block-actor, root.moderation-block-reason); } }
@@ -1542,8 +1591,8 @@ export component MainWindow inherits Window {
                                     padding: 10px;
                                     spacing: 7px;
                                     Text { text: "Allowlist host"; font-weight: 800; font-size: 13px; color: #172033; }
-                                LineEdit { text <=> root.moderation-allow-host; placeholder-text: "host"; }
-                                LineEdit { text <=> root.moderation-allow-note; placeholder-text: "note"; }
+                                LineEdit { text <=> root.moderation-allow-host; placeholder-text: "host"; accessible-label: "host"; }
+                                LineEdit { text <=> root.moderation-allow-note; placeholder-text: "note"; accessible-label: "note"; }
                                 HorizontalLayout {
                                     spacing: 8px;
                                     Button { text: "Allow host"; clicked => { root.allow-host(root.moderation-allow-host, root.moderation-allow-note); } }
@@ -1568,11 +1617,13 @@ export component MainWindow inherits Window {
                                     LineEdit {
                                         text <=> root.settings-default-visibility;
                                         placeholder-text: "followers, public, unlisted, direct";
+                                        accessible-label: "Default visibility";
                                         horizontal-stretch: 1;
                                     }
                                     LineEdit {
                                         text <=> root.settings-default-protocol;
                                         placeholder-text: "activitypub, bluesky, both";
+                                        accessible-label: "Default protocol";
                                         horizontal-stretch: 1;
                                     }
                                 }
@@ -1599,9 +1650,9 @@ export component MainWindow inherits Window {
                                     padding: 10px;
                                     spacing: 8px;
                                     Text { text: "Account profile"; font-weight: 800; font-size: 13px; }
-                                LineEdit { text <=> root.account-label; placeholder-text: "Label"; }
-                                LineEdit { text <=> root.account-url; placeholder-text: "Instance URL"; }
-                                LineEdit { text <=> root.account-token; placeholder-text: "Owner token"; }
+                                LineEdit { text <=> root.account-label; placeholder-text: "Label"; accessible-label: "Label"; }
+                                LineEdit { text <=> root.account-url; placeholder-text: "Instance URL"; accessible-label: "Instance URL"; }
+                                LineEdit { text <=> root.account-token; placeholder-text: "Owner token"; accessible-label: "Owner token"; }
                                 Button {
                                     text: "Save account";
                                     clicked => {

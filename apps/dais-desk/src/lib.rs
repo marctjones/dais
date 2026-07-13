@@ -466,6 +466,8 @@ pub struct UiProjection {
     pub attention_summary: String,
     pub privacy_status: String,
     pub status_message: String,
+    pub showing_fixture_data: bool,
+    pub fixture_data_reason: String,
     pub command_text: String,
     pub compose_text: String,
     pub compose_recipients: String,
@@ -1614,6 +1616,12 @@ impl DeskController {
             attention_summary: attention,
             privacy_status: "Private sharing by default. Follow or watch people; they do not need to follow back.".into(),
             status_message: self.status_message.clone(),
+            showing_fixture_data: self.data.api_error.is_some(),
+            fixture_data_reason: self
+                .data
+                .api_error
+                .clone()
+                .unwrap_or_else(|| "Real data unavailable; showing placeholder content.".into()),
             command_text: self.command_text.clone(),
             compose_text: self.compose.text.clone(),
             compose_recipients: self.compose.recipients.clone(),
@@ -3798,7 +3806,6 @@ impl DeskController {
     fn rows_for_active_screen_for_projection(&self) -> Vec<UiRow> {
         match self.active_screen.as_str() {
             "today" => self.home_today_rows(),
-            "conversations" => self.conversation_rows(),
             "reading" => self.reading_rows(),
             "inbox" => self.inbox_rows(),
             "compose" => self.compose_context_rows(),
@@ -3945,11 +3952,6 @@ impl DeskController {
             _ => vec![
                 ("today", "Feed", count_label(self.home_today_rows().len())),
                 (
-                    "conversations",
-                    "Conversations",
-                    count_label(self.conversation_rows().len()),
-                ),
-                (
                     "inbox",
                     "Inbox",
                     attention_count_label(self.inbox_rows().len()),
@@ -3976,7 +3978,6 @@ impl DeskController {
     fn title_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
             "today" => "Feed".into(),
-            "conversations" => "Conversations".into(),
             "reading" => "Reading".into(),
             "inbox" => "Inbox".into(),
             "compose" => "Compose".into(),
@@ -4005,13 +4006,12 @@ impl DeskController {
     fn subtitle_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
             "today" => "Latest posts and replies from people you know.".into(),
-            "conversations" => {
-                "Direct, group, and encrypted messages with normal social context.".into()
-            }
             "reading" => {
                 "Posts from followed accounts, private watches, and reading sources.".into()
             }
-            "inbox" => "Replies, mentions, reactions, and follow requests.".into(),
+            "inbox" => {
+                "Replies, mentions, reactions, follow requests, and direct conversations.".into()
+            }
             "compose" => "Audience and visibility are selected before posting.".into(),
             "find" => "Find people to follow by handle, URL, or name.".into(),
             "relationship" => "Relationship context for one person.".into(),
@@ -4048,7 +4048,25 @@ impl DeskController {
         rows
     }
 
+    #[cfg(test)]
     fn conversation_rows(&self) -> Vec<UiRow> {
+        let mut rows = self.conversation_summary_rows();
+        if rows.is_empty() {
+            rows.push(empty_state_row(
+                "conversation:empty",
+                "No conversations yet",
+                "Direct messages, encrypted messages, and small-group conversations will appear here.",
+                "Compose",
+            ));
+        }
+        rows
+    }
+
+    /// Conversation rows without the standalone empty-state filler, so
+    /// `inbox_rows` (which merges these in per #367 / the IA doc's "DMs are
+    /// part of Inbox Queue" call) can apply its own combined empty state
+    /// instead of stacking two unrelated "nothing here" messages.
+    fn conversation_summary_rows(&self) -> Vec<UiRow> {
         let mut summaries: BTreeMap<String, ConversationSummary> = BTreeMap::new();
         let mut rows = e2ee_endpoint_error_rows(&self.data.partial_api_errors);
 
@@ -4173,14 +4191,6 @@ impl DeskController {
                 .collect::<Vec<_>>(),
         );
         rows.sort_by(|left, right| right.subtitle.cmp(&left.subtitle));
-        if rows.is_empty() {
-            rows.push(empty_state_row(
-                "conversation:empty",
-                "No conversations yet",
-                "Direct messages, encrypted messages, and small-group conversations will appear here.",
-                "Compose",
-            ));
-        }
         rows
     }
 
@@ -4248,11 +4258,15 @@ impl DeskController {
                 .filter(|f| f.status == "pending")
                 .map(follower_row),
         );
+        // Direct/encrypted conversations are part of daily social work, not a
+        // separate top-level screen (DAIS_DESK_INFORMATION_ARCHITECTURE.md
+        // §4.1/§5) — merged in here per #367.
+        rows.extend(self.conversation_summary_rows());
         if rows.is_empty() {
             rows.push(empty_state_row(
                 "inbox:empty",
-                "No notifications need attention",
-                "Replies, mentions, and follow requests appear here. Lightweight likes stay quiet unless they need action.",
+                "No notifications or conversations need attention",
+                "Replies, mentions, follow requests, and direct or encrypted conversations appear here. Lightweight likes stay quiet unless they need action.",
                 "",
             ));
         }
@@ -5045,7 +5059,6 @@ impl DeskController {
             "compose"
                 | "find"
                 | "inbox"
-                | "conversations"
                 | "followers"
                 | "friends"
                 | "following"
@@ -6112,6 +6125,19 @@ pub fn create_test_window() -> Result<MainWindow, slint::PlatformError> {
     Ok(window)
 }
 
+/// Same as [`create_test_window`], but with the owner-API-failure/fixture-fallback
+/// state set (see issue #359) so tests can verify the fixture-data warning banner
+/// renders without needing a real 401 from a live account.
+pub fn create_test_window_with_api_error(reason: String) -> Result<MainWindow, slint::PlatformError> {
+    let mut inner = DeskController::fixture_for_tests();
+    inner.data = fixture_data(Some(reason));
+    let controller = Rc::new(RefCell::new(inner));
+    let window = MainWindow::new()?;
+    wire_callbacks(&window, controller.clone());
+    apply_controller_projection(&window, &controller);
+    Ok(window)
+}
+
 /// Headless window loaded with real data from the account configured at
 /// `settings_path`, instead of fixture data. Requires a headless Slint
 /// backend (e.g. `SLINT_BACKEND=software` via `i-slint-backend-testing`,
@@ -6159,6 +6185,8 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     window.set_attention_summary(s(&projection.attention_summary));
     window.set_privacy_status(s(&projection.privacy_status));
     window.set_status_message(s(&projection.status_message));
+    window.set_showing_fixture_data(projection.showing_fixture_data);
+    window.set_fixture_data_reason(s(&projection.fixture_data_reason));
     window.set_command_text(s(&projection.command_text));
     window.set_compose_text(s(&projection.compose_text));
     window.set_compose_recipients(s(&projection.compose_recipients));
@@ -13562,7 +13590,7 @@ mod tests {
     }
 
     #[test]
-    fn inbox_rows_are_attention_first() {
+    fn inbox_rows_are_attention_first_then_include_conversations() {
         let controller = DeskController::fixture_for_tests();
         let rows = controller.inbox_rows();
         assert_eq!(rows[0].id.as_str(), "notification:notice-reply");
@@ -13571,6 +13599,9 @@ mod tests {
             rows[2].id.as_str(),
             "follower:https://new.example/users/follower"
         );
+        // Direct/encrypted conversations merge into Inbox per #367 (IA doc
+        // §4.1/§5), after notifications and follow requests.
+        assert!(rows.iter().any(|row| row.id.starts_with("conversation:")));
         assert!(!rows.iter().any(|row| row.id.starts_with("dm:")));
         assert!(!rows.iter().any(|row| row.id.starts_with("e2ee-message:")));
         assert!(!rows.iter().any(|row| row.id.starts_with("delivery:")));
@@ -13600,7 +13631,7 @@ mod tests {
     #[test]
     fn selected_conversation_inspector_shows_thread_messages() {
         let mut controller = DeskController::fixture_for_tests();
-        controller.select_screen("conversations");
+        controller.select_screen("inbox");
         let rows = controller.inspector_rows("conversation:peer:https://friend.example/users/ada");
 
         assert!(rows.iter().any(|row| row.kind.as_str() == "message"
@@ -13732,7 +13763,6 @@ mod tests {
         let screens = [
             "today",
             "inbox",
-            "conversations",
             "saved",
             "find",
             "friends",
@@ -13960,6 +13990,26 @@ mod tests {
         assert_eq!(projection.account_options.len(), 2);
         assert!(projection.account_options[0].contains("Dais Social"));
         assert!(projection.account_options[1].contains("social.skpt.cl"));
+    }
+
+    #[test]
+    fn projection_hides_fixture_data_warning_when_no_api_error() {
+        let controller = DeskController::fixture_for_tests();
+        let projection = controller.projection();
+        assert!(!projection.showing_fixture_data);
+    }
+
+    #[test]
+    fn projection_surfaces_fixture_data_warning_on_owner_api_error() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.data = fixture_data(Some(
+            "owner API returned 401 Unauthorized: Owner bearer token required".to_string(),
+        ));
+
+        let projection = controller.projection();
+
+        assert!(projection.showing_fixture_data);
+        assert!(projection.fixture_data_reason.contains("401"));
     }
 
     #[test]
@@ -14316,5 +14366,54 @@ mod tests {
                 .expect_err("error")
                 .contains("dialog crashed")
         );
+    }
+
+    #[test]
+    fn repro_360_cold_launch_restores_same_active_account_every_time() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let settings_path = temp_dir.path().join("owner-settings.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::json!({
+                "instance_url": "https://account-b.invalid.example",
+                "owner_token": "token-b",
+                "accounts": [
+                    {
+                        "id": "account-a",
+                        "label": "Account A",
+                        "instance_url": "https://account-a.invalid.example",
+                        "owner_token": "token-a"
+                    },
+                    {
+                        "id": "account-b",
+                        "label": "Account B",
+                        "instance_url": "https://account-b.invalid.example",
+                        "owner_token": "token-b"
+                    }
+                ],
+                "active_account_id": "account-b"
+            })
+            .to_string(),
+        )
+        .expect("write settings");
+
+        for iteration in 0..25 {
+            let controller =
+                DeskController::new(settings_path.clone()).expect("construct controller");
+            assert_eq!(
+                controller.settings.active_account_id.as_deref(),
+                Some("account-b"),
+                "iteration {iteration}: active_account_id drifted from what's on disk"
+            );
+            let projection = controller.projection();
+            assert_eq!(
+                projection.active_account_label, "Account B",
+                "iteration {iteration}: projection showed the wrong active account"
+            );
+            assert_eq!(
+                projection.active_account_index, 1,
+                "iteration {iteration}: active account index drifted"
+            );
+        }
     }
 }

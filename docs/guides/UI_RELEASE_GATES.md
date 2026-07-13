@@ -90,8 +90,8 @@ UI release gate evidence
 - Command: ./scripts/release-desk-v2.sh
 - Result:
 - Covered modes: Home, People, settings/security surfaces
-- Covered sections: Feed, Conversations, Compose, Followers, Accounts & Tokens,
-  Settings, Security, visual screenshots
+- Covered sections: Feed, Inbox (including merged conversations), Compose,
+  Followers, Accounts & Tokens, Settings, Security, visual screenshots
 - Accessibility notes:
 - Privacy notes:
 - Screenshots or video, if visual behavior changed:
