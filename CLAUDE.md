@@ -19,6 +19,12 @@ and **AT Protocol (Bluesky)**.
 - **Track work in GitHub issues** (`gh issue …`), grouped under epic **#70**. Do
   not create `TODO.md` / `NOTES.md` / `SCRATCH.md` / `BACKLOG.md` style trackers,
   and avoid inline `// TODO` / `# FIXME` comments — open an issue instead.
+- **Every open issue belongs to a milestone**, and milestones are ordered by
+  priority in each milestone's own description (`Priority N of 3`, etc.) — check
+  `gh api repos/marctjones/dais/milestones` and work the lowest-numbered
+  priority first. When starting a session with no other direction, run
+  `gh issue list --milestone "<lowest-priority-number milestone title>"` and
+  pick up from there rather than asking which milestone to work on.
 - **Allocate model capacity by risk** using `docs/guides/MODEL_ALLOCATION.md`.
   Start with mini for audit/docs/triage, use the standard model for normal
   implementation, and reserve the strongest model for crypto, privacy
