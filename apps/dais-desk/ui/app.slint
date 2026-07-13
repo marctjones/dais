@@ -151,10 +151,17 @@ component SegmentOption inherits Rectangle {
 }
 
 component ToolbarCommandButton inherits Rectangle {
-    in property <string> symbol;
+    in property <string> icon-name;
     in property <string> label;
     in property <string> description;
     in property <length> button-width: 84px;
+    // Hover has no headless test signal (the testing backend has no
+    // pointer-move mock, and take_snapshot() doesn't capture hover state
+    // either) — this lets a screenshot force the tooltip visible for
+    // review without changing real runtime behavior, which stays
+    // hover-driven.
+    in property <bool> force-tooltip-preview: false;
+    property <bool> show-tooltip: touch-area.has-hover || root.force-tooltip-preview;
     callback activate();
 
     width: root.button-width;
@@ -171,23 +178,34 @@ component ToolbarCommandButton inherits Rectangle {
     }
 
     VerticalLayout {
-        padding-top: root.symbol == "" ? 0px : 5px;
-        padding-bottom: root.symbol == "" ? 0px : 5px;
-        spacing: root.symbol == "" ? 0px : 1px;
+        padding-top: root.icon-name == "" ? 0px : 4px;
+        padding-bottom: root.icon-name == "" ? 0px : 4px;
+        spacing: root.icon-name == "" ? 0px : 2px;
 
-        if root.symbol != "" : Text {
-            text: root.symbol;
-            color: #174a7e;
-            font-size: 16px;
-            font-weight: 800;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        if root.icon-name != "" : HorizontalLayout {
+            alignment: center;
+            Path {
+                width: 15px;
+                height: 15px;
+                viewbox-width: 24;
+                viewbox-height: 24;
+                stroke: #174a7e;
+                stroke-width: 2px;
+                fill: transparent;
+                commands: root.icon-name == "find"
+                    ? "M 16 10 A 6 6 0 1 1 4 10 A 6 6 0 1 1 16 10 M 14.5 14.5 L 20.5 20.5"
+                    : root.icon-name == "compose"
+                        ? "M 12 4 L 12 20 M 4 12 L 20 12"
+                        : root.icon-name == "sync"
+                            ? "M 19 12 A 7 7 0 1 1 12 5"
+                            : "";
+            }
         }
 
         Text {
             text: root.label;
             color: #2f3948;
-            font-size: root.symbol == "" ? 12px : 10px;
+            font-size: root.icon-name == "" ? 12px : 10px;
             font-weight: 700;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -198,6 +216,26 @@ component ToolbarCommandButton inherits Rectangle {
     touch-area := TouchArea {
         clicked => {
             root.activate();
+        }
+    }
+
+    if root.show-tooltip : Rectangle {
+        x: 0px;
+        y: root.height + 6px;
+        width: max(150px, root.button-width + 60px);
+        height: 22px;
+        z: 10;
+        border-radius: 5px;
+        background: #1f2733;
+
+        Text {
+            text: root.description;
+            color: #ffffff;
+            font-size: 10px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
         }
     }
 }
@@ -558,6 +596,10 @@ export component MainWindow inherits Window {
     in property <string> status-message;
     in property <bool> showing-fixture-data;
     in property <string> fixture-data-reason;
+    // Test/screenshot-only: forces one toolbar tooltip visible (matched by
+    // icon-name) without a real pointer hover, which the headless testing
+    // backend cannot simulate.
+    in property <string> debug-show-toolbar-tooltip-for;
     in-out property <bool> inspector-compact;
     in-out property <bool> find-compact-form;
     in-out property <string> command-text;
@@ -953,28 +995,31 @@ export component MainWindow inherits Window {
                     }
 
                     ToolbarCommandButton {
-                        symbol: "";
+                        icon-name: "find";
                         label: "Find";
                         description: "Run the command or search text. Jump to Find with ⌘F.";
+                        force-tooltip-preview: root.debug-show-toolbar-tooltip-for == "find";
                         activate => {
                             root.run-command(root.command-text);
                         }
                     }
 
                     ToolbarCommandButton {
-                        symbol: "";
+                        icon-name: "compose";
                         label: "Compose";
                         description: "Write a new post (⌘N).";
+                        force-tooltip-preview: root.debug-show-toolbar-tooltip-for == "compose";
                         activate => {
                             root.select-screen("compose");
                         }
                     }
 
                     ToolbarCommandButton {
-                        symbol: "";
+                        icon-name: "sync";
                         label: "Sync";
                         description: "Refresh posts and conversations (⌘R).";
                         button-width: 62px;
+                        force-tooltip-preview: root.debug-show-toolbar-tooltip-for == "sync";
                         activate => {
                             root.refresh();
                         }

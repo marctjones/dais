@@ -100,7 +100,7 @@ UI release gate evidence
 Required screenshot names at release time:
 
 ```text
-home, home-min-width, home-wide,
+home, home-toolbar-tooltip, home-min-width, home-wide,
 home-compose-media, home-compose-min-width,
 home-inbox-notifications, workflow-save-post, home-today,
 home-inbox-conversations, home-post-thread, home-saved,

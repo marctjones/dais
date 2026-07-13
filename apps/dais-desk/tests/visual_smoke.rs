@@ -34,6 +34,15 @@ fn run() -> Result<(), Box<dyn Error>> {
         "timeline:ada-week-friday-space-news",
     );
     capture(&window, &output_dir, "home")?;
+
+    // Hover has no headless test signal (no pointer-move mock, and
+    // take_snapshot() doesn't capture hover state), so the tooltip's real
+    // content is verified through this screenshot-only override instead of
+    // a real hover (#369).
+    window.set_debug_show_toolbar_tooltip_for("compose".into());
+    capture(&window, &output_dir, "home-toolbar-tooltip")?;
+    window.set_debug_show_toolbar_tooltip_for("".into());
+
     set_smoke_size(&window, 920.0, 660.0);
     assert!(
         window.get_inspector_compact(),
