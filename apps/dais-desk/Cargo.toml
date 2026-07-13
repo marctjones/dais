@@ -28,5 +28,10 @@ name = "visual_smoke"
 path = "tests/visual_smoke.rs"
 harness = false
 
+[[test]]
+name = "live_smoke"
+path = "tests/live_smoke.rs"
+harness = false
+
 [patch.crates-io]
 hpke-rs-libcrux = { path = "../../third_party/hpke-rs-libcrux-0.6.1" }

@@ -58,6 +58,18 @@ smoke test. The visual smoke writes screenshots to:
 apps/dais-desk/target/dais-desk-screenshots/
 ```
 
+To verify behavior against a real configured account instead of fixture
+data — fully headless, no real OS window, Dock presence, or desktop
+interaction — opt in to the live smoke test:
+
+```bash
+DAIS_DESK_LIVE_SMOKE=1 cargo test --manifest-path apps/dais-desk/Cargo.toml --test live_smoke
+```
+
+It's skipped by default (not part of `release-desk-v2.sh`) since it needs
+live network access and a configured account; it asserts the loaded account
+didn't silently fall back to local preview data.
+
 Configure production owner API access:
 
 ```bash

@@ -40,13 +40,18 @@ fn navigates_primary_workflows_through_accessible_controls() {
     assert_eq!(window.get_active_screen().as_str(), "followers");
     assert!(window.get_window_title().contains("Follow Requests"));
 
-    let server_controls: Vec<_> =
-        ElementHandle::find_by_accessible_label(&window, "Server").collect();
-    assert!(
-        server_controls.is_empty(),
-        "Server should not be exposed in the simplified social UI"
-    );
+    click_label(&window, "Server");
+    assert_eq!(window.get_active_mode().as_str(), "server");
+    assert_eq!(window.get_active_screen().as_str(), "health");
 
+    click_label(&window, "Accounts & Tokens");
+    assert_eq!(window.get_active_screen().as_str(), "accounts");
+    assert!(window.get_window_title().contains("Accounts"));
+
+    click_label(&window, "Settings");
+    assert_eq!(window.get_active_screen().as_str(), "settings");
+
+    click_label(&window, "Home");
     click_label(&window, "Compose");
     assert_eq!(window.get_active_mode().as_str(), "home");
     assert_eq!(window.get_active_screen().as_str(), "compose");

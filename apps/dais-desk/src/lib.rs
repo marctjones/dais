@@ -728,10 +728,12 @@ impl DeskController {
     pub fn select_mode(&mut self, mode: &str) {
         self.active_mode = match mode {
             "people" => "people".to_string(),
+            "server" => "server".to_string(),
             _ => "home".to_string(),
         };
         self.active_screen = match self.active_mode.as_str() {
             "people" => "find".to_string(),
+            "server" => "health".to_string(),
             _ => "today".to_string(),
         };
         self.selected_row = self.first_row_id();
@@ -3859,6 +3861,15 @@ impl DeskController {
                     + self.data.snapshot.friends.len(),
                 self.active_mode == "people",
             ),
+            nav(
+                "server",
+                "Server",
+                self.delivery_rows()
+                    .iter()
+                    .filter(|row| row.tone == "warn" || row.tone == "danger")
+                    .count(),
+                self.active_mode == "server",
+            ),
         ]
     }
 
@@ -3888,6 +3899,48 @@ impl DeskController {
                     "Following",
                     count_label(self.data.snapshot.following.len()),
                 ),
+                ("watches", "Watches", count_label(self.watch_rows().len())),
+                (
+                    "audience",
+                    "Audience Groups",
+                    count_label(self.audience_rows().len()),
+                ),
+                (
+                    "blocks",
+                    "Blocks & Mutes",
+                    count_label(self.block_rows().len()),
+                ),
+            ],
+            "server" => vec![
+                ("health", "Health", String::new()),
+                (
+                    "deliveries",
+                    "Deliveries",
+                    attention_count_label(
+                        self.delivery_rows()
+                            .iter()
+                            .filter(|row| row.tone == "warn" || row.tone == "danger")
+                            .count(),
+                    ),
+                ),
+                (
+                    "moderation",
+                    "Moderation",
+                    attention_count_label(self.moderation_rows().len()),
+                ),
+                (
+                    "security",
+                    "Security",
+                    count_label(self.security_rows().len()),
+                ),
+                ("identity", "Identity", String::new()),
+                (
+                    "accounts",
+                    "Accounts & Tokens",
+                    count_label(self.account_rows_as_ui().len()),
+                ),
+                ("settings", "Settings", String::new()),
+                ("stats", "Stats", String::new()),
             ],
             _ => vec![
                 ("today", "Feed", count_label(self.home_today_rows().len())),
@@ -6054,6 +6107,20 @@ fn wire_callbacks(window: &MainWindow, controller: Rc<RefCell<DeskController>>) 
 pub fn create_test_window() -> Result<MainWindow, slint::PlatformError> {
     let controller = Rc::new(RefCell::new(DeskController::fixture_for_tests()));
     let window = MainWindow::new()?;
+    wire_callbacks(&window, controller.clone());
+    apply_controller_projection(&window, &controller);
+    Ok(window)
+}
+
+/// Headless window loaded with real data from the account configured at
+/// `settings_path`, instead of fixture data. Requires a headless Slint
+/// backend (e.g. `SLINT_BACKEND=software` via `i-slint-backend-testing`,
+/// set before this is called) so it never creates a real OS window, Dock
+/// presence, or touches the desktop — same guarantee as [`create_test_window`],
+/// but backed by a live account. See issue #362.
+pub fn create_live_test_window(settings_path: PathBuf) -> Result<MainWindow, String> {
+    let controller = Rc::new(RefCell::new(DeskController::new(settings_path)?));
+    let window = MainWindow::new().map_err(|error| error.to_string())?;
     wire_callbacks(&window, controller.clone());
     apply_controller_projection(&window, &controller);
     Ok(window)
@@ -10898,7 +10965,7 @@ fn unix_timestamp_label() -> String {
         .unwrap_or_else(|_| "0".to_string())
 }
 
-fn default_settings_path() -> PathBuf {
+pub fn default_settings_path() -> PathBuf {
     if let Ok(path) = std::env::var("DAIS_DESK_SETTINGS") {
         return PathBuf::from(path);
     }
@@ -13269,7 +13336,7 @@ mod tests {
             .iter()
             .map(|item| item.id.to_string())
             .collect();
-        assert_eq!(modes, vec!["home", "people"]);
+        assert_eq!(modes, vec!["home", "people", "server"]);
         assert!(projection
             .privacy_status
             .contains("do not need to follow back"));
@@ -13353,7 +13420,43 @@ mod tests {
             .iter()
             .map(|item| item.id.to_string())
             .collect();
-        assert_eq!(screens, vec!["find", "friends", "followers", "following"]);
+        assert_eq!(
+            screens,
+            vec![
+                "find",
+                "friends",
+                "followers",
+                "following",
+                "watches",
+                "audience",
+                "blocks"
+            ]
+        );
+    }
+
+    #[test]
+    fn fixture_server_mode_has_expected_screen_order() {
+        let mut controller = DeskController::fixture_for_tests();
+        controller.select_mode("server");
+        let projection = controller.projection();
+        let screens: Vec<_> = projection
+            .screen_nav
+            .iter()
+            .map(|item| item.id.to_string())
+            .collect();
+        assert_eq!(
+            screens,
+            vec![
+                "health",
+                "deliveries",
+                "moderation",
+                "security",
+                "identity",
+                "accounts",
+                "settings",
+                "stats"
+            ]
+        );
     }
 
     #[test]

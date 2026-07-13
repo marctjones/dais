@@ -4,6 +4,25 @@ Dais Desk exposes GUI automation through stable accessibility labels and thin
 platform wrappers. The wrappers are intentionally small so smoke tests can drive
 the real native window without coupling test logic to Slint internals.
 
+Every wrapper below drives the *real* native window, which means it steals
+window focus (and `clickButton`/`pressShortcut`/`typeText` move the real
+mouse/keyboard) — there's no way around that for the real app. If you just
+need to verify behavior against a live account without touching the desktop
+at all, use the headless live smoke test instead (see
+`docs/guides/DAIS_DESK_APP.md`):
+
+```sh
+DAIS_DESK_LIVE_SMOKE=1 cargo test --manifest-path apps/dais-desk/Cargo.toml --test live_smoke
+```
+
+It loads real `DeskData` over the network the same way the real app does,
+through the same headless Slint test backend `visual_smoke.rs` uses for
+fixture screenshots — no OS window, no Dock icon, no focus/cursor
+interaction with whoever is using the machine. Pixel screenshot capture from
+this entry point doesn't render correctly yet (tracked separately); it
+verifies real state (account, status, row count) via the window's own
+properties instead.
+
 ## macOS AppleScript
 
 Load the helper from AppleScript or call handlers with `osascript`:
