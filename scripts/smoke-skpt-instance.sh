@@ -54,7 +54,7 @@ check_status \
 inbox_status="$(
   curl -sS -o /dev/null -w "%{http_code}" --max-time 20 \
     -H "Content-Type: application/activity+json" \
-    -d '{"@context":"https://www.w3.org/ns/activitystreams","id":"https://example.invalid/activities/test","type":"Create","actor":"https://example.invalid/users/alice","to":["https://social.skpt.cl/users/social"],"object":{"id":"https://example.invalid/users/alice/messages/test","type":"Note","to":["https://social.skpt.cl/users/social"],"content":"unsigned encrypted fallback","encryptedMessage":{"v":1,"alg":"AES-256-GCM","keyWrap":"RSA-OAEP-256","iv":"MTIzNDU2Nzg5MDEy","ciphertext":"Y2lwaGVydGV4dA==","recipients":[{"keyId":"https://social.skpt.cl/users/social#main-key","wrappedKey":"d3JhcHBlZA=="}]}}}' \
+    -d '{"@context":"https://www.w3.org/ns/activitystreams","id":"https://example.invalid/activities/test","type":"Create","actor":"https://example.invalid/users/alice","to":["https://social.skpt.cl/users/social"],"object":{"id":"https://example.invalid/users/alice/messages/test","type":"Note","to":["https://social.skpt.cl/users/social"],"content":"unsigned encrypted fallback","daisEncryptedMessage":{"v":2,"protocol":"mls-rfc9420","groupId":"dGVzdC1ncm91cA==","epoch":1,"senderDeviceId":"test-device","ciphertext":"Y2lwaGVydGV4dA=="}}}' \
     "https://social.skpt.cl/users/social/inbox"
 )"
 if [ "$inbox_status" != "401" ]; then

@@ -136,9 +136,8 @@ extension:
 }
 ```
 
-The existing `encryptedMessage` v1 envelope remains valid for hosted fallback
-posts. MLS DMs should use a new `daisEncryptedMessage` field so the compatibility
-line is clear.
+Dais no longer supports the legacy `encryptedMessage` v1 envelope for owner
+E2EE messages. MLS DMs use `daisEncryptedMessage` exclusively.
 
 ## Prototype Plan
 

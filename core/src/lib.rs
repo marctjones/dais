@@ -2,6 +2,7 @@ pub mod activitypub;
 pub mod atproto;
 #[cfg(feature = "mls")]
 pub mod e2ee_mls;
+pub mod e2ee_wire;
 mod error;
 pub mod migrations;
 pub mod protocol;

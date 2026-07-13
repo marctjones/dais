@@ -50,8 +50,7 @@ use deliveries::{owner_deliveries, owner_delivery_action_path, owner_update_deli
 pub(crate) use e2ee::{
     e2ee_device_fingerprint, normalize_e2ee_device_id, normalize_e2ee_fingerprint,
     normalize_e2ee_protocol, peer_trust_state_after_material_update,
-    validate_dais_encrypted_message_v2, validate_e2ee_device_material,
-    validate_encrypted_message_envelope, validate_owner_e2ee_payload,
+    validate_dais_encrypted_message_v2, validate_e2ee_device_material, validate_owner_e2ee_payload,
 };
 pub(crate) use e2ee::{
     owner_delete_e2ee_message, owner_direct_messages, owner_discover_e2ee_peer_devices,
@@ -121,13 +120,13 @@ use social::{
 #[cfg(test)]
 pub(crate) use sources::{
     activitypub_watch_item, bluesky_actor_target, bluesky_post_uri, bluesky_watch_item,
-    normalized_source_target, source_id, source_policy_json_for_type, source_type_for_watch_kind,
-    SourcePolicy,
+    follow_sync_stagger_minutes, follow_sync_watch_policy_json, normalized_source_target,
+    source_id, source_policy_json_for_type, source_type_for_watch_kind, SourcePolicy,
 };
 use sources::{
     owner_add_source, owner_add_watch, owner_delete_source, owner_delete_watch,
     owner_refresh_sources, owner_refresh_watches, owner_source_items, owner_source_subscriptions,
-    owner_watch_items, owner_watch_subscriptions, refresh_due_sources,
+    owner_watch_items, owner_watch_subscriptions, refresh_due_sources, sync_bluesky_follow_watches,
 };
 
 const PUBLIC_COLLECTION: &str = "https://www.w3.org/ns/activitystreams#Public";
@@ -190,6 +189,12 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 async fn scheduled(_event: ScheduledEvent, env: Env, ctx: ScheduleContext) {
     console_error_panic_hook::set_once();
     ctx.wait_until(async move {
+        // Reconcile watch_bluesky_actor sources against the current AT
+        // Protocol follow graph before refreshing: this is what backfills
+        // watches for follows that predate the feature, keeps newly followed
+        // accounts appearing without a separate manual step, and pauses
+        // watches for accounts the owner has since unfollowed.
+        let _ = sync_bluesky_follow_watches(&env).await;
         let _ = refresh_due_sources(&env).await;
     });
 }
@@ -447,7 +452,6 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let encrypt = body.get("encrypt").map(js_truthy).unwrap_or(false);
             let in_reply_to =
                 body_string_any(&body, &["in_reply_to", "inReplyTo", "in_reply_to_id"]);
             let audience_list_id = body_string_any(&body, &["audience_list_id", "audienceListId"]);
@@ -471,7 +475,6 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
                 &protocol,
                 recipients,
                 attachments,
-                encrypt,
                 in_reply_to,
                 audience_list_id,
                 "Note",
@@ -701,6 +704,12 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             let body = read_json(&mut req).await;
             let id = body.get("id").and_then(optional_body_string);
             match owner_refresh_watches(&env, id.as_deref()).await {
+                Ok(result) => api_json(&result, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Post, "/watches/sync-follows") => {
+            match sync_bluesky_follow_watches(&env).await {
                 Ok(result) => api_json(&result, 200),
                 Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
             }

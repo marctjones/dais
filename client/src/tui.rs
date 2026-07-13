@@ -1131,7 +1131,6 @@ impl App {
             text,
             visibility: owner_visibility(self.compose.visibility),
             protocol: owner_protocol(self.compose.protocol),
-            encrypt: self.compose.encrypt,
             in_reply_to: reply_to,
             audience_list_id: None,
             recipients: to,
@@ -2780,7 +2779,6 @@ async fn send_tui_mls_direct_message(
             recipient_device_id: Some(peer.device_id),
             sender_device_id: sender_state.owner_device.device_id,
             dais_encrypted_message: Some(serde_json::to_value(&envelope)?),
-            encrypted_message: None,
             fallback_content: Some(
                 "Encrypted MLS message. Open in a dais client to decrypt.".to_string(),
             ),
@@ -2845,7 +2843,6 @@ async fn send_tui_mls_group_message(
                 recipient_device_id: Some(delivery.validation_device_id.clone()),
                 sender_device_id: sender_state.owner_device.device_id.clone(),
                 dais_encrypted_message: Some(encrypted_message.clone()),
-                encrypted_message: None,
                 fallback_content: Some(
                     "Encrypted MLS group message. Open in a dais client to decrypt.".to_string(),
                 ),
@@ -3730,7 +3727,6 @@ mod tests {
             recipient_actor_id: Some("https://social.example/users/bob".to_string()),
             e2ee_protocol: protocol.to_string(),
             dais_encrypted_message: serde_json::json!({}),
-            encrypted_message: serde_json::json!({"ciphertext": "SECRET-CIPHERTEXT"}),
             mls_group_id: None,
             mls_epoch: None,
             fallback_content: Some("Encrypted message. Open in a dais client.".to_string()),
@@ -3847,7 +3843,7 @@ mod tests {
     fn select_trusted_mls_peer_device_ignores_untrusted_and_non_mls_devices() {
         let actor = "https://social.example/users/alice";
         let peers = vec![
-            peer_mls_device(actor, "v1-device", "dais-mls-v1", "trusted"),
+            peer_mls_device(actor, "legacy-device", "unsupported-legacy", "trusted"),
             peer_mls_device(actor, "untrusted-mls", "mls-rfc9420", "untrusted"),
             peer_mls_device(actor, "trusted-mls", "mls-rfc9420", "trusted"),
         ];
@@ -3979,7 +3975,6 @@ mod tests {
         message.sender_device_id = sender_device_id.to_string();
         message.recipient_actor_id = Some(recipient_actor.to_string());
         message.dais_encrypted_message = serde_json::to_value(&envelope).unwrap();
-        message.encrypted_message = serde_json::Value::Null;
         message.mls_group_id = Some(envelope.group_id.clone());
         message.mls_epoch = Some(envelope.epoch);
 
@@ -4055,7 +4050,7 @@ mod tests {
     fn e2ee_dm_entry_reports_specific_error_without_rendering_ciphertext() {
         let dir = tempfile::tempdir().unwrap();
         let store = ConfigStore::new(dir.path().join(".dais"));
-        let message = e2ee_message("message-2", "dais-mls-v1");
+        let message = e2ee_message("message-2", "unsupported-legacy");
 
         let entry = e2ee_dm_entry(&store, "https://social.example", &message, &[], None);
 

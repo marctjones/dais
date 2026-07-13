@@ -348,9 +348,20 @@ send_group_and_decrypt_on_two_devices() {
     --group-id "$group_id" \
     "$plaintext")"
   printf '%s\n' "$send_output"
-  grep -Fq "recipient_device_count=2" <<< "$send_output" \
-    || fail "$sender_label MLS group send did not include two trusted recipient devices"
-  ok "$sender_label sent MLS group message to two $recipient_label devices"
+  # A group send must fan out to every trusted device of the recipient, so the
+  # count is at least the primary plus the secondary. It is not pinned to an
+  # exact number: these instances are shared with the other smoke gates, which
+  # register devices of their own, and encrypting to those as well is correct
+  # MLS behaviour rather than a defect. The property that matters — that the
+  # secondary device is really reached — is proved by decrypting there below.
+  local device_count
+  device_count="$(awk -F= '/^recipient_device_count=/ {print $2; exit}' <<< "$send_output")"
+  case "$device_count" in
+    ''|*[!0-9]*) fail "$sender_label MLS group send reported no recipient_device_count" ;;
+  esac
+  [ "$device_count" -ge 2 ] \
+    || fail "$sender_label MLS group send reached $device_count recipient device(s); expected the primary and secondary"
+  ok "$sender_label sent MLS group message to $device_count $recipient_label devices"
 
   delivery_ids="$(awk -F= '/^delivery_ids=/ {print $2; exit}' <<< "$send_output")"
   if [ -n "$delivery_ids" ]; then
@@ -397,8 +408,19 @@ send_group_after_device_removal() {
     --group-id "$group_id" \
     "$plaintext")"
   printf '%s\n' "$send_output"
-  grep -Fq "recipient_device_count=1" <<< "$send_output" \
-    || fail "$sender_label MLS group send did not exclude removed recipient device"
+  # The security property is exclusion, not a head count: after revoking a peer
+  # device, a group send must not encrypt to it, while still reaching the device
+  # that is still trusted. Asserting an exact count instead would pass or fail on
+  # unrelated devices registered by the other smoke gates against this instance.
+  local recipient_devices
+  recipient_devices="$(awk -F= '/^recipient_devices=/ {print $2; exit}' <<< "$send_output")"
+  [ -n "$recipient_devices" ] \
+    || fail "$sender_label MLS group send did not report recipient_devices"
+  grep -q "\(^\|,\)${removed_device}\(,\|$\)" <<< "$recipient_devices" \
+    && fail "$sender_label MLS group send still encrypted to revoked device $removed_device"
+  grep -q "\(^\|,\)${remaining_device}\(,\|$\)" <<< "$recipient_devices" \
+    || fail "$sender_label MLS group send did not reach still-trusted device $remaining_device"
+  ok "$sender_label MLS group send excluded revoked $removed_device (sent to $recipient_devices)"
   ok "$sender_label sent MLS group message after removing $removed_device"
 
   delivery_ids="$(awk -F= '/^delivery_ids=/ {print $2; exit}' <<< "$send_output")"

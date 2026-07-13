@@ -198,7 +198,7 @@ async fn check_outbox(client: &reqwest::Client, config: &DoctorConfig) -> Doctor
             let leaked = items
                 .map(|items| {
                     items.iter().any(|item| {
-                        item.pointer("/object/encryptedMessage").is_some()
+                        item.pointer("/object/daisEncryptedMessage").is_some()
                             || item
                                 .pointer("/object/content")
                                 .and_then(Value::as_str)

@@ -1,5 +1,3 @@
-pub mod e2ee;
-
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -404,6 +402,16 @@ impl OwnerApiClient {
         .await
     }
 
+    /// Reconcile `watch_bluesky_actor` watches with the owner's current AT
+    /// Protocol follow graph: create watches for follows that don't have one
+    /// yet, and pause watches for accounts no longer followed. Runs
+    /// automatically every 30 minutes on the server; this triggers it
+    /// on demand (useful right after following someone, and for smoke tests).
+    pub async fn sync_follow_watches(&self) -> ClientResult<OwnerFollowWatchSyncResult> {
+        self.post("/api/dais/owner/watches/sync-follows", &OwnerEmptyBody {})
+            .await
+    }
+
     pub async fn moderation(&self) -> ClientResult<ModerationState> {
         self.get("/api/dais/owner/moderation").await
     }
@@ -609,7 +617,6 @@ pub struct ComposeDraft {
     pub text: String,
     pub visibility: Visibility,
     pub protocol: ProtocolRoute,
-    pub encrypt: bool,
     pub in_reply_to: Option<String>,
     pub audience_list_id: Option<String>,
     pub recipients: Vec<String>,
@@ -969,7 +976,6 @@ pub struct OwnerE2eeMessage {
     pub e2ee_protocol: String,
     #[serde(default)]
     pub dais_encrypted_message: serde_json::Value,
-    pub encrypted_message: serde_json::Value,
     #[serde(default)]
     pub mls_group_id: Option<String>,
     #[serde(default)]
@@ -991,15 +997,13 @@ pub struct OwnerE2eeMessageSend {
     pub sender_device_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dais_encrypted_message: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encrypted_message: Option<serde_json::Value>,
     pub fallback_content: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<serde_json::Value>,
 }
 
 fn default_e2ee_protocol() -> String {
-    "dais-mls-v1".to_string()
+    "mls-rfc9420".to_string()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1280,7 +1284,7 @@ pub struct OwnerProfileUpdate {
     pub image: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceItem {
     pub id: String,
     pub title: String,
@@ -1289,6 +1293,19 @@ pub struct SourceItem {
     pub excerpt: Option<String>,
     pub rights_policy_json: String,
     pub read: bool,
+    /// Id of the source_subscriptions row this item came from. The router
+    /// already returns this; it was previously dropped on deserialize.
+    #[serde(default)]
+    pub source_id: Option<String>,
+    /// When the item was published at its origin, if known. Falls back to
+    /// `fetched_at` for chronological placement when absent.
+    #[serde(default)]
+    pub published_at: Option<String>,
+    /// When dais fetched the item. Always present once a source has been
+    /// refreshed at least once; used to place items that report no
+    /// publish time of their own.
+    #[serde(default)]
+    pub fetched_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1367,6 +1384,13 @@ pub struct OwnerSourceRefreshItem {
 pub struct OwnerSourceRefreshResult {
     pub ok: bool,
     pub items: Vec<OwnerSourceRefreshItem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerFollowWatchSyncResult {
+    pub followed: u32,
+    pub ensured: u32,
+    pub paused: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1507,9 +1531,6 @@ pub fn privacy_badges(draft: &ComposeDraft) -> Vec<&'static str> {
         ProtocolRoute::AtProto => badges.push("bluesky"),
         ProtocolRoute::Both => badges.push("dual-protocol"),
     }
-    if draft.encrypt {
-        badges.push("e2ee");
-    }
     badges
 }
 
@@ -1555,12 +1576,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn source_item_deserializes_router_payload_missing_timestamp_fields() {
+        // A response from a router build that predates this change (or any
+        // future payload that simply omits these keys) must still deserialize
+        // instead of failing the whole /watches or /sources call.
+        let json = r#"{
+            "id": "source-item-1",
+            "title": "Old shape",
+            "source_type": "rss",
+            "canonical_url": null,
+            "excerpt": null,
+            "rights_policy_json": "{}",
+            "read": false
+        }"#;
+        let item: SourceItem = serde_json::from_str(json).expect("must deserialize");
+        assert_eq!(item.source_id, None);
+        assert_eq!(item.published_at, None);
+        assert_eq!(item.fetched_at, None);
+    }
+
+    #[test]
+    fn source_item_deserializes_router_payload_with_timestamp_fields() {
+        let json = r#"{
+            "id": "source-item-1",
+            "title": "New shape",
+            "source_type": "watch_bluesky_actor",
+            "canonical_url": "https://bsky.app/profile/did:plc:abc/post/1",
+            "excerpt": "hello",
+            "rights_policy_json": "{}",
+            "read": false,
+            "source_id": "source-abc123",
+            "published_at": "2026-07-10T12:00:00Z",
+            "fetched_at": "2026-07-10T12:05:00Z"
+        }"#;
+        let item: SourceItem = serde_json::from_str(json).expect("must deserialize");
+        assert_eq!(item.source_id.as_deref(), Some("source-abc123"));
+        assert_eq!(item.published_at.as_deref(), Some("2026-07-10T12:00:00Z"));
+        assert_eq!(item.fetched_at.as_deref(), Some("2026-07-10T12:05:00Z"));
+    }
+
+    #[test]
     fn private_activitypub_draft_has_private_badge_and_no_warning() {
         let draft = ComposeDraft {
             text: "hello".to_string(),
             visibility: Visibility::Followers,
             protocol: ProtocolRoute::ActivityPub,
-            encrypt: false,
             in_reply_to: None,
             audience_list_id: None,
             recipients: Vec::new(),
@@ -1576,13 +1636,11 @@ mod tests {
             text: "secret".to_string(),
             visibility: Visibility::Direct,
             protocol: ProtocolRoute::Both,
-            encrypt: true,
             in_reply_to: None,
             audience_list_id: None,
             recipients: vec!["https://example.com/users/alice".to_string()],
             attachments: Vec::new(),
         };
-        assert!(privacy_badges(&draft).contains(&"e2ee"));
         assert_eq!(
             route_warning(&draft),
             Some("Direct posts cannot be represented on Bluesky; route ActivityPub only.")
@@ -1606,7 +1664,6 @@ mod tests {
                 "senderDeviceId": "mac",
                 "ciphertext": "Y2lwaGVydGV4dA=="
             },
-            "encrypted_message": null,
             "mls_group_id": "group",
             "mls_epoch": 2,
             "fallback_content": "Encrypted message",
@@ -1617,7 +1674,6 @@ mod tests {
         assert_eq!(message.e2ee_protocol, "mls-rfc9420");
         assert_eq!(message.mls_group_id.as_deref(), Some("group"));
         assert_eq!(message.mls_epoch, Some(2));
-        assert_eq!(message.encrypted_message, serde_json::Value::Null);
         assert_eq!(message.dais_encrypted_message["v"], 2);
     }
 
@@ -1628,7 +1684,6 @@ mod tests {
             recipient_device_id: Some("phone".into()),
             sender_device_id: "mac".into(),
             dais_encrypted_message: Some(serde_json::json!({"v": 2})),
-            encrypted_message: None,
             fallback_content: Some("Encrypted".into()),
             attachments: Vec::new(),
         };

@@ -2,11 +2,12 @@ use super::{
     activitypub_actor_profile_html, activitypub_watch_item, audience_group_purpose_label,
     audience_membership_label, bluesky_actor_target, bluesky_appview_xrpc_url, bluesky_post_uri,
     bluesky_watch_item, display_local_url, e2ee_device_fingerprint,
-    encrypted_media_attachments_from_activitypub_object, is_local_object_url,
-    is_public_atproto_image_attachment, media_custom_metadata, normalize_ai_categories,
-    normalize_audience_group_type, normalize_audience_membership_visibility,
-    normalize_audience_posting_policy, normalize_discovered_public_post, normalize_e2ee_device_id,
-    normalize_e2ee_fingerprint, normalize_e2ee_protocol, normalize_encrypted_media_attachments,
+    encrypted_media_attachments_from_activitypub_object, follow_sync_stagger_minutes,
+    follow_sync_watch_policy_json, is_local_object_url, is_public_atproto_image_attachment,
+    media_custom_metadata, normalize_ai_categories, normalize_audience_group_type,
+    normalize_audience_membership_visibility, normalize_audience_posting_policy,
+    normalize_discovered_public_post, normalize_e2ee_device_id, normalize_e2ee_fingerprint,
+    normalize_e2ee_protocol, normalize_encrypted_media_attachments,
     normalize_owner_post_attachments, normalized_source_target, owner_normalize_bluesky_post,
     owner_normalize_tootfinder_status, owner_public_post_row_from_discovered,
     owner_public_search_mastodon_query_params, owner_token_has_scopes, parse_lenient_json_body,
@@ -14,9 +15,9 @@ use super::{
     sha256_hex, source_id, source_policy_json_for_type, source_type_for_watch_kind,
     strip_json_fence, tootfinder_search_items, tootfinder_search_url,
     validate_dais_encrypted_message_v2, validate_e2ee_device_material,
-    validate_encrypted_media_payload, validate_encrypted_message_envelope,
-    validate_owner_e2ee_payload, MediaMetadataInput, OwnerProfile, OwnerPublicSearchOptions,
-    OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
+    validate_encrypted_media_payload, validate_owner_e2ee_payload, MediaMetadataInput,
+    OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider, OwnerPublicSearchResultType,
+    SourcePolicy, PUBLIC_COLLECTION,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::{Map, Value};
@@ -84,10 +85,7 @@ fn normalizes_e2ee_device_ids_and_protocols() {
         "laptop:2026"
     );
     assert!(normalize_e2ee_device_id("bad device").is_err());
-    assert_eq!(
-        normalize_e2ee_protocol("encryptedMessage-v1").unwrap(),
-        "dais-mls-v1"
-    );
+    assert!(normalize_e2ee_protocol("encryptedMessage-v1").is_err());
     assert_eq!(normalize_e2ee_protocol("OpenMLS").unwrap(), "mls-rfc9420");
     assert_eq!(
         normalize_e2ee_protocol("dais-mls-v2").unwrap(),
@@ -104,7 +102,7 @@ fn validates_mls_device_material_shape() {
     assert!(validate_e2ee_device_material("mls-rfc9420", &credential, &key_package).is_ok());
     assert!(validate_e2ee_device_material("mls-rfc9420", "not base64", &key_package).is_err());
     assert!(validate_e2ee_device_material("mls-rfc9420", &credential, "").is_err());
-    assert!(validate_e2ee_device_material("dais-mls-v1", "legacy", "legacy").is_ok());
+    assert!(normalize_e2ee_protocol("dais-mls-v1").is_err());
 }
 
 #[test]
@@ -187,6 +185,7 @@ fn validates_dais_encrypted_message_v2_shape() {
     let mut bad_protocol = envelope.clone();
     bad_protocol["protocol"] = Value::String("dais-mls-v1".to_string());
     assert!(validate_dais_encrypted_message_v2(&bad_protocol).is_err());
+    assert!(validate_owner_e2ee_payload(&bad_protocol).is_err());
 
     let mut bad_ciphertext = envelope.clone();
     bad_ciphertext["ciphertext"] = Value::String("not base64".to_string());
@@ -195,6 +194,24 @@ fn validates_dais_encrypted_message_v2_shape() {
     let mut missing_epoch = envelope;
     missing_epoch.as_object_mut().unwrap().remove("epoch");
     assert!(validate_dais_encrypted_message_v2(&missing_epoch).is_err());
+}
+
+#[test]
+fn owner_e2ee_payload_rejects_legacy_encrypted_message_v1() {
+    let legacy = serde_json::json!({
+        "v": 1,
+        "alg": "AES-256-GCM",
+        "keyWrap": "RSA-OAEP-256",
+        "iv": "MDEyMzQ1Njc4OWFi",
+        "ciphertext": "Y2lwaGVydGV4dA==",
+        "recipients": [{
+            "keyId": "peer-device",
+            "wrappedKey": "d3JhcHBlZA=="
+        }]
+    });
+
+    let error = validate_owner_e2ee_payload(&legacy).expect_err("legacy v1 must be rejected");
+    assert!(error.contains("daisEncryptedMessage"));
 }
 
 #[test]
@@ -344,44 +361,43 @@ fn normalizes_only_ciphertext_encrypted_media_attachments() {
 }
 
 #[test]
-fn owner_post_compose_accepts_encrypted_activitypub_media() {
-    let encrypted = serde_json::json!({
+fn owner_post_media_must_be_private_for_followers_and_direct() {
+    let public_url = serde_json::json!({
         "type": "Document",
-        "name": "field notes.jpg",
-        "encryptedMedia": {
-            "v": 1,
-            "alg": "AES-256-GCM",
-            "mediaType": "image/jpeg",
-            "iv": BASE64.encode([1u8; 12]),
-            "ciphertext": BASE64.encode(b"ciphertext bytes"),
-            "sha256": sha256_hex(b"plaintext bytes")
-        }
+        "mediaType": "image/png",
+        "url": "https://social.dais.social/media/uploads/public.png"
+    });
+    let private_url = serde_json::json!({
+        "type": "Document",
+        "mediaType": "image/png",
+        "url": "https://social.dais.social/media/_private/token/private.png"
     });
 
-    let normalized = normalize_owner_post_attachments(&[encrypted], true, "activitypub", "direct")
-        .expect("encrypted owner media should normalize");
+    for visibility in ["followers", "direct"] {
+        let error =
+            normalize_owner_post_attachments(&[public_url.clone()], "activitypub", visibility)
+                .expect_err("public media must not attach to a non-public post");
+        assert!(error.contains("private media upload URLs"));
 
-    let object = normalized[0].as_object().expect("attachment object");
-    assert!(object.get("encryptedMedia").is_some());
-    assert!(object.get("url").is_none());
+        normalize_owner_post_attachments(&[private_url.clone()], "activitypub", visibility)
+            .expect("private media should attach to a non-public post");
+    }
+
+    normalize_owner_post_attachments(&[public_url], "activitypub", "public")
+        .expect("public media should attach to a public post");
 }
 
 #[test]
-fn owner_post_compose_rejects_encrypted_media_for_atproto() {
-    let encrypted = serde_json::json!({
-        "encryptedMedia": {
-            "v": 1,
-            "alg": "AES-256-GCM",
-            "mediaType": "image/png",
-            "iv": BASE64.encode([2u8; 12]),
-            "ciphertext": BASE64.encode(b"ciphertext bytes")
-        }
+fn owner_post_media_for_atproto_must_be_a_public_image_upload() {
+    let private_url = serde_json::json!({
+        "type": "Document",
+        "mediaType": "image/png",
+        "url": "https://social.dais.social/media/_private/token/private.png"
     });
 
-    let error = normalize_owner_post_attachments(&[encrypted], true, "both", "followers")
-        .expect_err("encrypted media should not route to ATProto");
-
-    assert!(error.contains("ActivityPub-only"));
+    let error = normalize_owner_post_attachments(&[private_url], "both", "public")
+        .expect_err("private media must not be routed to AT Protocol");
+    assert!(error.contains("public image uploads"));
 }
 
 #[test]
@@ -465,55 +481,6 @@ fn local_object_detection_uses_current_instance_host() {
         "https://social.skpt.cl/users/social/posts/abc",
         "social.skpt.cl"
     ));
-}
-
-#[test]
-fn validates_encrypted_message_envelope() {
-    let envelope = serde_json::json!({
-        "v": 1,
-        "alg": "AES-256-GCM",
-        "keyWrap": "RSA-OAEP-256",
-        "iv": "MDEyMzQ1Njc4OWFi",
-        "ciphertext": "Y2lwaGVydGV4dA==",
-        "recipients": [{
-            "keyId": "peer-device",
-            "wrappedKey": "d3JhcHBlZA=="
-        }]
-    });
-    assert!(validate_encrypted_message_envelope(&envelope).is_ok());
-}
-
-#[test]
-fn rejects_bad_encrypted_message_envelope() {
-    let bad_version = serde_json::json!({
-        "v": 2,
-        "alg": "AES-256-GCM",
-        "keyWrap": "RSA-OAEP-256",
-        "iv": "MDEyMzQ1Njc4OWFi",
-        "ciphertext": "Y2lwaGVydGV4dA==",
-        "recipients": [{ "keyId": "peer-device", "wrappedKey": "d3JhcHBlZA==" }]
-    });
-    assert!(validate_encrypted_message_envelope(&bad_version).is_err());
-
-    let bad_wrapped_key = serde_json::json!({
-        "v": 1,
-        "alg": "AES-256-GCM",
-        "keyWrap": "RSA-OAEP-SHA256",
-        "iv": "MDEyMzQ1Njc4OWFi",
-        "ciphertext": "Y2lwaGVydGV4dA==",
-        "recipients": [{ "keyId": "peer-device", "wrappedKey": "not base64!" }]
-    });
-    assert!(validate_encrypted_message_envelope(&bad_wrapped_key).is_err());
-
-    let no_recipients = serde_json::json!({
-        "v": 1,
-        "alg": "AES-256-GCM",
-        "keyWrap": "RSA-OAEP-256",
-        "iv": "MDEyMzQ1Njc4OWFi",
-        "ciphertext": "Y2lwaGVydGV4dA==",
-        "recipients": []
-    });
-    assert!(validate_encrypted_message_envelope(&no_recipients).is_err());
 }
 
 #[test]
@@ -634,6 +601,55 @@ fn source_ids_dedupe_by_type_and_normalized_target() {
     assert_eq!(one, two);
     assert_ne!(one, different_type);
     assert!(one.starts_with("source-"));
+}
+
+#[test]
+fn follow_sync_watch_id_matches_a_manually_added_watch_for_the_same_did() {
+    // sync_bluesky_follow_watches hashes the bare DID directly (it comes
+    // straight from the `following` table, already canonical). This must land
+    // on the exact same row a manual `watch-add bluesky_actor <did>` would
+    // produce, or following someone the owner had already manually watched
+    // creates a duplicate row instead of reconciling onto the existing one.
+    let did = "did:plc:abc123followsync";
+    let from_follow_sync = source_id("watch_bluesky_actor", did);
+    let from_manual_add = source_id("watch_bluesky_actor", &bluesky_actor_target(did).unwrap());
+    assert_eq!(from_follow_sync, from_manual_add);
+}
+
+#[test]
+fn follow_sync_watch_policy_is_valid_watch_policy_tagged_with_its_origin() {
+    // The auto-pause query in sync_bluesky_follow_watches identifies rows it
+    // created via `json_extract(policy_json, '$.origin') = 'follow_sync'`. If
+    // this literal ever stops parsing as JSON, or drops the origin field, that
+    // query silently matches nothing and unfollowed accounts are never paused.
+    let policy_json = follow_sync_watch_policy_json();
+    let parsed: serde_json::Value =
+        serde_json::from_str(policy_json).expect("policy_json must be valid JSON");
+    assert_eq!(parsed["origin"], "follow_sync");
+    // Must satisfy the same "no remote relationship, reader-only" contract as
+    // every other watch (source_policy_json_for_type's `is_watch` branch),
+    // since it is a watch as far as source_items provenance rendering cares.
+    assert_eq!(parsed["watch"], true);
+    assert_eq!(parsed["no_remote_relationship"], true);
+    assert_eq!(parsed["private_reader_only"], true);
+    assert_eq!(parsed["public_only"], true);
+}
+
+#[test]
+fn follow_sync_stagger_spreads_a_batch_across_five_minute_buckets() {
+    // A bulk sync of many follows must not leave every new watch's
+    // next_fetch_at equally "due now" — due_active_sources shares a single
+    // LIMIT 20 per cron tick across every source type on the instance, so a
+    // pile of simultaneously-due watches would crowd out RSS/Atom/
+    // ActivityPub watches for as many ticks as it takes to drain.
+    assert_eq!(follow_sync_stagger_minutes(0), 0.0);
+    assert_eq!(follow_sync_stagger_minutes(1), 5.0);
+    assert_eq!(follow_sync_stagger_minutes(11), 55.0);
+    // Wraps rather than growing unbounded for very large follow lists — later
+    // buckets reuse earlier minute offsets, relying on each row's own
+    // steady-state cadence (not a second sync pass) to desync them further.
+    assert_eq!(follow_sync_stagger_minutes(12), 0.0);
+    assert_eq!(follow_sync_stagger_minutes(13), 5.0);
 }
 
 #[test]

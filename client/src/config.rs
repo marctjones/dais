@@ -18,13 +18,6 @@ pub struct ConfigStore {
     root: PathBuf,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct E2eePrivateKeyEntry {
-    pub instance: String,
-    pub device_id: String,
-    pub path: PathBuf,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct MlsGroupStateFile {
     pub version: u8,
@@ -62,6 +55,13 @@ pub struct MlsGroupStateEntry {
     pub instance: String,
     pub device_id: String,
     pub group_id: String,
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MlsDeviceStateEntry {
+    pub instance: String,
+    pub device_id: String,
     pub path: PathBuf,
 }
 
@@ -106,81 +106,6 @@ impl ConfigStore {
         Ok(())
     }
 
-    pub fn e2ee_private_key_path(&self, instance_url: &str, device_id: &str) -> PathBuf {
-        self.root
-            .join("e2ee")
-            .join(self.e2ee_instance_dir_name(instance_url))
-            .join(format!("{}.pkcs8.pem", safe_path_component(device_id)))
-    }
-
-    pub fn e2ee_instance_dir_name(&self, instance_url: &str) -> String {
-        safe_path_component(instance_url)
-    }
-
-    pub fn save_e2ee_private_key(
-        &self,
-        instance_url: &str,
-        device_id: &str,
-        private_key_pem: &str,
-        force: bool,
-    ) -> Result<PathBuf> {
-        let path = self.e2ee_private_key_path(instance_url, device_id);
-        if path.exists() && !force {
-            anyhow::bail!(
-                "{} already exists; pass --force to overwrite",
-                path.display()
-            );
-        }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&path, private_key_pem.as_bytes())?;
-        set_owner_read_write(&path)?;
-        Ok(path)
-    }
-
-    pub fn load_e2ee_private_key(&self, instance_url: &str, device_id: &str) -> Result<String> {
-        let path = self.e2ee_private_key_path(instance_url, device_id);
-        fs::read_to_string(&path)
-            .with_context(|| format!("E2EE private key not found at {}", path.display()))
-    }
-
-    pub fn list_e2ee_private_keys(&self) -> Result<Vec<E2eePrivateKeyEntry>> {
-        let root = self.root.join("e2ee");
-        if !root.exists() {
-            return Ok(Vec::new());
-        }
-        let mut entries = Vec::new();
-        for instance_entry in fs::read_dir(root)? {
-            let instance_entry = instance_entry?;
-            if !instance_entry.file_type()?.is_dir() {
-                continue;
-            }
-            let instance = instance_entry.file_name().to_string_lossy().to_string();
-            for key_entry in fs::read_dir(instance_entry.path())? {
-                let key_entry = key_entry?;
-                if !key_entry.file_type()?.is_file() {
-                    continue;
-                }
-                let filename = key_entry.file_name().to_string_lossy().to_string();
-                let Some(device_id) = filename.strip_suffix(".pkcs8.pem") else {
-                    continue;
-                };
-                entries.push(E2eePrivateKeyEntry {
-                    instance: instance.clone(),
-                    device_id: device_id.to_string(),
-                    path: key_entry.path(),
-                });
-            }
-        }
-        entries.sort_by(|left, right| {
-            left.instance
-                .cmp(&right.instance)
-                .then(left.device_id.cmp(&right.device_id))
-        });
-        Ok(entries)
-    }
-
     pub fn mls_group_state_path(
         &self,
         instance_url: &str,
@@ -206,6 +131,10 @@ impl ConfigStore {
             .join("decrypted-messages")
             .join(safe_path_component(instance_url))
             .join(format!("{}.json", safe_path_component(message_id)))
+    }
+
+    pub fn instance_dir_name(&self, instance_url: &str) -> String {
+        safe_path_component(instance_url)
     }
 
     pub fn save_decrypted_message(
@@ -397,6 +326,42 @@ impl ConfigStore {
         Ok(entries)
     }
 
+    pub fn list_mls_device_states(&self) -> Result<Vec<MlsDeviceStateEntry>> {
+        let root = self.root.join("mls-devices");
+        if !root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut entries = Vec::new();
+        for instance_entry in fs::read_dir(root)? {
+            let instance_entry = instance_entry?;
+            if !instance_entry.file_type()?.is_dir() {
+                continue;
+            }
+            let instance = instance_entry.file_name().to_string_lossy().to_string();
+            for state_entry in fs::read_dir(instance_entry.path())? {
+                let state_entry = state_entry?;
+                if !state_entry.file_type()?.is_file() {
+                    continue;
+                }
+                let filename = state_entry.file_name().to_string_lossy().to_string();
+                let Some(device_id) = filename.strip_suffix(".json") else {
+                    continue;
+                };
+                entries.push(MlsDeviceStateEntry {
+                    instance: instance.clone(),
+                    device_id: device_id.to_string(),
+                    path: state_entry.path(),
+                });
+            }
+        }
+        entries.sort_by(|left, right| {
+            left.instance
+                .cmp(&right.instance)
+                .then(left.device_id.cmp(&right.device_id))
+        });
+        Ok(entries)
+    }
+
     fn bluesky_path(&self) -> PathBuf {
         self.root.join("bluesky.json")
     }
@@ -476,55 +441,6 @@ mod tests {
     }
 
     #[test]
-    fn stores_e2ee_private_keys_under_instance_and_device() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = ConfigStore::new(dir.path().to_path_buf());
-
-        let path = store
-            .save_e2ee_private_key(
-                "https://social.dais.social/",
-                "laptop:2026",
-                "private-key",
-                false,
-            )
-            .unwrap();
-
-        assert!(path.ends_with("e2ee/social.dais.social/laptop:2026.pkcs8.pem"));
-        assert_eq!(
-            store
-                .load_e2ee_private_key("https://social.dais.social", "laptop:2026")
-                .unwrap(),
-            "private-key"
-        );
-        let entries = store.list_e2ee_private_keys().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].instance, "social.dais.social");
-        assert_eq!(entries[0].device_id, "laptop:2026");
-    }
-
-    #[test]
-    fn refuses_to_overwrite_e2ee_private_key_without_force() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = ConfigStore::new(dir.path().to_path_buf());
-        store
-            .save_e2ee_private_key("https://social.skpt.cl", "phone", "one", false)
-            .unwrap();
-
-        assert!(store
-            .save_e2ee_private_key("https://social.skpt.cl", "phone", "two", false)
-            .is_err());
-        store
-            .save_e2ee_private_key("https://social.skpt.cl", "phone", "two", true)
-            .unwrap();
-        assert_eq!(
-            store
-                .load_e2ee_private_key("https://social.skpt.cl", "phone")
-                .unwrap(),
-            "two"
-        );
-    }
-
-    #[test]
     fn stores_mls_group_state_under_instance_device_and_group() {
         let dir = tempfile::tempdir().unwrap();
         let store = ConfigStore::new(dir.path().to_path_buf());
@@ -582,6 +498,65 @@ mod tests {
         assert!(store
             .load_mls_device_state("https://social.dais.social", "other-device")
             .is_err());
+        let entries = store.list_mls_device_states().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].instance, "social.dais.social");
+        assert_eq!(entries[0].device_id, "mac:2026");
+    }
+
+    #[test]
+    fn mls_device_state_is_scoped_to_its_instance() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let device_state = |instance: &str, device_id: &str| MlsDeviceStateFile {
+            version: 1,
+            instance_url: instance.to_string(),
+            local_actor_id: format!("{instance}/users/social"),
+            device_id: device_id.to_string(),
+            serialized_device_state: format!("serialized-state-for-{device_id}"),
+            updated_at: "2026-07-01T00:00:00Z".to_string(),
+        };
+
+        store
+            .save_mls_device_state(
+                &device_state("https://social.dais.social", "dais-device"),
+                false,
+            )
+            .unwrap();
+        store
+            .save_mls_device_state(
+                &device_state("https://social.skpt.cl", "skpt-device"),
+                false,
+            )
+            .unwrap();
+
+        // A device belongs to exactly one instance. Reading it through another
+        // instance must fail rather than hand back private MLS key material
+        // that instance was never entitled to.
+        assert!(store
+            .load_mls_device_state("https://social.dais.social", "dais-device")
+            .is_ok());
+        assert!(store
+            .load_mls_device_state("https://social.dais.social", "skpt-device")
+            .is_err());
+        assert!(store
+            .load_mls_device_state("https://social.skpt.cl", "dais-device")
+            .is_err());
+
+        let mut listed = store
+            .list_mls_device_states()
+            .unwrap()
+            .into_iter()
+            .map(|entry| (entry.instance, entry.device_id))
+            .collect::<Vec<_>>();
+        listed.sort();
+        assert_eq!(
+            listed,
+            vec![
+                ("social.dais.social".to_string(), "dais-device".to_string()),
+                ("social.skpt.cl".to_string(), "skpt-device".to_string()),
+            ]
+        );
     }
 
     #[test]
