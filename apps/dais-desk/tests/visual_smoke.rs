@@ -43,6 +43,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     capture(&window, &output_dir, "home-toolbar-tooltip")?;
     window.set_debug_show_toolbar_tooltip_for("".into());
 
+    // Same rationale as the tooltip above: row meta (visibility/protocol/
+    // time/reaction counts) only shows on real hover, so it's verified
+    // through this screenshot-only override (#370).
+    window.set_debug_show_row_meta(true);
+    capture(&window, &output_dir, "home-row-meta-hover")?;
+    window.set_debug_show_row_meta(false);
+
     set_smoke_size(&window, 920.0, 660.0);
     assert!(
         window.get_inspector_compact(),

@@ -15,6 +15,7 @@ RELEASE_GATE_FAILURE=0
 REQUIRED_SCREENSHOTS=(
   home
   home-toolbar-tooltip
+  home-row-meta-hover
   home-min-width
   home-wide
   home-compose-media

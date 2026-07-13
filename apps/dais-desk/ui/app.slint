@@ -339,6 +339,12 @@ component RowCard inherits Rectangle {
     property <bool> is-reading-source: entry.chip == "Watch" || entry.chip == "Source";
     property <bool> has-actions: entry.primary != "" || entry.secondary != "";
     property <bool> show-actions: selected && has-actions;
+    // Hover has no headless test signal (the testing backend has no
+    // pointer-move mock, and take_snapshot() doesn't capture hover state
+    // either) — force-meta-preview lets a screenshot show it anyway
+    // without changing real runtime behavior, which stays hover-driven.
+    in property <bool> force-meta-preview: false;
+    property <bool> show-meta: touch-area.has-hover || root.force-meta-preview;
     callback open(string);
     callback action(string, string);
 
@@ -368,6 +374,16 @@ component RowCard inherits Rectangle {
         height: root.height;
         border-radius: 3px;
         background: root.entry.tone == "danger" ? #c23b3b : root.entry.tone == "warn" ? #c98a18 : root.entry.tone == "ok" ? #23814b : #7c8da3;
+    }
+
+    // Declared before the content layout so the Chip and action Buttons
+    // added later in the tree sit on top for hit-testing and keep handling
+    // their own clicks — this TouchArea only needs to catch background
+    // clicks and drive hover state for the meta-on-hover behavior below.
+    touch-area := TouchArea {
+        clicked => {
+            root.open(root.entry.id);
+        }
     }
 
     VerticalLayout {
@@ -455,7 +471,10 @@ component RowCard inherits Rectangle {
             overflow: elide;
         }
 
-        if root.entry.meta != "" && (root.is-post || root.is-message || root.is-conversation) : Text {
+        // Meta (visibility/protocol/time/reaction counts) only appears on
+        // hover — content stands alone until the reader is actually looking
+        // at this row, rather than always occupying footer space.
+        if root.entry.meta != "" && (root.is-post || root.is-message || root.is-conversation) && root.show-meta : Text {
             text: root.entry.meta;
             color: root.entry.tone == "warn" ? #8a5a0a : root.entry.tone == "danger" ? #8a1f1f : #6b7684;
             font-size: 11px;
@@ -612,6 +631,9 @@ export component MainWindow inherits Window {
     // icon-name) without a real pointer hover, which the headless testing
     // backend cannot simulate.
     in property <string> debug-show-toolbar-tooltip-for;
+    // Test/screenshot-only: forces every row's meta (visibility/protocol/
+    // time/reaction counts) footer visible without a real pointer hover.
+    in property <bool> debug-show-row-meta;
     in-out property <bool> inspector-compact;
     in-out property <bool> find-compact-form;
     in-out property <string> command-text;
@@ -1280,6 +1302,7 @@ export component MainWindow inherits Window {
                                 for row in rows : RowCard {
                                     entry: row;
                                     selected: row.id == root.selected-row;
+                                    force-meta-preview: root.debug-show-row-meta;
                                     open(id) => {
                                         root.select-row(id);
                                     }

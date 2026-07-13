@@ -95,6 +95,31 @@ fn toolbar_command_buttons_surface_their_keyboard_shortcut_in_accessible_descrip
     }
 }
 
+/// Regression coverage for #370: RowCard gained a background TouchArea
+/// (driving the meta-on-hover behavior) declared before its content layout
+/// specifically so the Chip and action Buttons added later stay on top for
+/// hit-testing. Confirms a real simulated click still reaches the row's own
+/// Save button rather than being swallowed by that background TouchArea.
+#[test]
+fn selected_row_action_button_click_is_not_swallowed_by_the_row_background() {
+    i_slint_backend_testing::init_no_event_loop();
+    let window = dais_desk::create_test_window().expect("test fixture window");
+    window.invoke_select_screen("today".into());
+    window.invoke_select_row("timeline:ada-week-friday-space-news".into());
+    slint::platform::update_timers_and_animations();
+
+    // Clicking the row's own Reply button navigates to compose — a real
+    // Button click, since the row's own accessible-action-default (which
+    // the background TouchArea also drives via `open()`) only changes
+    // selection, never the active screen.
+    click_label(&window, "Reply");
+    assert_eq!(
+        window.get_active_screen().as_str(),
+        "compose",
+        "clicking the row's own Reply button should have run the Reply row action, not just reopened the row"
+    );
+}
+
 #[test]
 fn navigates_primary_workflows_through_accessible_controls() {
     i_slint_backend_testing::init_no_event_loop();
