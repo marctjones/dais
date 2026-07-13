@@ -518,10 +518,16 @@ mod tests {
         };
 
         store
-            .save_mls_device_state(&device_state("https://social.dais.social", "dais-device"), false)
+            .save_mls_device_state(
+                &device_state("https://social.dais.social", "dais-device"),
+                false,
+            )
             .unwrap();
         store
-            .save_mls_device_state(&device_state("https://social.skpt.cl", "skpt-device"), false)
+            .save_mls_device_state(
+                &device_state("https://social.skpt.cl", "skpt-device"),
+                false,
+            )
             .unwrap();
 
         // A device belongs to exactly one instance. Reading it through another

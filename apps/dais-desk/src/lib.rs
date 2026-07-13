@@ -13986,10 +13986,10 @@ mod tests {
         controller.select_screen("security");
         let rows = controller.rows_for_active_screen();
         assert!(rows.iter().any(|row| row.id.as_str() == "security:summary"));
-        assert!(rows.iter().any(
-            |row| row.id.as_str() == "e2ee-device:e2ee-device-local-mls"
-                && row.chip.as_str() == "Active"
-        ));
+        assert!(rows
+            .iter()
+            .any(|row| row.id.as_str() == "e2ee-device:e2ee-device-local-mls"
+                && row.chip.as_str() == "Active"));
         assert!(
             rows.iter()
                 .all(|row| !row.id.as_str().starts_with("mls-group:")),

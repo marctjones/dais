@@ -1864,7 +1864,11 @@ async fn print_owner_e2ee_recovery(args: &cli::OwnerApiArgs, store: &ConfigStore
             device.status,
             device.protocol,
             device.fingerprint,
-            if has_local_state { "present" } else { "missing" }
+            if has_local_state {
+                "present"
+            } else {
+                "missing"
+            }
         );
     }
 
@@ -2967,5 +2971,4 @@ mod tests {
             owner_mls_audience_group_id(&audience("close-friends", &[alice]), &after_remove)
         );
     }
-
 }
