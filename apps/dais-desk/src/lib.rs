@@ -12191,7 +12191,7 @@ mod tests {
             excerpt: Some("No external link in this excerpt.".into()),
             rights_policy_json: "{}".into(),
             read: false,
-        
+
             ..Default::default()
         });
         assert_eq!(row.primary.as_str(), "");
@@ -12207,7 +12207,7 @@ mod tests {
             excerpt: Some("See https://example.org/article for details.".into()),
             rights_policy_json: "{}".into(),
             read: false,
-        
+
             ..Default::default()
         });
         assert_eq!(row.primary.as_str(), "Open link");
@@ -12223,7 +12223,7 @@ mod tests {
             excerpt: None,
             rights_policy_json: "{}".into(),
             read: false,
-        
+
             ..Default::default()
         });
         assert_eq!(row.primary.as_str(), "Open link");
@@ -12247,7 +12247,7 @@ mod tests {
             })
             .to_string(),
             read: false,
-        
+
             ..Default::default()
         });
         assert_eq!(row.chip.as_str(), "Private reader");
@@ -12325,7 +12325,7 @@ mod tests {
             excerpt: None,
             rights_policy_json: "{}".into(),
             read: false,
-        
+
             ..Default::default()
         });
         controller.select_screen("watches");

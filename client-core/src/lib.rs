@@ -410,11 +410,8 @@ impl OwnerApiClient {
     /// automatically every 30 minutes on the server; this triggers it
     /// on demand (useful right after following someone, and for smoke tests).
     pub async fn sync_follow_watches(&self) -> ClientResult<OwnerFollowWatchSyncResult> {
-        self.post(
-            "/api/dais/owner/watches/sync-follows",
-            &OwnerEmptyBody {},
-        )
-        .await
+        self.post("/api/dais/owner/watches/sync-follows", &OwnerEmptyBody {})
+            .await
     }
 
     pub async fn moderation(&self) -> ClientResult<ModerationState> {
