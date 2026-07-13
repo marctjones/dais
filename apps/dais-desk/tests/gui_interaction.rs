@@ -58,6 +58,43 @@ fn every_interactive_control_has_an_accessible_label() {
     }
 }
 
+/// Regression coverage for #369: the toolbar's keyboard shortcuts (already
+/// wired via `KeyBinding` — see app.slint's Cmd/Ctrl+N and Cmd/Ctrl+R) were
+/// undiscoverable, since nothing in the UI surfaced them. A hover tooltip
+/// can't be asserted headlessly (the testing backend has no hover/pointer-
+/// move mock and `take_snapshot()` doesn't capture hover state either), so
+/// this asserts the one surface that is both real and testable: the
+/// shortcut is spelled out in each button's `accessible-description`, which
+/// screen readers and other assistive tech already read for these controls.
+#[test]
+fn toolbar_command_buttons_surface_their_keyboard_shortcut_in_accessible_description() {
+    i_slint_backend_testing::init_no_event_loop();
+    let window = dais_desk::create_test_window().expect("test fixture window");
+
+    // Home mode's screen_nav also exposes a same-labelled "Compose" button
+    // (a different control, no shortcut of its own) — the toolbar and nav
+    // controls share an accessible-label, so check across every match for
+    // that label rather than assuming an index or uniqueness.
+    let expectations: &[(&str, &str)] = &[("Compose", "⌘N"), ("Sync", "⌘R")];
+    for (label, shortcut) in expectations {
+        let matches: Vec<_> = ElementHandle::find_by_accessible_label(&window, label).collect();
+        assert!(
+            !matches.is_empty(),
+            "expected to find a toolbar control labelled {label:?}"
+        );
+        assert!(
+            matches
+                .iter()
+                .any(|m| m.accessible_description().is_some_and(|d| d.contains(shortcut))),
+            "no control labelled {label:?} mentioned its shortcut {shortcut:?} in accessible-description; found: {:?}",
+            matches
+                .iter()
+                .map(|m| m.accessible_description())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
 #[test]
 fn navigates_primary_workflows_through_accessible_controls() {
     i_slint_backend_testing::init_no_event_loop();

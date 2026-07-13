@@ -955,7 +955,7 @@ export component MainWindow inherits Window {
                     ToolbarCommandButton {
                         symbol: "";
                         label: "Find";
-                        description: "Run the command or search text";
+                        description: "Run the command or search text. Jump to Find with ⌘F.";
                         activate => {
                             root.run-command(root.command-text);
                         }
@@ -964,7 +964,7 @@ export component MainWindow inherits Window {
                     ToolbarCommandButton {
                         symbol: "";
                         label: "Compose";
-                        description: "Write a new post";
+                        description: "Write a new post (⌘N).";
                         activate => {
                             root.select-screen("compose");
                         }
@@ -973,7 +973,7 @@ export component MainWindow inherits Window {
                     ToolbarCommandButton {
                         symbol: "";
                         label: "Sync";
-                        description: "Refresh posts and conversations";
+                        description: "Refresh posts and conversations (⌘R).";
                         button-width: 62px;
                         activate => {
                             root.refresh();
