@@ -304,9 +304,15 @@ component RowCard inherits Rectangle {
     callback open(string);
     callback action(string, string);
 
-    height: root.is-post ? (root.show-actions ? 168px : 128px) : root.is-notification ? (root.show-actions ? 154px : 126px) : root.is-message || root.is-conversation ? (root.show-actions ? 126px : 104px) : root.is-relationship ? (root.show-actions ? 126px : 104px) : (root.show-actions ? 136px : 108px);
+    // Base heights are still tuned per row kind (posts show more content than
+    // a notification or a relationship card) but the action-row addition is
+    // standardized to the actual action row's footprint (34px button height +
+    // 7px layout spacing) instead of varying per kind (#370) — the previous
+    // per-kind deltas didn't consistently match the button row's real size.
+    property <length> base-height: root.is-post ? 128px : root.is-notification ? 126px : root.is-message || root.is-conversation ? 104px : root.is-relationship ? 104px : 108px;
+    height: root.show-actions ? root.base-height + 41px : root.base-height;
     vertical-stretch: 0;
-    border-radius: root.is-post ? 8px : 7px;
+    border-radius: 8px;
     border-width: selected ? 1px : 0px;
     border-color: #5f94ca;
     background: selected ? #eef6ff : root.is-notification && entry.tone == "warn" ? #fffaf0 : root.is-conversation ? #fbfcff : #ffffff;
@@ -327,8 +333,8 @@ component RowCard inherits Rectangle {
     }
 
     VerticalLayout {
-        padding: root.is-post ? 14px : 12px;
-        spacing: root.is-post ? 8px : root.is-message || root.is-conversation ? 6px : 7px;
+        padding: 12px;
+        spacing: 7px;
 
         HorizontalLayout {
             spacing: 10px;
