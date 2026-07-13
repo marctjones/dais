@@ -1719,6 +1719,14 @@ async fn send_owner_e2ee_mls_group_message(
     println!("audience_name={}", audience.name);
     println!("member_count={}", plan.member_count);
     println!("recipient_device_count={}", plan.devices.len());
+    println!(
+        "recipient_devices={}",
+        plan.devices
+            .iter()
+            .map(|device| device.device_id.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     println!("mls_group={}", sender_state.group_id);
     println!("mls_epoch={}", sender_state.epoch);
     println!("wire_material=daisEncryptedMessage-v2-mls-rfc9420");
