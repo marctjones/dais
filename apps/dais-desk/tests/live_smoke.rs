@@ -7,14 +7,14 @@
 //! Skipped by default (it needs live network access and a configured
 //! account); opt in with `DAIS_DESK_LIVE_SMOKE=1`.
 //!
-//! Pixel snapshot capture (`take_snapshot`) reliably renders blank from this
-//! entry point for reasons not yet root-caused — `visual_smoke.rs`'s
-//! identical `create_test_window` + resize + show sequence renders real
-//! content, so something specific to this binary's window setup is at
-//! fault, not the renderer generally. Rather than write a misleadingly
-//! blank screenshot, this only asserts on the real signal that matters:
-//! the live account's actual loaded state (status message, account label,
-//! row count), read directly from the window's properties.
+//! Pixel snapshot capture (`take_snapshot`) previously looked blank from this
+//! entry point (issue #364). Root cause: the snapshot buffer comes back with
+//! alpha=0 on every pixel even though the RGB data is real content —
+//! `visual_smoke.rs`'s `capture()` helper already works around this (if more
+//! than half the pixels are fully transparent, force alpha to 255 before
+//! saving); this entry point just wasn't doing that step yet. With the same
+//! fixup applied here, it renders real content like every other headless
+//! window. Screenshot capture is opt-in via `DAIS_DESK_SCREENSHOT_DIR`.
 
 use slint::{ComponentHandle, Model};
 
@@ -52,6 +52,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("status: {status}");
     println!("row count: {row_count}");
 
+    if let Some(dir) = std::env::var_os("DAIS_DESK_SCREENSHOT_DIR") {
+        capture(&window, &std::path::PathBuf::from(dir), "live-home")?;
+    }
+
     let looks_like_fallback =
         status.contains("local preview data") || status.contains("401") || status.contains("403");
     if looks_like_fallback {
@@ -69,5 +73,40 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     window.hide()?;
+    Ok(())
+}
+
+fn capture(
+    window: &dais_desk::MainWindow,
+    output_dir: &std::path::Path,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(output_dir)?;
+    slint::platform::update_timers_and_animations();
+    let snapshot = window.window().take_snapshot()?;
+    let width = snapshot.width();
+    let height = snapshot.height();
+    let mut bytes = snapshot.as_bytes().to_vec();
+
+    // The software renderer's snapshot buffer can come back with alpha=0 on
+    // every pixel even when the RGB data is real content (issue #364) — force
+    // opaque before saving so the PNG isn't misleadingly blank.
+    let transparent_pixels = bytes.chunks_exact(4).filter(|pixel| pixel[3] == 0).count();
+    if transparent_pixels * 2 > width as usize * height as usize {
+        for pixel in bytes.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+    }
+
+    let path = output_dir.join(format!("{name}.png"));
+    image::save_buffer_with_format(
+        &path,
+        &bytes,
+        width,
+        height,
+        image::ColorType::Rgba8,
+        image::ImageFormat::Png,
+    )?;
+    println!("wrote {}", path.display());
     Ok(())
 }
