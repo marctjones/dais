@@ -440,20 +440,26 @@ component RowCard inherits Rectangle {
             tone: root.entry.tone;
         }
 
-        if root.entry.meta != "" && (root.is-post || root.is-message || root.is-conversation) : Text {
-            text: root.entry.meta;
-            color: root.entry.tone == "warn" ? #8a5a0a : root.entry.tone == "danger" ? #8a1f1f : #3f6b50;
-            font-size: 12px;
-            font-weight: 700;
-            overflow: elide;
-        }
-
+        // Post-first hierarchy (#370): content reads immediately after the
+        // byline, the way a social client shows it — visibility/protocol/time
+        // and reply-reaction counts (all bundled into `meta`) move to a
+        // compact footer below the content instead of sitting above it,
+        // competing with the byline for attention before the reader has seen
+        // what the post actually says.
         Text {
             text: root.entry.detail;
             color: #27313f;
             font-size: root.is-post || root.is-message || root.is-conversation ? 14px : 13px;
             wrap: word-wrap;
             max-height: root.is-post ? 64px : root.is-message || root.is-conversation ? 42px : 48px;
+            overflow: elide;
+        }
+
+        if root.entry.meta != "" && (root.is-post || root.is-message || root.is-conversation) : Text {
+            text: root.entry.meta;
+            color: root.entry.tone == "warn" ? #8a5a0a : root.entry.tone == "danger" ? #8a1f1f : #6b7684;
+            font-size: 11px;
+            font-weight: 600;
             overflow: elide;
         }
 
@@ -489,14 +495,20 @@ component InspectorRow inherits Rectangle {
     in property <UiRow> entry;
     property <bool> expanded: true;
     property <bool> has-actions: root.entry.primary != "" || root.entry.secondary != "";
+    // Distinguishes the owner's own reply within a conversation thread
+    // (#370's "clearer thread hierarchy" ask) from the peer's messages,
+    // reusing the tinted-selection language already used elsewhere rather
+    // than inventing new chat-bubble alignment in a component shared by
+    // every other inspector section (settings, security, post detail, ...).
+    property <bool> is-own-message: root.entry.kind == "message" && root.entry.title == "You";
     callback action(string, string);
 
     height: root.expanded ? (root.has-actions ? 118px : 86px) : 42px;
     vertical-stretch: 0;
     border-radius: 5px;
-    background: root.expanded ? #ffffff : #f8fafc;
+    background: !root.expanded ? #f8fafc : root.is-own-message ? #eef6ff : #ffffff;
     border-width: 1px;
-    border-color: #e3e7ee;
+    border-color: root.is-own-message ? #bfd7f2 : #e3e7ee;
     accessible-role: button;
     accessible-label: root.entry.title;
     accessible-description: root.expanded ? root.entry.detail : "Collapsed inspector section";
