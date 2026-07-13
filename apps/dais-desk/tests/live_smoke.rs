@@ -23,6 +23,16 @@
 //! saving); this entry point just wasn't doing that step yet. With the same
 //! fixup applied here, it renders real content like every other headless
 //! window. Screenshot capture is opt-in via `DAIS_DESK_SCREENSHOT_DIR`.
+//!
+//! Beyond navigation reachability, also verifies real *behavior* against the
+//! live account (#371): a real encrypted conversation actually renders
+//! decrypted plaintext inline rather than a ciphertext/placeholder fallback,
+//! and replying through the real row action preserves the audience context
+//! (direct replies keep Direct visibility and their recipient) rather than
+//! resetting to a generic default. Both checks skip (rather than fail) when
+//! the live account simply doesn't have the relevant data — they exist to
+//! catch Desk silently losing context that was present, not to require any
+//! particular fixture shape from the account under test.
 
 use i_slint_backend_testing::ElementHandle;
 use slint::platform::PointerEventButton;
@@ -124,8 +134,114 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
+    check_conversation_decrypts_to_plaintext(&window)?;
+    check_reply_preserves_audience_context(&window)?;
+
     window.hide()?;
     Ok(())
+}
+
+fn check_conversation_decrypts_to_plaintext(
+    window: &dais_desk::MainWindow,
+) -> Result<(), Box<dyn std::error::Error>> {
+    window.invoke_select_mode("home".into());
+    window.invoke_select_screen("inbox".into());
+    slint::platform::update_timers_and_animations();
+
+    let rows = ui_rows(window.get_rows());
+    let Some(conversation_row) = rows.iter().find(|row| row.id.starts_with("conversation:")) else {
+        println!(
+            "no conversation rows on the live account; skipping decrypted-plaintext check"
+        );
+        return Ok(());
+    };
+    let row_id = conversation_row.id.to_string();
+
+    window.invoke_select_row(row_id.clone().into());
+    slint::platform::update_timers_and_animations();
+
+    let combined = ui_rows(window.get_inspector_rows())
+        .iter()
+        .map(|row| format!("{}\n{}\n{}\n{}", row.title, row.subtitle, row.detail, row.meta))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if combined.contains("No local MLS state found") {
+        println!(
+            "conversation {row_id} has no local MLS state on this device; skipping decrypted-plaintext check"
+        );
+        return Ok(());
+    }
+
+    for signal in [
+        "could not be decrypted",
+        "Unsupported encrypted message protocol",
+        "decryption failed",
+    ] {
+        if combined.contains(signal) {
+            return Err(format!(
+                "conversation {row_id} failed to render decrypted plaintext: {combined}"
+            )
+            .into());
+        }
+    }
+    if combined.trim().is_empty() {
+        return Err(format!("conversation {row_id} inspector had no content").into());
+    }
+    Ok(())
+}
+
+fn check_reply_preserves_audience_context(
+    window: &dais_desk::MainWindow,
+) -> Result<(), Box<dyn std::error::Error>> {
+    window.invoke_select_mode("home".into());
+    window.invoke_select_screen("inbox".into());
+    slint::platform::update_timers_and_animations();
+
+    let rows = ui_rows(window.get_rows());
+    let Some(reply_row) = rows
+        .iter()
+        .find(|row| row.primary.as_str() == "Reply" || row.secondary.as_str() == "Reply")
+    else {
+        println!("no row in Inbox supports Reply on the live account; skipping reply-audience check");
+        return Ok(());
+    };
+    let row_id = reply_row.id.to_string();
+    let expects_direct = row_id.starts_with("conversation:") || row_id.starts_with("dm:");
+
+    window.invoke_row_action(row_id.clone().into(), "Reply".into());
+    slint::platform::update_timers_and_animations();
+
+    if window.get_active_screen().as_str() != "compose" {
+        return Err(format!("replying to {row_id} did not navigate to compose").into());
+    }
+    let visibility = window.get_compose_visibility().to_string();
+    if !["public", "unlisted", "followers", "direct"].contains(&visibility.as_str()) {
+        return Err(format!(
+            "replying to {row_id} produced an unexpected compose visibility {visibility:?}"
+        )
+        .into());
+    }
+    if expects_direct {
+        if visibility != "direct" {
+            return Err(format!(
+                "replying to direct conversation {row_id} should preserve Direct visibility, got {visibility:?}"
+            )
+            .into());
+        }
+        if window.get_compose_recipients().to_string().trim().is_empty() {
+            return Err(
+                format!("replying to direct conversation {row_id} lost its recipient").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn ui_rows(model: slint::ModelRc<dais_desk::UiRow>) -> Vec<dais_desk::UiRow> {
+    (0..model.row_count())
+        .filter_map(|index| model.row_data(index))
+        .collect()
 }
 
 fn looks_like_fallback(status: &str) -> bool {
