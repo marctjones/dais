@@ -21,7 +21,7 @@ REQUIRED_SCREENSHOTS=(
   home-inbox-notifications
   workflow-save-post
   home-today
-  home-conversations
+  home-inbox-conversations
   home-reading
   home-post-thread
   home-saved
@@ -117,6 +117,21 @@ else
     echo
     echo "SKIP: set \`RUN_PRIVATE_MODE_LOCAL_SMOKE=1\` with a running local server to execute \`scripts/test-private-mode-local.sh\`."
     echo "Required local inputs: \`BASE_URL\` defaults to \`http://localhost:8790\`; \`ACTOR\` defaults to \`social\`; \`ACTOR_URL\` defaults to \`https://social.dais.social/users/social\`."
+    echo
+  } >>"${REPORT_FILE}"
+fi
+if [[ -n "${DAIS_DESK_SETTINGS:-}" ]]; then
+  # #371: verify Desk against a real production/skpt account through real
+  # mode_nav()/screen_nav() click-through navigation, not select_screen
+  # shortcuts — this is what would have caught #365/#366-shaped regressions
+  # (whole screens silently unreachable while their own tests still passed).
+  run_cmd "Live Desk GUI navigation gate (production/skpt)" env DAIS_DESK_LIVE_SMOKE=1 DAIS_DESK_SCREENSHOT_DIR="${SCREENSHOT_DIR}" cargo test --manifest-path apps/dais-desk/Cargo.toml --test live_smoke
+else
+  {
+    echo "## Live Desk GUI navigation gate (production/skpt)"
+    echo
+    echo "SKIP: set \`DAIS_DESK_SETTINGS\` to a real production or skpt.cl owner-settings.json path to run this against a live account."
+    echo "Exercises every mode_nav()/screen_nav() button by real click and fails if any screen falls back to placeholder data (see #359, #371)."
     echo
   } >>"${REPORT_FILE}"
 fi

@@ -1,5 +1,6 @@
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::platform::PointerEventButton;
+use slint::Model;
 
 fn click_label(window: &dais_desk::MainWindow, label: &str) {
     let matches: Vec<_> = ElementHandle::find_by_accessible_label(window, label).collect();
@@ -237,6 +238,78 @@ fn repro_360_rendered_account_combobox_matches_active_account_on_every_cold_laun
                 .as_deref()
                 .is_some_and(|value| value.contains("Account A")),
             "iteration {iteration}: rendered ComboBox showed the inactive account instead"
+        );
+    }
+}
+
+fn nav_items(model: slint::ModelRc<dais_desk::NavItem>) -> Vec<(String, String)> {
+    model
+        .iter()
+        .map(|item| (item.id.to_string(), item.title.to_string()))
+        .collect()
+}
+
+/// #371: navigate the way a real user does — click every `mode_nav()` button,
+/// then click every `screen_nav()` button it exposes — instead of jumping
+/// straight to a screen id via `invoke_select_screen`. This is the mechanism
+/// that would have caught #365/#366 (Server mode and several People screens
+/// silently unreachable while their own tests, which called
+/// `invoke_select_screen` directly, kept passing).
+#[test]
+fn every_mode_and_screen_nav_button_is_reachable_by_clicking_through() {
+    i_slint_backend_testing::init_no_event_loop();
+    let window = dais_desk::create_test_window().expect("test fixture window");
+
+    let modes = nav_items(window.get_mode_nav());
+    assert!(!modes.is_empty(), "expected at least one entry in mode_nav()");
+
+    let mut visited_screens = Vec::new();
+
+    for (mode_id, mode_title) in &modes {
+        click_label(&window, mode_title);
+        assert_eq!(
+            window.get_active_mode().as_str(),
+            mode_id.as_str(),
+            "clicking mode nav button {mode_title:?} did not navigate to mode {mode_id:?}"
+        );
+
+        let screens = nav_items(window.get_screen_nav());
+        assert!(
+            !screens.is_empty(),
+            "mode {mode_id:?} exposed no screens via screen_nav()"
+        );
+
+        for (screen_id, screen_title) in &screens {
+            click_label(&window, screen_title);
+            assert_eq!(
+                window.get_active_screen().as_str(),
+                screen_id.as_str(),
+                "clicking screen nav button {screen_title:?} in mode {mode_id:?} did not navigate to screen {screen_id:?}"
+            );
+            assert_eq!(
+                window.get_active_mode().as_str(),
+                mode_id.as_str(),
+                "navigating to screen {screen_id:?} unexpectedly changed the active mode"
+            );
+            visited_screens.push(screen_id.clone());
+        }
+    }
+
+    // Screens that exist in the row-rendering code but aren't exposed by any
+    // mode_nav()/screen_nav() entry would silently vanish from this list
+    // instead of failing loudly — assert the ones the design docs describe
+    // are all present, so a future screen_nav edit that drops one is caught
+    // here rather than discovered by manual review months later.
+    let expected_reachable = [
+        "today", "inbox", "compose", "posts", "saved", "find", "friends", "followers",
+        "following", "watches", "audience", "blocks", "health", "deliveries", "moderation",
+        "security", "identity", "accounts", "settings", "stats",
+    ];
+    for screen in expected_reachable {
+        assert!(
+            visited_screens.iter().any(|id| id == screen),
+            "expected screen {screen:?} to be reachable via real mode_nav/screen_nav navigation, \
+             but it was not in {visited_screens:?}"
         );
     }
 }

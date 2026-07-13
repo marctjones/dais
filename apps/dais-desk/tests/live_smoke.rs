@@ -7,6 +7,14 @@
 //! Skipped by default (it needs live network access and a configured
 //! account); opt in with `DAIS_DESK_LIVE_SMOKE=1`.
 //!
+//! Navigates through every mode_nav()/screen_nav() button by real accessible
+//! click (see #371), the same way `gui_interaction.rs`'s headless-fixture
+//! reachability test does, instead of jumping straight to a screen id —
+//! catches a screen that's reachable against fixture data (headless tests
+//! pass) but silently falls back to placeholder content or errors against a
+//! real account (a class of bug no assertion against fixture data alone can
+//! catch).
+//!
 //! Pixel snapshot capture (`take_snapshot`) previously looked blank from this
 //! entry point (issue #364). Root cause: the snapshot buffer comes back with
 //! alpha=0 on every pixel even though the RGB data is real content —
@@ -16,6 +24,8 @@
 //! fixup applied here, it renders real content like every other headless
 //! window. Screenshot capture is opt-in via `DAIS_DESK_SCREENSHOT_DIR`.
 
+use i_slint_backend_testing::ElementHandle;
+use slint::platform::PointerEventButton;
 use slint::{ComponentHandle, Model};
 
 fn main() {
@@ -34,6 +44,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var_os("SLINT_BACKEND").is_none() {
         std::env::set_var("SLINT_BACKEND", "software");
     }
+    i_slint_backend_testing::init_no_event_loop();
 
     let settings_path = dais_desk::default_settings_path();
     println!("loading live account from {}", settings_path.display());
@@ -56,12 +67,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         capture(&window, &std::path::PathBuf::from(dir), "live-home")?;
     }
 
-    let looks_like_fallback =
-        status.contains("local preview data") || status.contains("401") || status.contains("403");
-    if looks_like_fallback {
+    // `showing_fixture_data` (issue #359) reflects `self.data.api_error`,
+    // which only changes on an actual refresh() — unlike `status_message`,
+    // which `select_screen()` unconditionally resets to "Ready." on every
+    // navigation. Checking `status_message` per-screen below would silently
+    // never catch anything past the first screen; `showing_fixture_data` is
+    // the signal that actually persists across real navigation.
+    if window.get_showing_fixture_data() || looks_like_fallback(&status) {
         return Err(format!(
             "Desk fell back to local preview data instead of loading the live account \
-             (account={account:?}): {status}"
+             (account={account:?}): {}",
+            window.get_fixture_data_reason()
         )
         .into());
     }
@@ -72,7 +88,64 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
+    let mut broken_screens = Vec::new();
+    for (mode_id, mode_title) in nav_items(window.get_mode_nav()) {
+        click(&window, &mode_title)?;
+        if window.get_active_mode().as_str() != mode_id {
+            broken_screens.push(format!(
+                "mode nav button {mode_title:?} did not navigate to mode {mode_id:?}"
+            ));
+            continue;
+        }
+
+        for (screen_id, screen_title) in nav_items(window.get_screen_nav()) {
+            click(&window, &screen_title)?;
+            if window.get_active_screen().as_str() != screen_id {
+                broken_screens.push(format!(
+                    "screen nav button {screen_title:?} in mode {mode_id:?} did not navigate to screen {screen_id:?}"
+                ));
+                continue;
+            }
+            if window.get_showing_fixture_data() {
+                broken_screens.push(format!(
+                    "{mode_id}/{screen_id}: fell back to placeholder data after real navigation: {}",
+                    window.get_fixture_data_reason()
+                ));
+            }
+        }
+    }
+
+    if !broken_screens.is_empty() {
+        return Err(format!(
+            "real click-through navigation found {} broken screen(s):\n{}",
+            broken_screens.len(),
+            broken_screens.join("\n")
+        )
+        .into());
+    }
+
     window.hide()?;
+    Ok(())
+}
+
+fn looks_like_fallback(status: &str) -> bool {
+    status.contains("local preview data") || status.contains("401") || status.contains("403")
+}
+
+fn nav_items(model: slint::ModelRc<dais_desk::NavItem>) -> Vec<(String, String)> {
+    model
+        .iter()
+        .map(|item| (item.id.to_string(), item.title.to_string()))
+        .collect()
+}
+
+fn click(window: &dais_desk::MainWindow, label: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let matches: Vec<_> = ElementHandle::find_by_accessible_label(window, label).collect();
+    if matches.is_empty() {
+        return Err(format!("expected to find an accessible control labelled {label:?}").into());
+    }
+    matches[0].mock_single_click(PointerEventButton::Left);
+    slint::platform::update_timers_and_animations();
     Ok(())
 }
 
