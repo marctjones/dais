@@ -537,6 +537,7 @@ export component MainWindow inherits Window {
     in property <[string]> account-options;
     in property <int> active-account-index;
     in property <string> active-account-label;
+    in property <string> active-account-initial;
     in property <string> active-account-url;
     in property <string> active-mode;
     in property <string> active-screen;
@@ -895,24 +896,52 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    VerticalLayout {
-                        width: 270px;
-                        padding-top: 7px;
-                        padding-bottom: 5px;
-                        spacing: 2px;
-                        Text {
-                            text: root.active-account-label;
-                            color: #344055;
-                            font-size: 11px;
-                            font-weight: 700;
-                            overflow: elide;
-                        }
-                        ComboBox {
-                            model: root.account-options;
-                            current-index: root.active-account-index;
-                            accessible-label: "Switch account, currently " + root.active-account-label;
-                            selected(option) => {
-                                root.switch-account-option(option);
+                    Rectangle {
+                        width: 216px;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #cfd8e3;
+                        background: #f4f7fb;
+
+                        HorizontalLayout {
+                            padding: 5px;
+                            spacing: 6px;
+
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 14px;
+                                background: #2f6fae;
+                                Text {
+                                    text: root.active-account-initial;
+                                    color: #ffffff;
+                                    font-size: 12px;
+                                    font-weight: 800;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: parent.width;
+                                    height: parent.height;
+                                }
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 1px;
+                                Text {
+                                    text: root.active-account-label;
+                                    color: #172033;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    overflow: elide;
+                                }
+                                ComboBox {
+                                    model: root.account-options;
+                                    current-index: root.active-account-index;
+                                    accessible-label: "Switch account, currently " + root.active-account-label;
+                                    selected(option) => {
+                                        root.switch-account-option(option);
+                                    }
+                                }
                             }
                         }
                     }

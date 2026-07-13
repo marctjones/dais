@@ -454,6 +454,7 @@ pub struct UiProjection {
     pub account_options: Vec<String>,
     pub active_account_index: i32,
     pub active_account_label: String,
+    pub active_account_initial: String,
     pub active_account_url: String,
     pub active_mode: String,
     pub active_screen: String,
@@ -1603,6 +1604,7 @@ impl DeskController {
                 .collect(),
             account_options,
             active_account_index,
+            active_account_initial: account_initial(&active_account_label),
             active_account_label,
             active_account_url,
             active_mode: self.active_mode.clone(),
@@ -6173,6 +6175,7 @@ fn apply_projection_data(window: &MainWindow, projection: UiProjection) {
     ));
     window.set_active_account_index(projection.active_account_index);
     window.set_active_account_label(s(&projection.active_account_label));
+    window.set_active_account_initial(s(&projection.active_account_initial));
     window.set_active_account_url(s(&projection.active_account_url));
     window.set_active_mode(s(&projection.active_mode));
     window.set_active_screen(s(&projection.active_screen));
@@ -6494,15 +6497,21 @@ fn account_row(account: OwnerAccountSummary, can_delete: bool) -> AccountRow {
 }
 
 fn account_option_text(account: &OwnerAccountSummary) -> String {
-    let token_status = if account.owner_token_present {
-        "token"
+    let host = compact_url(&account.instance_url);
+    if account.owner_token_present {
+        format!("{} · {host}", account.label)
     } else {
-        "preview"
-    };
-    format!(
-        "{} - {} ({token_status})",
-        account.label, account.instance_url
-    )
+        format!("{} · {host} · needs token", account.label)
+    }
+}
+
+fn account_initial(label: &str) -> String {
+    label
+        .trim()
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_string())
 }
 
 #[derive(Clone, Debug)]
