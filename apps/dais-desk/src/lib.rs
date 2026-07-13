@@ -3808,7 +3808,6 @@ impl DeskController {
     fn rows_for_active_screen_for_projection(&self) -> Vec<UiRow> {
         match self.active_screen.as_str() {
             "today" => self.home_today_rows(),
-            "reading" => self.reading_rows(),
             "inbox" => self.inbox_rows(),
             "compose" => self.compose_context_rows(),
             "posts" => self.post_rows(),
@@ -3980,7 +3979,6 @@ impl DeskController {
     fn title_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
             "today" => "Feed".into(),
-            "reading" => "Reading".into(),
             "inbox" => "Inbox".into(),
             "compose" => "Compose".into(),
             "posts" => "My Posts".into(),
@@ -4008,9 +4006,6 @@ impl DeskController {
     fn subtitle_for_active_screen(&self) -> String {
         match self.active_screen.as_str() {
             "today" => "Latest posts and replies from people you know.".into(),
-            "reading" => {
-                "Posts from followed accounts, private watches, and reading sources.".into()
-            }
             "inbox" => {
                 "Replies, mentions, reactions, follow requests, and direct conversations.".into()
             }
@@ -4193,52 +4188,6 @@ impl DeskController {
                 .collect::<Vec<_>>(),
         );
         rows.sort_by(|left, right| right.subtitle.cmp(&left.subtitle));
-        rows
-    }
-
-    fn reading_rows(&self) -> Vec<UiRow> {
-        // Timeline posts, watch items, and source items each arrive as
-        // separate lists; merged here into one chronological stream rather
-        // than three concatenated blocks, so a newly followed account's post
-        // lands next to the timeline post it's actually contemporary with
-        // instead of always trailing at the end. Items with no recorded time
-        // (recency key "") sort last as a group, in their original relative
-        // order (`sort_by` is stable) — home timeline, then watches, then
-        // sources — matching the previous concatenation order as a fallback.
-        let mut ranked: Vec<(String, UiRow)> = self
-            .data
-            .snapshot
-            .home_timeline
-            .iter()
-            .map(|post| {
-                (
-                    post.published_at.clone().unwrap_or_default(),
-                    reading_timeline_row(post),
-                )
-            })
-            .collect();
-        ranked.extend(self.data.watches.items.iter().map(|item| {
-            (
-                reading_item_recency_key(item),
-                reading_source_item_row(item, "Watched public post", "Watch"),
-            )
-        }));
-        ranked.extend(self.data.sources.items.iter().map(|item| {
-            (
-                reading_item_recency_key(item),
-                reading_source_item_row(item, "Source post", "Source"),
-            )
-        }));
-        ranked.sort_by(|left, right| right.0.cmp(&left.0));
-        let mut rows: Vec<UiRow> = ranked.into_iter().map(|(_, row)| row).collect();
-        if rows.is_empty() {
-            rows.push(empty_state_row(
-                "reading:empty",
-                "No reading stream yet",
-                "Follow an account, add a private Watch, or add an RSS/Atom source to populate this stream.",
-                "Find people",
-            ));
-        }
         rows
     }
 
@@ -6738,12 +6687,6 @@ fn timeline_row(post: &OwnerTimelinePost) -> UiRow {
     )
 }
 
-fn reading_timeline_row(post: &OwnerTimelinePost) -> UiRow {
-    let mut row = timeline_row(post);
-    row.subtitle = s(&format!("Following · {}", row.subtitle));
-    row
-}
-
 fn post_row(post: &OwnerPost) -> UiRow {
     let title = post.title.as_deref().unwrap_or("My post");
     let indicator = if post.encrypted {
@@ -8784,55 +8727,6 @@ fn source_item_row(item: &SourceItem) -> UiRow {
     )
 }
 
-/// Recency key for chronologically merging a watch/source item into
-/// `reading_rows`. Prefers the origin's own publish time; falls back to when
-/// dais fetched it, since some feeds (and older cached items) don't carry a
-/// reliable publish timestamp. Both fields are stored as they arrive from
-/// their source protocol (RFC 3339 for ActivityPub/Bluesky, D1's
-/// `datetime('now')` shape for fetched_at) — lexical comparison sorts either
-/// form correctly on its own; the only imprecision is a tie between the two
-/// formats landing on the exact same date, an acceptable rough edge for a
-/// reading-order convenience rather than a correctness-critical property.
-fn reading_item_recency_key(item: &SourceItem) -> String {
-    item.published_at
-        .clone()
-        .or_else(|| item.fetched_at.clone())
-        .unwrap_or_default()
-}
-
-fn reading_source_item_row(item: &SourceItem, subtitle: &str, chip: &str) -> UiRow {
-    let id = item
-        .canonical_url
-        .as_deref()
-        .map(|url| format!("url:{url}"))
-        .unwrap_or_else(|| format!("source-item:{}", item.id));
-    let open_link = has_openable_link([
-        item.canonical_url.as_deref(),
-        item.excerpt.as_deref(),
-        Some(&item.title),
-    ]);
-    let context = source_policy_summary(&item.rights_policy_json);
-    let detail = source_item_detail(
-        item.excerpt
-            .as_deref()
-            .or(item.canonical_url.as_deref())
-            .unwrap_or("Public reading item"),
-        &context,
-    );
-    row_with_kind(
-        "post",
-        &id,
-        &item.title,
-        subtitle,
-        &detail,
-        &format!("{} · {}", item.source_type, context.meta),
-        chip,
-        "info",
-        if open_link { "Open link" } else { "" },
-        "Save",
-    )
-}
-
 fn search_source_item_row(item: &dais_client_core::OwnerSearchSourceItem) -> UiRow {
     let id = item
         .canonical_url
@@ -8866,7 +8760,6 @@ fn search_source_item_row(item: &dais_client_core::OwnerSearchSourceItem) -> UiR
 
 struct SourcePolicySummary {
     chip: String,
-    meta: String,
     detail: String,
 }
 
@@ -8912,11 +8805,6 @@ fn source_policy_summary(policy_json: &str) -> SourcePolicySummary {
     } else {
         "Source item"
     };
-    let meta = if facts.is_empty() {
-        "source provenance".to_string()
-    } else {
-        facts.join(", ")
-    };
     let detail = if facts.is_empty() {
         "No special source-use policy was supplied.".to_string()
     } else {
@@ -8924,7 +8812,6 @@ fn source_policy_summary(policy_json: &str) -> SourcePolicySummary {
     };
     SourcePolicySummary {
         chip: chip.to_string(),
-        meta,
         detail,
     }
 }
@@ -11526,7 +11413,6 @@ mod tests {
         let mut controller = DeskController::fixture_for_tests();
         for screen in &[
             "today",
-            "reading",
             "inbox",
             "compose",
             "posts",
@@ -13507,95 +13393,6 @@ mod tests {
         assert!(!rows
             .iter()
             .any(|row| row.id.as_str() == "notification:notice-like-context"));
-    }
-
-    #[test]
-    fn reading_rows_include_followed_watched_and_source_posts() {
-        let controller = DeskController::fixture_for_tests();
-        let rows = controller.reading_rows();
-        assert!(rows.iter().any(
-            |row| row.id.as_str() == "timeline:ada-week-friday-space-news"
-                && row.subtitle.contains("Following")
-        ));
-        assert!(rows
-            .iter()
-            .any(|row| row.title.as_str() == "Nobel Prize public update"
-                && row.subtitle.as_str() == "Watched public post"
-                && row.chip.as_str() == "Watch"));
-        assert!(rows
-            .iter()
-            .any(|row| row.title.as_str() == "Science source item"
-                && row.subtitle.as_str() == "Source post"
-                && row.chip.as_str() == "Source"));
-    }
-
-    #[test]
-    fn reading_rows_merge_timeline_watch_and_source_items_chronologically() {
-        let mut controller = DeskController::fixture_for_tests();
-        let timeline_template = controller.data.snapshot.home_timeline[0].clone();
-
-        // Deliberately out of order and interleaved across all three sources,
-        // so a naive "timeline block, then watches, then sources"
-        // concatenation (the old behaviour) would produce a different order
-        // than a genuine chronological merge.
-        controller.data.snapshot.home_timeline = vec![
-            OwnerTimelinePost {
-                id: "timeline-oldest".into(),
-                object_id: "oldest".into(),
-                published_at: Some("2026-07-01T00:00:00Z".into()),
-                ..timeline_template.clone()
-            },
-            OwnerTimelinePost {
-                id: "timeline-newest".into(),
-                object_id: "newest".into(),
-                published_at: Some("2026-07-10T00:00:00Z".into()),
-                ..timeline_template
-            },
-        ];
-        controller.data.watches.items = vec![SourceItem {
-            id: "watch-middle".into(),
-            title: "Watch middle".into(),
-            source_type: "watch_bluesky_actor".into(),
-            canonical_url: None,
-            excerpt: None,
-            rights_policy_json: "{}".into(),
-            read: false,
-            source_id: Some("source-watch".into()),
-            published_at: Some("2026-07-05T00:00:00Z".into()),
-            fetched_at: None,
-        }];
-        controller.data.sources.items = vec![SourceItem {
-            id: "source-no-publish-time".into(),
-            title: "Source with only a fetch time".into(),
-            source_type: "rss".into(),
-            canonical_url: None,
-            excerpt: None,
-            rights_policy_json: "{}".into(),
-            read: false,
-            source_id: Some("source-rss".into()),
-            // No published_at: falls back to fetched_at, landing between
-            // the oldest and middle items rather than at the very end.
-            published_at: None,
-            fetched_at: Some("2026-07-03T00:00:00Z".into()),
-        }];
-
-        let rows = controller.reading_rows();
-        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
-        let position = |needle: &str| {
-            ids.iter()
-                .position(|id| *id == needle)
-                .unwrap_or_else(|| panic!("row {needle} missing from reading_rows: {ids:?}"))
-        };
-
-        let newest = position("timeline:newest");
-        let watch_middle = position("source-item:watch-middle");
-        let source_no_publish = position("source-item:source-no-publish-time");
-        let oldest = position("timeline:oldest");
-
-        assert!(
-            newest < watch_middle && watch_middle < source_no_publish && source_no_publish < oldest,
-            "expected newest, watch, source(by fetched_at), oldest in that order, got {ids:?}"
-        );
     }
 
     #[test]

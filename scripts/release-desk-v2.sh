@@ -22,7 +22,6 @@ REQUIRED_SCREENSHOTS=(
   workflow-save-post
   home-today
   home-inbox-conversations
-  home-reading
   home-post-thread
   home-saved
   workflow-reply-compose

@@ -32,9 +32,9 @@ The smoke gate must cover:
 - **People** mode: discovery, followers, audience groups, watches, and public
   search.
 - Explicit sections: Home, Compose, Settings, Discovery, and Moderation.
-- Explicit screens: home/feed, reading, conversations, compose, inbox, my posts
-  with thread inspector, saved, people find/friends/follow requests/following,
-  accounts, settings, and E2EE security.
+- Explicit screens: home/feed, compose, inbox (including merged conversations),
+  my posts with thread inspector, saved, people find/friends/follow
+  requests/following, accounts, settings, and E2EE security.
 
 Design-alignment coverage tracking lives in:
 
@@ -103,7 +103,7 @@ Required screenshot names at release time:
 home, home-min-width, home-wide,
 home-compose-media, home-compose-min-width,
 home-inbox-notifications, workflow-save-post, home-today,
-home-conversations, home-reading, home-post-thread, home-saved,
+home-inbox-conversations, home-post-thread, home-saved,
 workflow-reply-compose,
 people-find-search, people-friends, people-followers, people-following,
 workflow-follower-approve,

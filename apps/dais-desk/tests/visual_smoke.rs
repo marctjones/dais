@@ -74,10 +74,6 @@ fn run() -> Result<(), Box<dyn Error>> {
     assert_encrypted_conversation_content(&window);
     capture(&window, &output_dir, "home-inbox-conversations")?;
 
-    window.invoke_select_screen("reading".into());
-    assert_screen_content(&window, "reading", "Reading", "timeline:");
-    capture(&window, &output_dir, "home-reading")?;
-
     window.invoke_select_screen("posts".into());
     assert_screen_content(&window, "posts", "My Posts", "post:");
     window.invoke_select_row("post:fixture-private-post".into());
