@@ -2,21 +2,22 @@ use super::{
     activitypub_actor_profile_html, activitypub_watch_item, audience_group_purpose_label,
     audience_membership_label, bluesky_actor_target, bluesky_appview_xrpc_url, bluesky_post_uri,
     bluesky_watch_item, display_local_url, e2ee_device_fingerprint,
-    encrypted_media_attachments_from_activitypub_object, is_local_object_url,
-    is_public_atproto_image_attachment, media_custom_metadata, normalize_ai_categories,
-    normalize_audience_group_type, normalize_audience_membership_visibility,
-    normalize_audience_posting_policy, normalize_discovered_public_post, normalize_e2ee_device_id,
-    normalize_e2ee_fingerprint, normalize_e2ee_protocol, normalize_encrypted_media_attachments,
-    normalize_owner_post_attachments, normalized_source_target, owner_normalize_bluesky_post,
-    owner_normalize_tootfinder_status, owner_public_post_row_from_discovered,
-    owner_public_search_mastodon_query_params, owner_token_has_scopes, parse_lenient_json_body,
-    parse_scoped_owner_tokens, parse_workers_ai_moderation, peer_trust_state_after_material_update,
-    sha256_hex, source_id, source_policy_json_for_type, source_type_for_watch_kind,
-    strip_json_fence, tootfinder_search_items, tootfinder_search_url,
-    validate_dais_encrypted_message_v2, validate_e2ee_device_material,
-    validate_encrypted_media_payload, validate_encrypted_message_envelope,
-    validate_owner_e2ee_payload, MediaMetadataInput, OwnerProfile, OwnerPublicSearchOptions,
-    OwnerPublicSearchProvider, OwnerPublicSearchResultType, SourcePolicy, PUBLIC_COLLECTION,
+    encrypted_media_attachments_from_activitypub_object, follow_sync_stagger_minutes,
+    follow_sync_watch_policy_json, is_local_object_url, is_public_atproto_image_attachment,
+    media_custom_metadata, normalize_ai_categories, normalize_audience_group_type,
+    normalize_audience_membership_visibility, normalize_audience_posting_policy,
+    normalize_discovered_public_post, normalize_e2ee_device_id, normalize_e2ee_fingerprint,
+    normalize_e2ee_protocol, normalize_encrypted_media_attachments, normalize_owner_post_attachments,
+    normalized_source_target, owner_normalize_bluesky_post, owner_normalize_tootfinder_status,
+    owner_public_post_row_from_discovered, owner_public_search_mastodon_query_params,
+    owner_token_has_scopes, parse_lenient_json_body, parse_scoped_owner_tokens,
+    parse_workers_ai_moderation, peer_trust_state_after_material_update, sha256_hex, source_id,
+    source_policy_json_for_type, source_type_for_watch_kind, strip_json_fence,
+    tootfinder_search_items, tootfinder_search_url, validate_dais_encrypted_message_v2,
+    validate_e2ee_device_material, validate_encrypted_media_payload,
+    validate_encrypted_message_envelope, validate_owner_e2ee_payload, MediaMetadataInput,
+    OwnerProfile, OwnerPublicSearchOptions, OwnerPublicSearchProvider, OwnerPublicSearchResultType,
+    SourcePolicy, PUBLIC_COLLECTION,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::{Map, Value};
@@ -634,6 +635,55 @@ fn source_ids_dedupe_by_type_and_normalized_target() {
     assert_eq!(one, two);
     assert_ne!(one, different_type);
     assert!(one.starts_with("source-"));
+}
+
+#[test]
+fn follow_sync_watch_id_matches_a_manually_added_watch_for_the_same_did() {
+    // sync_bluesky_follow_watches hashes the bare DID directly (it comes
+    // straight from the `following` table, already canonical). This must land
+    // on the exact same row a manual `watch-add bluesky_actor <did>` would
+    // produce, or following someone the owner had already manually watched
+    // creates a duplicate row instead of reconciling onto the existing one.
+    let did = "did:plc:abc123followsync";
+    let from_follow_sync = source_id("watch_bluesky_actor", did);
+    let from_manual_add = source_id("watch_bluesky_actor", &bluesky_actor_target(did).unwrap());
+    assert_eq!(from_follow_sync, from_manual_add);
+}
+
+#[test]
+fn follow_sync_watch_policy_is_valid_watch_policy_tagged_with_its_origin() {
+    // The auto-pause query in sync_bluesky_follow_watches identifies rows it
+    // created via `json_extract(policy_json, '$.origin') = 'follow_sync'`. If
+    // this literal ever stops parsing as JSON, or drops the origin field, that
+    // query silently matches nothing and unfollowed accounts are never paused.
+    let policy_json = follow_sync_watch_policy_json();
+    let parsed: serde_json::Value =
+        serde_json::from_str(policy_json).expect("policy_json must be valid JSON");
+    assert_eq!(parsed["origin"], "follow_sync");
+    // Must satisfy the same "no remote relationship, reader-only" contract as
+    // every other watch (source_policy_json_for_type's `is_watch` branch),
+    // since it is a watch as far as source_items provenance rendering cares.
+    assert_eq!(parsed["watch"], true);
+    assert_eq!(parsed["no_remote_relationship"], true);
+    assert_eq!(parsed["private_reader_only"], true);
+    assert_eq!(parsed["public_only"], true);
+}
+
+#[test]
+fn follow_sync_stagger_spreads_a_batch_across_five_minute_buckets() {
+    // A bulk sync of many follows must not leave every new watch's
+    // next_fetch_at equally "due now" — due_active_sources shares a single
+    // LIMIT 20 per cron tick across every source type on the instance, so a
+    // pile of simultaneously-due watches would crowd out RSS/Atom/
+    // ActivityPub watches for as many ticks as it takes to drain.
+    assert_eq!(follow_sync_stagger_minutes(0), 0.0);
+    assert_eq!(follow_sync_stagger_minutes(1), 5.0);
+    assert_eq!(follow_sync_stagger_minutes(11), 55.0);
+    // Wraps rather than growing unbounded for very large follow lists — later
+    // buckets reuse earlier minute offsets, relying on each row's own
+    // steady-state cadence (not a second sync pass) to desync them further.
+    assert_eq!(follow_sync_stagger_minutes(12), 0.0);
+    assert_eq!(follow_sync_stagger_minutes(13), 5.0);
 }
 
 #[test]

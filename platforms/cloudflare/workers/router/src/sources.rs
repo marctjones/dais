@@ -972,6 +972,130 @@ pub(crate) async fn owner_add_watch(
     })
 }
 
+/// Policy for `watch_bluesky_actor` sources created automatically from the
+/// owner's AT Protocol follow graph, rather than an explicit `owner_add_watch`
+/// call. Same watch defaults `source_policy_json_for_type` would produce, plus
+/// an `origin` marker so a later unfollow can find and pause exactly the rows
+/// this created — never a watch the owner added by hand.
+pub(crate) fn follow_sync_watch_policy_json() -> &'static str {
+    r#"{"private_reader_only":true,"excerpt_only":true,"link_required":true,"attribution_required":true,"image_allowed":false,"full_text_allowed":false,"watch":true,"public_only":true,"no_remote_relationship":true,"origin":"follow_sync"}"#
+}
+
+/// Minutes ahead of now for a newly created follow-sync watch's first
+/// `next_fetch_at`, given its position in the current sync pass. Spreads a
+/// batch of N new watches across five-minute buckets over the next ~55
+/// minutes rather than leaving every one of them due immediately — see
+/// `sync_bluesky_follow_watches` for why that matters.
+pub(crate) fn follow_sync_stagger_minutes(index: usize) -> f64 {
+    ((index % 12) as f64) * 5.0
+}
+
+/// Reconcile `watch_bluesky_actor` sources with the owner's current AT
+/// Protocol follow graph: ensure every followed DID has an active watch, and
+/// pause (never delete — reading history stays) any follow-sync watch whose
+/// DID is no longer followed.
+///
+/// New rows get a staggered `next_fetch_at` rather than left `NULL`. Sources
+/// with `next_fetch_at IS NULL` are ordered by `created_at` in
+/// `due_active_sources`, whose `LIMIT 20` is shared across every source type
+/// on this instance — a follow list synced in one pass would otherwise all
+/// race to the front of that shared queue at once and crowd out RSS/Atom/
+/// ActivityPub watches for as many cron ticks as it takes to drain. Spreading
+/// new rows over the next ~55 minutes lets them interleave instead.
+///
+/// Reactivating a previously paused watch does not touch `next_fetch_at`: it
+/// is already in the past (paused sources stop advancing it), so it is
+/// naturally due on the next cron tick — refreshing promptly after a
+/// re-follow without needing special-case scheduling.
+pub(crate) async fn sync_bluesky_follow_watches(
+    env: &Env,
+) -> std::result::Result<Map<String, Value>, String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+
+    let followed_dids: Vec<String> = db
+        .prepare(
+            r#"
+            SELECT target_actor_id
+            FROM following
+            WHERE status = 'accepted'
+              AND target_actor_id LIKE 'did:%'
+            ORDER BY created_at ASC
+            "#,
+        )
+        .all()
+        .await
+        .map_err(|error| error.to_string())?
+        .results::<Map<String, Value>>()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter_map(|row| string_field(Some(&row), "target_actor_id"))
+        .collect();
+
+    let policy_json = follow_sync_watch_policy_json();
+    let mut ensured = 0u32;
+    for (index, did) in followed_dids.iter().enumerate() {
+        let id = source_id("watch_bluesky_actor", did);
+        let stagger_minutes = follow_sync_stagger_minutes(index);
+        let next_fetch_at = js_sys::Date::new(&JsValue::from_f64(
+            js_sys::Date::now() + stagger_minutes * 60.0 * 1000.0,
+        ))
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default();
+
+        let id_arg = D1Type::Text(&id);
+        let url_arg = D1Type::Text(did);
+        let policy_arg = D1Type::Text(policy_json);
+        let next_fetch_arg = D1Type::Text(&next_fetch_at);
+        db.prepare(
+            r#"
+            INSERT INTO source_subscriptions (
+              id, source_type, url, refresh_cadence_minutes, policy_json,
+              status, next_fetch_at, created_at, updated_at
+            ) VALUES (?1, 'watch_bluesky_actor', ?2, 60, ?3, 'active', ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+              status = 'active',
+              updated_at = CURRENT_TIMESTAMP
+            WHERE source_subscriptions.status = 'paused'
+            "#,
+        )
+        .bind_refs([&id_arg, &url_arg, &policy_arg, &next_fetch_arg])
+        .map_err(|error| error.to_string())?
+        .run()
+        .await
+        .map_err(|error| error.to_string())?;
+        ensured += 1;
+    }
+
+    let paused = db
+        .prepare(
+            r#"
+            UPDATE source_subscriptions
+            SET status = 'paused', updated_at = CURRENT_TIMESTAMP
+            WHERE source_type = 'watch_bluesky_actor'
+              AND status = 'active'
+              AND json_extract(policy_json, '$.origin') = 'follow_sync'
+              AND url NOT IN (
+                SELECT target_actor_id FROM following WHERE status = 'accepted'
+              )
+            "#,
+        )
+        .run()
+        .await
+        .map_err(|error| error.to_string())?
+        .meta()
+        .ok()
+        .flatten()
+        .and_then(|meta| meta.changes)
+        .unwrap_or(0);
+
+    Ok(Map::from_iter([
+        ("followed".to_string(), Value::from(followed_dids.len())),
+        ("ensured".to_string(), Value::from(ensured)),
+        ("paused".to_string(), Value::from(paused)),
+    ]))
+}
+
 async fn owner_upsert_source(
     env: &Env,
     source_type: &str,

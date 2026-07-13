@@ -1460,6 +1460,15 @@ async fn handle_owner(command: OwnerCommand, store: &ConfigStore) -> Result<()> 
                 }
             }
         }
+        OwnerCommand::WatchSyncFollows(args) => {
+            let result = owner_api(&args)
+                .sync_follow_watches()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!("followed={}", result.followed);
+            println!("ensured={}", result.ensured);
+            println!("paused={}", result.paused);
+        }
         OwnerCommand::Moderation(args) => {
             let moderation = owner_api(&args)
                 .moderation()

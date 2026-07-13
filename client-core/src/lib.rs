@@ -404,6 +404,19 @@ impl OwnerApiClient {
         .await
     }
 
+    /// Reconcile `watch_bluesky_actor` watches with the owner's current AT
+    /// Protocol follow graph: create watches for follows that don't have one
+    /// yet, and pause watches for accounts no longer followed. Runs
+    /// automatically every 30 minutes on the server; this triggers it
+    /// on demand (useful right after following someone, and for smoke tests).
+    pub async fn sync_follow_watches(&self) -> ClientResult<OwnerFollowWatchSyncResult> {
+        self.post(
+            "/api/dais/owner/watches/sync-follows",
+            &OwnerEmptyBody {},
+        )
+        .await
+    }
+
     pub async fn moderation(&self) -> ClientResult<ModerationState> {
         self.get("/api/dais/owner/moderation").await
     }
@@ -1280,7 +1293,7 @@ pub struct OwnerProfileUpdate {
     pub image: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceItem {
     pub id: String,
     pub title: String,
@@ -1289,6 +1302,19 @@ pub struct SourceItem {
     pub excerpt: Option<String>,
     pub rights_policy_json: String,
     pub read: bool,
+    /// Id of the source_subscriptions row this item came from. The router
+    /// already returns this; it was previously dropped on deserialize.
+    #[serde(default)]
+    pub source_id: Option<String>,
+    /// When the item was published at its origin, if known. Falls back to
+    /// `fetched_at` for chronological placement when absent.
+    #[serde(default)]
+    pub published_at: Option<String>,
+    /// When dais fetched the item. Always present once a source has been
+    /// refreshed at least once; used to place items that report no
+    /// publish time of their own.
+    #[serde(default)]
+    pub fetched_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1367,6 +1393,13 @@ pub struct OwnerSourceRefreshItem {
 pub struct OwnerSourceRefreshResult {
     pub ok: bool,
     pub items: Vec<OwnerSourceRefreshItem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnerFollowWatchSyncResult {
+    pub followed: u32,
+    pub ensured: u32,
+    pub paused: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1553,6 +1586,46 @@ fn encode_query(params: &[(&str, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_item_deserializes_router_payload_missing_timestamp_fields() {
+        // A response from a router build that predates this change (or any
+        // future payload that simply omits these keys) must still deserialize
+        // instead of failing the whole /watches or /sources call.
+        let json = r#"{
+            "id": "source-item-1",
+            "title": "Old shape",
+            "source_type": "rss",
+            "canonical_url": null,
+            "excerpt": null,
+            "rights_policy_json": "{}",
+            "read": false
+        }"#;
+        let item: SourceItem = serde_json::from_str(json).expect("must deserialize");
+        assert_eq!(item.source_id, None);
+        assert_eq!(item.published_at, None);
+        assert_eq!(item.fetched_at, None);
+    }
+
+    #[test]
+    fn source_item_deserializes_router_payload_with_timestamp_fields() {
+        let json = r#"{
+            "id": "source-item-1",
+            "title": "New shape",
+            "source_type": "watch_bluesky_actor",
+            "canonical_url": "https://bsky.app/profile/did:plc:abc/post/1",
+            "excerpt": "hello",
+            "rights_policy_json": "{}",
+            "read": false,
+            "source_id": "source-abc123",
+            "published_at": "2026-07-10T12:00:00Z",
+            "fetched_at": "2026-07-10T12:05:00Z"
+        }"#;
+        let item: SourceItem = serde_json::from_str(json).expect("must deserialize");
+        assert_eq!(item.source_id.as_deref(), Some("source-abc123"));
+        assert_eq!(item.published_at.as_deref(), Some("2026-07-10T12:00:00Z"));
+        assert_eq!(item.fetched_at.as_deref(), Some("2026-07-10T12:05:00Z"));
+    }
 
     #[test]
     fn private_activitypub_draft_has_private_badge_and_no_warning() {

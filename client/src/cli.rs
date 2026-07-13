@@ -883,6 +883,11 @@ pub enum OwnerCommand {
     WatchRemove(OwnerSourceIdArgs),
     /// Refresh one private Watch, or all active watches when no id is supplied.
     WatchRefresh(OwnerSourceRefreshArgs),
+    /// Reconcile Bluesky-follow watches against the current AT Protocol follow
+    /// graph: create watches for follows missing one, pause watches for
+    /// accounts no longer followed. Runs automatically every 30 minutes on
+    /// the server; this triggers it immediately.
+    WatchSyncFollows(OwnerApiArgs),
     /// Show live owner API moderation blocks and federation allowlist.
     Moderation(OwnerApiArgs),
     /// Block an ActivityPub actor through the live owner API.

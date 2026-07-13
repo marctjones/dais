@@ -4143,27 +4143,40 @@ impl DeskController {
     }
 
     fn reading_rows(&self) -> Vec<UiRow> {
-        let mut rows: Vec<UiRow> = self
+        // Timeline posts, watch items, and source items each arrive as
+        // separate lists; merged here into one chronological stream rather
+        // than three concatenated blocks, so a newly followed account's post
+        // lands next to the timeline post it's actually contemporary with
+        // instead of always trailing at the end. Items with no recorded time
+        // (recency key "") sort last as a group, in their original relative
+        // order (`sort_by` is stable) — home timeline, then watches, then
+        // sources — matching the previous concatenation order as a fallback.
+        let mut ranked: Vec<(String, UiRow)> = self
             .data
             .snapshot
             .home_timeline
             .iter()
-            .map(reading_timeline_row)
+            .map(|post| {
+                (
+                    post.published_at.clone().unwrap_or_default(),
+                    reading_timeline_row(post),
+                )
+            })
             .collect();
-        rows.extend(
-            self.data
-                .watches
-                .items
-                .iter()
-                .map(|item| reading_source_item_row(item, "Watched public post", "Watch")),
-        );
-        rows.extend(
-            self.data
-                .sources
-                .items
-                .iter()
-                .map(|item| reading_source_item_row(item, "Source post", "Source")),
-        );
+        ranked.extend(self.data.watches.items.iter().map(|item| {
+            (
+                reading_item_recency_key(item),
+                reading_source_item_row(item, "Watched public post", "Watch"),
+            )
+        }));
+        ranked.extend(self.data.sources.items.iter().map(|item| {
+            (
+                reading_item_recency_key(item),
+                reading_source_item_row(item, "Source post", "Source"),
+            )
+        }));
+        ranked.sort_by(|left, right| right.0.cmp(&left.0));
+        let mut rows: Vec<UiRow> = ranked.into_iter().map(|(_, row)| row).collect();
         if rows.is_empty() {
             rows.push(empty_state_row(
                 "reading:empty",
@@ -8752,6 +8765,22 @@ fn source_item_row(item: &SourceItem) -> UiRow {
     )
 }
 
+/// Recency key for chronologically merging a watch/source item into
+/// `reading_rows`. Prefers the origin's own publish time; falls back to when
+/// dais fetched it, since some feeds (and older cached items) don't carry a
+/// reliable publish timestamp. Both fields are stored as they arrive from
+/// their source protocol (RFC 3339 for ActivityPub/Bluesky, D1's
+/// `datetime('now')` shape for fetched_at) — lexical comparison sorts either
+/// form correctly on its own; the only imprecision is a tie between the two
+/// formats landing on the exact same date, an acceptable rough edge for a
+/// reading-order convenience rather than a correctness-critical property.
+fn reading_item_recency_key(item: &SourceItem) -> String {
+    item.published_at
+        .clone()
+        .or_else(|| item.fetched_at.clone())
+        .unwrap_or_default()
+}
+
 fn reading_source_item_row(item: &SourceItem, subtitle: &str, chip: &str) -> UiRow {
     let id = item
         .canonical_url
@@ -10363,6 +10392,9 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 excerpt: Some("A public science update saved for private reading.".into()),
                 rights_policy_json: "{\"excerpt_only\":true}".into(),
                 read: false,
+                source_id: Some("source-npr".into()),
+                published_at: Some("today".into()),
+                fetched_at: Some("today".into()),
             }],
         },
         watches: OwnerSources {
@@ -10392,6 +10424,9 @@ fn fixture_data(api_error: Option<String>) -> DeskData {
                 ),
                 rights_policy_json: "{\"excerpt_only\":true,\"private_reader_only\":true}".into(),
                 read: false,
+                source_id: Some("watch-nobel".into()),
+                published_at: Some("today".into()),
+                fetched_at: Some("today".into()),
             }],
         },
         e2ee_devices: vec![
@@ -10706,6 +10741,9 @@ fn local_snapshot(
             excerpt: Some("Reads normalized private source items once the owner API is wired.".to_string()),
             rights_policy_json: "{\"private_reader_only\":true,\"excerpt_only\":true}".to_string(),
             read: false,
+            source_id: Some("sources-ready".to_string()),
+            published_at: Some("today".to_string()),
+            fetched_at: Some("today".to_string()),
         }],
         moderation: ModerationState {
             closed_network: false,
@@ -12153,6 +12191,8 @@ mod tests {
             excerpt: Some("No external link in this excerpt.".into()),
             rights_policy_json: "{}".into(),
             read: false,
+        
+            ..Default::default()
         });
         assert_eq!(row.primary.as_str(), "");
     }
@@ -12167,6 +12207,8 @@ mod tests {
             excerpt: Some("See https://example.org/article for details.".into()),
             rights_policy_json: "{}".into(),
             read: false,
+        
+            ..Default::default()
         });
         assert_eq!(row.primary.as_str(), "Open link");
     }
@@ -12181,6 +12223,8 @@ mod tests {
             excerpt: None,
             rights_policy_json: "{}".into(),
             read: false,
+        
+            ..Default::default()
         });
         assert_eq!(row.primary.as_str(), "Open link");
     }
@@ -12203,6 +12247,8 @@ mod tests {
             })
             .to_string(),
             read: false,
+        
+            ..Default::default()
         });
         assert_eq!(row.chip.as_str(), "Private reader");
         assert!(row.detail.contains("private reader"));
@@ -12279,6 +12325,8 @@ mod tests {
             excerpt: None,
             rights_policy_json: "{}".into(),
             read: false,
+        
+            ..Default::default()
         });
         controller.select_screen("watches");
         let row_id = "source-item:source-item-title-only";
@@ -13473,6 +13521,75 @@ mod tests {
             .any(|row| row.title.as_str() == "Science source item"
                 && row.subtitle.as_str() == "Source post"
                 && row.chip.as_str() == "Source"));
+    }
+
+    #[test]
+    fn reading_rows_merge_timeline_watch_and_source_items_chronologically() {
+        let mut controller = DeskController::fixture_for_tests();
+        let timeline_template = controller.data.snapshot.home_timeline[0].clone();
+
+        // Deliberately out of order and interleaved across all three sources,
+        // so a naive "timeline block, then watches, then sources"
+        // concatenation (the old behaviour) would produce a different order
+        // than a genuine chronological merge.
+        controller.data.snapshot.home_timeline = vec![
+            OwnerTimelinePost {
+                id: "timeline-oldest".into(),
+                object_id: "oldest".into(),
+                published_at: Some("2026-07-01T00:00:00Z".into()),
+                ..timeline_template.clone()
+            },
+            OwnerTimelinePost {
+                id: "timeline-newest".into(),
+                object_id: "newest".into(),
+                published_at: Some("2026-07-10T00:00:00Z".into()),
+                ..timeline_template
+            },
+        ];
+        controller.data.watches.items = vec![SourceItem {
+            id: "watch-middle".into(),
+            title: "Watch middle".into(),
+            source_type: "watch_bluesky_actor".into(),
+            canonical_url: None,
+            excerpt: None,
+            rights_policy_json: "{}".into(),
+            read: false,
+            source_id: Some("source-watch".into()),
+            published_at: Some("2026-07-05T00:00:00Z".into()),
+            fetched_at: None,
+        }];
+        controller.data.sources.items = vec![SourceItem {
+            id: "source-no-publish-time".into(),
+            title: "Source with only a fetch time".into(),
+            source_type: "rss".into(),
+            canonical_url: None,
+            excerpt: None,
+            rights_policy_json: "{}".into(),
+            read: false,
+            source_id: Some("source-rss".into()),
+            // No published_at: falls back to fetched_at, landing between
+            // the oldest and middle items rather than at the very end.
+            published_at: None,
+            fetched_at: Some("2026-07-03T00:00:00Z".into()),
+        }];
+
+        let rows = controller.reading_rows();
+        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        let position = |needle: &str| {
+            ids.iter()
+                .position(|id| *id == needle)
+                .unwrap_or_else(|| panic!("row {needle} missing from reading_rows: {ids:?}"))
+        };
+
+        let newest = position("timeline:newest");
+        let watch_middle = position("source-item:watch-middle");
+        let source_no_publish = position("source-item:source-no-publish-time");
+        let oldest = position("timeline:oldest");
+
+        assert!(
+            newest < watch_middle && watch_middle < source_no_publish && source_no_publish < oldest,
+            "expected newest, watch, source(by fetched_at), oldest in that order, got {ids:?}"
+        );
     }
 
     #[test]
