@@ -23,8 +23,6 @@ use ipld_core::ipld::Ipld;
 
 use crate::error::{CoreError, CoreResult};
 
-use super::repo::CarBlock;
-
 /// A decoded CAR v1 file: the root CID(s) declared in the header, and every
 /// block the archive carries, keyed by CID for the MST walk to look up.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
@@ -58,8 +56,9 @@ pub fn decode_car(bytes: &[u8]) -> CoreResult<CarFile> {
 }
 
 fn decode_header_roots(header_bytes: &[u8]) -> CoreResult<Vec<Cid>> {
-    let header: Ipld = serde_ipld_dagcbor::from_slice(header_bytes)
-        .map_err(|error| CoreError::InvalidAtProto(format!("CAR header is not DAG-CBOR: {error}")))?;
+    let header: Ipld = serde_ipld_dagcbor::from_slice(header_bytes).map_err(|error| {
+        CoreError::InvalidAtProto(format!("CAR header is not DAG-CBOR: {error}"))
+    })?;
     let Ipld::Map(fields) = header else {
         return Err(CoreError::InvalidAtProto(
             "CAR header must be a CBOR map".to_string(),
@@ -148,7 +147,7 @@ fn take<'a>(cursor: &mut &'a [u8], len: usize) -> CoreResult<&'a [u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atproto::repo::encode_car;
+    use crate::atproto::repo::{encode_car, CarBlock};
     use multihash_codetable::{Code, MultihashDigest};
 
     fn cbor_block(value: &Ipld) -> CarBlock {
