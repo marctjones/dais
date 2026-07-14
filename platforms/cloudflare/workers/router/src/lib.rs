@@ -197,7 +197,9 @@ async fn scheduled(_event: ScheduledEvent, env: Env, ctx: ScheduleContext) {
         // watches for accounts the owner has since unfollowed.
         let _ = sync_bluesky_follow_watches(&env).await;
         let _ = refresh_due_sources(&env).await;
-        let _ = firehose::ensure_firehose_subscription_running(&env).await;
+        if let Err(error) = firehose::ensure_firehose_subscription_running(&env).await {
+            worker::console_log!("ensure_firehose_subscription_running failed: {error}");
+        }
     });
 }
 
