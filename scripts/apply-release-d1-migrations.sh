@@ -63,6 +63,7 @@ if [ "${#MIGRATIONS[@]}" -eq 0 ]; then
       "cli/migrations/030_mutes.sql"
       "cli/migrations/031_atproto_sync_commits.sql"
       "cli/migrations/032_private_groups.sql"
+      "cli/migrations/034_atproto_firehose_index.sql"
     )
   fi
 fi
