@@ -177,6 +177,7 @@ async fn run_read_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Re
 
     console_log!("firehose read loop starting, {} followed dids", dids.len());
     let mut events = ws.events()?;
+    ws.accept()?;
     let mut processed_since_flush: u32 = 0;
     let mut total_processed: u64 = 0;
     let mut last_seq: i64 = 0;
@@ -222,6 +223,17 @@ async fn run_read_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Re
             Ok(FirehoseEvent::Other(_)) => {}
             Err(error) => {
                 console_log!("firehose frame decode failed: {error}");
+            }
+        }
+
+        if total_processed == 1 {
+            // Flush immediately on the very first message so the checkpoint
+            // row is an externally-queryable (D1) heartbeat -- logs emitted
+            // from inside this wait_until-detached loop don't reliably reach
+            // `wrangler tail`, so D1 is the only observable signal that the
+            // socket is actually receiving frames.
+            if let Err(error) = flush_checkpoint(&env, last_seq, 0).await {
+                console_log!("firehose first-message checkpoint flush failed: {error}");
             }
         }
 
