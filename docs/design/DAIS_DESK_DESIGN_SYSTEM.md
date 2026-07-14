@@ -262,14 +262,13 @@ Dialog rules:
 
 Global shortcuts — the "Implemented" column reflects the actual `KeyBinding`s
 in `apps/dais-desk/ui/app.slint` as of 2026-07-14; several of this table's
-original entries described intent that was never built, or had drifted from
-what got built instead (see #376 for the Command-3/Server gap specifically):
+original entries described intent that was never built:
 
 | Shortcut | Action | Implemented |
 | --- | --- | --- |
 | Command-1 | Home | Yes |
 | Command-2 | People | Yes |
-| Command-3 | Server | **No.** Currently bound to Compose instead (duplicating Command-N); Server mode has no shortcut at all. Tracked in #376 as a product decision (add a real Server shortcut vs. rebind Command-3), not a plain doc fix. |
+| Command-3 | Server | Yes (fixed in #376 — previously duplicated Command-N/Compose and left Server with no shortcut). |
 | Command-F | Jump to Find | Yes |
 | Command-N | Compose | Yes |
 | Command-R | Refresh current view | Yes |

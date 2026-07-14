@@ -784,14 +784,14 @@ export component MainWindow inherits Window {
         KeyBinding {
             keys: @keys(Control + "3");
             activated => {
-                root.select-screen("compose");
+                root.select-mode("server");
             }
         }
 
         KeyBinding {
             keys: @keys(Meta + "3");
             activated => {
-                root.select-screen("compose");
+                root.select-mode("server");
             }
         }
 
