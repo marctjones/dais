@@ -167,7 +167,7 @@ default-open federation.
 | Inbound HTTP-signature enforcement | **Implemented for inbox POSTs** |
 | Authorized-fetch read gating | **Implemented for non-public and encrypted post pulls** |
 | ATProto / Bluesky / PDS | **Public-read compatibility floor; AppView work remains** |
-| Bluesky **reading** (AppView) | **Personal AppView floor (v0.16) plus a poll-based aggregated follows timeline (v1.36 Track A): every AT Protocol follow gets an auto-managed watch, merged chronologically with the ActivityPub home timeline in Desk/TUI/CLI. Firehose-based near-real-time AppView (v1.36 Track B, #50) not yet built.** |
+| Bluesky **reading** (AppView) | **Personal AppView floor (v0.16) plus a poll-based aggregated follows timeline (v1.36 Track A) and a firehose-based near-real-time consumer (v1.36 Track B, #50): a Durable Object holds a persistent connection to Bluesky's relay, decodes commits for followed DIDs, and indexes posts/likes/follows into D1, merged chronologically with the ActivityPub home timeline in Desk/TUI/CLI. Owner-authenticated `notifications`/`likes`/`followers` endpoints are also live.** |
 | Private mode (home timeline, default-private, friends) | **Implemented foundation; still hardening UX and lifecycle coverage** |
 | **E2EE DMs** | **Implemented on the MLS/RFC 9420 v2 owner workflow; legacy encryptedMessage v1 rows/devices are purged, and live dais.social <-> skpt.cl gates cover 1:1, groups, multi-device, removal, and delivery-worker processing** |
 | Rich ActivityPub objects | **v0.17 foundation: Article, Document, Event, Group, Organization with Mastodon-safe fallbacks** |
