@@ -1,5 +1,6 @@
 pub mod appview;
 pub mod car;
+pub mod firehose;
 pub mod mst;
 pub mod records;
 pub mod repo;
@@ -13,6 +14,7 @@ pub mod sync;
 
 pub use appview::*;
 pub use car::*;
+pub use firehose::*;
 pub use mst::*;
 pub use records::*;
 pub use repo::*;

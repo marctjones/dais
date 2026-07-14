@@ -18,6 +18,18 @@ database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 [ai]
 binding = "AI"
 
+# Personal Bluesky AppView firehose consumer (issue #50, Track B). Not yet
+# enabled in any deployed environment -- the class is bound below per-env
+# once the live-relay smoke test (see the issue) has passed for that
+# environment.
+[[durable_objects.bindings]]
+name = "FIREHOSE_SUBSCRIPTION"
+class_name = "FirehoseSubscription"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["FirehoseSubscription"]
+
 [triggers]
 crons = ["*/30 * * * *"]
 
@@ -38,6 +50,10 @@ database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
 [env.production.ai]
 binding = "AI"
+
+[[env.production.durable_objects.bindings]]
+name = "FIREHOSE_SUBSCRIPTION"
+class_name = "FirehoseSubscription"
 
 [env.production.triggers]
 crons = ["*/30 * * * *"]
@@ -71,6 +87,10 @@ database_id = "39490363-8871-4c24-b28e-4873e6a25a0a"
 
 [env.skpt.ai]
 binding = "AI"
+
+[[env.skpt.durable_objects.bindings]]
+name = "FIREHOSE_SUBSCRIPTION"
+class_name = "FirehoseSubscription"
 
 [env.skpt.triggers]
 crons = ["*/30 * * * *"]

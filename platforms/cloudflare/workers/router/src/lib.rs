@@ -8,6 +8,7 @@ mod audience;
 mod config;
 mod deliveries;
 mod e2ee;
+mod firehose;
 mod fixtures;
 mod mastodon;
 mod mastodon_api;
@@ -196,6 +197,7 @@ async fn scheduled(_event: ScheduledEvent, env: Env, ctx: ScheduleContext) {
         // watches for accounts the owner has since unfollowed.
         let _ = sync_bluesky_follow_watches(&env).await;
         let _ = refresh_due_sources(&env).await;
+        let _ = firehose::ensure_firehose_subscription_running(&env).await;
     });
 }
 
@@ -533,6 +535,32 @@ async fn handle_owner_api(mut req: Request, env: Env, url: &worker::Url) -> Resu
             },
             200,
         ),
+        (worker::Method::Get, "/atproto/notifications") => {
+            match firehose::owner_atproto_notifications(&env, limit).await {
+                Ok(items) => api_json(&OwnerItems { items }, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Get, "/atproto/likes") => {
+            let subject_uri = query_param(url, "uri").unwrap_or_default();
+            if subject_uri.is_empty() {
+                return api_json(
+                    &serde_json::json!({ "error": "uri query param is required" }),
+                    400,
+                );
+            }
+            match firehose::owner_atproto_likes(&env, &subject_uri, limit).await {
+                Ok(items) => api_json(&OwnerItems { items }, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
+        (worker::Method::Get, "/atproto/followers") => {
+            let subject_did = query_param(url, "did").unwrap_or_else(|| firehose::owner_did(&env));
+            match firehose::owner_atproto_followers(&env, &subject_did, limit).await {
+                Ok(items) => api_json(&OwnerItems { items }, 200),
+                Err(message) => api_json(&serde_json::json!({ "error": message }), 400),
+            }
+        }
         (worker::Method::Get, "/notifications") => api_json(
             &OwnerItems {
                 items: owner_notifications(&env, limit).await?,
