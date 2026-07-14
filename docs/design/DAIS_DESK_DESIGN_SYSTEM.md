@@ -42,7 +42,7 @@ Desktop target layout:
 | Region | Target size | Constraints |
 | --- | --- | --- |
 | Source list | 220-260 px | Fixed while window resizes; collapses below narrow breakpoint. |
-| Toolbar | 48-56 px tall | Never wraps primary actions; overflow moves into menu. |
+| Toolbar | 68 px tall | Never wraps primary actions; overflow moves into menu. |
 | Primary content | Flexible | Keeps list row widths stable and scrolls independently. |
 | Inspector | 340-440 px | Collapsible; selected item remains in list when collapsed. |
 
@@ -260,25 +260,31 @@ Dialog rules:
 
 ## 5. Keyboard and Focus
 
-Global shortcuts:
+Global shortcuts — the "Implemented" column reflects the actual `KeyBinding`s
+in `apps/dais-desk/ui/app.slint` as of 2026-07-14; several of this table's
+original entries described intent that was never built, or had drifted from
+what got built instead (see #376 for the Command-3/Server gap specifically):
 
-| Shortcut | Action |
-| --- | --- |
-| Command-1 | Home |
-| Command-2 | People |
-| Command-3 | Server |
-| Command-K | Command/search |
-| Command-N | Compose |
-| Command-R | Refresh current view |
-| Escape | Close sheet/dialog or return from detail |
-| Space | Toggle selection where applicable |
-| Return | Open focused item or accept safe default |
+| Shortcut | Action | Implemented |
+| --- | --- | --- |
+| Command-1 | Home | Yes |
+| Command-2 | People | Yes |
+| Command-3 | Server | **No.** Currently bound to Compose instead (duplicating Command-N); Server mode has no shortcut at all. Tracked in #376 as a product decision (add a real Server shortcut vs. rebind Command-3), not a plain doc fix. |
+| Command-F | Jump to Find | Yes |
+| Command-N | Compose | Yes |
+| Command-R | Refresh current view | Yes |
+| Escape | Close sheet/dialog or return from detail | No — not implemented. |
+| Space | Toggle selection where applicable | No — not implemented. |
+| Return | Open focused item or accept safe default | Yes |
+
+There is no "Command-K" shortcut; Find is reached via Command-F.
 
 List navigation:
 
-- Arrow keys move selection.
-- Page Up/Page Down move by viewport.
-- Home/End move to first/last item.
+- **J**/**K** move selection down/up (vim-style, not arrow keys — arrow-key
+  selection is not implemented).
+- **G** or **Home** key moves to the first item; **End** key moves to the last.
+- Page Up/Page Down are not implemented.
 - Typeahead filters the active list when no text field is focused.
 
 Focus order:

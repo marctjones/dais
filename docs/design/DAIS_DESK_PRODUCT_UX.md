@@ -246,9 +246,10 @@ Rules:
 - Attention indicators as small count badges.
 - No protocol names in primary navigation.
 
-### Home / Today
+### Home / Feed
 
-**Purpose:** The default daily social surface.
+**Purpose:** The default daily social surface. (Screen title is "Feed" in the
+running app.)
 
 **Major functions:**
 
@@ -582,9 +583,11 @@ relationship.
 - Save buttons disabled until there are valid changes.
 - Public defaults highlighted as higher risk.
 
-### Health and Diagnostics
+### Health
 
-**Purpose:** Verify the instance and troubleshoot problems.
+**Purpose:** Verify the instance and troubleshoot problems. (Diagnostic detail
+lives inside this screen, not as a separate "Diagnostics" screen — there is
+no `diagnostics` screen id in the app.)
 
 **Major functions:**
 
@@ -598,6 +601,23 @@ relationship.
 - Needs-attention checks first.
 - Raw logs/evidence collapsed.
 - Cloudflare/protocol/database terms acceptable here.
+
+### Security
+
+**Purpose:** Manage end-to-end encrypted messaging keys and trust.
+
+**Major functions:**
+
+- Show local and peer E2EE/MLS device counts and trust state.
+- Surface fingerprints to check before trusting a peer device.
+- Show MLS group state and any encrypted-endpoint errors needing attention.
+- Provide copyable evidence for debugging encrypted-message issues.
+
+**Visuals:**
+
+- Warn tone when no local device/key state exists yet.
+- Peer device list with trust/fingerprint context.
+- Same "needs attention first" ordering as Health.
 
 ### Stats
 

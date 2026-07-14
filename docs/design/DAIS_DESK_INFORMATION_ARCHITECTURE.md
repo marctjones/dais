@@ -24,9 +24,9 @@ Those questions become the three primary modes:
   drafts, saved posts, and the user's own posts.
 - **People**: friends, followers, following, follow requests, watched public
   sources, audience groups, blocks, mutes, and discovery.
-- **Server**: diagnostics, deliveries, federation health, moderation, public
-  identity, account profiles, tokens, settings, statistics, and release/operator
-  tasks.
+- **Server**: health and diagnostics, deliveries, federation health, moderation,
+  E2EE/MLS security and key trust, public identity, account profiles, tokens,
+  settings, statistics, and release/operator tasks.
 
 Protocol details still matter, but they belong in inspectors and advanced
 details. Primary navigation should use user-language labels.
@@ -73,11 +73,12 @@ source uses before starting a task.
 
 ### 4.1 Home
 
-Home is the daily social surface. It opens to **Today**.
+Home is the daily social surface. It opens to the **Feed** screen (internal
+screen id `today`).
 
 Primary screens:
 
-- **Today**: combined reading queue with lanes for Friends, Following, Mentions,
+- **Feed**: combined reading queue with lanes for Friends, Following, Mentions,
   DMs, Watches, Saved, Drafts, and My Posts.
 - **Post and Thread Inspector**: selected post, thread, replies, audience,
   relationship, moderation state, and available actions.
@@ -114,7 +115,9 @@ Primary screens:
 - **Audience Groups**: Close Friends, Family, Work, and custom groups used by
   compose.
 - **Blocks and Mutes**: actor, domain, and content filtering relationships.
-- **Bundles**: starter-pack-style sets of follows, watches, and feed presets.
+
+A "bundle" (a starter-pack-style set of follows/watches/feed presets) exists as
+a save-form field inside Watches and Sources, not as its own primary screen.
 
 People should make Follow, Friend, and Watch feel different:
 
@@ -130,19 +133,21 @@ daily reading.
 Primary screens:
 
 - **Health**: version, deployment, worker health, database/storage status,
-  queue status, public profile reachability, and account-token state.
+  queue status, public profile reachability, account-token state, and raw
+  diagnostic evidence (there is no separate "Diagnostics" screen — that detail
+  lives inside Health).
 - **Deliveries**: where each post went, retry state, signing state, recipient
   count, protocol writes, failures, and safe retry/cancel actions.
 - **Moderation**: reply queue, blocks, mutes, domain blocks, AI advisories,
   sensitivity policy, and stackable rule layers.
+- **Security**: E2EE/MLS local and peer device state, key trust and
+  fingerprints, MLS group state, and encrypted-endpoint error evidence.
 - **Identity**: public actor/profile settings, display name, avatar, header,
   domain identity, handles, and public profile previews.
 - **Accounts and Tokens**: local Dais account profiles, instance URLs, owner
   tokens, active account, and token rotation.
 - **Settings**: default audience, default posting route, authorized fetch,
   manual follower approval, media policy, and privacy defaults.
-- **Diagnostics**: raw checks, logs, copyable evidence, and troubleshooting
-  details.
 - **Stats**: counts and trends that help operate the server, not engagement
   ranking.
 
@@ -156,7 +161,7 @@ architecture.
 
 | Current section | New primary home | Notes |
 | --- | --- | --- |
-| Home | Home -> Today | First screen; social reading and attention summary. |
+| Home | Home -> Feed | First screen (internal id `today`); social reading and attention summary. |
 | Compose | Home -> Compose Sheet | Global action, not a persistent sidebar page. |
 | Search | People -> Find | Public post search and saved search creation start here. |
 | Discovery | People -> Find | Handles, URLs, feeds, domains, posts, and accounts. |
@@ -174,13 +179,14 @@ architecture.
 | Stats | Server -> Stats | Operational stats, not engagement ranking. |
 | Profile | Server -> Identity | Public profile and federation identity. |
 | Settings | Server -> Settings | Privacy defaults and instance configuration. |
-| Diagnostics | Server -> Diagnostics | Raw operator troubleshooting. |
+| Diagnostics | Server -> Health | Raw operator troubleshooting; no separate Diagnostics screen exists. |
+| E2EE/MLS keys | Server -> Security | Local/peer device trust, fingerprints, and group state. |
 
 ## 6. Task Map
 
 | User task | Start here | Primary screen | Escape hatch |
 | --- | --- | --- | --- |
-| Read what matters today | Home | Today | Saved feed preset. |
+| Read what matters today | Home | Feed | Saved feed preset. |
 | Reply to a friend | Home | Post and Thread Inspector | Compose Sheet. |
 | Publish a post | Global compose button | Compose Sheet | Server -> Settings for defaults. |
 | Send a direct message | Home | Inbox Queue or Compose Sheet | People -> Relationship Card. |
@@ -192,11 +198,11 @@ architecture.
 | Delete or revoke a media item | Home | My Posts | Server -> Deliveries if remote delivery matters. |
 | Moderate a reply | Home | Inbox Queue | Server -> Moderation for policy changes. |
 | Block an account or domain | People | Blocks and Mutes | Server -> Moderation for policy context. |
-| Check whether federation is healthy | Server | Health | Diagnostics for raw evidence. |
+| Check whether federation is healthy | Server | Health | Raw evidence is inside Health itself. |
 | Debug a failed delivery | Server | Deliveries | Open from the post inspector. |
 | Edit public profile | Server | Identity | Preview public surfaces before saving. |
 | Add another Dais instance | Server | Accounts and Tokens | Account switcher after setup. |
-| Rotate an owner token | Server | Accounts and Tokens | Diagnostics if validation fails. |
+| Rotate an owner token | Server | Accounts and Tokens | Health if validation fails. |
 
 ## 7. Navigation Labels
 
@@ -208,7 +214,7 @@ Use these primary labels:
 
 Recommended secondary labels:
 
-- Today
+- Feed
 - Inbox
 - My Posts
 - Saved
@@ -223,10 +229,10 @@ Recommended secondary labels:
 - Health
 - Deliveries
 - Moderation
+- Security
 - Identity
 - Accounts and Tokens
 - Settings
-- Diagnostics
 - Stats
 
 Avoid these in primary navigation:
