@@ -2,6 +2,7 @@ pub mod appview;
 pub mod car;
 pub mod firehose;
 pub mod mst;
+pub mod record_proof;
 pub mod records;
 pub mod repo;
 /// AT Protocol implementation
@@ -16,6 +17,7 @@ pub use appview::*;
 pub use car::*;
 pub use firehose::*;
 pub use mst::*;
+pub use record_proof::*;
 pub use records::*;
 pub use repo::*;
 pub use sync::*;

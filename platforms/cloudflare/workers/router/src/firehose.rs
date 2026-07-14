@@ -1,35 +1,51 @@
-//! Personal Bluesky AppView (issue #50, Track B): a Durable Object that
-//! holds a persistent outbound WebSocket connection to Bluesky's public
-//! relay firehose (`com.atproto.sync.subscribeRepos`), decodes commits for
-//! DIDs the owner follows, and indexes posts/likes/follows into D1.
+//! Personal Bluesky AppView (issue #50 Track B, cost-optimized per issue
+//! #377): a Durable Object that holds a persistent connection to
+//! [Jetstream](https://github.com/bluesky-social/jetstream), Bluesky's
+//! filtered JSON relay proxy, and indexes posts/likes/follows for DIDs the
+//! owner follows into D1.
 //!
-//! `subscribeRepos` has no server-side DID filter -- it streams every
-//! commit on the network, and filtering to the owner's follows happens here,
-//! after decode. That is why this holds one always-on connection rather
-//! than duty-cycling: catching up after a gap means decoding the entire
-//! network's commit volume for that window, not just the followed DIDs'
-//! commits, so a bounded connection window would fall further behind on
-//! every reconnect rather than catching up.
+//! The original design connected directly to Bluesky's raw relay
+//! (`com.atproto.sync.subscribeRepos`), which has no server-side DID
+//! filter -- it streamed every commit on the network, and decoding each one
+//! (CBOR envelope + CAR blocks) before filtering burned through a
+//! Cloudflare free-plan daily limit processing ~100% of Bluesky's global
+//! traffic to extract a handful of followed accounts' data. Jetstream's
+//! `wantedDids`/`wantedCollections` query params filter server-side, so this
+//! consumer only ever receives events for followed accounts in the first
+//! place.
 //!
-//! The read loop (`run_read_loop`) is spawned once via `State::wait_until`,
-//! which keeps this Durable Object resident for as long as the loop's
-//! future is pending, and owns its own clone of the `WebSocket` -- the
-//! struct's own `socket` field exists only so `alarm()`'s watchdog can close
-//! the shared connection for budget enforcement. `alarm()` itself is a
-//! periodic watchdog, not the per-message driver: it re-starts the read
-//! loop if it isn't running (including after a cold restart, when the
-//! struct's in-memory `socket` field has reset to `None`), and enforces the
-//! daily active-time budget as a runaway-loop backstop.
+//! Jetstream's JSON is not independently verifiable -- Bluesky's own docs
+//! state its events carry no signatures or MST proofs. So this does not
+//! trust Jetstream's `record`/`cid` fields directly: for every matched
+//! event it resolves the DID's real PDS (Jetstream only *detects* a change;
+//! the aggregator relay does not implement `getRecord` at all, only the
+//! account's own PDS does -- see [`resolve_pds_endpoint`]) and calls
+//! `com.atproto.sync.getRecord` there, then verifies the response with
+//! [`dais_core::atproto::record_proof::verify_record_proof`] -- the same
+//! `decode_commit`/`mst_get` primitives issue #50's original design used,
+//! reused here as an existence/non-existence proof rather than a commit-diff
+//! walk. Only a verified result is written to D1.
+//!
+//! The read loop (`run_jetstream_loop`) is spawned once via
+//! `State::wait_until`, which keeps this Durable Object resident for as long
+//! as the loop's future is pending, and owns its own clone of the
+//! `WebSocket` -- the struct's own `socket` field exists only so `alarm()`'s
+//! watchdog can close the shared connection for budget enforcement.
+//! `alarm()` itself is a periodic watchdog, not the per-message driver: it
+//! re-starts the read loop if it isn't running (including after a cold
+//! restart, when the struct's in-memory `socket` field has reset to `None`),
+//! and enforces the daily active-time budget as a runaway-loop backstop.
 //!
 //! [`ensure_firehose_subscription_running`] is what actually starts this --
 //! called from the router's existing 30-minute cron, gated behind the
 //! `FIREHOSE_ENABLED` var (unset/absent means disabled). Deploying this
-//! code does not by itself open a connection to Bluesky's relay in any
-//! environment; that var is only meant to be set once the live-relay smoke
-//! test in issue #50 has passed for that environment.
+//! code does not by itself open a connection to Bluesky in any environment;
+//! that var is only meant to be set once the live smoke test in issue #50
+//! has passed for that environment.
 
-use dais_core::atproto::firehose::{decode_frame, record_bytes_to_json, FirehoseEvent};
-use dais_core::atproto::mst::{extract_commit_changes, RepoChange};
+use dais_core::atproto::firehose::record_bytes_to_json;
+use dais_core::atproto::record_proof::{verify_record_proof, RecordProof};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -37,14 +53,21 @@ use std::rc::Rc;
 use std::time::Duration;
 use worker::*;
 
-const RELAY_HOST: &str = "bsky.network";
+const JETSTREAM_HOST: &str = "jetstream2.us-east.bsky.network";
 const WATCHDOG_INTERVAL: Duration = Duration::from_secs(60);
 /// How often the read loop persists its cursor and re-checks the follow
-/// list, in processed firehose messages (matched or not). A crash between
-/// flushes just means re-decoding up to this many already-seen messages on
-/// reconnect -- harmless, since every D1 write here is an idempotent
-/// upsert/delete keyed by URI.
+/// list, in processed events. A crash between flushes just means replaying
+/// up to this many already-seen events on reconnect (Jetstream's `cursor`
+/// replays inclusively) -- harmless, since every D1 write here is an
+/// idempotent upsert/delete keyed by URI.
 const FLUSH_EVERY_MESSAGES: u32 = 200;
+/// Collections this consumer indexes; also Jetstream's server-side
+/// collection filter, so events outside this set are never even sent to us.
+const WANTED_COLLECTIONS: [&str; 3] = [
+    "app.bsky.feed.post",
+    "app.bsky.feed.like",
+    "app.bsky.graph.follow",
+];
 
 /// Kicks the firehose Durable Object if `FIREHOSE_ENABLED` is `"true"` for
 /// this environment; a no-op otherwise, so shipping this code does not by
@@ -140,8 +163,8 @@ impl FirehoseSubscription {
             return Ok(());
         }
 
-        let url = Url::parse(&relay_url(checkpoint.last_seq))
-            .map_err(|error| Error::RustError(format!("invalid relay url: {error}")))?;
+        let url = Url::parse(&jetstream_url(checkpoint.last_seq, &dids))
+            .map_err(|error| Error::RustError(format!("invalid jetstream url: {error}")))?;
         let ws = WebSocket::connect(url).await?;
         *self.socket.borrow_mut() = Some(ws.clone());
         mark_running(&self.env).await.map_err(Error::RustError)?;
@@ -149,7 +172,7 @@ impl FirehoseSubscription {
         let task_env = self.env.clone();
         let task_socket = self.socket.clone();
         self.state.wait_until(async move {
-            if let Err(error) = run_read_loop(task_env, ws, dids).await {
+            if let Err(error) = run_jetstream_loop(task_env, ws, dids).await {
                 console_log!("firehose read loop ended: {error}");
             }
             // The loop only returns when the connection is gone (closed,
@@ -164,15 +187,48 @@ impl FirehoseSubscription {
     }
 }
 
-fn relay_url(last_seq: i64) -> String {
-    if last_seq > 0 {
-        format!("wss://{RELAY_HOST}/xrpc/com.atproto.sync.subscribeRepos?cursor={last_seq}")
-    } else {
-        format!("wss://{RELAY_HOST}/xrpc/com.atproto.sync.subscribeRepos")
-    }
+/// A Jetstream event, per <https://github.com/bluesky-social/jetstream>'s
+/// wire format. Only the fields needed to *detect* a change and locate the
+/// real record are parsed -- `record`/`record_cbor` are deliberately not
+/// modeled here, since they are exactly the unverified data this consumer
+/// never trusts (see the module doc comment).
+#[derive(Debug, Deserialize)]
+struct JetstreamEvent {
+    did: String,
+    time_us: i64,
+    commit: Option<JetstreamCommit>,
 }
 
-async fn run_read_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Result<()> {
+/// Deliberately does not carry Jetstream's own claimed `operation`
+/// (create/update/delete): [`handle_commit_event`] always asks the PDS for
+/// the record's *current* verified state via `getRecord` and acts on that,
+/// so a stale or wrong operation label from Jetstream can't cause a wrong
+/// write -- it can at most cause an extra (harmless, idempotent) check.
+#[derive(Debug, Deserialize)]
+struct JetstreamCommit {
+    collection: String,
+    rkey: String,
+}
+
+fn jetstream_url(cursor: i64, dids: &HashSet<String>) -> String {
+    let mut url =
+        Url::parse(&format!("wss://{JETSTREAM_HOST}/subscribe")).expect("static url is valid");
+    {
+        let mut pairs = url.query_pairs_mut();
+        for collection in WANTED_COLLECTIONS {
+            pairs.append_pair("wantedCollections", collection);
+        }
+        for did in dids {
+            pairs.append_pair("wantedDids", did);
+        }
+        if cursor > 0 {
+            pairs.append_pair("cursor", &cursor.to_string());
+        }
+    }
+    url.to_string()
+}
+
+async fn run_jetstream_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Result<()> {
     use futures_util::StreamExt;
 
     console_log!("firehose read loop starting, {} followed dids", dids.len());
@@ -180,7 +236,7 @@ async fn run_read_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Re
     ws.accept()?;
     let mut processed_since_flush: u32 = 0;
     let mut total_processed: u64 = 0;
-    let mut last_seq: i64 = 0;
+    let mut last_cursor: i64 = 0;
     let mut last_flush_at = js_sys::Date::now();
 
     while let Some(event) = events.next().await {
@@ -198,31 +254,29 @@ async fn run_read_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Re
             console_log!("firehose read loop got a Close event, exiting");
             break; // Close event: the stream's guaranteed final item.
         };
-        let Some(bytes) = message.bytes() else {
-            console_log!("firehose read loop got a non-binary message, skipping");
-            continue; // Non-binary frame; the wire protocol only sends binary.
+        let Some(text) = message.text() else {
+            console_log!("firehose read loop got a non-text message, skipping");
+            continue; // Jetstream's uncompressed wire is JSON text frames.
         };
         total_processed += 1;
 
-        match decode_frame(&bytes) {
-            Ok(FirehoseEvent::Commit(commit)) => {
-                last_seq = commit.seq as i64;
-                if dids.contains(&commit.repo_did) {
-                    if let Ok(changes) =
-                        extract_commit_changes(&commit.car, commit.commit_cid, &commit.ops)
-                    {
-                        let writes = changes_to_index_writes(&commit.repo_did, changes);
-                        for write in &writes {
-                            if let Err(error) = apply_index_write(&env, write).await {
-                                console_log!("firehose index write failed: {error}");
-                            }
+        match serde_json::from_str::<JetstreamEvent>(&text) {
+            Ok(jetstream_event) => {
+                last_cursor = jetstream_event.time_us;
+                // wantedDids already filters server-side; this check is a
+                // defense-in-depth backstop, not the primary filter.
+                if dids.contains(&jetstream_event.did) {
+                    if let Some(commit) = &jetstream_event.commit {
+                        if let Err(error) =
+                            handle_commit_event(&env, &jetstream_event.did, commit).await
+                        {
+                            console_log!("firehose commit handling failed: {error}");
                         }
                     }
                 }
             }
-            Ok(FirehoseEvent::Other(_)) => {}
             Err(error) => {
-                console_log!("firehose frame decode failed: {error}");
+                console_log!("firehose jetstream event parse failed: {error}");
             }
         }
 
@@ -232,7 +286,7 @@ async fn run_read_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Re
             // from inside this wait_until-detached loop don't reliably reach
             // `wrangler tail`, so D1 is the only observable signal that the
             // socket is actually receiving frames.
-            if let Err(error) = flush_checkpoint(&env, last_seq, 0).await {
+            if let Err(error) = flush_checkpoint(&env, last_cursor, 0).await {
                 console_log!("firehose first-message checkpoint flush failed: {error}");
             }
         }
@@ -243,7 +297,7 @@ async fn run_read_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Re
             let now = js_sys::Date::now();
             let delta_seconds = ((now - last_flush_at) / 1000.0) as i64;
             last_flush_at = now;
-            if let Err(error) = flush_checkpoint(&env, last_seq, delta_seconds.max(0)).await {
+            if let Err(error) = flush_checkpoint(&env, last_cursor, delta_seconds.max(0)).await {
                 console_log!("firehose checkpoint flush failed: {error}");
             }
             match load_followed_dids(&env).await {
@@ -254,6 +308,139 @@ async fn run_read_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Re
     }
 
     Ok(())
+}
+
+/// Resolves the record Jetstream claims changed, independently verifies it
+/// against the owning PDS's own `getRecord` proof, and only then applies the
+/// resulting D1 write. This is the entire point of the hybrid design: a
+/// compromised or buggy Jetstream instance can at most cause us to *check*
+/// the wrong thing, never to *store* unverified content.
+async fn handle_commit_event(
+    env: &Env,
+    did: &str,
+    commit: &JetstreamCommit,
+) -> std::result::Result<(), String> {
+    if !WANTED_COLLECTIONS.contains(&commit.collection.as_str()) {
+        return Ok(());
+    }
+
+    let pds_endpoint = resolve_pds_endpoint(env, did).await?;
+    let car_bytes = fetch_get_record(&pds_endpoint, did, &commit.collection, &commit.rkey).await?;
+    let proof = verify_record_proof(&car_bytes, did, &commit.collection, &commit.rkey)
+        .map_err(|error| error.to_string())?;
+
+    let uri = format!("at://{did}/{}/{}", commit.collection, commit.rkey);
+    let write = match proof {
+        RecordProof::Present { record_bytes, .. } => {
+            let json = record_bytes_to_json(&record_bytes).map_err(|error| error.to_string())?;
+            index_write_for_upsert(did, &commit.collection, &uri, &json)
+        }
+        RecordProof::Absent => index_write_for_delete(&commit.collection, &uri),
+    };
+
+    match write {
+        Some(write) => apply_index_write(env, &write).await,
+        None => Ok(()),
+    }
+}
+
+/// Looks up (and caches in D1) the PDS host that actually serves `did`'s
+/// repo. Bluesky's aggregator relay does not implement
+/// `com.atproto.sync.getRecord` itself -- only the account's own PDS does --
+/// so this resolution is required before every `getRecord` call, not an
+/// optimization.
+async fn resolve_pds_endpoint(env: &Env, did: &str) -> std::result::Result<String, String> {
+    let db = env.d1("DB").map_err(|error| error.to_string())?;
+    let did_arg = D1Type::Text(did);
+    let cached = db
+        .prepare("SELECT pds_endpoint FROM atproto_pds_cache WHERE did = ?1")
+        .bind_refs([&did_arg])
+        .map_err(|error| error.to_string())?
+        .first::<Map<String, Value>>(None)
+        .await
+        .map_err(|error| error.to_string())?
+        .and_then(|row| field_str(&row, "pds_endpoint"));
+    if let Some(endpoint) = cached {
+        return Ok(endpoint);
+    }
+
+    let endpoint = fetch_pds_endpoint_from_did_document(did).await?;
+
+    let endpoint_arg = D1Type::Text(&endpoint);
+    db.prepare(
+        "INSERT INTO atproto_pds_cache (did, pds_endpoint) VALUES (?1, ?2) \
+         ON CONFLICT(did) DO UPDATE SET pds_endpoint = excluded.pds_endpoint, \
+         resolved_at = CURRENT_TIMESTAMP",
+    )
+    .bind_refs([&did_arg, &endpoint_arg])
+    .map_err(|error| error.to_string())?
+    .run()
+    .await
+    .map_err(|error| error.to_string())?;
+
+    Ok(endpoint)
+}
+
+async fn fetch_pds_endpoint_from_did_document(did: &str) -> std::result::Result<String, String> {
+    let doc_url = if did.starts_with("did:plc:") {
+        format!("https://plc.directory/{did}")
+    } else if let Some(web_domain) = did.strip_prefix("did:web:") {
+        // did:web path-component encoding (`:` -> `/`) is rare in practice
+        // for Bluesky accounts, but part of the did:web spec.
+        format!(
+            "https://{}/.well-known/did.json",
+            web_domain.replace(':', "/")
+        )
+    } else {
+        return Err(format!("unsupported did method for '{did}'"));
+    };
+
+    let document = crate::activitypub::fetch_json_with_accept_and_headers(
+        &doc_url,
+        "application/json",
+        "did document",
+        &[],
+    )
+    .await?;
+
+    document
+        .get("service")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|service| service.get("id").and_then(Value::as_str) == Some("#atproto_pds"))
+        .and_then(|service| service.get("serviceEndpoint"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("did document for '{did}' has no #atproto_pds service endpoint"))
+}
+
+async fn fetch_get_record(
+    pds_endpoint: &str,
+    did: &str,
+    collection: &str,
+    rkey: &str,
+) -> std::result::Result<Vec<u8>, String> {
+    let mut url = Url::parse(&format!("{pds_endpoint}/xrpc/com.atproto.sync.getRecord"))
+        .map_err(|error| error.to_string())?;
+    url.query_pairs_mut()
+        .append_pair("did", did)
+        .append_pair("collection", collection)
+        .append_pair("rkey", rkey);
+
+    let request =
+        Request::new(url.as_str(), worker::Method::Get).map_err(|error| error.to_string())?;
+    let mut response = Fetch::Request(request)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status_code();
+    if !(200..=299).contains(&status) {
+        return Err(format!(
+            "getRecord for {did}/{collection}/{rkey} at {pds_endpoint} failed with HTTP {status}"
+        ));
+    }
+    response.bytes().await.map_err(|error| error.to_string())
 }
 
 /// The parts of an indexed change a D1 writer needs, independent of how the
@@ -293,69 +480,71 @@ pub(crate) enum IndexWrite {
     },
 }
 
-pub(crate) fn changes_to_index_writes(repo_did: &str, changes: Vec<RepoChange>) -> Vec<IndexWrite> {
-    changes
-        .into_iter()
-        .filter_map(|change| change_to_index_write(repo_did, change))
-        .collect()
+/// Maps a verified, present record to its D1 write. `did`/`uri` come from
+/// the caller (already independently confirmed by [`verify_record_proof`]);
+/// `json` is the decoded record body.
+pub(crate) fn index_write_for_upsert(
+    did: &str,
+    collection: &str,
+    uri: &str,
+    json: &Value,
+) -> Option<IndexWrite> {
+    match collection {
+        "app.bsky.feed.post" => Some(IndexWrite::UpsertPost {
+            object_id: uri.to_string(),
+            actor_id: did.to_string(),
+            content: json_str(json, "text"),
+            in_reply_to: json
+                .get("reply")
+                .and_then(|reply| reply.get("parent"))
+                .and_then(|parent| parent.get("uri"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            published_at: json_str(json, "createdAt"),
+        }),
+        "app.bsky.feed.like" => Some(IndexWrite::UpsertLike {
+            uri: uri.to_string(),
+            actor_did: did.to_string(),
+            subject_uri: json
+                .get("subject")
+                .and_then(|subject| subject.get("uri"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            subject_cid: json
+                .get("subject")
+                .and_then(|subject| subject.get("cid"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            created_at: json_str(json, "createdAt"),
+        }),
+        "app.bsky.graph.follow" => Some(IndexWrite::UpsertFollow {
+            uri: uri.to_string(),
+            actor_did: did.to_string(),
+            subject_did: json
+                .get("subject")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            created_at: json_str(json, "createdAt"),
+        }),
+        _ => None,
+    }
 }
 
-fn change_to_index_write(repo_did: &str, change: RepoChange) -> Option<IndexWrite> {
-    let path = change.path().to_string();
-    let uri = format!("at://{repo_did}/{path}");
-    let collection = path.split('/').next().unwrap_or("").to_string();
-
-    match change {
-        RepoChange::Created { record_bytes, .. } | RepoChange::Updated { record_bytes, .. } => {
-            let json = record_bytes_to_json(&record_bytes).ok()?;
-            match collection.as_str() {
-                "app.bsky.feed.post" => Some(IndexWrite::UpsertPost {
-                    object_id: uri,
-                    actor_id: repo_did.to_string(),
-                    content: json_str(&json, "text"),
-                    in_reply_to: json
-                        .get("reply")
-                        .and_then(|reply| reply.get("parent"))
-                        .and_then(|parent| parent.get("uri"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    published_at: json_str(&json, "createdAt"),
-                }),
-                "app.bsky.feed.like" => Some(IndexWrite::UpsertLike {
-                    uri,
-                    actor_did: repo_did.to_string(),
-                    subject_uri: json
-                        .get("subject")
-                        .and_then(|subject| subject.get("uri"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    subject_cid: json
-                        .get("subject")
-                        .and_then(|subject| subject.get("cid"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    created_at: json_str(&json, "createdAt"),
-                }),
-                "app.bsky.graph.follow" => Some(IndexWrite::UpsertFollow {
-                    uri,
-                    actor_did: repo_did.to_string(),
-                    subject_did: json
-                        .get("subject")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    created_at: json_str(&json, "createdAt"),
-                }),
-                _ => None,
-            }
-        }
-        RepoChange::Deleted { .. } => match collection.as_str() {
-            "app.bsky.feed.post" => Some(IndexWrite::DeletePost { object_id: uri }),
-            "app.bsky.feed.like" => Some(IndexWrite::DeleteLike { uri }),
-            "app.bsky.graph.follow" => Some(IndexWrite::DeleteFollow { uri }),
-            _ => None,
-        },
+/// Maps a verified-absent record to its D1 delete.
+pub(crate) fn index_write_for_delete(collection: &str, uri: &str) -> Option<IndexWrite> {
+    match collection {
+        "app.bsky.feed.post" => Some(IndexWrite::DeletePost {
+            object_id: uri.to_string(),
+        }),
+        "app.bsky.feed.like" => Some(IndexWrite::DeleteLike {
+            uri: uri.to_string(),
+        }),
+        "app.bsky.graph.follow" => Some(IndexWrite::DeleteFollow {
+            uri: uri.to_string(),
+        }),
+        _ => None,
     }
 }
 
@@ -777,92 +966,47 @@ fn today_utc_date() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dais_core::atproto::mst::RepoChange;
-    use dais_core::atproto::repo::CarBlock;
-
-    fn record_change(action: &str, path: &str, json: Value) -> RepoChange {
-        let bytes = serde_ipld_dagcbor::to_vec(&json_to_ipld(&json)).expect("encode record");
-        match action {
-            "create" => RepoChange::Created {
-                path: path.to_string(),
-                cid: sample_record_cid(),
-                record_bytes: bytes,
-            },
-            "update" => RepoChange::Updated {
-                path: path.to_string(),
-                cid: sample_record_cid(),
-                record_bytes: bytes,
-            },
-            "delete" => RepoChange::Deleted {
-                path: path.to_string(),
-            },
-            other => panic!("unexpected action {other}"),
-        }
-    }
-
-    fn sample_record_cid() -> cid::Cid {
-        use multihash_codetable::{Code, MultihashDigest};
-        cid::Cid::new_v1(0x71, Code::Sha2_256.digest(b"test"))
-    }
-
-    fn json_to_ipld(value: &Value) -> ipld_core::ipld::Ipld {
-        use ipld_core::ipld::Ipld;
-        match value {
-            Value::Null => Ipld::Null,
-            Value::Bool(b) => Ipld::Bool(*b),
-            Value::Number(n) => Ipld::Integer(n.as_i64().unwrap_or(0) as i128),
-            Value::String(s) => Ipld::String(s.clone()),
-            Value::Array(items) => Ipld::List(items.iter().map(json_to_ipld).collect()),
-            Value::Object(fields) => Ipld::Map(
-                fields
-                    .iter()
-                    .map(|(k, v)| (k.clone(), json_to_ipld(v)))
-                    .collect(),
-            ),
-        }
-    }
-
-    #[allow(unused_imports)]
-    use CarBlock as _UnusedCarBlockImportGuard;
 
     #[test]
     fn maps_a_post_create_into_an_upsert_post_write() {
-        let change = record_change(
-            "create",
-            "app.bsky.feed.post/abc",
-            serde_json::json!({"$type": "app.bsky.feed.post", "text": "hello", "createdAt": "2026-01-01T00:00:00Z"}),
+        let json = serde_json::json!({"$type": "app.bsky.feed.post", "text": "hello", "createdAt": "2026-01-01T00:00:00Z"});
+        let write = index_write_for_upsert(
+            "did:plc:alice",
+            "app.bsky.feed.post",
+            "at://did:plc:alice/app.bsky.feed.post/abc",
+            &json,
         );
-        let writes = changes_to_index_writes("did:plc:alice", vec![change]);
         assert_eq!(
-            writes,
-            vec![IndexWrite::UpsertPost {
+            write,
+            Some(IndexWrite::UpsertPost {
                 object_id: "at://did:plc:alice/app.bsky.feed.post/abc".to_string(),
                 actor_id: "did:plc:alice".to_string(),
                 content: "hello".to_string(),
                 in_reply_to: None,
                 published_at: "2026-01-01T00:00:00Z".to_string(),
-            }]
+            })
         );
     }
 
     #[test]
     fn maps_a_reply_post_with_its_parent_uri() {
-        let change = record_change(
-            "create",
-            "app.bsky.feed.post/reply1",
-            serde_json::json!({
-                "$type": "app.bsky.feed.post",
-                "text": "yes",
-                "createdAt": "2026-01-01T00:00:00Z",
-                "reply": {
-                    "parent": {"uri": "at://did:plc:bob/app.bsky.feed.post/parent1", "cid": "bafy"},
-                    "root": {"uri": "at://did:plc:bob/app.bsky.feed.post/parent1", "cid": "bafy"}
-                }
-            }),
+        let json = serde_json::json!({
+            "$type": "app.bsky.feed.post",
+            "text": "yes",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "reply": {
+                "parent": {"uri": "at://did:plc:bob/app.bsky.feed.post/parent1", "cid": "bafy"},
+                "root": {"uri": "at://did:plc:bob/app.bsky.feed.post/parent1", "cid": "bafy"}
+            }
+        });
+        let write = index_write_for_upsert(
+            "did:plc:alice",
+            "app.bsky.feed.post",
+            "at://did:plc:alice/app.bsky.feed.post/reply1",
+            &json,
         );
-        let writes = changes_to_index_writes("did:plc:alice", vec![change]);
-        match &writes[0] {
-            IndexWrite::UpsertPost { in_reply_to, .. } => {
+        match write {
+            Some(IndexWrite::UpsertPost { in_reply_to, .. }) => {
                 assert_eq!(
                     in_reply_to.as_deref(),
                     Some("at://did:plc:bob/app.bsky.feed.post/parent1")
@@ -874,99 +1018,154 @@ mod tests {
 
     #[test]
     fn maps_a_like_create_into_an_upsert_like_write() {
-        let change = record_change(
-            "create",
-            "app.bsky.feed.like/xyz",
-            serde_json::json!({
-                "$type": "app.bsky.feed.like",
-                "subject": {"uri": "at://did:plc:bob/app.bsky.feed.post/p1", "cid": "bafy123"},
-                "createdAt": "2026-01-01T00:00:00Z"
-            }),
+        let json = serde_json::json!({
+            "$type": "app.bsky.feed.like",
+            "subject": {"uri": "at://did:plc:bob/app.bsky.feed.post/p1", "cid": "bafy123"},
+            "createdAt": "2026-01-01T00:00:00Z"
+        });
+        let write = index_write_for_upsert(
+            "did:plc:alice",
+            "app.bsky.feed.like",
+            "at://did:plc:alice/app.bsky.feed.like/xyz",
+            &json,
         );
-        let writes = changes_to_index_writes("did:plc:alice", vec![change]);
         assert_eq!(
-            writes,
-            vec![IndexWrite::UpsertLike {
+            write,
+            Some(IndexWrite::UpsertLike {
                 uri: "at://did:plc:alice/app.bsky.feed.like/xyz".to_string(),
                 actor_did: "did:plc:alice".to_string(),
                 subject_uri: "at://did:plc:bob/app.bsky.feed.post/p1".to_string(),
                 subject_cid: Some("bafy123".to_string()),
                 created_at: "2026-01-01T00:00:00Z".to_string(),
-            }]
+            })
         );
     }
 
     #[test]
     fn maps_a_follow_create_into_an_upsert_follow_write() {
-        let change = record_change(
-            "create",
-            "app.bsky.graph.follow/f1",
-            serde_json::json!({
-                "$type": "app.bsky.graph.follow",
-                "subject": "did:plc:carol",
-                "createdAt": "2026-01-01T00:00:00Z"
-            }),
+        let json = serde_json::json!({
+            "$type": "app.bsky.graph.follow",
+            "subject": "did:plc:carol",
+            "createdAt": "2026-01-01T00:00:00Z"
+        });
+        let write = index_write_for_upsert(
+            "did:plc:alice",
+            "app.bsky.graph.follow",
+            "at://did:plc:alice/app.bsky.graph.follow/f1",
+            &json,
         );
-        let writes = changes_to_index_writes("did:plc:alice", vec![change]);
         assert_eq!(
-            writes,
-            vec![IndexWrite::UpsertFollow {
+            write,
+            Some(IndexWrite::UpsertFollow {
                 uri: "at://did:plc:alice/app.bsky.graph.follow/f1".to_string(),
                 actor_did: "did:plc:alice".to_string(),
                 subject_did: "did:plc:carol".to_string(),
                 created_at: "2026-01-01T00:00:00Z".to_string(),
-            }]
+            })
         );
     }
 
     #[test]
     fn maps_deletes_for_each_known_collection() {
-        let post_delete = record_change("delete", "app.bsky.feed.post/abc", Value::Null);
-        let like_delete = record_change("delete", "app.bsky.feed.like/xyz", Value::Null);
-        let follow_delete = record_change("delete", "app.bsky.graph.follow/f1", Value::Null);
-
-        let writes = changes_to_index_writes(
-            "did:plc:alice",
-            vec![post_delete, like_delete, follow_delete],
-        );
-
         assert_eq!(
-            writes,
-            vec![
-                IndexWrite::DeletePost {
-                    object_id: "at://did:plc:alice/app.bsky.feed.post/abc".to_string()
-                },
-                IndexWrite::DeleteLike {
-                    uri: "at://did:plc:alice/app.bsky.feed.like/xyz".to_string()
-                },
-                IndexWrite::DeleteFollow {
-                    uri: "at://did:plc:alice/app.bsky.graph.follow/f1".to_string()
-                },
-            ]
+            index_write_for_delete(
+                "app.bsky.feed.post",
+                "at://did:plc:alice/app.bsky.feed.post/abc"
+            ),
+            Some(IndexWrite::DeletePost {
+                object_id: "at://did:plc:alice/app.bsky.feed.post/abc".to_string()
+            })
+        );
+        assert_eq!(
+            index_write_for_delete(
+                "app.bsky.feed.like",
+                "at://did:plc:alice/app.bsky.feed.like/xyz"
+            ),
+            Some(IndexWrite::DeleteLike {
+                uri: "at://did:plc:alice/app.bsky.feed.like/xyz".to_string()
+            })
+        );
+        assert_eq!(
+            index_write_for_delete(
+                "app.bsky.graph.follow",
+                "at://did:plc:alice/app.bsky.graph.follow/f1"
+            ),
+            Some(IndexWrite::DeleteFollow {
+                uri: "at://did:plc:alice/app.bsky.graph.follow/f1".to_string()
+            })
         );
     }
 
     #[test]
     fn ignores_collections_this_indexer_does_not_care_about() {
-        let change = record_change(
-            "create",
-            "app.bsky.actor.profile/self",
-            serde_json::json!({"$type": "app.bsky.actor.profile", "displayName": "Alice"}),
+        let json = serde_json::json!({"$type": "app.bsky.actor.profile", "displayName": "Alice"});
+        assert_eq!(
+            index_write_for_upsert(
+                "did:plc:alice",
+                "app.bsky.actor.profile",
+                "at://did:plc:alice/app.bsky.actor.profile/self",
+                &json
+            ),
+            None
         );
-        let writes = changes_to_index_writes("did:plc:alice", vec![change]);
-        assert!(writes.is_empty());
+        assert_eq!(
+            index_write_for_delete(
+                "app.bsky.actor.profile",
+                "at://did:plc:alice/app.bsky.actor.profile/self"
+            ),
+            None
+        );
     }
 
     #[test]
-    fn relay_url_omits_cursor_on_first_run_and_includes_it_on_resume() {
-        assert_eq!(
-            relay_url(0),
-            "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos"
-        );
-        assert_eq!(
-            relay_url(42),
-            "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos?cursor=42"
-        );
+    fn parses_a_real_shaped_jetstream_commit_event_extracting_only_what_it_needs() {
+        // Shape confirmed live against wss://jetstream2.us-east.bsky.network/subscribe;
+        // content is synthetic (never commit real captured post text/dids).
+        let text = r#"{"did":"did:plc:example","time_us":1784051382391244,"kind":"commit","commit":{"rev":"3mqmng4deol2x","operation":"create","collection":"app.bsky.feed.post","rkey":"3mqmng4f67c2x","cid":"bafyreiexample","record":{"$type":"app.bsky.feed.post","text":"hi","createdAt":"2026-01-01T00:00:00Z"}}}"#;
+        let event: JetstreamEvent = serde_json::from_str(text).expect("parse");
+        assert_eq!(event.did, "did:plc:example");
+        assert_eq!(event.time_us, 1784051382391244);
+        let commit = event.commit.expect("commit present");
+        assert_eq!(commit.collection, "app.bsky.feed.post");
+        assert_eq!(commit.rkey, "3mqmng4f67c2x");
+    }
+
+    #[test]
+    fn parses_a_jetstream_delete_event_with_no_record_or_cid() {
+        let text = r#"{"did":"did:plc:example","time_us":1784051384077720,"kind":"commit","commit":{"rev":"3mqmngb4okb22","operation":"delete","collection":"app.bsky.feed.post","rkey":"3ly3sp7j4d22d"}}"#;
+        let event: JetstreamEvent = serde_json::from_str(text).expect("parse");
+        let commit = event.commit.expect("commit present");
+        assert_eq!(commit.collection, "app.bsky.feed.post");
+        assert_eq!(commit.rkey, "3ly3sp7j4d22d");
+    }
+
+    #[test]
+    fn parses_a_jetstream_account_event_with_no_commit_field() {
+        let text = r#"{"did":"did:plc:example","time_us":1784051384522819,"kind":"account","account":{"active":false,"did":"did:plc:example","seq":31832282146,"status":"deleted","time":"2026-01-01T00:00:00Z"}}"#;
+        let event: JetstreamEvent = serde_json::from_str(text).expect("parse");
+        assert!(event.commit.is_none());
+    }
+
+    #[test]
+    fn jetstream_url_omits_cursor_on_first_run_and_includes_it_on_resume() {
+        let dids = HashSet::new();
+        let url = jetstream_url(0, &dids);
+        assert!(url.starts_with("wss://jetstream2.us-east.bsky.network/subscribe?"));
+        assert!(!url.contains("cursor="));
+        assert!(url.contains("wantedCollections=app.bsky.feed.post"));
+        assert!(url.contains("wantedCollections=app.bsky.feed.like"));
+        assert!(url.contains("wantedCollections=app.bsky.graph.follow"));
+
+        let resumed = jetstream_url(1_700_000_000_000_000, &dids);
+        assert!(resumed.contains("cursor=1700000000000000"));
+    }
+
+    #[test]
+    fn jetstream_url_includes_every_followed_did() {
+        let mut dids = HashSet::new();
+        dids.insert("did:plc:alice".to_string());
+        let url = jetstream_url(0, &dids);
+        assert!(url.contains("wantedDids=did%3Aplc%3Aalice"));
     }
 
     #[test]
