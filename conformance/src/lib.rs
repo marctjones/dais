@@ -2193,6 +2193,12 @@ fn run_mastodon_api_authenticated(http: &Http, rows: &mut Vec<Row>, token: &str)
                 "/api/v1/scheduled_statuses",
                 "/api/v1/mutes",
                 "/api/v1/bookmarks",
+                "/api/v1/announcements",
+                "/api/v1/directory",
+                "/api/v1/trends",
+                "/api/v1/trends/statuses",
+                "/api/v1/trends/tags",
+                "/api/v1/trends/links",
             ] {
                 let res = http.request("GET", path, auth, None)?;
                 expect_status(&res, 200, path)?;
