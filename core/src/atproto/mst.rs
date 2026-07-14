@@ -70,8 +70,9 @@ pub fn decode_commit(car: &CarFile, commit_cid: Cid) -> CoreResult<CommitData> {
     let bytes = car.block(&commit_cid).ok_or_else(|| {
         CoreError::InvalidAtProto(format!("commit block {commit_cid} not present in CAR"))
     })?;
-    let commit: Ipld = serde_ipld_dagcbor::from_slice(bytes)
-        .map_err(|error| CoreError::InvalidAtProto(format!("commit block is not DAG-CBOR: {error}")))?;
+    let commit: Ipld = serde_ipld_dagcbor::from_slice(bytes).map_err(|error| {
+        CoreError::InvalidAtProto(format!("commit block is not DAG-CBOR: {error}"))
+    })?;
     let Ipld::Map(fields) = commit else {
         return Err(CoreError::InvalidAtProto(
             "commit block must be a CBOR map".to_string(),
@@ -174,10 +175,7 @@ fn extract_one_change(car: &CarFile, data_root: Cid, op: &RepoOperation) -> Core
     }
 
     let found = mst_get(car, data_root, op.path.as_bytes())?.ok_or_else(|| {
-        CoreError::InvalidAtProto(format!(
-            "commit op for '{}' not found in its MST",
-            op.path
-        ))
+        CoreError::InvalidAtProto(format!("commit op for '{}' not found in its MST", op.path))
     })?;
     if let Some(declared) = &op.cid {
         let declared_cid: Cid = declared.parse().map_err(|error| {
@@ -310,18 +308,13 @@ fn apply_prefix(previous_key: &[u8], prefix_len: usize, suffix: &[u8]) -> CoreRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atproto::car::decode_car;
     use crate::atproto::repo::{
         encode_car, mst_subtree, repo_key_depth, repo_record_block, repo_snapshot_from_records,
         AtprotoIdentity, CarBlock, RepoRecord,
     };
-    use crate::atproto::car::decode_car;
 
-    fn signed_commit(
-        did: &str,
-        rev: &str,
-        prev: Option<Cid>,
-        data: Cid,
-    ) -> (Cid, Vec<u8>) {
+    fn signed_commit(did: &str, rev: &str, prev: Option<Cid>, data: Cid) -> (Cid, Vec<u8>) {
         use ipld_core::ipld::Ipld;
         use std::collections::BTreeMap;
 
@@ -447,9 +440,7 @@ mod tests {
             .find(|path| {
                 *path != target_path
                     && match collect_visited(&car, data_root, path.as_bytes()) {
-                        Ok((_, visited)) => {
-                            !visited.iter().all(|cid| target_visited.contains(cid))
-                        }
+                        Ok((_, visited)) => !visited.iter().all(|cid| target_visited.contains(cid)),
                         Err(_) => false,
                     }
             })
@@ -546,9 +537,9 @@ mod tests {
             .map(|record| repo_key_depth(record.path.as_bytes()))
             .min()
             .expect("min depth");
-        let (data_root, mst_blocks) = mst_subtree(&sorted, 0..sorted.len(), min_depth).expect("mst");
-        let (commit_cid, commit_bytes) =
-            signed_commit(&identity.did, "3lzzz", None, data_root);
+        let (data_root, mst_blocks) =
+            mst_subtree(&sorted, 0..sorted.len(), min_depth).expect("mst");
+        let (commit_cid, commit_bytes) = signed_commit(&identity.did, "3lzzz", None, data_root);
 
         let target = sorted
             .iter()
@@ -619,7 +610,8 @@ mod tests {
         )]);
         let op = RepoOperation::create("app.bsky.feed.post/does-not-exist", "bafyfake");
 
-        let error = extract_commit_changes(&car, commit_cid, &[op]).expect_err("missing path rejected");
+        let error =
+            extract_commit_changes(&car, commit_cid, &[op]).expect_err("missing path rejected");
         assert!(error.to_string().contains("not found"));
     }
 }
