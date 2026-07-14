@@ -28,7 +28,7 @@ class_name = "FirehoseSubscription"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["FirehoseSubscription"]
+new_sqlite_classes = ["FirehoseSubscription"]
 
 [triggers]
 crons = ["*/30 * * * *"]
