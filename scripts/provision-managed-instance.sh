@@ -239,10 +239,13 @@ EOF
     cat >> "$INSTANCE_OUT/commands.txt" <<EOF
 $WRANGLER secret put OWNER_API_TOKEN --env $SLUG --config platforms/cloudflare/workers/router/wrangler.toml < $OWNER_TOKEN_FILE
 $WRANGLER secret put DAIS_OWNER_TOKEN --env $SLUG --config platforms/cloudflare/workers/router/wrangler.toml < $OWNER_TOKEN_FILE
+$WRANGLER secret put OWNER_API_TOKEN --env $SLUG --config platforms/cloudflare/workers/pds/wrangler.toml < $OWNER_TOKEN_FILE
 EOF
   else
     cat >> "$INSTANCE_OUT/commands.txt" <<'EOF'
-# Generate an owner token, store it with 0600 permissions, then set OWNER_API_TOKEN and DAIS_OWNER_TOKEN on the router worker.
+# Generate an owner token, store it with 0600 permissions, then set OWNER_API_TOKEN and DAIS_OWNER_TOKEN
+# on the router worker, AND OWNER_API_TOKEN on the pds worker (they are separate Workers with
+# separate secrets — see issue #358 for the drift this caused when only the router was updated).
 EOF
   fi
   if [ -n "$DELIVERY_ADMIN_TOKEN_FILE" ]; then
@@ -275,6 +278,13 @@ run_if_needed() {
     [ -f "$OWNER_TOKEN_FILE" ] || { echo "Owner token file not found: $OWNER_TOKEN_FILE" >&2; exit 2; }
     "$WRANGLER" secret put OWNER_API_TOKEN --env "$SLUG" --config "$ROOT/platforms/cloudflare/workers/router/wrangler.toml" < "$OWNER_TOKEN_FILE"
     "$WRANGLER" secret put DAIS_OWNER_TOKEN --env "$SLUG" --config "$ROOT/platforms/cloudflare/workers/router/wrangler.toml" < "$OWNER_TOKEN_FILE"
+    # pds is a separate Cloudflare Worker from the router with its own
+    # OWNER_API_TOKEN secret (no DAIS_OWNER_TOKEN fallback there — see
+    # platforms/cloudflare/workers/pds/src/lib.rs's owner_api_token()).
+    # Keeping this call site in sync with the router's above is what #358
+    # was filed to fix: they'd drifted apart after a rotation that only
+    # touched the router.
+    "$WRANGLER" secret put OWNER_API_TOKEN --env "$SLUG" --config "$ROOT/platforms/cloudflare/workers/pds/wrangler.toml" < "$OWNER_TOKEN_FILE"
   fi
   if [ -n "$DELIVERY_ADMIN_TOKEN_FILE" ]; then
     [ -f "$DELIVERY_ADMIN_TOKEN_FILE" ] || { echo "Delivery admin token file not found: $DELIVERY_ADMIN_TOKEN_FILE" >&2; exit 2; }

@@ -70,11 +70,15 @@ It's skipped by default (not part of `release-desk-v2.sh`) since it needs
 live network access and a configured account; it asserts the loaded account
 didn't silently fall back to local preview data.
 
-Configure production owner API access:
+Configure production owner API access. The router and pds workers are
+separate Cloudflare Workers with independently-configured `OWNER_API_TOKEN`
+secrets — both need the same token, or owner-authenticated pds requests
+(createRecord, getPreferences, uploadBlob, etc.) will 401 even though the
+router accepts it (see issue #358):
 
 ```bash
-cd platforms/cloudflare/workers/router
-printf '%s' '<random-token>' | wrangler secret put OWNER_API_TOKEN --env production
+printf '%s' '<random-token>' | wrangler secret put OWNER_API_TOKEN --env production --config platforms/cloudflare/workers/router/wrangler.toml
+printf '%s' '<random-token>' | wrangler secret put OWNER_API_TOKEN --env production --config platforms/cloudflare/workers/pds/wrangler.toml
 ```
 
 Dais Desk stores local account profiles in the platform app configuration
