@@ -30,6 +30,22 @@ class_name = "FirehoseSubscription"
 tag = "v1"
 new_sqlite_classes = ["FirehoseSubscription"]
 
+# v2/v3: force-restart every existing FirehoseSubscription instance after the
+# Jetstream rewrite (issue #377). A code-only deploy does not evict a live DO
+# instance whose outbound WebSocket is still open -- Cloudflare's own docs:
+# "eviction is deferred until all outbound connections have closed" -- so an
+# instance that had already opened the old raw-relay connection would keep
+# running the old code indefinitely. Deleting then recreating the class is
+# the documented way to force a hard reset. Only the DO's own internal
+# storage (alarm scheduling) is lost; all real data lives in D1.
+[[migrations]]
+tag = "v2"
+deleted_classes = ["FirehoseSubscription"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["FirehoseSubscription"]
+
 [triggers]
 crons = ["*/30 * * * *"]
 
