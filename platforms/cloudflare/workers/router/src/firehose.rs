@@ -175,19 +175,33 @@ fn relay_url(last_seq: i64) -> String {
 async fn run_read_loop(env: Env, ws: WebSocket, mut dids: HashSet<String>) -> Result<()> {
     use futures_util::StreamExt;
 
+    console_log!("firehose read loop starting, {} followed dids", dids.len());
     let mut events = ws.events()?;
     let mut processed_since_flush: u32 = 0;
+    let mut total_processed: u64 = 0;
     let mut last_seq: i64 = 0;
     let mut last_flush_at = js_sys::Date::now();
 
     while let Some(event) = events.next().await {
-        let event = event?;
+        let event = match event {
+            Ok(event) => event,
+            Err(error) => {
+                console_log!("firehose event stream error: {error}");
+                break;
+            }
+        };
+        if total_processed == 0 {
+            console_log!("firehose read loop received its first event");
+        }
         let WebsocketEvent::Message(message) = event else {
+            console_log!("firehose read loop got a Close event, exiting");
             break; // Close event: the stream's guaranteed final item.
         };
         let Some(bytes) = message.bytes() else {
+            console_log!("firehose read loop got a non-binary message, skipping");
             continue; // Non-binary frame; the wire protocol only sends binary.
         };
+        total_processed += 1;
 
         match decode_frame(&bytes) {
             Ok(FirehoseEvent::Commit(commit)) => {
