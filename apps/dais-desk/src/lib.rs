@@ -6079,7 +6079,9 @@ pub fn create_test_window() -> Result<MainWindow, slint::PlatformError> {
 /// Same as [`create_test_window`], but with the owner-API-failure/fixture-fallback
 /// state set (see issue #359) so tests can verify the fixture-data warning banner
 /// renders without needing a real 401 from a live account.
-pub fn create_test_window_with_api_error(reason: String) -> Result<MainWindow, slint::PlatformError> {
+pub fn create_test_window_with_api_error(
+    reason: String,
+) -> Result<MainWindow, slint::PlatformError> {
     let mut inner = DeskController::fixture_for_tests();
     inner.data = fixture_data(Some(reason));
     let controller = Rc::new(RefCell::new(inner));

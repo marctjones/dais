@@ -165,7 +165,11 @@ fn run() -> Result<(), Box<dyn Error>> {
             .contains("401"),
         "fixture data reason should include the underlying API error"
     );
-    capture(&fixture_error_window, &output_dir, "home-fixture-data-warning")?;
+    capture(
+        &fixture_error_window,
+        &output_dir,
+        "home-fixture-data-warning",
+    )?;
     fixture_error_window.hide()?;
 
     Ok(())

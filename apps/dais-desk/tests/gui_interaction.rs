@@ -49,7 +49,9 @@ fn every_interactive_control_has_an_accessible_label() {
             for element in elements {
                 let label = element.accessible_label();
                 assert!(
-                    label.as_deref().is_some_and(|value| !value.trim().is_empty()),
+                    label
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty()),
                     "on {mode}/{screen}: {role:?} control (type {:?}) has no accessible-label",
                     element.type_name()
                 );
@@ -323,7 +325,10 @@ fn every_mode_and_screen_nav_button_is_reachable_by_clicking_through() {
     let window = dais_desk::create_test_window().expect("test fixture window");
 
     let modes = nav_items(window.get_mode_nav());
-    assert!(!modes.is_empty(), "expected at least one entry in mode_nav()");
+    assert!(
+        !modes.is_empty(),
+        "expected at least one entry in mode_nav()"
+    );
 
     let mut visited_screens = Vec::new();
 
@@ -363,9 +368,26 @@ fn every_mode_and_screen_nav_button_is_reachable_by_clicking_through() {
     // are all present, so a future screen_nav edit that drops one is caught
     // here rather than discovered by manual review months later.
     let expected_reachable = [
-        "today", "inbox", "compose", "posts", "saved", "find", "friends", "followers",
-        "following", "watches", "audience", "blocks", "health", "deliveries", "moderation",
-        "security", "identity", "accounts", "settings", "stats",
+        "today",
+        "inbox",
+        "compose",
+        "posts",
+        "saved",
+        "find",
+        "friends",
+        "followers",
+        "following",
+        "watches",
+        "audience",
+        "blocks",
+        "health",
+        "deliveries",
+        "moderation",
+        "security",
+        "identity",
+        "accounts",
+        "settings",
+        "stats",
     ];
     for screen in expected_reachable {
         assert!(

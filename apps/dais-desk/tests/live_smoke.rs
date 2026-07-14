@@ -150,9 +150,7 @@ fn check_conversation_decrypts_to_plaintext(
 
     let rows = ui_rows(window.get_rows());
     let Some(conversation_row) = rows.iter().find(|row| row.id.starts_with("conversation:")) else {
-        println!(
-            "no conversation rows on the live account; skipping decrypted-plaintext check"
-        );
+        println!("no conversation rows on the live account; skipping decrypted-plaintext check");
         return Ok(());
     };
     let row_id = conversation_row.id.to_string();
@@ -162,7 +160,12 @@ fn check_conversation_decrypts_to_plaintext(
 
     let combined = ui_rows(window.get_inspector_rows())
         .iter()
-        .map(|row| format!("{}\n{}\n{}\n{}", row.title, row.subtitle, row.detail, row.meta))
+        .map(|row| {
+            format!(
+                "{}\n{}\n{}\n{}",
+                row.title, row.subtitle, row.detail, row.meta
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -203,7 +206,9 @@ fn check_reply_preserves_audience_context(
         .iter()
         .find(|row| row.primary.as_str() == "Reply" || row.secondary.as_str() == "Reply")
     else {
-        println!("no row in Inbox supports Reply on the live account; skipping reply-audience check");
+        println!(
+            "no row in Inbox supports Reply on the live account; skipping reply-audience check"
+        );
         return Ok(());
     };
     let row_id = reply_row.id.to_string();
@@ -229,7 +234,12 @@ fn check_reply_preserves_audience_context(
             )
             .into());
         }
-        if window.get_compose_recipients().to_string().trim().is_empty() {
+        if window
+            .get_compose_recipients()
+            .to_string()
+            .trim()
+            .is_empty()
+        {
             return Err(
                 format!("replying to direct conversation {row_id} lost its recipient").into(),
             );

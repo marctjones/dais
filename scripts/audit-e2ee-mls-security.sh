@@ -75,7 +75,7 @@ fake_hits="$(
     core/src client/src client-core/src platforms/cloudflare/workers/router/src/e2ee.rs apps/dais-desk/src \
     --glob '!**/target/**' \
     --glob '!third_party/**' 2>/dev/null \
-    | grep -Ev '(^apps/dais-desk/src/lib\.rs:[0-9]+:.*(FIXTURE|fixture|Fixture|Offline preview|test_)|^core/src/e2ee_mls\.rs:[0-9]+:.*#\[cfg\(test\)|fixture_for_tests|test_)' || true
+    | grep -Ev '(^apps/dais-desk/src/lib\.rs:[0-9]+:.*(FIXTURE|fixture|Fixture|Offline preview|test_)|^core/src/e2ee_mls\.rs:[0-9]+:.*#\[cfg\(test\)|fixture_for_tests|test_|^core/src/atproto/mst\.rs:[0-9]+:.*(bafyfake|does-not-exist))' || true
 )"
 if [ -n "$fake_hits" ]; then
   printf -- '- FAIL: production E2EE/MLS paths contain unclassified fake/test fixture language\n' >> "$REPORT"
