@@ -6076,6 +6076,37 @@ pub fn create_test_window() -> Result<MainWindow, slint::PlatformError> {
     Ok(window)
 }
 
+/// Single source of truth for every screen expected to be reachable via real
+/// `mode_nav()`/`screen_nav()` navigation (see #371/#373). Both the
+/// reachability test (`gui_interaction.rs`) and the screenshot-coverage
+/// enforcement test (`visual_smoke.rs`) check against this same list, so a
+/// screen can't quietly go missing from one without the other noticing —
+/// the failure mode that let #373's stale coverage docs drift undetected.
+pub fn expected_reachable_screens() -> &'static [&'static str] {
+    &[
+        "today",
+        "inbox",
+        "compose",
+        "posts",
+        "saved",
+        "find",
+        "friends",
+        "followers",
+        "following",
+        "watches",
+        "audience",
+        "blocks",
+        "health",
+        "deliveries",
+        "moderation",
+        "security",
+        "identity",
+        "accounts",
+        "settings",
+        "stats",
+    ]
+}
+
 /// Same as [`create_test_window`], but with the owner-API-failure/fixture-fallback
 /// state set (see issue #359) so tests can verify the fixture-data warning banner
 /// renders without needing a real 401 from a live account.

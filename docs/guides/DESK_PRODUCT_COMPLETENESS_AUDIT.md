@@ -20,16 +20,23 @@ TODO/FIXME comments.
 
 ## Audit Checklist
 
+**Screenshot names below are narrative, not evidence** (see #373): the actual
+enforced mapping lives in code —
+`apps/dais-desk/tests/visual_smoke.rs`'s `screenshot_for_screen()`, checked
+against every screen in `dais_desk::expected_reachable_screens()`. If a name
+below disagrees with that mapping, the code is right and this table is stale;
+fix the table.
+
 | Area | Product-doc anchors | Required Desk evidence | Release gate |
 | --- | --- | --- | --- |
-| Home / Today | `DAIS_DESK_PRODUCT_UX.md` sections 3, 4, 10; `POSITIONING.md` sections 1-2 | Today, Reading, Inbox, My Posts, and Saved/Drafts rows expose reading, attention, response, and owner-only saved-state workflows. | `product_completeness_primary_workflows_are_not_placeholders` walks `today`, `reading`, `inbox`, `posts`, and `saved`; visual smoke requires `home*` screenshots. |
+| Home / Today | `DAIS_DESK_PRODUCT_UX.md` sections 3, 4, 10; `POSITIONING.md` sections 1-2 | Today, Inbox, My Posts, and Saved/Drafts rows expose reading, attention, response, and owner-only saved-state workflows. | `product_completeness_primary_workflows_are_not_placeholders` walks `today`, `inbox`, `posts`, and `saved`; visual smoke requires `home*` screenshots. |
 | Compose | `POSITIONING.md` three actions; `PRIVATE_MODE.md`; `DAIS_DESK_PRODUCT_UX.md` sections 3, 4, 9, 10 | Compose shows audience before protocol route, explains who can see the post, keeps public posting deliberate, and supports draft/media context rows. | Product completeness test walks `compose`; release visual smoke requires `home-compose-media.png`. |
 | Direct Messages | `POSITIONING.md` section 1; `DAIS_DESK_PRODUCT_UX.md` Direct Messages | DMs appear in Today/Inbox, expose reply context, and show direct/encrypted state without raw recipient URLs as primary labels. | Product completeness test treats `today` and `inbox` as DM-carrying primary workflows. |
-| People / Relationships | `DAIS_DESK_PRODUCT_UX.md` sections 3, 4, 9, 10 | Find, Relationship, Friends, Followers, Following, Watches/Sources, Audience Groups, and Blocks/Mutes are present with state-aware rows and next-step empty states. | Product completeness test walks all People screens; visual smoke requires `people-*` screenshots. |
-| Discovery | `DAIS_DESK_PRODUCT_UX.md` Find/Search/Discovery; `MAINSTREAM_SOCIAL_PLATFORM_LESSONS.md` | Finder supports handles, URLs, sources, provider results, starter bundles, and public-search guardrails. | Product completeness test walks `find` and `watches`; release smoke captures `people-find-search` and `people-watches-sources`. |
-| Server / Operations | `DAIS_DESK_PRODUCT_UX.md` sections 3, 5, 7, 10 | Health, Deliveries, Moderation, Security, Identity, Accounts, Settings, and Stats expose operator state without making raw protocol machinery primary. | Product completeness test walks all Server screens; visual smoke requires `server-*` screenshots. |
+| People / Relationships | `DAIS_DESK_PRODUCT_UX.md` sections 3, 4, 9, 10 | Find, Friends, Followers, Following, Watches/Sources, Audience Groups, and Blocks/Mutes are present with state-aware rows and next-step empty states. | Product completeness test walks all People screens; visual smoke requires `people-*` screenshots. |
+| Discovery | `DAIS_DESK_PRODUCT_UX.md` Find/Search/Discovery; `MAINSTREAM_SOCIAL_PLATFORM_LESSONS.md` | Finder supports handles, URLs, sources, provider results, starter bundles, and public-search guardrails. | Product completeness test walks `find` and `watches`; release smoke captures `people-find-search` and `people-watches`. |
+| Server / Operations | `DAIS_DESK_PRODUCT_UX.md` sections 3, 5, 7, 10 | Health, Deliveries, Moderation, Security, Identity, Accounts, Settings, and Stats expose operator state without making raw protocol machinery primary. | Product completeness test walks all Server screens; visual smoke requires `server-health`, `server-deliveries`, `server-moderation`, `settings-security`, `server-identity`, `settings-accounts`, `settings-privacy`, and `server-stats`. |
 | Media | `DAIS_DESK_PRODUCT_UX.md` Compose, Thread/Post Inspector, Watches/Sources | Compose media rows show access/alt-text consequences; public media polish and encrypted media remain separately tracked roadmap work. | Product completeness test covers current compose/media rows; unresolved encrypted media must stay in GitHub issues, not placeholders. |
-| Settings / Accounts | `DAIS_DESK_PRODUCT_UX.md` Global Shell, Settings, Account Switching | Defaults, route, authorized fetch, manual follower approval, and account token state are visible and actionable. | Product completeness test walks `settings` and `accounts`; visual smoke requires `server-settings` and `server-accounts`. |
+| Settings / Accounts | `DAIS_DESK_PRODUCT_UX.md` Global Shell, Settings, Account Switching | Defaults, route, authorized fetch, manual follower approval, and account token state are visible and actionable. | Product completeness test walks `settings` and `accounts`; visual smoke requires `settings-privacy` and `settings-accounts`. |
 
 ## Placeholder Rules
 

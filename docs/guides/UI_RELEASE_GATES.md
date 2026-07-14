@@ -36,10 +36,18 @@ The smoke gate must cover:
   my posts with thread inspector, saved, people find/friends/follow
   requests/following, accounts, settings, and E2EE security.
 
-Design-alignment coverage tracking lives in:
+Screenshot coverage is enforced by code, not by a hand-maintained list (see #373,
+where the design docs below claimed coverage for screens that had none): every
+screen in `dais_desk::expected_reachable_screens()` (`apps/dais-desk/src/lib.rs`)
+must have an entry in `visual_smoke.rs`'s `screenshot_for_screen()` mapping, and
+`visual_smoke.rs` asserts the mapped file actually exists after the capture
+sequence runs. Adding a screen without a screenshot fails the suite the next
+time it runs.
 
-- `docs/guides/DESIGN_ALIGNMENT_MATRIX.md`
-- `docs/guides/DESK_PRODUCT_COMPLETENESS_AUDIT.md`
+`docs/guides/DESIGN_ALIGNMENT_MATRIX.md` and
+`docs/guides/DESK_PRODUCT_COMPLETENESS_AUDIT.md` describe product-doc anchors
+and narrative intent — treat their prose as context, not as evidence that
+coverage exists; the test above is the only thing that actually enforces it.
 
 The product-completeness gate maps Home, People, Server, Discovery, Compose,
 DMs, media, and settings to the product docs. Its Rust test fails when a claimed
@@ -58,8 +66,9 @@ The smoke gate checks and release script requirements:
 - Font sizing does not depend on viewport width.
 - Native screenshots for Home, People/Followers, Accounts, Settings, and
   Security are nonblank and visually varied.
-- Release script enforces the required screenshot names below and still keeps
-  `docs/guides/DESIGN_ALIGNMENT_MATRIX.md` as the design-coverage source.
+- Release script enforces the required screenshot names below; the actual
+  coverage source of truth is `visual_smoke.rs`'s per-screen enforcement (see
+  "Required Coverage" above), not `docs/guides/DESIGN_ALIGNMENT_MATRIX.md`.
 
 Future GUI changes that add new icon-only controls, dialogs, sheets, or custom
 interactive widgets should extend the smoke gate with targeted checks for those
@@ -106,9 +115,14 @@ home-inbox-notifications, workflow-save-post, home-today,
 home-inbox-conversations, home-post-thread, home-saved,
 workflow-reply-compose,
 people-find-search, people-friends, people-followers, people-following,
+people-watches, people-audience, people-blocks,
 workflow-follower-approve,
-settings-accounts, settings-privacy, settings-security
+settings-accounts, settings-privacy, settings-security,
+server-health, server-deliveries, server-moderation, server-identity, server-stats
 ```
+
+This list is a secondary artifact-presence check; the authoritative source is
+`visual_smoke.rs`'s `screenshot_for_screen()` mapping (see "Required Coverage").
 
 If a gate is intentionally deferred, the release issue must name the missing
 gate, explain the user risk, and link to the follow-up issue.

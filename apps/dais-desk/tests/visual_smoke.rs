@@ -126,6 +126,17 @@ fn run() -> Result<(), Box<dyn Error>> {
     window.invoke_select_screen("following".into());
     assert_screen_content(&window, "following", "Following", "following:");
     capture(&window, &output_dir, "people-following")?;
+
+    window.invoke_select_screen("watches".into());
+    assert_screen_content(&window, "watches", "Watches & Sources", "watch:");
+    capture(&window, &output_dir, "people-watches")?;
+    window.invoke_select_screen("audience".into());
+    assert_screen_content(&window, "audience", "Audience Groups", "audience:");
+    capture(&window, &output_dir, "people-audience")?;
+    window.invoke_select_screen("blocks".into());
+    assert_screen_content(&window, "blocks", "Blocks & Mutes", "block:");
+    capture(&window, &output_dir, "people-blocks")?;
+
     window.invoke_select_mode("people".into());
     window.invoke_select_screen("followers".into());
     window.invoke_row_action(
@@ -145,6 +156,37 @@ fn run() -> Result<(), Box<dyn Error>> {
     window.invoke_select_screen("security".into());
     assert_screen_content(&window, "security", "Security", "security:");
     capture(&window, &output_dir, "settings-security")?;
+
+    window.invoke_select_screen("health".into());
+    assert_screen_content(&window, "health", "Health", "health:");
+    capture(&window, &output_dir, "server-health")?;
+    window.invoke_select_screen("deliveries".into());
+    assert_screen_content(&window, "deliveries", "Deliveries", "delivery:");
+    capture(&window, &output_dir, "server-deliveries")?;
+    window.invoke_select_screen("moderation".into());
+    assert_screen_content(&window, "moderation", "Moderation", "moderation:");
+    capture(&window, &output_dir, "server-moderation")?;
+    window.invoke_select_screen("identity".into());
+    assert_screen_content(&window, "identity", "Identity", "identity:");
+    capture(&window, &output_dir, "server-identity")?;
+    window.invoke_select_screen("stats".into());
+    assert_screen_content(&window, "stats", "Stats", "stats:");
+    capture(&window, &output_dir, "server-stats")?;
+
+    // Enforcement for #373: every screen reachable via real mode_nav()/
+    // screen_nav() navigation must have a captured screenshot mapped here.
+    // A screen missing from `screenshot_for_screen` fails loudly instead of
+    // silently shipping with zero visual regression coverage — the failure
+    // mode that let the design docs claim coverage that didn't exist.
+    for screen in dais_desk::expected_reachable_screens() {
+        let name = screenshot_for_screen(screen);
+        let path = output_dir.join(format!("{name}.png"));
+        assert!(
+            path.exists(),
+            "screen {screen:?} is reachable but its mapped screenshot {name:?} was never captured (missing {})",
+            path.display()
+        );
+    }
 
     window.hide()?;
 
@@ -232,6 +274,37 @@ fn capture(
     )?;
     println!("wrote {}", path.display());
     Ok(())
+}
+
+/// Maps each screen in `dais_desk::expected_reachable_screens()` to the
+/// screenshot basename that provides its visual regression coverage (#373).
+/// Adding a screen to `expected_reachable_screens()` without adding an
+/// entry here panics loudly the next time this suite runs, instead of
+/// silently shipping a new screen with zero screenshot coverage.
+fn screenshot_for_screen(screen: &str) -> &'static str {
+    match screen {
+        "today" => "home",
+        "inbox" => "home-inbox-notifications",
+        "compose" => "home-compose-media",
+        "posts" => "home-post-thread",
+        "saved" => "home-saved",
+        "find" => "people-find-search",
+        "friends" => "people-friends",
+        "followers" => "people-followers",
+        "following" => "people-following",
+        "watches" => "people-watches",
+        "audience" => "people-audience",
+        "blocks" => "people-blocks",
+        "health" => "server-health",
+        "deliveries" => "server-deliveries",
+        "moderation" => "server-moderation",
+        "security" => "settings-security",
+        "identity" => "server-identity",
+        "accounts" => "settings-accounts",
+        "settings" => "settings-privacy",
+        "stats" => "server-stats",
+        other => panic!("no screenshot mapping for screen {other:?}; add one to screenshot_for_screen"),
+    }
 }
 
 fn set_smoke_size(window: &dais_desk::MainWindow, width: f32, height: f32) {

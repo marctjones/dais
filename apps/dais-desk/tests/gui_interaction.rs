@@ -364,32 +364,11 @@ fn every_mode_and_screen_nav_button_is_reachable_by_clicking_through() {
 
     // Screens that exist in the row-rendering code but aren't exposed by any
     // mode_nav()/screen_nav() entry would silently vanish from this list
-    // instead of failing loudly — assert the ones the design docs describe
+    // instead of failing loudly — assert the ones dais_desk::expected_reachable_screens()
+    // (shared with visual_smoke.rs's screenshot-coverage check, see #373) describe
     // are all present, so a future screen_nav edit that drops one is caught
     // here rather than discovered by manual review months later.
-    let expected_reachable = [
-        "today",
-        "inbox",
-        "compose",
-        "posts",
-        "saved",
-        "find",
-        "friends",
-        "followers",
-        "following",
-        "watches",
-        "audience",
-        "blocks",
-        "health",
-        "deliveries",
-        "moderation",
-        "security",
-        "identity",
-        "accounts",
-        "settings",
-        "stats",
-    ];
-    for screen in expected_reachable {
+    for screen in dais_desk::expected_reachable_screens() {
         assert!(
             visited_screens.iter().any(|id| id == screen),
             "expected screen {screen:?} to be reachable via real mode_nav/screen_nav navigation, \

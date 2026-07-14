@@ -12,6 +12,10 @@ RUN_PRIVATE_MODE_LOCAL_SMOKE="${RUN_PRIVATE_MODE_LOCAL_SMOKE:-0}"
 REQUIRE_FULL_RELEASE_GATES="${REQUIRE_FULL_RELEASE_GATES:-${REQUIRE_FULL:-0}}"
 RELEASE_GATE_FAILURE=0
 
+# Kept in sync with apps/dais-desk/tests/visual_smoke.rs's screenshot_for_screen()
+# mapping, which is itself checked against dais_desk::expected_reachable_screens()
+# every run (#373) — that Rust-side assertion is the real enforcement; this list
+# is a secondary artifact-presence check for the release report.
 REQUIRED_SCREENSHOTS=(
   home
   home-toolbar-tooltip
@@ -31,10 +35,18 @@ REQUIRED_SCREENSHOTS=(
   people-friends
   people-followers
   people-following
+  people-watches
+  people-audience
+  people-blocks
   workflow-follower-approve
   settings-accounts
   settings-privacy
   settings-security
+  server-health
+  server-deliveries
+  server-moderation
+  server-identity
+  server-stats
 )
 
 mkdir -p "${REPORT_DIR}" "${SCREENSHOT_DIR}"
