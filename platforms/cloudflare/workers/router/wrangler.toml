@@ -18,19 +18,20 @@ database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 [ai]
 binding = "AI"
 
-# Personal Bluesky AppView firehose consumer (issue #50, Track B). Not yet
-# enabled in any deployed environment -- the class is bound below per-env
-# once the live-relay smoke test (see the issue) has passed for that
-# environment.
-[[durable_objects.bindings]]
-name = "FIREHOSE_SUBSCRIPTION"
-class_name = "FirehoseSubscription"
+# Personal Bluesky AppView firehose consumer (issue #50, Track B).
+#
+# STEP 1 OF 2 (issue #377 force-restart): the binding is deliberately removed
+# here -- Cloudflare requires a `deleted_classes` migration to ship in the
+# same deploy as removing the binding that references it. Once this deploys
+# to both environments, step 2 re-adds the binding below plus a
+# `new_sqlite_classes` migration recreating the class fresh. See the v2
+# migration entry for why this force-restart is needed at all.
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["FirehoseSubscription"]
 
-# v2/v3: force-restart every existing FirehoseSubscription instance after the
+# v2: force-restart every existing FirehoseSubscription instance after the
 # Jetstream rewrite (issue #377). A code-only deploy does not evict a live DO
 # instance whose outbound WebSocket is still open -- Cloudflare's own docs:
 # "eviction is deferred until all outbound connections have closed" -- so an
@@ -41,10 +42,6 @@ new_sqlite_classes = ["FirehoseSubscription"]
 [[migrations]]
 tag = "v2"
 deleted_classes = ["FirehoseSubscription"]
-
-[[migrations]]
-tag = "v3"
-new_sqlite_classes = ["FirehoseSubscription"]
 
 [triggers]
 crons = ["*/30 * * * *"]
@@ -66,10 +63,6 @@ database_id = "f90f9da8-136c-40c6-b96a-eba38d7efa65"
 
 [env.production.ai]
 binding = "AI"
-
-[[env.production.durable_objects.bindings]]
-name = "FIREHOSE_SUBSCRIPTION"
-class_name = "FirehoseSubscription"
 
 [env.production.triggers]
 crons = ["*/30 * * * *"]
@@ -103,10 +96,6 @@ database_id = "39490363-8871-4c24-b28e-4873e6a25a0a"
 
 [env.skpt.ai]
 binding = "AI"
-
-[[env.skpt.durable_objects.bindings]]
-name = "FIREHOSE_SUBSCRIPTION"
-class_name = "FirehoseSubscription"
 
 [env.skpt.triggers]
 crons = ["*/30 * * * *"]
